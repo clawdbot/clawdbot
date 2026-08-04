@@ -81,6 +81,20 @@ export function hasUsableOAuthCredential(
   return hasUsableStoredOAuthCredential(credential, { now });
 }
 
+/**
+ * Returns true when an OAuth access token has not reached raw expiry.
+ * Refresh-failure fallbacks read this instead of hasUsableOAuthCredential: the
+ * pre-expiry margin decides when to rotate, not whether an already-issued token
+ * still authenticates. Applying the margin here would let one transient
+ * token-endpoint error revoke access that is still valid for minutes.
+ */
+export function hasUnexpiredOAuthCredential(
+  credential: OAuthCredential | undefined,
+  now = Date.now(),
+): boolean {
+  return hasUsableStoredOAuthCredential(credential, { now, refreshMarginMs: 0 });
+}
+
 /** Returns true when an OAuth credential has account or email identity. */
 export function hasOAuthIdentity(
   credential: Pick<OAuthCredential, "accountId" | "email">,

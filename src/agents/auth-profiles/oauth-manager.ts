@@ -20,6 +20,7 @@ import {
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
+  hasUnexpiredOAuthCredential,
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -243,7 +244,7 @@ async function loadFreshStoredOAuthCredential(params: {
   if (
     reloaded?.type !== "oauth" ||
     reloaded.provider !== params.provider ||
-    !hasUsableOAuthCredential(reloaded)
+    !hasUnexpiredOAuthCredential(reloaded)
   ) {
     return null;
   }
@@ -743,9 +744,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     } catch (error) {
       const refreshedStore = loadStoredOAuthRefreshStore(params.agentDir);
       const refreshed = refreshedStore.profiles[params.profileId];
+      // Refreshes now run inside the pre-expiry margin, so this fallback must
+      // measure raw expiry: a token that is merely due for rotation still
+      // authenticates, and rejecting it turns one endpoint error into an outage.
       if (
         refreshed?.type === "oauth" &&
-        hasUsableOAuthCredential(refreshed) &&
+        hasUnexpiredOAuthCredential(refreshed) &&
         canReuseOAuthCredentialAfterRefreshFailure({
           forceRefresh: params.forceRefresh,
           attempted: effectiveCredential,
@@ -808,7 +812,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           if (
             mainCred?.type === "oauth" &&
             mainCred.provider === params.credential.provider &&
-            hasUsableOAuthCredential(mainCred) &&
+            hasUnexpiredOAuthCredential(mainCred) &&
             canReuseOAuthCredentialAfterRefreshFailure({
               forceRefresh: params.forceRefresh,
               attempted: effectiveCredential,

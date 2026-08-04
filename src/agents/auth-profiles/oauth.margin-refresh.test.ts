@@ -4,9 +4,13 @@
  * Once the manager's pre-expiry margin gate (`hasUsableOAuthCredential`, 5min)
  * decides a refresh is due, the built-in provider branch must rotate the token
  * directly instead of the previous no-op that handed back the same near-expiry
- * credential. A transient rotation failure inside the margin window must fail
- * open to the still-valid credential; a rotation failure after hard expiry must
- * still propagate.
+ * credential.
+ *
+ * Rotating inside the margin also means a transient token-endpoint failure can
+ * now reach a request whose access token is still valid. The manager's existing
+ * refresh-failure fallback covers that, measured against raw expiry rather than
+ * the margin, so a non-forced request keeps working; forced refreshes and
+ * hard-expired credentials still propagate the failure.
  */
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -178,9 +182,35 @@ describe("built-in OAuth refresh inside the pre-expiry margin window (#103846)",
     expect(result?.apiKey).toBe("rotated-access-token");
   });
 
-  it("surfaces a margin-window refresh failure instead of hiding it behind the stale token", async () => {
-    // A failed refresh must propagate so forced (doctor/CLI) and margin refreshes
-    // alike report the failure rather than silently returning the stale token.
+  it("keeps serving the unexpired token when a non-forced margin refresh fails", async () => {
+    // Rotating inside the margin means the token endpoint is now contacted while
+    // the stored access token still authenticates. A transient failure there must
+    // not revoke it: the manager's refresh-failure fallback measures raw expiry,
+    // so the request is served and the next call retries the rotation.
+    seedMarginWindowStore(agentDir);
+    refreshTokenMock.mockRejectedValueOnce(new Error("token endpoint unavailable"));
+
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+      store: ensureAuthProfileStore(agentDir),
+      profileId: PROFILE_ID,
+      agentDir,
+    });
+
+    expect(refreshTokenMock).toHaveBeenCalledTimes(1);
+    expect(result?.apiKey).toBe("stale-access-token");
+
+    // The failed rotation left the stored credential untouched, so nothing was
+    // persisted as if the refresh had succeeded.
+    const persisted = readAuthProfileStoreForTest(agentDir).profiles[PROFILE_ID];
+    if (persisted?.type !== "oauth") {
+      throw new Error(`expected persisted OAuth credential for ${PROFILE_ID}`);
+    }
+    expect(persisted.access).toBe("stale-access-token");
+  });
+
+  it("still propagates a forced margin-window refresh failure", async () => {
+    // Forced refreshes (doctor --fix, CLI re-auth) ask for rotation as the result,
+    // not for a served request, so the fallback must not absorb their failures.
     seedMarginWindowStore(agentDir);
     refreshTokenMock.mockRejectedValueOnce(new Error("invalid_grant"));
 
@@ -189,6 +219,7 @@ describe("built-in OAuth refresh inside the pre-expiry margin window (#103846)",
         store: ensureAuthProfileStore(agentDir),
         profileId: PROFILE_ID,
         agentDir,
+        forceRefresh: true,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for anthropic/);
     expect(refreshTokenMock).toHaveBeenCalledTimes(1);
