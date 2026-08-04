@@ -338,12 +338,8 @@ describe("execution identity context storage", () => {
     });
   });
 
-  it("keeps inspection read-only and lets persistence restore the additive table", () => {
+  it("keeps inspection read-only and lets persistence create the additive table", () => {
     const database = databaseOptions();
-    const opened = openOpenClawStateDatabase(database);
-    opened.db.exec("DROP TABLE execution_identity_contexts;");
-    closeOpenClawStateDatabaseForTest();
-
     const reopened = openOpenClawStateDatabase(database);
     expect(
       reopened.db
@@ -371,6 +367,23 @@ describe("execution identity context storage", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
         .get("execution_identity_contexts_run_created_idx"),
     ).toEqual({ name: "execution_identity_contexts_run_created_idx" });
+  });
+
+  it("keeps maintenance read-only until the first identity capture", () => {
+    const database = databaseOptions();
+    const opened = openOpenClawStateDatabase(database);
+    expect(
+      opened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
+
+    expect(pruneExpiredExecutionIdentityContexts({ database })).toBe(0);
+    expect(
+      opened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
   });
 
   it("records attribution only when an invoker fact is actually present", () => {
@@ -435,10 +448,11 @@ describe("execution identity context storage", () => {
       enqueueExecutionIdentityContextAtAdmission(facts("run-disabled"), { enabled: false }),
     ).toBeUndefined();
 
-    const rowCount = openOpenClawStateDatabase(database)
-      .db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts")
-      .get() as { count: number };
-    expect(rowCount.count).toBe(0);
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
   });
 
   it("keeps bounded retention maintenance available while collection is disabled", () => {

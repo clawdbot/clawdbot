@@ -9,7 +9,7 @@ scenario:
   objective: Verify an operator can inspect one local execution, discover repeated same-session executions, and select each immutable identity context through the audit CLI before and after Gateway restart.
   successCriteria:
     - A real local agent turn against the deterministic mock provider records one bounded execution identity context.
-    - Fresh and existing-install restarts retain no execution identity before explicit opt-in, and global audit disable prevents new identity rows.
+    - Fresh and existing-install restarts keep execution-identity storage absent before explicit opt-in, and global audit disable prevents new identity rows.
     - The audit CLI renders text and JSON projections for the exact run, including every identity field and the truthful non-enforcement admission receipt.
     - A replacement Gateway process returns byte-equivalent normalized identity context JSON for the same run.
     - Two real public-ingress turns that omit runId share the session correlation but retain distinct execution and context ids.

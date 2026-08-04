@@ -218,7 +218,13 @@ export function pruneExpiredExecutionIdentityContexts(
     database?: OpenClawStateDatabaseOptions;
   } = {},
 ): number {
-  ensureExecutionIdentityContextSchema(params.database);
+  const databaseOptions = params.database ?? {};
+  const database = openOpenClawStateDatabase(databaseOptions);
+  // Maintenance must not create opt-in storage. First capture owns schema creation;
+  // once the table exists, cleanup remains active even after collection is disabled.
+  if (!tableExists(database.db, "execution_identity_contexts")) {
+    return 0;
+  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const deleted = deleteExpiredExecutionIdentityContexts(
@@ -228,7 +234,7 @@ export function pruneExpiredExecutionIdentityContexts(
       );
       return Number(deleted.numAffectedRows ?? 0n);
     },
-    params.database,
+    { ...databaseOptions, database },
     { operationLabel: "audit.execution-identity.context.maintenance" },
   );
 }
@@ -306,8 +312,10 @@ function verifyExecutionIdentityAdmissionRetry(
   token: ExecutionIdentityAdmissionToken,
   options: ExecutionIdentityReadOptions = {},
 ): ExecutionIdentityContextV1 {
-  ensureExecutionIdentityContextSchema(options);
   const { db } = openOpenClawStateDatabase(options);
+  if (!tableExists(db, "execution_identity_contexts")) {
+    throw new Error("execution identity recovery evidence unavailable");
+  }
   const existing = readRowByExecutionId(db, token.executionId);
   if (!existing) {
     // Never reconstruct identity from the later runtime after an ambiguous restart.

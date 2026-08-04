@@ -4,7 +4,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { listAuditEvents } from "./audit-event-store.js";
+import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import {
@@ -78,6 +78,43 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("audit event worker", () => {
+  it("keeps first-use identity storage absent during maintenance without admission", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+
+    await writer.ready;
+    await writer.stop();
+
+    expect(errors).toEqual([]);
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
+  });
+
+  it("keeps an established current store identity-free during maintenance", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    recordAuditEvent(input(), database);
+    closeOpenClawStateDatabaseForTest();
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+
+    await writer.ready;
+    await writer.stop();
+
+    expect(errors).toEqual([]);
+    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
+  });
+
   it("returns immediately under SQLite contention and flushes before stop", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -100,7 +137,7 @@ describe("audit event worker", () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const { db } = openOpenClawStateDatabase(database);
-    db.exec("DROP TABLE execution_identity_contexts; DELETE FROM audit_identity_keys;");
+    db.exec("DELETE FROM audit_identity_keys;");
     db.exec("BEGIN IMMEDIATE");
     const errors: string[] = [];
     const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
@@ -345,6 +382,11 @@ describe("audit event worker", () => {
     expect(JSON.stringify(errors)).not.toContain(token.contextId);
     expect(JSON.stringify(errors)).not.toContain(token.executionId);
     expect(JSON.stringify(errors)).not.toContain(token.runId);
+    expect(
+      openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
   });
 
   it("keeps unavailable worker, schema, and insert failures off the admission path", async () => {
@@ -373,7 +415,6 @@ describe("audit event worker", () => {
     const schemaStateDir = tempDirs.make("openclaw-audit-writer-");
     const schemaDatabase = { env: { OPENCLAW_STATE_DIR: schemaStateDir } };
     openOpenClawStateDatabase(schemaDatabase).db.exec(`
-      DROP TABLE execution_identity_contexts;
       CREATE VIEW execution_identity_contexts AS
       SELECT 'context' AS context_id, 'run' AS run_id, 0 AS created_at,
              'unattributed' AS coverage_state, 2 AS context_bytes, '{}' AS context_json;
@@ -392,6 +433,18 @@ describe("audit event worker", () => {
 
     const insertStateDir = tempDirs.make("openclaw-audit-writer-");
     const insertDatabase = { env: { OPENCLAW_STATE_DIR: insertStateDir } };
+    persistExecutionIdentityAdmissionEnvelope(
+      captureExecutionIdentityAdmissionEnvelope(
+        {
+          runId: "insert-failure-setup",
+          agentId: "main",
+          ingress: { kind: "local-cli", boundary: "agent-command.local" },
+          runtime: { kind: "embedded" },
+        },
+        { runtimeInstanceId: "runtime-setup" },
+      ),
+      insertDatabase,
+    );
     const insertDb = openOpenClawStateDatabase(insertDatabase).db;
     insertDb.exec(`
       CREATE TRIGGER reject_identity_insert

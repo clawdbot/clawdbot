@@ -175,7 +175,7 @@ function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>
   }
 }
 
-function countExecutionIdentityContexts(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -184,10 +184,16 @@ function countExecutionIdentityContexts(gateway: Awaited<ReturnType<typeof start
     readOnly: true,
   });
   try {
+    const table = database
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("execution_identity_contexts");
+    if (!table) {
+      return { rowCount: 0, tablePresent: false };
+    }
     const row = database
       .prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts")
       .get() as { count: number };
-    return row.count;
+    return { rowCount: row.count, tablePresent: true };
   } finally {
     database.close();
   }
@@ -297,13 +303,13 @@ async function runProof(options: ProducerOptions): Promise<string> {
       controlUiEnabled: false,
     });
     await runLocalTurn(gateway, "Reply exactly: IDENTITY-DISABLED-FRESH");
-    if (countExecutionIdentityContexts(gateway) !== 0) {
-      throw new Error("fresh-install default unexpectedly retained execution identity");
+    if (inspectExecutionIdentityStorage(gateway).tablePresent) {
+      throw new Error("fresh-install default unexpectedly created execution identity storage");
     }
     await gateway.restartAfterStateMutation(async () => {});
     await runLocalTurn(gateway, "Reply exactly: IDENTITY-DISABLED-UPGRADE");
-    if (countExecutionIdentityContexts(gateway) !== 0) {
-      throw new Error("existing-install restart unexpectedly enabled execution identity");
+    if (inspectExecutionIdentityStorage(gateway).tablePresent) {
+      throw new Error("existing-install restart unexpectedly created execution identity storage");
     }
     await gateway.restartAfterStateMutation(async ({ configPath }) => {
       await updateExecutionIdentityConfig(configPath, { executionIdentity: true });
@@ -393,7 +399,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
         throw new Error(`repeated execution changed across Gateway restart: ${executionId}`);
       }
     }
-    const retainedBeforeGlobalDisable = countExecutionIdentityContexts(gateway);
+    const retainedBeforeGlobalDisable = inspectExecutionIdentityStorage(gateway).rowCount;
     await gateway.restartAfterStateMutation(async ({ configPath }) => {
       await updateExecutionIdentityConfig(configPath, {
         enabled: false,
@@ -401,7 +407,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
       });
     });
     await runLocalTurn(gateway, "Reply exactly: IDENTITY-DISABLED-GLOBAL");
-    if (countExecutionIdentityContexts(gateway) !== retainedBeforeGlobalDisable) {
+    if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable) {
       throw new Error("global audit disable unexpectedly retained a new execution context");
     }
     const afterGlobalDisable = parseJson<AuditRunInspectResult>(
@@ -432,8 +438,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
           optIn: {
             explicitEnablement: true,
             freshInstallDisabled: true,
+            freshInstallTableAbsent: true,
             globalAuditDisabled: true,
             upgradeStyleExistingInstallDisabled: true,
+            upgradeStyleTableAbsent: true,
           },
           textSections: TEXT_SECTIONS,
           identityFields: IDENTITY_FIELDS,
