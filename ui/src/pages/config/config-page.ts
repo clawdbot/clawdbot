@@ -915,6 +915,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       runtimeState.configSaving ||
       runtimeState.configApplying ||
       this.isUpdateBusy() ||
+      !this.context.runtimeConfig.canSet ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null)
     );
   }
@@ -957,6 +958,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       applying: configState.configApplying,
       updating: this.isUpdateBusy(),
       connected: configState.connected,
+      mutationAllowed: runtimeConfig.canSet,
+      openFileAllowed: runtimeConfig.canOpenFile,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,

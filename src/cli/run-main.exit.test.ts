@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,8 +14,12 @@ import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
-import { runCli, shouldStartProxyForCli } from "./run-main.js";
 import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
+
+type RunMainModule = typeof import("./run-main.js");
+
+let runCli: RunMainModule["runCli"];
+let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -38,6 +42,13 @@ type ConfigSnapshotReadOptionsStub = {
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
+const dotenvModuleImportState = vi.hoisted(() => ({ count: 0 }));
+const existsSyncOverride = vi.hoisted(
+  () =>
+    ({ value: undefined }) as {
+      value: ((target: string) => boolean) | undefined;
+    },
+);
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const pinConfigDirMock = vi.hoisted(() => vi.fn());
 const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
@@ -230,9 +241,23 @@ vi.mock("./container-target.js", () => ({
   parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
 }));
 
-vi.mock("./dotenv.js", () => ({
-  loadCliDotEnv: loadDotEnvMock,
-}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    existsSync: (target: Parameters<typeof actual.existsSync>[0]) =>
+      typeof target === "string" && existsSyncOverride.value
+        ? existsSyncOverride.value(target)
+        : actual.existsSync(target),
+  };
+});
+
+vi.mock("./dotenv.js", () => {
+  dotenvModuleImportState.count += 1;
+  return {
+    loadCliDotEnv: loadDotEnvMock,
+  };
+});
 
 vi.mock("./one-shot-exit.js", () => ({
   flushExitAfterOneShotOutput: flushExitAfterOneShotOutputMock,
@@ -472,6 +497,14 @@ async function expectNonInteractiveBareCliError(
 }
 
 describe("runCli exit behavior", () => {
+  beforeAll(async () => {
+    expect(dotenvModuleImportState.count).toBe(0);
+    const runMainModule = await import("./run-main.js");
+    expect(dotenvModuleImportState.count).toBe(0);
+    runCli = runMainModule.runCli;
+    shouldStartProxyForCli = runMainModule.shouldStartProxyForCli;
+  });
+
   afterAll(() => {
     serviceEnvSnapshot.restore();
   });
@@ -485,6 +518,7 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    existsSyncOverride.value = undefined;
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -527,6 +561,32 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
     loggingState.forceConsoleToStderr = false;
+  });
+
+  it("does not import dotenv for gateway forms without a workspace file", async () => {
+    existsSyncOverride.value = () => false;
+    expect(dotenvModuleImportState.count).toBe(0);
+
+    await runCli(["node", "openclaw", "gateway"]);
+    await runCli(["node", "openclaw", "gateway", "run"]);
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "gateway", aliases: () => [] }],
+      parseAsync: commanderParseAsyncMock,
+    });
+    await runCli(["node", "openclaw", "--log-level", "debug", "gateway", "run"]);
+
+    expect(dotenvModuleImportState.count).toBe(0);
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).toHaveBeenCalledTimes(1);
+    expect(commanderParseAsyncMock).toHaveBeenLastCalledWith([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "gateway",
+      "run",
+    ]);
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -2448,24 +2508,46 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["bare gateway fast path", ["node", "openclaw", "gateway"]],
     ["fast path", ["node", "openclaw", "gateway", "run"]],
     [
       "full Commander path with root options",
       ["node", "openclaw", "--log-level", "debug", "gateway", "run"],
     ],
   ])("loads trusted dotenv and isolates %s gateway proxy config reads", async (_name, argv) => {
+    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
     if (_name === "full Commander path with root options") {
-      tryRouteCliMock.mockResolvedValueOnce(true);
+      tryRouteCliMock.mockResolvedValueOnce(false);
+      buildProgramMock.mockReturnValueOnce({
+        commands: [{ name: () => "gateway", aliases: () => [] }],
+        parseAsync: commanderParseAsyncMock,
+      });
     }
     await runCli(argv);
 
     expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    if (_name === "full Commander path with root options") {
+      expect(buildProgramMock).toHaveBeenCalledTimes(1);
+      expect(commanderParseAsyncMock).toHaveBeenLastCalledWith(argv);
+    }
     expect(loadConfigMock).toHaveBeenCalledWith({
       isolateEnv: true,
       observe: false,
       skipPluginValidation: true,
     });
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps state dotenv loading for non-gateway commands", async () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-run-main-state");
+    existsSyncOverride.value = (target) => target === path.join(stateDir, ".env");
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      runCli(["node", "openclaw", "status"]),
+    );
+
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: true, quiet: true });
   });
 
   it("keeps agent exec outside the CLI dotenv loader", async () => {

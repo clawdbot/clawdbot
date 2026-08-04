@@ -999,6 +999,7 @@ export const en: TranslationMap = {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
+      updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
       title: "Channels",
