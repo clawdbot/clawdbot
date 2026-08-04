@@ -30,6 +30,7 @@ type CompactionSafeguardTestApi = {
   MAX_COMPACTION_SUMMARY_CHARS: number;
   MAX_FILE_OPS_SECTION_CHARS: number;
   MAX_FILE_OPS_LIST_CHARS: number;
+  MAX_CONTEXT_SECTION_CHARS: number;
   SUMMARY_TRUNCATED_MARKER: string;
 };
 

@@ -69,6 +69,9 @@ const MAX_TOOL_FAILURE_CHARS = 240;
 const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 const MAX_FILE_OPS_SECTION_CHARS = 2_000;
 const MAX_FILE_OPS_LIST_CHARS = 900;
+// Keeps the summed suffix parts under MAX_COMPACTION_SUMMARY_CHARS: two context
+// sections at this cap plus file ops, tool failures, and workspace rules.
+const MAX_CONTEXT_SECTION_CHARS = 4_000;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
@@ -583,8 +586,16 @@ function capCompactionSummaryPreservingSuffix(
     return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
   }
   if (suffix.length >= maxChars) {
-    // Preserve tail (workspace rules, diagnostics) over head (preserved turns).
-    return sliceUtf16Safe(suffix, -maxChars);
+    // The suffix alone can fill the budget, which previously dropped summaryBody
+    // outright and produced a full-length summary carrying none of the summary.
+    // Split the budget instead: the body keeps its head, the suffix its tail
+    // (workspace rules, diagnostics) over its head (preserved turns).
+    const bodyBudget = Math.min(summaryBody.length, Math.floor(maxChars / 2));
+    const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
+    log.warn(
+      `Compaction suffix (${suffix.length} chars) exceeds the ${maxChars}-char summary budget; truncating suffix and capping summary body to ${cappedBody.length} chars`,
+    );
+    return `${cappedBody}${sliceUtf16Safe(suffix, -(maxChars - cappedBody.length))}`;
   }
   const bodyBudget = Math.max(0, maxChars - suffix.length);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
@@ -755,7 +766,15 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
 
 function formatContextSection(messages: AgentMessage[], heading: string): string {
   const lines = formatContextMessages(messages);
-  return lines.length > 0 ? `${heading}\n${lines.join("\n")}` : "";
+  if (lines.length === 0) {
+    return "";
+  }
+  // Split-turn prefixes are not turn-count bounded the way preserved turns are
+  // (MAX_RECENT_TURNS_PRESERVE), so this section is the one suffix contributor
+  // that could otherwise outgrow the whole summary budget. Keep every suffix
+  // part bounded so capCompactionSummaryPreservingSuffix stays off its
+  // budget-splitting path.
+  return `${heading}\n${capCompactionSummary(lines.join("\n"), MAX_CONTEXT_SECTION_CHARS)}`;
 }
 
 function formatPreservedTurnsSection(messages: AgentMessage[]): string {
@@ -1275,6 +1294,7 @@ const testing = {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   MAX_FILE_OPS_LIST_CHARS,
+  MAX_CONTEXT_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } as const;
 

@@ -65,8 +65,10 @@ const {
   SAFETY_MARGIN,
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
+  MAX_CONTEXT_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } = testing;
+const { formatSplitTurnContextSection } = testing;
 
 beforeEach(() => {
   testing.setSummarizeInStagesForTest(mockSummarizeInStages);
@@ -555,7 +557,50 @@ describe("compaction-safeguard summary budgets", () => {
   });
 
   it("keeps an oversized preserved suffix UTF-16 safe at its leading edge", () => {
-    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("tail");
+    expect(capCompactionSummaryPreservingSuffix("", "A🚀tail", 5)).toBe("tail");
+  });
+
+  it("keeps the summary body when the suffix alone exceeds the cap", () => {
+    const body =
+      "## Decisions\nShip the refresh.\n## Open TODOs\nNone.\n## Constraints/Rules\nNone.\n" +
+      "## Pending user asks\nNone.\n## Exact identifiers\nN823JB";
+    const criticalTail =
+      "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const oversizedSuffix = `${"x".repeat(MAX_COMPACTION_SUMMARY_CHARS)}${criticalTail}`;
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped.startsWith("## Decisions")).toBe(true);
+    expect(capped).toContain("## Exact identifiers");
+    expect(capped).toContain("<workspace-critical-rules>");
+  });
+
+  it("bounds a split-turn context section so it cannot outgrow the summary budget", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `step ${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+
+    expect(section.length).toBeLessThan(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(section).toContain("**Turn Context (split turn):**");
+    expect(section.length).toBeLessThanOrEqual(
+      "**Turn Context (split turn):**\n\n".length + MAX_CONTEXT_SECTION_CHARS,
+    );
+  });
+
+  it("marks the body as truncated when an oversized suffix forces a body cap", () => {
+    const body = "## Decisions\n".padEnd(MAX_COMPACTION_SUMMARY_CHARS, "b");
+    const oversizedSuffix = "s".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped.startsWith("## Decisions")).toBe(true);
+    expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
   });
 });
 
