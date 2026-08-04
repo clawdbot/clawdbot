@@ -57,7 +57,7 @@ export class CustomEditor extends Editor {
   onAltUp?: () => void;
   shouldSubmitAutocomplete?: (text: string) => boolean;
 
-  /** Dispatches TUI shortcuts before falling back to normal editor input handling. */
+  /** Preserves whitespace that blocks bang execution before pi-tui trims submitted text. */
   override handleInput(data: string): void {
     if (isKeyRelease(data)) {
       return;
@@ -130,6 +130,21 @@ export class CustomEditor extends Editor {
       this.setText(this.getText());
     }
 
+    const expandedText = this.getExpandedText();
+    if (
+      keybindings.matches(data, "tui.input.submit") &&
+      /^\s+!/u.test(expandedText) &&
+      this.onSubmit
+    ) {
+      const onSubmit = this.onSubmit;
+      this.onSubmit = () => onSubmit(expandedText);
+      try {
+        super.handleInput(data);
+      } finally {
+        this.onSubmit = onSubmit;
+      }
+      return;
+    }
     super.handleInput(data);
   }
 }

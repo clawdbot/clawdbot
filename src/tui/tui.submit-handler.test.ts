@@ -33,13 +33,24 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("does not treat leading whitespace before ! as a bang command", () => {
-    const { editor, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+    editor.onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine,
+      onSubmitError: vi.fn(),
+    });
+    editor.setText("  !ls");
 
-    onSubmit("  !ls");
+    editor.handleInput("\r");
 
     expect(handleBangLine).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith("!ls");
-    expect(editor.addToHistory).toHaveBeenCalledWith("!ls");
+    expect(editor.getText()).toBe("");
   });
 
   it("trims normal messages before sending and adding to history", () => {

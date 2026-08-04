@@ -1126,6 +1126,77 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "keeps whitespace-prefixed bang input in chat after local shell approval",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished, {
+        replyText: "T06_CHAT_RESPONSE",
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("!node -e \"console.log('T06_APPROVAL_PRIMER')\"\r");
+        await fixture.run.waitForOutput("Allow local shell commands for this session?");
+        await fixture.run.write("\u001b[B\r", { delay: false });
+        await fixture.run.waitForOutput("local shell: enabled for this session");
+        await fixture.run.waitForOutput("[local] T06_APPROVAL_PRIMER");
+        await fixture.run.waitForOutput("[local] exit 0");
+
+        const chatOffset = fixture.run.visibleOutput().length;
+        const command = " !node -e \"console.log('T06_UNEXPECTED_EXECUTION')\"";
+        await fixture.run.write(`${command}\r`);
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`whitespace-prefixed bang did not reach chat\n${fixture.run.output()}`),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(
+          "T06_UNEXPECTED_EXECUTION",
+        );
+        await waitForOutputAfter(fixture.run, "T06_CHAT_RESPONSE", chatOffset);
+        expect(fixture.run.visibleOutput().slice(chatOffset)).not.toContain(
+          "[local] T06_UNEXPECTED_EXECUTION",
+        );
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "confirms and renders local shell output and environment through a real local PTY",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished);
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write(
+          "!node -e \"console.log('T06_STDOUT'); console.error('T06_STDERR'); console.log('T06_ENV='+process.env.OPENCLAW_SHELL); process.exitCode=7\"\r",
+        );
+        await fixture.run.waitForOutput("Allow local shell commands for this session?");
+        await fixture.run.waitForOutput("Select Yes/No (arrows + Enter), Esc to cancel.");
+        expect(fixture.run.visibleOutput()).toContain("No");
+        expect(fixture.run.visibleOutput()).toContain("Yes");
+
+        await fixture.run.write("\u001b[B\r", { delay: false });
+        await fixture.run.waitForOutput("local shell: enabled for this session");
+        await fixture.run.waitForOutput("[local] T06_STDOUT");
+        await fixture.run.waitForOutput("[local] T06_STDERR");
+        await fixture.run.waitForOutput("[local] T06_ENV=tui-local");
+        await fixture.run.waitForOutput("[local] exit 7");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
   function registerValidationLoopTest(mode: "gateway" | "local") {
     it(
       `renders safe validation-loop abort diagnostics through the real ${mode} backend`,

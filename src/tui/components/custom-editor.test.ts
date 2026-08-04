@@ -212,4 +212,29 @@ describe("CustomEditor", () => {
 
     expect(onSubmit).toHaveBeenCalledWith("/help");
   });
+
+  it("preserves whitespace that keeps bang input on the chat path", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("  !echo stays in chat");
+
+    editor.handleInput("\r");
+
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("  !echo stays in chat");
+    expect(editor.getText()).toBe("");
+  });
+
+  it("keeps pi-tui trimming for ordinary submissions", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("  ordinary message  ");
+
+    editor.handleInput("\r");
+
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("ordinary message");
+  });
 });
