@@ -20,7 +20,7 @@ import {
 const instances: OpenClawTestInstance[] = [];
 
 afterEach(async () => {
-  await Promise.allSettled(instances.splice(0).map((instance) => instance.cleanup()));
+  await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
   clearPluginMetadataLifecycleCaches();
   closeOpenClawStateDatabaseForTest();
 });
@@ -30,13 +30,11 @@ describe("Doctor plugin index persistence built CLI proof", () => {
     const instance = await createOpenClawTestInstance({
       name: "doctor-plugin-index-persistence",
       env: {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_TEST_FAST: "1",
       },
       startTimeoutMs: 90_000,
     });
     instances.push(instance);
-    instance.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(instance.stateDir, "bundled");
 
     const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8")) as OpenClawConfig;
     const pluginId = "legacy-doctor-index";
@@ -97,7 +95,17 @@ describe("Doctor plugin index persistence built CLI proof", () => {
     await instance.startGateway();
     expect(hasActiveStartupMigrationLease({ env: instance.env }), instance.logs()).toBe(false);
 
+    clearPluginMetadataLifecycleCaches();
     closeOpenClawStateDatabaseForTest();
+    const reread = loadPluginMetadataSnapshot({
+      config,
+      env: instance.env,
+      stateDir: instance.stateDir,
+      allowCurrent: false,
+    });
+    expect(reread.registrySource, instance.logs()).toBe("persisted");
+    expect(reread.registryDiagnostics, instance.logs()).toStrictEqual([]);
+
     const persisted = readPersistedInstalledPluginIndexSync({ env: instance.env });
     const persistedPlugin = persisted?.plugins.find((plugin) => plugin.pluginId === pluginId);
     expect(persistedPlugin, instance.logs()).toMatchObject({

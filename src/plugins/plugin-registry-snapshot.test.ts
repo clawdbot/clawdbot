@@ -78,7 +78,12 @@ function writePackagePlugin(
   );
 }
 
-function writeBundledPlugin(rootDir: string, pluginId: string, entryPath: string) {
+function writeBundledPlugin(
+  rootDir: string,
+  pluginId: string,
+  entryPath: string,
+  build?: Record<string, unknown>,
+) {
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, entryPath), "export default { register() {} };\n", "utf8");
   fs.writeFileSync(
@@ -96,7 +101,10 @@ function writeBundledPlugin(rootDir: string, pluginId: string, entryPath: string
     JSON.stringify({
       name: `@openclaw/${pluginId}`,
       version: "1.0.0",
-      openclaw: { extensions: [`./${entryPath}`] },
+      openclaw: {
+        extensions: [`./${entryPath}`],
+        ...(build ? { build } : {}),
+      },
     }),
     "utf8",
   );
@@ -1209,8 +1217,14 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
     fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
-    writeBundledPlugin(path.join(bundledRoot, "codex"), "codex", "index.js");
-    writeBundledPlugin(path.join(sourceRoot, "whatsapp"), "whatsapp", "index.ts");
+    writeBundledPlugin(path.join(bundledRoot, "codex"), "codex", "index.js", {
+      bundledDist: true,
+      openclawVersion: "2026.4.26",
+      pluginSdkVersion: "2026.4.26",
+    });
+    writeBundledPlugin(path.join(sourceRoot, "whatsapp"), "whatsapp", "index.ts", {
+      openclawVersion: "2026.4.26",
+    });
 
     const index = loadInstalledPluginIndex({ config: {}, env, stateDir });
     expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual(["codex", "whatsapp"]);
@@ -1218,6 +1232,14 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       fs.realpathSync(path.join(bundledRoot, "codex")),
       fs.realpathSync(path.join(sourceRoot, "whatsapp")),
     ]);
+    expect(requirePluginRecord(index.plugins, "codex").packageBuild).toEqual({
+      bundledDist: true,
+      openclawVersion: "2026.4.26",
+      pluginSdkVersion: "2026.4.26",
+    });
+    expect(requirePluginRecord(index.plugins, "whatsapp").packageBuild).toEqual({
+      openclawVersion: "2026.4.26",
+    });
     writePersistedInstalledPluginIndexSync(index, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
@@ -1225,6 +1247,10 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
     expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["codex", "whatsapp"]);
+    expect(requirePluginRecord(result.snapshot.plugins, "codex").packageBuild).toEqual({
+      bundledDist: true,
+    });
+    expect(requirePluginRecord(result.snapshot.plugins, "whatsapp").packageBuild).toEqual({});
   });
 
   it("keeps missing disabled bundled records under the trusted bundled root", () => {

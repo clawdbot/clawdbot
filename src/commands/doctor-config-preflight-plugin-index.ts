@@ -59,8 +59,13 @@ export async function persistRefreshedPluginIndex(params: {
   // The registry selector owns freshness and returns "persisted" only after accepting the
   // durable index. Persisted parsing intentionally canonicalizes non-runtime package metadata.
   if (persistedPluginMetadataSnapshot?.registrySource !== "persisted") {
+    const diagnosticCodes = persistedPluginMetadataSnapshot?.registryDiagnostics.map(
+      (diagnostic) => diagnostic.code,
+    );
     throwPluginRegistryPersistenceFailed(
-      `reread source was ${persistedPluginMetadataSnapshot?.registrySource ?? "missing"}`,
+      `reread source was ${persistedPluginMetadataSnapshot?.registrySource ?? "missing"}${
+        diagnosticCodes?.length ? `; diagnostics: ${diagnosticCodes.join(", ")}` : ""
+      }`,
     );
   }
   return persistedSnapshotRead;

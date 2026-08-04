@@ -77,21 +77,35 @@ function resolvePluginRegistryContent(
         const {
           doctorContractFile: _doctorContractFile,
           manifestFile: _manifestFile,
+          packageBuild,
           packageJson,
           ...record
         } = plugin;
+        // Compare the durable package-build contract. The store intentionally drops
+        // build-only metadata that runtime selection does not consume.
+        const stableRecord = Object.assign(
+          record,
+          packageBuild === undefined
+            ? {}
+            : {
+                packageBuild:
+                  packageBuild.bundledDist === undefined
+                    ? {}
+                    : { bundledDist: packageBuild.bundledDist },
+              },
+        );
         if (!packageJson) {
-          return record;
+          return stableRecord;
         }
         if (!comparePackageJsonPath) {
-          return record;
+          return stableRecord;
         }
         const {
           fileSignature: _fileSignature,
           path: packageJsonPath,
           ...stablePackageJson
         } = packageJson;
-        return Object.assign(record, {
+        return Object.assign(stableRecord, {
           packageJson: Object.assign(stablePackageJson, { path: packageJsonPath }),
         });
       }),
