@@ -1,5 +1,6 @@
 // Telegram plugin module implements client fetch behavior.
 import type { ApiClientOptions } from "grammy";
+import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramTransport } from "./fetch.js";
 import { isTelegramMisdirectedRequestError, tagTelegramNetworkError } from "./network-errors.js";
@@ -179,30 +180,53 @@ export function createTelegramClientFetch(params: {
         requestTimeout.unref?.();
       }
 
-      try {
-        return await callFetch(input, {
-          ...init,
-          signal: controller.signal,
-        });
-      } catch (err) {
-        if (requestTimedOut && timeoutError) {
-          throw timeoutError;
-        }
-        throw err;
-      } finally {
+      const disarm = () => {
         if (requestTimeout) {
           clearTimeout(requestTimeout);
+          requestTimeout = undefined;
         }
         shutdownSignal?.removeEventListener("abort", onShutdown);
         if (requestSignal && onRequestAbort) {
           requestSignal.removeEventListener("abort", onRequestAbort);
         }
+      };
+      // An aborted request never reaches the body observer below.
+      controller.signal.addEventListener("abort", disarm, { once: true });
+
+      let response: Awaited<ReturnType<typeof callFetch>>;
+      try {
+        response = await callFetch(input, {
+          ...init,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        disarm();
+        if (requestTimedOut && timeoutError) {
+          throw timeoutError;
+        }
+        throw err;
       }
+      // Headers arriving is not request completion: the Bot API client reads the
+      // body after this returns. Disarming here let a peer that sends headers and
+      // then stalls mid-body outlive the request timeout entirely, leaving only
+      // the far slower stall watchdog to notice (#119007).
+      // grammY types Bot API responses as node-fetch's Response while the SDK
+      // helper speaks the platform Response; they are the same runtime object.
+      return responseWithRelease(response as unknown as Response, async () =>
+        disarm(),
+      ) as unknown as typeof response;
     };
 
     try {
       const response = await runFetch();
       if (response.status === 421 && canForceTransportFallback("misdirected-request")) {
+        // Cleanup rides on body settlement now, so a discarded attempt would hold
+        // its deadline, listeners, and transport until the method timeout.
+        // Same seam: node-fetch's body type lacks cancel(); the runtime object is
+        // a web ReadableStream. Probe defensively so a non-cancellable body is a
+        // no-op rather than a throw.
+        const discarded = response.body as unknown as { cancel?: () => Promise<void> } | null;
+        await discarded?.cancel?.().catch(() => undefined);
         return await runFetch();
       }
       return response;
