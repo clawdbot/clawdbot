@@ -249,10 +249,13 @@ async function requestHttp(params: {
       }
       settled = true;
       clearTimeout(timer);
-      req.destroy();
       run();
     };
-    const fail = (error: Error) => settle(() => reject(error));
+    const fail = (error: Error) =>
+      settle(() => {
+        req.destroy();
+        reject(error);
+      });
     const req = request(
       {
         headers: { accept: params.accept },

@@ -210,6 +210,51 @@ describe("gateway concurrency benchmark script", () => {
     }
   });
 
+  it("reuses one connection for sequential successful HTTP samples", async () => {
+    let connectionCount = 0;
+    const server = createHttpServer((request, response) => {
+      response.setHeader(
+        "content-type",
+        request.url === "/readyz" ? "application/json" : "text/html",
+      );
+      response.end(request.url === "/readyz" ? '{"status":"ok"}' : "<html></html>");
+    });
+    server.on("connection", () => {
+      connectionCount += 1;
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected HTTP test server address");
+      }
+      const deadlineAt = performance.now() + 5_000;
+
+      await testing.requestHttp({
+        accept: "application/json",
+        deadlineAt,
+        path: "/readyz",
+        port: address.port,
+      });
+      await testing.requestHttp({
+        accept: "text/html",
+        deadlineAt,
+        path: "/",
+        port: address.port,
+      });
+
+      expect(connectionCount).toBe(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("loads through native Node TypeScript stripping", () => {
     const result = spawnSync(process.execPath, ["scripts/bench-gateway-concurrency.ts", "--help"], {
       cwd: process.cwd(),
