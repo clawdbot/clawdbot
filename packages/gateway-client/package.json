@@ -56,6 +56,7 @@
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
+    "@openclaw/net-policy": "workspace:*",
     "ipaddr.js": "2.4.0",
     "ws": "8.21.1"
   },

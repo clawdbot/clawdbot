@@ -32,6 +32,26 @@ describe("redactSensitiveUrl", () => {
     );
   });
 
+  it("redacts AWS presigned URL credential and signature params", () => {
+    expect(
+      redactSensitiveUrl(
+        "https://bucket.s3.amazonaws.com/key.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260802%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260802T000000Z&X-Amz-Signature=deadbeefcafe&safe=value",
+      ),
+    ).toBe(
+      "https://bucket.s3.amazonaws.com/key.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=***&X-Amz-Date=20260802T000000Z&X-Amz-Signature=***&safe=value",
+    );
+  });
+
+  it("redacts Google Cloud signed URL credential and signature params", () => {
+    expect(
+      redactSensitiveUrl(
+        "https://storage.googleapis.com/bucket/key.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=svc%40project.iam.gserviceaccount.com%2F20260802%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260802T000000Z&X-Goog-Signature=deadbeefcafe&safe=value",
+      ),
+    ).toBe(
+      "https://storage.googleapis.com/bucket/key.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=***&X-Goog-Date=20260802T000000Z&X-Goog-Signature=***&safe=value",
+    );
+  });
+
   it("redacts resource-scoped bearer token query params", () => {
     expect(
       redactSensitiveUrl(

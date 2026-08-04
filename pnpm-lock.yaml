@@ -2210,6 +2210,9 @@ importers:
       '@openclaw/gateway-protocol':
         specifier: workspace:*
         version: link:../gateway-protocol
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../net-policy
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0

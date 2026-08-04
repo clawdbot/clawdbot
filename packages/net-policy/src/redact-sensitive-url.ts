@@ -36,11 +36,14 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "private_key",
   "credential",
   "authorization",
-  // Common signed/API gateway aliases that do not contain an existing secret-name marker.
+  // Common signed-URL aliases that exact marker matches above do not cover.
   "sig",
   "x_api_key",
   "x_access_token",
   "x_auth_token",
+  "x_amz_credential",
+  "x_goog_credential",
+  "x_goog_signature",
 ]);
 // Align with FORM_BODY_KEY_SEPARATOR_RE: category-Lo Hangul fillers can splice sensitive names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
