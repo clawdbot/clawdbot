@@ -26,7 +26,8 @@ const ALPHANUMERIC_RE = /[A-Za-z0-9]/;
 const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
 const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
+const BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const BIDI_CONTROL_GLOBAL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 // Fenced code blocks (``` or ~~~). Lazy on content; tolerates info string after
@@ -113,12 +114,25 @@ function sanitizeTerminalControlsAndBinary(text: string): string {
   const withoutControlChars = hasControlChars(withoutAnsi)
     ? stripControlChars(withoutAnsi)
     : withoutAnsi;
-  return withoutControlChars.includes("\uFFFD")
-    ? withoutControlChars
+  const withoutBidiControls = BIDI_CONTROL_RE.test(withoutControlChars)
+    ? withoutControlChars.replace(BIDI_CONTROL_GLOBAL_RE, "")
+    : withoutControlChars;
+  return withoutBidiControls.includes("\uFFFD")
+    ? withoutBidiControls
         .split("\n")
         .map((line) => redactBinaryLikeLine(line))
         .join("\n")
-    : withoutControlChars;
+    : withoutBidiControls;
+}
+
+export function isTerminalSafeAutocompleteValue(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f) || BIDI_CONTROL_RE.test(char)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isCopySensitiveToken(token: string): boolean {
@@ -226,7 +240,7 @@ function redactBinaryLikeLine(line: string): string {
 }
 
 function isolateRtlLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(line) || BIDI_CONTROL_RE.test(line)) {
+  if (!RTL_SCRIPT_RE.test(line)) {
     return line;
   }
   return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;

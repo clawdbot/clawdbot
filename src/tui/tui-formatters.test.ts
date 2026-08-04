@@ -9,6 +9,7 @@ import {
   extractThinkingFromMessage,
   formatTuiFooter,
   formatTuiErrorMessage,
+  isTerminalSafeAutocompleteValue,
   isCommandMessage,
   sanitizeRenderableLine,
   sanitizeRenderableText,
@@ -762,6 +763,11 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
+  it("removes untrusted bidi overrides before adding trusted RTL isolation", () => {
+    expect(sanitizeRenderableText("\u202eمرحبا\u202c")).toBe("\u2067مرحبا\u2069");
+    expect(sanitizeRenderableText("\u061cمرحبا\u200f")).toBe("\u2067مرحبا\u2069");
+  });
+
   it("preserves long camelCase identifiers wrapped in inline code spans (#48432)", () => {
     const input = "- `requireConfirmationForMutatingActions: false`";
     const sanitized = sanitizeRenderableText(input);
@@ -889,6 +895,21 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toContain("[binary data omitted]");
+  });
+});
+
+describe("isTerminalSafeAutocompleteValue", () => {
+  it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
+    expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
+    for (const value of [
+      "bad\x1b[31m",
+      "bad\tvalue",
+      "bad\u009bvalue",
+      "bad\u200evalue",
+      "bad\u202evalue",
+    ]) {
+      expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
+    }
   });
 });
 

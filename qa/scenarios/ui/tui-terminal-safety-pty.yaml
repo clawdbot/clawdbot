@@ -15,10 +15,10 @@ scenario:
     - ANSI, OSC, clipboard, and C1 payloads cannot reach raw terminal frames.
     - Printable text surrounding hostile terminal controls remains visible.
     - A row-aware synchronized-frame oracle proves selector labels, descriptions, footer fields, connection status, BTW questions, and complete headers collapse CR, LF, and tab payloads to exact single-space one-line copies while preserving printable Unicode and RTL isolation.
-    - The row oracle has negative controls for split rows, literal tabs, tab-expanded multiple spaces, and incomplete synchronized frames.
+    - The authenticated row oracle has negative controls for split rows, literal tabs, tab-expanded multiple spaces, cursor movement, erase/overwrite, and incomplete synchronized frames.
     - Hostile selected session and agent identity fields cannot inject controls through the header while their stored identity remains raw.
     - Live tool titles sanitize their final display string before trusted styling, and control-only system output renders a neutral visible fallback.
-    - Restored in-flight Markdown, dynamic command descriptions, and thinking labels sanitize display copies before Markdown or autocomplete rendering.
+    - Restored in-flight Markdown and dynamic command descriptions sanitize display copies, while unsafe thinking-level completion values are omitted before editor rendering.
     - Model and session selections pass exact unmodified backend values to patchSession and loadHistory.
   codeRefs:
     - src/tui/components/btw-inline-message.ts
@@ -51,3 +51,6 @@ scenario:
         - coverageId: tui.output-safety
           testFile: src/tui/tui-pty-harness.e2e.test.ts
           testNamePattern: ^TUI PTY harness sanitizes ANSI OSC and C1 payloads across real PTY display boundaries$
+        - coverageId: tui.output-safety
+          testFile: src/tui/tui-pty-harness-assertion-test-support.test.ts
+          testNamePattern: ^hasSynchronizedFrameRow rejects terminal row reconstruction false positives$

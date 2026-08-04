@@ -1,9 +1,9 @@
 import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
-import { sanitizeRenderableLine } from "./tui-formatters.js";
+import { isTerminalSafeAutocompleteValue, sanitizeRenderableLine } from "./tui-formatters.js";
 
-/** Sanitize autocomplete presentation while preserving exact completion values. */
+const originalSafeItem = Symbol("originalSafeItem");
+/** Sanitize autocomplete presentation and omit values unsafe for editor rendering. */
 export function sanitizeAutocompleteProvider(inner: AutocompleteProvider): AutocompleteProvider {
-  const originals = new WeakMap<AutocompleteItem, AutocompleteItem>();
   return {
     triggerCharacters: inner.triggerCharacters,
     async getSuggestions(...args) {
@@ -11,9 +11,15 @@ export function sanitizeAutocompleteProvider(inner: AutocompleteProvider): Autoc
       if (!suggestions) {
         return null;
       }
+      const safeItems = suggestions.items.filter((item) =>
+        isTerminalSafeAutocompleteValue(item.value),
+      );
+      if (safeItems.length === 0) {
+        return null;
+      }
       return {
         ...suggestions,
-        items: Array.from(suggestions.items, (item) => {
+        items: Array.from(safeItems, (item) => {
           const { description: rawDescription, ...displayFields } = item;
           const label =
             sanitizeRenderableLine(item.label) || sanitizeRenderableLine(item.value) || "(unnamed)";
@@ -24,8 +30,7 @@ export function sanitizeAutocompleteProvider(inner: AutocompleteProvider): Autoc
             label,
             ...(description ? { description } : {}),
           };
-          originals.set(displayItem, item);
-          return displayItem;
+          return Object.defineProperty(displayItem, originalSafeItem, { value: item });
         }),
       };
     },
@@ -34,7 +39,7 @@ export function sanitizeAutocompleteProvider(inner: AutocompleteProvider): Autoc
         lines,
         cursorLine,
         cursorCol,
-        originals.get(item) ?? item,
+        (Reflect.get(item, originalSafeItem) as AutocompleteItem | undefined) ?? item,
         prefix,
       );
     },

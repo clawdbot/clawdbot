@@ -1,9 +1,10 @@
 // Shared assertions and exercises for the fake-backend TUI PTY harness.
 import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import * as ansiSequences from "../../packages/terminal-core/src/ansi-sequences.js";
+import { splitGraphemes, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
-import { sleep, type PtyRun } from "./tui-pty-test-support.js";
+import { sleep, type PtyRun, waitFor } from "./tui-pty-test-support.js";
 
 export type FixtureLogEntry = {
   method: string;
@@ -94,23 +95,161 @@ function buildInlineTerminalAttackPayload(tag: string, attack: string): Terminal
   };
 }
 
+type TestScreen = { col: number; row: number; rows: string[][] };
+
+function screenRow(screen: TestScreen) {
+  return (screen.rows[screen.row] ??= []);
+}
+
+function clearScreenCell(row: string[], col: number) {
+  let lead = col;
+  while (lead > 0 && row[lead] === "") {
+    lead -= 1;
+  }
+  const width = Math.max(1, visibleWidth(row[lead] ?? ""));
+  return row.fill(" ", lead, lead + width);
+}
+
+function writeScreenText(screen: TestScreen, text: string) {
+  for (const part of text.split(/([\b\r\n\t])/u)) {
+    if (part === "\r") {
+      screen.col = 0;
+    } else if (part === "\n") {
+      screen.row += 1;
+    } else if (part === "\t") {
+      screen.col = Math.floor(screen.col / 8 + 1) * 8;
+    } else if (part === "\b") {
+      screen.col = Math.max(0, screen.col - 1);
+    } else {
+      for (const grapheme of splitGraphemes(part)) {
+        if (/[\x00-\x1f\x7f-\x9f]/u.test(grapheme)) {
+          throw new Error("unsupported terminal control in TUI PTY evidence");
+        }
+        const row = screenRow(screen);
+        row.push(...Array(Math.max(0, screen.col - row.length)).fill(" "));
+        if (/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(grapheme)) {
+          continue;
+        }
+        const width = visibleWidth(grapheme);
+        for (let col = screen.col; col < screen.col + width; col += 1) {
+          clearScreenCell(row, col);
+        }
+        row[screen.col] = grapheme;
+        row.splice(screen.col + 1, Math.max(0, width - 1), ...Array(width - 1).fill(""));
+        screen.col += width;
+      }
+    }
+  }
+}
+
+function csiParams(value: string) {
+  const body = value.startsWith("\u009b") ? value.slice(1, -1) : value.slice(2, -1);
+  return body.replace(/^[?>!]/u, "").split(";");
+}
+
+function csiCount(params: string[], index = 0) {
+  const value = Number(params[index] || "1");
+  return Number.isSafeInteger(value) && value > 0 ? value : 1;
+}
+
+function applyScreenCsi(screen: TestScreen, value: string) {
+  const final = value.at(-1) ?? "";
+  const privatePrefix = value.startsWith("\u009b") ? value[1] : value[2];
+  const params = csiParams(value);
+  const harmlessPrivateMode =
+    (final === "h" || final === "l") &&
+    privatePrefix === "?" &&
+    params.every((param) => param === "25" || param === "2004" || param === "2031");
+  if (final === "A") {
+    screen.row = Math.max(0, screen.row - csiCount(params));
+  } else if (final === "B") {
+    screen.row += csiCount(params);
+  } else if (final === "C") {
+    screen.col += csiCount(params);
+  } else if (final === "D") {
+    screen.col = Math.max(0, screen.col - csiCount(params));
+  } else if (final === "G") {
+    screen.col = csiCount(params) - 1;
+  } else if (final === "H" || final === "f") {
+    screen.row = csiCount(params) - 1;
+    screen.col = csiCount(params, 1) - 1;
+  } else if (final === "J") {
+    const mode = Number(params[0] || "0");
+    if (mode === 0) {
+      clearScreenCell(screenRow(screen), screen.col).splice(screen.col);
+      screen.rows.splice(screen.row + 1);
+    } else if (mode === 1) {
+      screen.rows.splice(0, screen.row, ...Array.from({ length: screen.row }, () => []));
+      clearScreenCell(screenRow(screen), screen.col).fill(" ", 0, screen.col + 1);
+    } else if (mode === 2 || mode === 3) {
+      screen.rows = [];
+    } else {
+      throw new Error(`unsupported erase-display mode in TUI PTY evidence: ${mode}`);
+    }
+  } else if (final === "K") {
+    const row = screenRow(screen);
+    const mode = Number(params[0] || "0");
+    if (mode === 0) {
+      clearScreenCell(row, screen.col).splice(screen.col);
+    } else if (mode === 1) {
+      clearScreenCell(row, screen.col).fill(" ", 0, screen.col + 1);
+    } else if (mode === 2) {
+      screen.rows[screen.row] = [];
+    } else {
+      throw new Error(`unsupported erase-line mode in TUI PTY evidence: ${mode}`);
+    }
+  } else if (
+    !(final === "u" && privatePrefix && "?<>".includes(privatePrefix)) &&
+    !harmlessPrivateMode &&
+    !["c", "m", "n", "q"].includes(final)
+  ) {
+    throw new Error(
+      `unsupported cursor-mutating CSI in TUI PTY evidence: ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+function trimIncompleteTrailingAnsi(raw: string) {
+  const lastFrameEnd = raw.lastIndexOf("\x1b[?2026l");
+  const oscStart = Math.max(raw.lastIndexOf("\x1b]"), raw.lastIndexOf("\u009d"));
+  const oscTail = raw.slice(oscStart + (raw[oscStart] === "\x1b" ? 2 : 1)).replace(/\x1b$/u, "");
+  if (oscStart > lastFrameEnd && !/[\x00-\x1f\x7f-\x9f]/u.test(oscTail)) {
+    return raw.slice(0, oscStart);
+  }
+  const csiStart = Math.max(raw.lastIndexOf("\x1b["), raw.lastIndexOf("\u009b"));
+  const csi = csiStart > lastFrameEnd ? ansiSequences.scanAnsiCsiAt(raw, csiStart) : undefined;
+  if (csi && !csi.ended && csiStart + csi.value.length === raw.length) {
+    return raw.slice(0, csiStart);
+  }
+  return raw.endsWith("\x1b") && raw.length - 1 > lastFrameEnd ? raw.slice(0, -1) : raw;
+}
+
 export function synchronizedFrameRows(raw: string): string[][] {
   const start = "\x1b[?2026h";
   const end = "\x1b[?2026l";
   const frames: string[][] = [];
-  let cursor = 0;
-  while (cursor < raw.length) {
-    const startIndex = raw.indexOf(start, cursor);
-    if (startIndex === -1) {
-      break;
+  const screen: TestScreen = { col: 0, row: 0, rows: [] };
+  let synchronized = false;
+  for (const segment of ansiSequences.splitAnsiSegments(trimIncompleteTrailingAnsi(raw))) {
+    if (segment.kind === "text") {
+      writeScreenText(screen, segment.value);
+    } else if (segment.value === start) {
+      synchronized = true;
+    } else if (segment.value === end) {
+      if (synchronized) {
+        frames.push(
+          [...Array(screen.rows.length)].map(
+            (_, index) => screen.rows[index]?.join("").trimEnd() ?? "",
+          ),
+        );
+      }
+      synchronized = false;
+    } else {
+      writeScreenText(screen, segment.controls.join(""));
+      if (segment.value.startsWith("\x1b[") || segment.value.startsWith("\u009b")) {
+        applyScreenCsi(screen, segment.value);
+      }
     }
-    const contentStart = startIndex + start.length;
-    const endIndex = raw.indexOf(end, contentStart);
-    if (endIndex === -1) {
-      break;
-    }
-    frames.push(stripAnsi(raw.slice(contentStart, endIndex)).split(/\r+\n/u));
-    cursor = endIndex + end.length;
   }
   return frames;
 }
@@ -134,17 +273,17 @@ async function assertTerminalAttackSanitized(
   await fixture.run.waitForOutput(payload.markers.at(-1) ?? "", timeoutMs);
   const visible = fixture.run.visibleOutput();
   expect(payload.markers.every((marker) => visible.includes(marker))).toBe(true);
-  const raw = fixture.run.output();
+  const raw = await waitFor({
+    timeoutMs,
+    read: () => {
+      const output = fixture.run.output();
+      return hasSynchronizedFrameRow(output, payload.markers, payload.expectedLine) ? output : null;
+    },
+    onTimeout: () => new Error(`expected completed synchronized row\n${fixture.run.output()}`),
+  });
   for (const attack of payload.attacks) {
     expect(raw).not.toContain(attack);
   }
-  const matchingRows = synchronizedFrameRows(raw)
-    .flat()
-    .filter((row) => payload.markers.some((marker) => row.includes(marker)));
-  expect(
-    hasSynchronizedFrameRow(raw, payload.markers, payload.expectedLine),
-    `expected one synchronized row ${JSON.stringify(payload.expectedLine)}\n${JSON.stringify(matchingRows)}`,
-  ).toBe(true);
   expect(raw).not.toContain("\uFFFD");
 }
 
@@ -193,7 +332,7 @@ async function exerciseSelectorOutputSafety(
   const selectedSessionKey = `agent:main:${sessionKey.text}`;
   const fixture = await startFixture({
     env: {
-      OPENCLAW_TUI_PTY_COLS: "180",
+      OPENCLAW_TUI_PTY_COLS: "240",
       OPENCLAW_TUI_PTY_ROWS: "24",
       OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
       OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
@@ -366,6 +505,7 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
       OPENCLAW_TUI_PTY_DYNAMIC_COMMAND_DESCRIPTION: command.text,
       OPENCLAW_TUI_PTY_IN_FLIGHT_TEXT: `**${inFlight.text}** [copy-safe](https://example.test/t08-inflight)`,
       OPENCLAW_TUI_PTY_ROWS: "22",
+      OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL: "T08_SAFE_THINKING",
       OPENCLAW_TUI_PTY_THINKING_LABEL: thinking.text,
     },
   });
@@ -383,7 +523,10 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
     await fixture.run.write("\x15", { delay: false });
     await sleep(50);
     await fixture.run.write("/think ", { delay: false });
-    await assertTerminalAttackSanitized(fixture, thinking, 5_000);
+    await fixture.run.waitForOutput("T08_SAFE_THINKING", 5_000);
+    const raw = fixture.run.output();
+    expect(thinking.markers.some((marker) => raw.includes(marker))).toBe(false);
+    expect(thinking.attacks.some((attack) => raw.includes(attack))).toBe(false);
   } finally {
     await fixture.cleanup();
   }

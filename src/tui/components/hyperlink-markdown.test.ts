@@ -78,4 +78,14 @@ describe("HyperlinkMarkdown", () => {
     expect(normalizeTestText(rendered)).toContain(url);
     expect(rendered).not.toContain("Y2xpcGJvYXJk");
   });
+
+  it("keeps an RTL bare URL target byte-exact", () => {
+    const url = "https://example.test/rtl-proof";
+    const rendered = new HyperlinkMarkdown(`مرحبا ${url}`, 0, 0, markdownTheme)
+      .render(120)
+      .join("\n");
+
+    expect(rendered).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
+    expect(rendered).not.toContain(`\x1b]8;;${url}\u2069`);
+  });
 });

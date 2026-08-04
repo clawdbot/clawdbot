@@ -44,6 +44,11 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const inFlightRunText = process.env.OPENCLAW_TUI_PTY_IN_FLIGHT_TEXT;
       const dynamicCommandDescription = process.env.OPENCLAW_TUI_PTY_DYNAMIC_COMMAND_DESCRIPTION;
       const thinkingLabel = process.env.OPENCLAW_TUI_PTY_THINKING_LABEL;
+      const safeThinkingLabel = process.env.OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL;
+      const thinkingLevels = [
+        ...(thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : []),
+        ...(safeThinkingLabel ? [{ id: "fixture-thinking-safe", label: safeThinkingLabel }] : []),
+      ];
       const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
       let disconnectPending = disconnectReason !== undefined;
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
@@ -106,7 +111,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           ...(entryVerboseLevel ? { verboseLevel: entryVerboseLevel } : {}),
           ...(entryTraceLevel ? { traceLevel: entryTraceLevel } : {}),
           ...(entryReasoningLevel ? { reasoningLevel: entryReasoningLevel } : {}),
-          thinkingLevels: thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : [],
+          thinkingLevels,
         };
       }
 
@@ -470,9 +475,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               model: currentModel,
               modelProvider: "fixture-provider",
               contextTokens: 128,
-              thinkingLevels: thinkingLabel
-                ? [{ id: "fixture-thinking", label: thinkingLabel }]
-                : [],
+              thinkingLevels,
             },
           };
         }
