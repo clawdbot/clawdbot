@@ -177,22 +177,8 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.collectConfiguredMemoryEmbeddingProviderIds).toHaveBeenCalledWith(config);
     expect(requireLoadOptions()).toEqual(
       expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["acpx", "memory-core", "openai"],
-            entries: expect.objectContaining({
-              openai: { enabled: true },
-            }),
-          }),
-        }),
-        activationSourceConfig: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["acpx", "memory-core", "openai"],
-            entries: expect.objectContaining({
-              openai: { enabled: true },
-            }),
-          }),
-        }),
+        config,
+        activationSourceConfig: config,
         onlyPluginIds: ["memory-core", "openai"],
         throwOnLoadError: true,
       }),
@@ -247,14 +233,8 @@ describe("ensurePluginRegistryLoaded", () => {
 
     const options = requireLoadOptions();
     expect(options.onlyPluginIds).toEqual(["google", "memory-core"]);
-    expect(options.config).toEqual(
-      expect.objectContaining({
-        plugins: expect.objectContaining({
-          allow: ["memory-core", "google"],
-          deny: ["google"],
-        }),
-      }),
-    );
+    expect(options.config).toEqual(config);
+    expect(options.activationSourceConfig).toEqual(config);
   });
 
   it("keeps an explicitly disabled memory provider owner disabled", () => {
@@ -276,15 +256,8 @@ describe("ensurePluginRegistryLoaded", () => {
 
     const options = requireLoadOptions();
     expect(options.onlyPluginIds).toEqual(["llama-cpp", "memory-core"]);
-    expect(options.config).toEqual(
-      expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            "llama-cpp": { enabled: false },
-          }),
-        }),
-      }),
-    );
+    expect(options.config).toEqual(config);
+    expect(options.activationSourceConfig).toEqual(config);
   });
 
   it("keeps an empty memory scope empty when no backend is selected", () => {

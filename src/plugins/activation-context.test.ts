@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe("withActivatedPluginIds", () => {
-  it("can activate configured owners through a restrictive allowlist", () => {
+  it("keeps omitted plugin ids outside restrictive allowlists", () => {
     expect(
       withActivatedPluginIds({
         config: {
@@ -45,15 +45,12 @@ describe("withActivatedPluginIds", () => {
           },
         },
         pluginIds: ["openai", "blocked", "disabled"],
-        allowRestrictiveAllowlistBypass: true,
       }),
     ).toEqual({
       plugins: {
-        allow: ["memory-core", "openai", "blocked", "disabled"],
+        allow: ["memory-core"],
         deny: ["blocked"],
         entries: {
-          openai: { enabled: true },
-          blocked: { enabled: true },
           disabled: { enabled: false },
         },
       },

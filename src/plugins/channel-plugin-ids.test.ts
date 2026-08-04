@@ -776,6 +776,18 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       ["browser", "openai", "memory-core"],
     ],
     [
+      "keeps configured memory embedding providers behind restrictive allowlists",
+      {
+        channels: {},
+        memory: { search: { provider: "openai" } },
+        plugins: {
+          allow: ["memory-core"],
+          slots: { memory: "memory-core" },
+        },
+      } as OpenClawConfig,
+      ["memory-core"],
+    ],
+    [
       "includes the owning plugin for a configured memory embedding fallback at startup",
       {
         channels: {},

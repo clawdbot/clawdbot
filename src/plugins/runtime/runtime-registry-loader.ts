@@ -82,19 +82,14 @@ export function ensurePluginRegistryLoaded(options?: {
   const scope = options?.scope ?? "all";
   const context = resolvePluginRuntimeLoadContext(options);
   const pluginIds = resolveScopePluginIds({ scope, context });
-  const activateConfigured =
-    (scope === "configured-channels" || scope === "memory") && pluginIds.length > 0;
-  const activationOptions = {
-    pluginIds,
-    ...(scope === "memory" ? { allowRestrictiveAllowlistBypass: true } : {}),
-  };
+  const activateConfigured = scope === "configured-channels" && pluginIds.length > 0;
   const config = activateConfigured
-    ? (withActivatedPluginIds({ config: context.config, ...activationOptions }) ?? context.config)
+    ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)
     : context.config;
   const activationSourceConfig = activateConfigured
     ? (withActivatedPluginIds({
         config: context.activationSourceConfig,
-        ...activationOptions,
+        pluginIds,
       }) ?? context.activationSourceConfig)
     : context.activationSourceConfig;
   loadOpenClawPlugins(
