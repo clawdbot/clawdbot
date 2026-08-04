@@ -71,6 +71,28 @@ describe("provider prompt admission", () => {
     }
   });
 
+  it("does not recover for large runtime-only tool metadata", () => {
+    const context = {
+      messages: [{ role: "user", content: "small prompt", timestamp: 1 }],
+      tools: [
+        {
+          name: "small_tool",
+          description: "small description",
+          parameters: { type: "object", properties: {} },
+          label: "x".repeat(30_000),
+          outputSchema: { description: "y".repeat(30_000) },
+        },
+      ],
+    } as ProviderContext;
+
+    const result = admit(context, undefined, {
+      contextTokenBudget: 4_000,
+      reserveTokens: 1_000,
+    });
+
+    expect(result.status).toBe("ready");
+  });
+
   it("admits a tighter provider-only tool-result projection in the same attempt", () => {
     const messages = [
       { role: "user", content: "inspect the results", timestamp: 1 } as AgentMessage,

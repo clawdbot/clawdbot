@@ -106,6 +106,37 @@ describe("preemptive-compaction", () => {
     expect(larger).toBeGreaterThan(smaller);
   });
 
+  it("ignores runtime-only metadata when estimating provider tool schemas", () => {
+    const providerTool = {
+      name: "lookup",
+      description: "Look up one record",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    };
+    const baseline = estimateLlmBoundaryTokenPressure({
+      messages: [],
+      prompt: "continue",
+      tools: [providerTool],
+    });
+    const withRuntimeMetadata = estimateLlmBoundaryTokenPressure({
+      messages: [],
+      prompt: "continue",
+      tools: [
+        {
+          ...providerTool,
+          label: "x".repeat(100_000),
+          outputSchema: { description: "y".repeat(100_000) },
+          displaySummary: "z".repeat(100_000),
+        },
+      ],
+    });
+
+    expect(withRuntimeMetadata).toBe(baseline);
+  });
+
   it("requests preemptive compaction when the reserve-based prompt budget would be exceeded", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory(verboseHistory)],

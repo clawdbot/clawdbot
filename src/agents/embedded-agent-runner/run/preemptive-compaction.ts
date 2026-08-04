@@ -94,6 +94,19 @@ function estimateJsonPayloadTokenPressure(
   }
 }
 
+function estimateProviderToolTokenPressure(tool: unknown): number {
+  if (!isRecord(tool)) {
+    return estimateJsonPayloadTokenPressure(tool);
+  }
+  // Provider transports serialize the model-facing tool contract, not AgentTool runtime metadata
+  // such as labels, output schemas, execution policy, or callbacks.
+  return estimateJsonPayloadTokenPressure({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  });
+}
+
 function estimateIdentifierTokenPressure(
   value: unknown,
   charsPerToken = JSON_PAYLOAD_CHARS_PER_TOKEN,
@@ -254,7 +267,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
     0,
   );
   const toolTokens = (params.tools ?? []).reduce<number>(
-    (sum, tool) => sum + MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(tool),
+    (sum, tool) => sum + MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateProviderToolTokenPressure(tool),
     0,
   );
   return Math.max(
