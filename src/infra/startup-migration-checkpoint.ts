@@ -1,4 +1,4 @@
-// Coordinates gateway startup migration version checkpoints in shared state.
+// Coordinates automatic state-migration and gateway-startup checkpoints in shared state.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -24,6 +24,7 @@ type StartupMigrationCheckpointDatabase = Pick<
 >;
 
 const STARTUP_MIGRATION_META_KEY = "startup-migrations";
+const STATE_MIGRATION_META_KEY = "state-migrations";
 const STARTUP_MIGRATION_BUILD_SEPARATOR = "\n";
 const STARTUP_MIGRATION_LEASE_SCOPE = "startup-migrations";
 const STARTUP_MIGRATION_LEASE_KEY = "global";
@@ -135,7 +136,25 @@ function writeStartupMigrationCheckpointDatabase<T>(
   );
 }
 
-function readStartupMigrationCheckpoint(env: NodeJS.ProcessEnv): string | null {
+type MigrationCheckpointMetaKey =
+  | typeof STARTUP_MIGRATION_META_KEY
+  | typeof STATE_MIGRATION_META_KEY;
+
+type MigrationCheckpointParams = {
+  buildIdentity?: string | null;
+  env?: NodeJS.ProcessEnv;
+  version?: string;
+};
+
+type RecordMigrationCheckpointParams = MigrationCheckpointParams & {
+  lease?: StartupMigrationLease;
+  nowMs?: number;
+};
+
+function readMigrationCheckpoint(
+  env: NodeJS.ProcessEnv,
+  metaKey: MigrationCheckpointMetaKey,
+): string | null {
   return withStartupMigrationCheckpointDatabase(env, (db) => {
     const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
     const row = executeSqliteQueryTakeFirstSync(
@@ -143,7 +162,7 @@ function readStartupMigrationCheckpoint(env: NodeJS.ProcessEnv): string | null {
       stateDb
         .selectFrom("schema_meta")
         .select("app_version as appVersion")
-        .where("meta_key", "=", STARTUP_MIGRATION_META_KEY),
+        .where("meta_key", "=", metaKey),
     );
     return row?.appVersion ?? null;
   });
@@ -151,11 +170,14 @@ function readStartupMigrationCheckpoint(env: NodeJS.ProcessEnv): string | null {
 
 export function readStartupMigrationVersion(env: NodeJS.ProcessEnv = process.env): string | null {
   return (
-    readStartupMigrationCheckpoint(env)?.split(STARTUP_MIGRATION_BUILD_SEPARATOR, 1)[0] ?? null
+    readMigrationCheckpoint(env, STARTUP_MIGRATION_META_KEY)?.split(
+      STARTUP_MIGRATION_BUILD_SEPARATOR,
+      1,
+    )[0] ?? null
   );
 }
 
-/** Returns whether the canonical gateway startup-migration lease is still live. */
+/** Returns whether the canonical automatic-migration lease is still live. */
 export function hasActiveStartupMigrationLease(
   params: { env?: NodeJS.ProcessEnv; nowMs?: number } = {},
 ): boolean {
@@ -188,12 +210,9 @@ export function hasActiveStartupMigrationLease(
   );
 }
 
-export function needsStartupMigrationCheckpoint(
-  params: {
-    buildIdentity?: string | null;
-    env?: NodeJS.ProcessEnv;
-    version?: string;
-  } = {},
+function needsMigrationCheckpoint(
+  metaKey: MigrationCheckpointMetaKey,
+  params: MigrationCheckpointParams = {},
 ): boolean {
   const env = params.env ?? process.env;
   const buildIdentity =
@@ -204,8 +223,21 @@ export function needsStartupMigrationCheckpoint(
     return true;
   }
   return (
-    readStartupMigrationCheckpoint(env) !==
+    readMigrationCheckpoint(env, metaKey) !==
     formatStartupMigrationCheckpoint(params.version ?? VERSION, buildIdentity)
+  );
+}
+
+export function needsStartupMigrationCheckpoint(params: MigrationCheckpointParams = {}): boolean {
+  return needsMigrationCheckpoint(STARTUP_MIGRATION_META_KEY, params);
+}
+
+export function needsStateMigrationCheckpoint(params: MigrationCheckpointParams = {}): boolean {
+  // A legacy gateway checkpoint also proves state migrations completed. The inverse is false:
+  // state-only commands never certify gateway plugin convergence.
+  return (
+    needsMigrationCheckpoint(STATE_MIGRATION_META_KEY, params) &&
+    needsMigrationCheckpoint(STARTUP_MIGRATION_META_KEY, params)
   );
 }
 
@@ -260,7 +292,7 @@ export function acquireStartupMigrationLease(
     } else if (existing) {
       const ownerHint = existingOwner ? ` (held by pid ${existingOwner.pid})` : "";
       throw new Error(
-        `OpenClaw startup migrations are already running for this state directory; retry after the other gateway finishes or after ${new Date(existing.expiresAt ?? expiresAt).toISOString()}.${ownerHint}`,
+        `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after ${new Date(existing.expiresAt ?? expiresAt).toISOString()}.${ownerHint}`,
       );
     }
     executeSqliteQuerySync(
@@ -301,7 +333,7 @@ export function acquireStartupMigrationLease(
         );
         if (result.numAffectedRows !== 1n) {
           throw new Error(
-            "OpenClaw startup migration lease was lost before startup migrations completed; restart the gateway so migrations can run under a fresh lease.",
+            "OpenClaw startup migration lease was lost before startup migrations completed; retry so migrations can run under a fresh lease.",
           );
         }
       });
@@ -322,14 +354,9 @@ export function acquireStartupMigrationLease(
   };
 }
 
-export function recordSuccessfulStartupMigrations(
-  params: {
-    buildIdentity?: string | null;
-    env?: NodeJS.ProcessEnv;
-    lease?: StartupMigrationLease;
-    version?: string;
-    nowMs?: number;
-  } = {},
+function recordSuccessfulMigrationCheckpoints(
+  metaKeys: MigrationCheckpointMetaKey[],
+  params: RecordMigrationCheckpointParams = {},
 ): void {
   const env = params.env ?? process.env;
   const version = params.version ?? VERSION;
@@ -355,32 +382,49 @@ export function recordSuccessfulStartupMigrations(
       );
       if (!activeLease) {
         throw new Error(
-          "OpenClaw startup migration lease was lost before checkpoint recording; restart the gateway so migrations can run under a fresh lease.",
+          "OpenClaw startup migration lease was lost before checkpoint recording; retry so migrations can run under a fresh lease.",
         );
       }
     }
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .insertInto("schema_meta")
-        .values({
-          meta_key: STARTUP_MIGRATION_META_KEY,
-          role: "global",
-          schema_version: buildIdentity === null ? 1 : 2,
-          agent_id: null,
-          app_version: checkpoint,
-          created_at: nowMs,
-          updated_at: nowMs,
-        })
-        .onConflict((conflict) =>
-          conflict.column("meta_key").doUpdateSet({
+    for (const metaKey of metaKeys) {
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .insertInto("schema_meta")
+          .values({
+            meta_key: metaKey,
             role: "global",
             schema_version: buildIdentity === null ? 1 : 2,
             agent_id: null,
             app_version: checkpoint,
+            created_at: nowMs,
             updated_at: nowMs,
-          }),
-        ),
-    );
+          })
+          .onConflict((conflict) =>
+            conflict.column("meta_key").doUpdateSet({
+              role: "global",
+              schema_version: buildIdentity === null ? 1 : 2,
+              agent_id: null,
+              app_version: checkpoint,
+              updated_at: nowMs,
+            }),
+          ),
+      );
+    }
   });
+}
+
+export function recordSuccessfulStateMigrations(
+  params: RecordMigrationCheckpointParams = {},
+): void {
+  recordSuccessfulMigrationCheckpoints([STATE_MIGRATION_META_KEY], params);
+}
+
+export function recordSuccessfulStartupMigrations(
+  params: RecordMigrationCheckpointParams = {},
+): void {
+  recordSuccessfulMigrationCheckpoints(
+    [STATE_MIGRATION_META_KEY, STARTUP_MIGRATION_META_KEY],
+    params,
+  );
 }

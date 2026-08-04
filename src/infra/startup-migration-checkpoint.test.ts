@@ -19,8 +19,10 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   acquireStartupMigrationLease,
   hasActiveStartupMigrationLease,
+  needsStateMigrationCheckpoint,
   needsStartupMigrationCheckpoint,
   readStartupMigrationVersion,
+  recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
 } from "./startup-migration-checkpoint.js";
 
@@ -80,6 +82,13 @@ describe("startup migration checkpoint", () => {
         buildIdentity: "2026-07-11T00:00:00.000Z",
       }),
     ).toBe(true);
+    expect(
+      needsStateMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(true);
 
     recordSuccessfulStartupMigrations({
       env,
@@ -91,6 +100,13 @@ describe("startup migration checkpoint", () => {
     expect(readStartupMigrationVersion(env)).toBe("2026.7.1");
     expect(
       needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      needsStateMigrationCheckpoint({
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
@@ -110,6 +126,23 @@ describe("startup migration checkpoint", () => {
         buildIdentity: "2026-07-11T00:00:00.000Z",
       }),
     ).toBe(true);
+  });
+
+  it("keeps state-only completion narrower than gateway startup", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const checkpoint = {
+      env,
+      version: "2026.7.1",
+      buildIdentity: "2026-07-11T00:00:00.000Z",
+    };
+
+    recordSuccessfulStateMigrations({ ...checkpoint, nowMs: 1234 });
+
+    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
+    expect(readStartupMigrationVersion(env)).toBeNull();
   });
 
   it("keeps the fast path disabled without immutable build provenance", () => {
@@ -145,7 +178,7 @@ describe("startup migration checkpoint", () => {
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(true);
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1001, owner: "second" })).toThrow(
-      `OpenClaw startup migrations are already running for this state directory; retry after the other gateway finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
+      `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
     );
 
     lease.release();

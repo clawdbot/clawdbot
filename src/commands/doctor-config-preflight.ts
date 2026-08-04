@@ -192,6 +192,7 @@ export async function runDoctorConfigPreflight(
     measure?: ConfigSnapshotReadMeasure;
     /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+    requireStateMigrationCheckpoint?: boolean;
     requireStartupMigrationCheckpoint?: boolean;
     /** Core state was proven absent before Gateway selection could create runtime files. */
     skipPristineCoreStateMigrations?: boolean;
@@ -204,15 +205,18 @@ export async function runDoctorConfigPreflight(
   const stateMigrationsRequested = options.migrateState !== false;
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
-  const startupCheckpoint =
-    options.requireStartupMigrationCheckpoint === true
-      ? await measurePreflightStep(
-          "startup-checkpoint-import",
-          () => import("../infra/startup-migration-checkpoint.js"),
-        )
-      : undefined;
+  const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
+  const migrationCheckpointRequired =
+    gatewayStartupCheckpointRequired || options.requireStateMigrationCheckpoint === true;
+  const migrationCheckpoint = migrationCheckpointRequired
+    ? await measurePreflightStep(
+        "startup-checkpoint-import",
+        () => import("../infra/startup-migration-checkpoint.js"),
+      )
+    : undefined;
   let stateMigrations: Awaited<ReturnType<typeof loadDoctorStateMigrations>> | undefined;
   let startupMigrationEnv = process.env;
+  let shouldRecordStateCheckpoint = false;
   let shouldRecordStartupCheckpoint = false;
   let skipPristineStartupStateMigrations = options.skipPristineStartupStateMigrations === true;
   let skipPristineCoreStateMigrations =
@@ -232,8 +236,8 @@ export async function runDoctorConfigPreflight(
     noteStateMigrationResult(result);
   };
   try {
-    if (startupCheckpoint && !skipPristineStartupStateMigrations) {
-      // Capture pristine state before the Gateway's fresh-config guard can prepare runtime state.
+    if (migrationCheckpoint && !skipPristineStartupStateMigrations) {
+      // Capture pristine state before command bootstrap can prepare runtime state.
       const { planPristineStartupStateMigrations } = await measurePreflightStep(
         "pristine-state-plan-import",
         () => import("./doctor/shared/pristine-startup-state.js"),
@@ -252,18 +256,26 @@ export async function runDoctorConfigPreflight(
       (await measurePreflightStep("state-migration-guard", () =>
         options.beforeStateMigrations?.(),
       ));
-    if (startupCheckpoint && !stateMigrationsAllowed) {
+    if (gatewayStartupCheckpointRequired && !stateMigrationsAllowed) {
       throwStartupMigrationGuardRejected();
     }
-    if (startupCheckpoint) {
+    if (migrationCheckpoint) {
       // Later config reads can apply state selectors. Pin the accepted lease target for its lifetime.
       startupMigrationEnv = cloneEnvWithPlatformSemantics(process.env);
-      shouldRecordStartupCheckpoint = startupCheckpoint.needsStartupMigrationCheckpoint({
-        env: startupMigrationEnv,
-      });
-      startupMigrationLease = shouldRecordStartupCheckpoint
-        ? startupCheckpoint.acquireStartupMigrationLease({ env: startupMigrationEnv })
-        : undefined;
+      shouldRecordStateCheckpoint =
+        stateMigrationsRequested &&
+        migrationCheckpoint.needsStateMigrationCheckpoint({
+          env: startupMigrationEnv,
+        });
+      shouldRecordStartupCheckpoint =
+        gatewayStartupCheckpointRequired &&
+        migrationCheckpoint.needsStartupMigrationCheckpoint({
+          env: startupMigrationEnv,
+        });
+      startupMigrationLease =
+        shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint
+          ? migrationCheckpoint.acquireStartupMigrationLease({ env: startupMigrationEnv })
+          : undefined;
       if (startupMigrationLease) {
         startupMigrationHeartbeat = setInterval(() => {
           try {
@@ -275,11 +287,11 @@ export async function runDoctorConfigPreflight(
         startupMigrationHeartbeat.unref?.();
       }
     }
-    // A current version checkpoint proves this state root already completed every automatic
-    // migration. Keep repeated Gateway boots out of the legacy/plugin migration import graph.
+    // A current state checkpoint proves this root already completed every automatic migration.
+    // Keep repeated short-lived commands out of the legacy migration import graph.
     stateMigrations =
       stateMigrationsRequested &&
-      (!startupCheckpoint || shouldRecordStartupCheckpoint) &&
+      (!migrationCheckpoint || shouldRecordStateCheckpoint) &&
       !skipPristineStartupStateMigrations
         ? await measurePreflightStep("state-migrations-import", loadDoctorStateMigrations)
         : undefined;
@@ -360,7 +372,8 @@ export async function runDoctorConfigPreflight(
 
     const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
-    const freshConfigGuardRequired = stateMigrations !== undefined || shouldRecordStartupCheckpoint;
+    const freshConfigGuardRequired =
+      stateMigrations !== undefined || shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint;
     const freshConfigGuardAllowed =
       !freshConfigGuardRequired ||
       !stateMigrationsAllowed ||
@@ -368,7 +381,7 @@ export async function runDoctorConfigPreflight(
       (await measurePreflightStep("fresh-config-guard", () =>
         options.beforeStateMigrations?.(snapshot),
       ));
-    if (startupCheckpoint && !freshConfigGuardAllowed) {
+    if (gatewayStartupCheckpointRequired && !freshConfigGuardAllowed) {
       throwStartupMigrationGuardRejected();
     }
     if (stateMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
@@ -473,13 +486,16 @@ export async function runDoctorConfigPreflight(
         ),
       );
     }
-    if (startupCheckpoint) {
+    if (
+      (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) &&
+      startupMigrationHeartbeatError
+    ) {
+      throw startupMigrationHeartbeatError instanceof Error
+        ? startupMigrationHeartbeatError
+        : new Error("OpenClaw startup migration lease heartbeat failed.");
+    }
+    if (gatewayStartupCheckpointRequired) {
       if (shouldRecordStartupCheckpoint) {
-        if (startupMigrationHeartbeatError) {
-          throw startupMigrationHeartbeatError instanceof Error
-            ? startupMigrationHeartbeatError
-            : new Error("OpenClaw startup migration lease heartbeat failed.");
-        }
         if (startupMigrationWarnings.length > 0) {
           throwStartupMigrationRefusal(
             formatStartupMigrationFailure({
@@ -520,12 +536,29 @@ export async function runDoctorConfigPreflight(
           );
         }
       }
-      if (shouldRecordStartupCheckpoint) {
-        startupCheckpoint.recordSuccessfulStartupMigrations({
-          env: startupMigrationEnv,
-          lease: startupMigrationLease,
-        });
+    }
+    if (shouldRecordStartupCheckpoint) {
+      if (!migrationCheckpoint) {
+        throw new Error("OpenClaw startup migration checkpoint module was not loaded.");
       }
+      migrationCheckpoint.recordSuccessfulStartupMigrations({
+        env: startupMigrationEnv,
+        lease: startupMigrationLease,
+      });
+    } else if (
+      shouldRecordStateCheckpoint &&
+      stateMigrationsAllowed &&
+      freshConfigGuardAllowed &&
+      startupMigrationWarnings.length === 0 &&
+      snapshot.valid
+    ) {
+      if (!migrationCheckpoint) {
+        throw new Error("OpenClaw state migration checkpoint module was not loaded.");
+      }
+      migrationCheckpoint.recordSuccessfulStateMigrations({
+        env: startupMigrationEnv,
+        lease: startupMigrationLease,
+      });
     }
 
     return {
