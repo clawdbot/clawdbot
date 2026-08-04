@@ -4,10 +4,15 @@ import type {
   ProviderNormalizeToolSchemasContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 
+// Draft-07 `dependencies` is the union of the modern `dependentSchemas` and
+// `dependentRequired`: each value is either a subschema or a list of property names.
+// Walking it is safe for both, because the list form holds strings and a string is
+// not a record, so it round-trips unchanged.
 const SCHEMA_MAP_KEYS = new Set([
   "properties",
   "patternProperties",
   "dependentSchemas",
+  "dependencies",
   "$defs",
   "definitions",
 ]);

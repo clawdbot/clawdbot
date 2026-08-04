@@ -112,6 +112,39 @@ describe("moonshot schema normalization", () => {
     expect(branch.type).toBe("object");
   });
 
+  // Draft-07 `dependencies` maps a property name to either a schema or a list of
+  // required property names. The schema form nests a real subschema, so a walker that
+  // skips the keyword copies the rejected parent-type/untyped-anyOf shape through.
+  it("normalizes schemas nested under legacy dependencies", () => {
+    const normalized = normalizeSchema({
+      type: "object",
+      properties: { billing: { type: "string" } },
+      dependencies: {
+        billing: {
+          type: "object",
+          anyOf: [{ required: ["card"] }, { required: ["invoice"] }],
+        },
+      },
+    }) as { dependencies: Record<string, Record<string, unknown>> };
+
+    const nested = normalized.dependencies.billing ?? {};
+    expect(nested.type).toBeUndefined();
+    expect(nested.anyOf).toEqual([
+      { type: "object", required: ["card"] },
+      { type: "object", required: ["invoice"] },
+    ]);
+  });
+
+  it("leaves the property-name-list form of dependencies untouched", () => {
+    const normalized = normalizeSchema({
+      type: "object",
+      properties: { billing: { type: "string" } },
+      dependencies: { billing: ["card", "invoice"] },
+    }) as { dependencies: Record<string, unknown> };
+
+    expect(normalized.dependencies.billing).toEqual(["card", "invoice"]);
+  });
+
   it("leaves oneOf alone because only anyOf is evidenced by the provider error", () => {
     const schema = {
       type: "object",
