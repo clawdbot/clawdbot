@@ -36,6 +36,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     isRoutedReplyDelivered,
     markInboundDedupeReplayUnsafe,
     noVisibleReplyFallbackDirected,
+    pendingContinuation,
     replyResult,
     replyRoute,
     routeReplyToOriginating,
@@ -273,6 +274,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     state.sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
     !deliberateSilentTerminalReply &&
+    !pendingContinuation &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery() &&
@@ -375,7 +377,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !getObservedReplyDelivery() &&
       !replyAcceptedByActiveRun &&
       !emptyFinalAllowedAsSilent &&
-      !deliberateSilentTerminalReply
+      !deliberateSilentTerminalReply &&
+      !pendingContinuation
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),
