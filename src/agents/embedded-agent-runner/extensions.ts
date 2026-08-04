@@ -132,6 +132,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  contextTokenBudget?: number;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -141,16 +142,18 @@ export function buildEmbeddedExtensionFactories(params: {
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
-    const contextWindowInfo = resolveContextWindowInfo({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextTokens: params.model?.contextTokens,
-      modelContextWindow: params.model?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
+    const contextWindowTokens =
+      params.contextTokenBudget ??
+      resolveContextWindowInfo({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextTokens: params.model?.contextTokens,
+        modelContextWindow: params.model?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens;
     setCompactionSafeguardRuntime(params.sessionManager, {
-      contextWindowTokens: contextWindowInfo.tokens,
+      contextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,

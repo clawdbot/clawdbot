@@ -395,7 +395,7 @@ describe("context-window-guard", () => {
     ).toContain("This looks like a local model endpoint.");
   });
 
-  it("points config-backed block remediation at agents.defaults.contextTokens", () => {
+  it("uses neutral remediation for agent contextTokens caps", () => {
     const guard = evaluateContextWindowGuard({
       info: { tokens: 8_000, source: "agentContextTokens" },
     });
@@ -405,7 +405,9 @@ describe("context-window-guard", () => {
       runtimeBaseUrl: "http://127.0.0.1:11434/v1",
     });
 
-    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    expect(message).toContain("OpenClaw is capped by an agent contextTokens setting.");
+    expect(message).toContain("Raise that cap for the active agent.");
+    expect(message).not.toContain("agents.defaults.contextTokens");
     expect(message).not.toContain("choose a larger model");
   });
 

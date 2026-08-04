@@ -39,6 +39,25 @@ function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
   return { factories, sessionManager };
 }
 
+function buildSafeguardFactoriesWithContextBudget(contextTokenBudget: number) {
+  const sessionManager = {} as SessionManager;
+  const factories = buildEmbeddedExtensionFactories({
+    cfg: {
+      agents: {
+        defaults: {
+          compaction: { mode: "safeguard" },
+        },
+      },
+    } as OpenClawConfig,
+    sessionManager,
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-20250514",
+    model: { id: "claude-sonnet-4-20250514", contextWindow: 200_000 } as Model,
+    contextTokenBudget,
+  });
+  return { factories, sessionManager };
+}
+
 function expectSafeguardRuntime(
   cfg: OpenClawConfig,
   expectedRuntime: { qualityGuardEnabled: boolean; qualityGuardMaxRetries?: number },
@@ -104,6 +123,12 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("uses the resolved embedded context budget for safeguard compaction", () => {
+    const { sessionManager } = buildSafeguardFactoriesWithContextBudget(64_000);
+
+    expect(getCompactionSafeguardRuntime(sessionManager)?.contextWindowTokens).toBe(64_000);
   });
 
   it("wires the run workspace into safeguard runtime", () => {
