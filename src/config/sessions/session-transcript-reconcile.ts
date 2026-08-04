@@ -3,6 +3,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker, type WorkerOptions } from "node:worker_threads";
+import { computeBackoffSchedule } from "../../../packages/retry/src/index.js";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
@@ -21,6 +22,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { resolveStateDir } from "../paths.js";
+import { sleep } from "../../utils/sleep.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -52,6 +54,12 @@ import type {
 const log = createSubsystemLogger("sessions/transcript-index");
 const PROJECTION_WRITE_CHUNK_ROWS = 512;
 const PROJECTION_READY_POLL_MS = 10;
+// A dirty session clears the preflight and pays for a worker plus a full transcript
+// reparse on every pass, so one losing every race to concurrent appends livelocks
+// the main thread. Escalate on consecutive retries rather than aggregate progress:
+// sibling sessions can finalize while one contended session keeps spinning. The
+// leading zero preserves one immediate retry; target readers poll readiness separately.
+const RECONCILE_RETRY_BACKOFF_MS: readonly number[] = [0, 50, 200, 500, 1_000];
 
 type RunningReconcile = {
   pending: boolean;
@@ -522,6 +530,7 @@ export function startSessionTranscriptIndexReconcile(
   const pending = yieldToGateway()
     .then(async () => {
       let reconciledSessions = 0;
+      let retryCount = 0;
       while (true) {
         // Leave a successor's pending request intact if the previous memory
         // owner was disposed while its successful pass was settling.
@@ -535,6 +544,8 @@ export function startSessionTranscriptIndexReconcile(
         });
         reconciledSessions += result.reconciledSessions;
         if (state.pending) {
+          retryCount += 1;
+          await sleep(computeBackoffSchedule(RECONCILE_RETRY_BACKOFF_MS, retryCount));
           continue;
         }
         // Check and relinquish ownership without an async boundary. A later
