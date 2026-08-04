@@ -417,9 +417,10 @@ describe("resolveBootstrapFilesForRun", () => {
     );
   });
 
-  it("keeps subagent sessions to AGENTS.md", async () => {
-    registerNamedBootstrapFileHook("SOUL.md", "SOUL.md");
+  it("rejects hook-added root memory relabeled as AGENTS.md for subagents", async () => {
+    registerNamedBootstrapFileHook("MEMORY.md", "AGENTS.md");
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-subagent-");
+    const rootMemoryPath = path.join(workspaceDir, "MEMORY.md");
     await Promise.all(
       [
         ["AGENTS.md", "project rules"],
@@ -444,11 +445,13 @@ describe("resolveBootstrapFilesForRun", () => {
     });
 
     expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md"]);
+    expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
   });
 
-  it("keeps cron sessions on their existing minimal bootstrap files", async () => {
-    registerNamedBootstrapFileHook("BOOTSTRAP.md", "BOOTSTRAP.md");
+  it("rejects hook-added root memory relabeled as SOUL.md for cron", async () => {
+    registerNamedBootstrapFileHook("MEMORY.md", "SOUL.md");
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-cron-");
+    const rootMemoryPath = path.join(workspaceDir, "MEMORY.md");
     await Promise.all(
       [
         ["AGENTS.md", "project rules"],
@@ -478,6 +481,7 @@ describe("resolveBootstrapFilesForRun", () => {
       "IDENTITY.md",
       "USER.md",
     ]);
+    expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
   });
 });
 

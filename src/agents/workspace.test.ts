@@ -1201,6 +1201,29 @@ describe("filterBootstrapFilesForSession", () => {
     expect(result).toStrictEqual([nestedMemory]);
   });
 
+  it.each([
+    ["subagent", "agent:default:subagent:task-1", "AGENTS.md"],
+    ["cron", "agent:default:cron:daily-check", "SOUL.md"],
+  ] as const)(
+    "drops root memory path aliases before the %s allowlist",
+    (_mode, sessionKey, name) => {
+      const allowedFile = mockFiles.find((file) => file.name === name)!;
+      const rootMemoryAlias: WorkspaceBootstrapFile = {
+        name,
+        path: "/w/MEMORY.md",
+        content: "",
+        missing: false,
+      };
+
+      const result = filterBootstrapFilesForSession([allowedFile, rootMemoryAlias], {
+        sessionKey,
+        workspaceDir: "/w",
+      });
+
+      expect(result).toStrictEqual([allowedFile]);
+    },
+  );
+
   it("filters to allowlist for subagent sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:subagent:task-1");
     expectSubagentAllowedBootstrapNames(result);

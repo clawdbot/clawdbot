@@ -1025,16 +1025,10 @@ function resolveBootstrapSessionContext(
   return typeof session === "string" ? { sessionKey: session } : (session ?? {});
 }
 
-function filterRootMemoryBootstrapFilesForSession(
+function filterRootMemoryBootstrapFiles(
   files: WorkspaceBootstrapFile[],
-  session?: string | BootstrapSessionContext,
+  workspaceRoot?: string,
 ): WorkspaceBootstrapFile[] {
-  const { sessionKey, chatType } = resolveBootstrapSessionContext(session);
-  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  if (effectiveChatType !== "group" && effectiveChatType !== "channel") {
-    return files;
-  }
-  const workspaceRoot = session && typeof session === "object" ? session.workspaceDir : undefined;
   if (!workspaceRoot) {
     return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
   }
@@ -1061,14 +1055,22 @@ export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  const { sessionKey } = resolveBootstrapSessionContext(session);
-  if (isSubagentSessionKey(sessionKey)) {
-    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
+  const isSubagent = isSubagentSessionKey(sessionKey);
+  const isCron = isCronSessionKey(sessionKey);
+  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
+  const isNonPrivate =
+    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
+  const privacyFilteredFiles = isNonPrivate
+    ? filterRootMemoryBootstrapFiles(files, workspaceDir)
+    : files;
+  if (isSubagent) {
+    return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  if (isCronSessionKey(sessionKey)) {
-    return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+  if (isCron) {
+    return privacyFilteredFiles.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  return filterRootMemoryBootstrapFilesForSession(files, session);
+  return privacyFilteredFiles;
 }
 
 function hasGlobPattern(pattern: string): boolean {
