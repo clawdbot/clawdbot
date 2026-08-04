@@ -73,6 +73,10 @@ const MAX_FILE_OPS_LIST_CHARS = 900;
 // sections at this cap plus file ops, tool failures, and workspace rules.
 const MAX_CONTEXT_SECTION_CHARS = 4_000;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
+// Distinct from SUMMARY_TRUNCATED_MARKER: names loss of appended context
+// (preserved turns, split-turn prefix) rather than of the summary itself, so a
+// reader of the stored artifact can tell which half was cut.
+const SUFFIX_TRUNCATED_MARKER = "\n\n[Compaction context truncated to fit budget]\n";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
@@ -561,17 +565,20 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
     : "";
 }
 
-function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
-  if (maxChars <= 0 || summary.length <= maxChars) {
-    return summary;
+function capWithMarker(text: string, maxChars: number, marker: string): string {
+  if (maxChars <= 0 || text.length <= maxChars) {
+    return text;
   }
-  const marker = SUMMARY_TRUNCATED_MARKER;
   const budget = Math.max(0, maxChars - marker.length);
   if (budget <= 0) {
     // Marker cannot fit; keep body prefix instead of a partial marker fragment.
-    return truncateUtf16Safe(summary, maxChars);
+    return truncateUtf16Safe(text, maxChars);
   }
-  return `${truncateUtf16Safe(summary, budget)}${marker}`;
+  return `${truncateUtf16Safe(text, budget)}${marker}`;
+}
+
+function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
+  return capWithMarker(summary, maxChars, SUMMARY_TRUNCATED_MARKER);
 }
 
 function capCompactionSummaryPreservingSuffix(
@@ -589,13 +596,21 @@ function capCompactionSummaryPreservingSuffix(
     // The suffix alone can fill the budget, which previously dropped summaryBody
     // outright and produced a full-length summary carrying none of the summary.
     // Split the budget instead: the body keeps its head, the suffix its tail
-    // (workspace rules, diagnostics) over its head (preserved turns).
+    // (workspace rules, diagnostics) over its head (preserved turns). Both sides
+    // of the split mark their own loss so the stored artifact never reads as
+    // complete when either half was cut.
     const bodyBudget = Math.min(summaryBody.length, Math.floor(maxChars / 2));
     const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
+    const suffixBudget = maxChars - cappedBody.length;
     log.warn(
       `Compaction suffix (${suffix.length} chars) exceeds the ${maxChars}-char summary budget; truncating suffix and capping summary body to ${cappedBody.length} chars`,
     );
-    return `${cappedBody}${sliceUtf16Safe(suffix, -(maxChars - cappedBody.length))}`;
+    if (suffixBudget <= SUFFIX_TRUNCATED_MARKER.length) {
+      // Marker cannot fit; keep suffix tail instead of a partial marker fragment.
+      return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
+    }
+    const keptSuffix = sliceUtf16Safe(suffix, -(suffixBudget - SUFFIX_TRUNCATED_MARKER.length));
+    return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${keptSuffix}`;
   }
   const bodyBudget = Math.max(0, maxChars - suffix.length);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
@@ -773,8 +788,8 @@ function formatContextSection(messages: AgentMessage[], heading: string): string
   // (MAX_RECENT_TURNS_PRESERVE), so this section is the one suffix contributor
   // that could otherwise outgrow the whole summary budget. Keep every suffix
   // part bounded so capCompactionSummaryPreservingSuffix stays off its
-  // budget-splitting path.
-  return `${heading}\n${capCompactionSummary(lines.join("\n"), MAX_CONTEXT_SECTION_CHARS)}`;
+  // budget-splitting path. Marked as context loss, not summary loss.
+  return `${heading}\n${capWithMarker(lines.join("\n"), MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER)}`;
 }
 
 function formatPreservedTurnsSection(messages: AgentMessage[]): string {
@@ -1296,6 +1311,7 @@ const testing = {
   MAX_FILE_OPS_LIST_CHARS,
   MAX_CONTEXT_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
+  SUFFIX_TRUNCATED_MARKER,
 } as const;
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

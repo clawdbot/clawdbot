@@ -67,6 +67,7 @@ const {
   MAX_FILE_OPS_SECTION_CHARS,
   MAX_CONTEXT_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
+  SUFFIX_TRUNCATED_MARKER,
 } = testing;
 const { formatSplitTurnContextSection } = testing;
 
@@ -573,6 +574,23 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(capped.startsWith("## Decisions")).toBe(true);
     expect(capped).toContain("## Exact identifiers");
+    expect(capped).toContain("<workspace-critical-rules>");
+  });
+
+  it("marks suffix-only truncation when a short body leaves the suffix the one thing cut", () => {
+    const body = "## Decisions\nShip the refresh.\n## Exact identifiers\nN823JB";
+    const criticalTail =
+      "\n\n<workspace-critical-rules>\n## Session Startup\n</workspace-critical-rules>";
+    const oversizedSuffix = `${"x".repeat(MAX_COMPACTION_SUMMARY_CHARS)}${criticalTail}`;
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    // Body fits in half the budget, so it is returned intact and unmarked...
+    expect(capped.startsWith(body)).toBe(true);
+    expect(capped).not.toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    // ...but the suffix lost its head, and the stored artifact must say so.
+    expect(capped).toContain(SUFFIX_TRUNCATED_MARKER.trim());
     expect(capped).toContain("<workspace-critical-rules>");
   });
 

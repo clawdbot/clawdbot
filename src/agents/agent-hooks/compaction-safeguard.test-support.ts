@@ -32,6 +32,7 @@ type CompactionSafeguardTestApi = {
   MAX_FILE_OPS_LIST_CHARS: number;
   MAX_CONTEXT_SECTION_CHARS: number;
   SUMMARY_TRUNCATED_MARKER: string;
+  SUFFIX_TRUNCATED_MARKER: string;
 };
 
 function getTestApi(): CompactionSafeguardTestApi {
