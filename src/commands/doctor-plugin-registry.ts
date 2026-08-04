@@ -142,17 +142,16 @@ function readPluginManifestId(packageDir: string): string | undefined {
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
-function primaryInstallRecordPath(record: PluginInstallRecord): {
+function populatedInstallRecordPaths(record: PluginInstallRecord): {
   field: "installPath" | "sourcePath";
   path: string;
-} | null {
-  if (typeof record.installPath === "string" && record.installPath.trim()) {
-    return { field: "installPath", path: record.installPath };
-  }
-  if (typeof record.sourcePath === "string" && record.sourcePath.trim()) {
-    return { field: "sourcePath", path: record.sourcePath };
-  }
-  return null;
+}[] {
+  return (["installPath", "sourcePath"] as const).flatMap((field) => {
+    const recordPath = record[field];
+    return typeof recordPath === "string" && recordPath.trim()
+      ? [{ field, path: recordPath }]
+      : [];
+  });
 }
 
 async function listMissingPluginInstallRecordPaths(
@@ -173,18 +172,18 @@ async function listMissingPluginInstallRecordPaths(
   for (const [pluginId, record] of Object.entries(installRecords).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    const recordPath = primaryInstallRecordPath(record);
-    if (!recordPath) {
+    const recordPaths = populatedInstallRecordPaths(record).map((recordPath) => ({
+      ...recordPath,
+      path: path.resolve(resolveUserPath(recordPath.path, params.env)),
+    }));
+    if (recordPaths.length === 0 || recordPaths.some((recordPath) => fs.existsSync(recordPath.path))) {
       continue;
     }
-    const resolvedPath = path.resolve(resolveUserPath(recordPath.path, params.env));
-    if (fs.existsSync(resolvedPath)) {
-      continue;
-    }
+    const recordPath = recordPaths[0];
     missing.push({
       pluginId,
       recordPathField: recordPath.field,
-      missingPath: resolvedPath,
+      missingPath: recordPath.path,
     });
   }
   return missing;

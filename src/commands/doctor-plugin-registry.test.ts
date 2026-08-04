@@ -506,6 +506,30 @@ describe("maybeRepairPluginRegistryState", () => {
     });
   });
 
+  it("keeps install records when an alternate supported path exists", async () => {
+    const stateDir = makeTempDir();
+    const missingDir = path.join(stateDir, "plugins", "missing");
+    const sourceDir = path.join(stateDir, "plugins", "source");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const index = createCurrentIndexWithPathRecord({
+      pluginId: "demo",
+      installPath: missingDir,
+    });
+    index.installRecords.demo!.sourcePath = sourceDir;
+    await writePersistedInstalledPluginIndex(index, { stateDir });
+
+    const issues = await detectPluginRegistryHealthIssues({
+      stateDir,
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: false },
+    });
+
+    expect(issues).not.toContainEqual(
+      expect.objectContaining({ kind: "missing-plugin-install-record-path", pluginId: "demo" }),
+    );
+  });
+
   it("removes missing install record paths during repair", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
