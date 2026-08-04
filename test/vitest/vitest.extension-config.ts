@@ -22,8 +22,8 @@ export function createExtensionVitestConfig(
       env,
       name: `extension-${name}`,
       passWithNoTests: true,
-      ...options,
       setupFiles: ["test/setup.extensions.ts"],
+      ...options,
     },
   );
 }
