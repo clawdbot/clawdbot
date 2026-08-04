@@ -3,6 +3,9 @@
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
+// Beyond this much clock movement the stream already underran, or the wall clock jumped;
+// restart the cadence from now instead of firing a catch-up burst the carrier would drop.
+const MAX_PACING_CATCHUP_MS = 100;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
 const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 
@@ -35,6 +38,8 @@ export class RealtimeAudioPacer {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
+  /** Wall time the next audio frame is due, so pacing cannot drift late frame by frame. */
+  private nextSendDeadlineMs: number | null = null;
 
   constructor(
     private readonly params: {
@@ -151,6 +156,9 @@ export class RealtimeAudioPacer {
   private resetQueue(): void {
     this.queue.length = 0;
     this.queueHead = 0;
+    // Nothing is pending, so the next audio starts a fresh cadence rather than
+    // inheriting a deadline from the previous utterance.
+    this.nextSendDeadlineMs = null;
   }
 
   /** Send one queued item and schedule the next send based on audio duration. */
@@ -169,7 +177,21 @@ export class RealtimeAudioPacer {
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
       sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
-      delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
+      // Schedule against a running deadline instead of sleeping a full frame after each
+      // send; a relative sleep adds send and event-loop cost to every frame, and that
+      // underfeed accumulates into carrier jitter-buffer concealment.
+      const frameDurationMs = item.durationMs || TELEPHONY_CHUNK_MS;
+      const nowMs = Date.now();
+      // Read the same clock the scheduler runs on, and drop the deadline whenever it is
+      // no longer meaningful: a long stall, or a wall-clock jump in either direction.
+      if (
+        this.nextSendDeadlineMs === null ||
+        Math.abs(nowMs - this.nextSendDeadlineMs) > MAX_PACING_CATCHUP_MS
+      ) {
+        this.nextSendDeadlineMs = nowMs;
+      }
+      this.nextSendDeadlineMs += frameDurationMs;
+      delayMs = Math.max(0, this.nextSendDeadlineMs - nowMs);
     } else {
       sent = this.params.send(this.params.serializer.mark(item.name));
     }
