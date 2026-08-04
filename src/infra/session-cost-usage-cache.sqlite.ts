@@ -250,10 +250,33 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+// Owner nonces for refresh locks whose in-process holder is still live in THIS lifecycle.
+// pid-liveness alone cannot reclaim a lock leaked by our own process: an in-process gateway
+// restart (SIGUSR1 keeps the same pid for the process lifetime) can abandon a mid-refresh
+// holder before its release runs, so pid-liveness reports "refreshing" forever (#103910).
+const activeRefreshLockOwnerNonces = new Set<string>();
+
+// A lock owned by another pid is live while that pid runs. A lock owned by our own pid is
+// live only while its holder is still registered; an own-pid lock whose nonce is no longer
+// registered is a self-lock leaked by a previous in-process lifecycle and is reclaimable.
+function isRefreshLockHeldByLiveHolder(lock: SessionCostUsageRefreshLock): boolean {
+  if (lock.pid === process.pid) {
+    return activeRefreshLockOwnerNonces.has(lock.ownerNonce);
+  }
+  return isProcessRunning(lock.pid);
+}
+
+// Called at the in-process gateway restart boundary. Holders from the previous lifecycle
+// never released, so drop their registrations; their own-pid locks then read as leaked
+// self-locks and the next acquire/status check reclaims them instead of blocking (#103910).
+export function clearSessionCostUsageRefreshHoldersForInProcessRestart(): void {
+  activeRefreshLockOwnerNonces.clear();
+}
+
 export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
   const raw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
   const lock = parseRefreshLock(raw);
-  if (lock && isProcessRunning(lock.pid)) {
+  if (lock && isRefreshLockHeldByLiveHolder(lock)) {
     return true;
   }
   if (raw !== null) {
@@ -274,9 +297,9 @@ export function acquireSessionCostUsageRefreshLock(
 ): { acquired: boolean; release: () => void } {
   const previousRaw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
   const previousLock = parseRefreshLock(previousRaw);
-  // Process liveness is resolved before BEGIN. The transaction only compares
-  // the authoritative row and commits the prepared replacement synchronously.
-  const previousOwnerIsRunning = previousLock ? isProcessRunning(previousLock.pid) : false;
+  // Holder liveness is resolved before BEGIN. The transaction only compares the
+  // authoritative row and commits the prepared replacement synchronously.
+  const previousOwnerIsRunning = previousLock ? isRefreshLockHeldByLiveHolder(previousLock) : false;
   const lock: SessionCostUsageRefreshLock = {
     pid: process.pid,
     startedAt: Date.now(),
@@ -328,10 +351,16 @@ export function acquireSessionCostUsageRefreshLock(
     },
     { operationLabel: "session-cost-usage.refresh-lock.acquire" },
   );
+  if (acquired) {
+    // Register the live holder so a subsequent status/acquire on this pid treats the row
+    // as live until release; the restart boundary clears this to reclaim leaked self-locks.
+    activeRefreshLockOwnerNonces.add(lock.ownerNonce);
+  }
   return {
     acquired,
     release: () => {
       if (acquired) {
+        activeRefreshLockOwnerNonces.delete(lock.ownerNonce);
         deleteCacheValueIfUnchanged({
           agentId,
           databasePath,
