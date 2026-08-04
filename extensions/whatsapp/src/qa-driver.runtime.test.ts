@@ -3,6 +3,11 @@ import { EventEmitter } from "node:events";
 import type { proto, WAMessage } from "baileys";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildPollCreationMessageForTests,
+  buildPollUpdateMessageForTests,
+  encryptPollVoteForTests,
+} from "./inbound/poll-votes.test-support.js";
 import { startWhatsAppQaDriverSession, type WhatsAppQaDriverSession } from "./qa-driver.runtime.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
@@ -426,6 +431,67 @@ describe("startWhatsAppQaDriverSession", () => {
       mimetype: "image/webp",
     });
     expect(mocks.socketSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("decodes a real poll vote referencing an earlier observed poll (live-proof harness)", async () => {
+    const session = await startSession();
+    const chatJid = "999@s.whatsapp.net";
+    const pollCreatorJid = "111@s.whatsapp.net";
+    const voterJid = "222@s.whatsapp.net";
+    const pollMsgId = "poll-1";
+
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Yes", "No"],
+    });
+    emitMessages(
+      incoming(pollCreationMessage, {
+        id: pollMsgId,
+        remoteJid: chatJid,
+        fromMe: false,
+        participant: pollCreatorJid,
+      }),
+    );
+
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Yes"],
+      pollEncKey,
+      pollCreatorJid,
+      pollMsgId,
+      voterJid,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({
+      creationKey: {
+        remoteJid: chatJid,
+        id: pollMsgId,
+        fromMe: false,
+        participant: pollCreatorJid,
+      },
+      vote,
+      senderTimestampMs: 1_700_000_100_000,
+    });
+    emitMessages(
+      incoming(voteMessage, {
+        id: "vote-1",
+        remoteJid: chatJid,
+        fromMe: false,
+        participant: voterJid,
+      }),
+    );
+
+    const observedMessages = session.getObservedMessages();
+    expect(observedMessages).toHaveLength(2);
+    expect(observedMessages[0]).toMatchObject({ kind: "poll" });
+    expect(observedMessages[1]).toMatchObject({
+      kind: "poll_vote",
+      pollVote: {
+        pollMessageId: pollMsgId,
+        chatJid,
+        voter: voterJid,
+        selectedOptions: ["Yes"],
+        timestamp: 1_700_000_100_000,
+      },
+    });
   });
 
   it("passes the connection timeout to the shared connection waiter", async () => {

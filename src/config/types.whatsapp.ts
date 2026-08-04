@@ -72,6 +72,8 @@ export type WhatsAppConfig = Omit<WhatsAppSharedConfig, "name"> &
     pluginHooks?: {
       /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
       messageReceived?: boolean;
+      /** Enable poll_vote_received hooks to broadcast decoded WhatsApp poll votes to plugins. */
+      pollVoteReceived?: boolean;
     };
   };
 
@@ -85,5 +87,7 @@ export type WhatsAppAccountConfig = WhatsAppSpecificConfig &
     pluginHooks?: {
       /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
       messageReceived?: boolean;
+      /** Enable poll_vote_received hooks to broadcast decoded WhatsApp poll votes to plugins. */
+      pollVoteReceived?: boolean;
     };
   };

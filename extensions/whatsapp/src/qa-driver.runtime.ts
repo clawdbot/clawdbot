@@ -14,6 +14,7 @@ import {
   findMessageSection,
 } from "./inbound/extract.js";
 import { resolveInboundMediaMimetype } from "./inbound/media-mimetype.js";
+import { decodeWhatsAppPollVote, type WhatsAppDecodedPollVote } from "./inbound/poll-votes.js";
 import { createWebSendApi } from "./inbound/send-api.js";
 import type { ActiveWebSendOptions } from "./inbound/types.js";
 import { isWhatsAppGroupJid } from "./normalize-target.js";
@@ -28,6 +29,7 @@ type WhatsAppQaDriverObservedMessageKind =
   | "media"
   | "location"
   | "poll"
+  | "poll_vote"
   | "reaction"
   | "text"
   | "unknown";
@@ -61,6 +63,8 @@ export type WhatsAppQaDriverObservedMessage = {
   observedAt: string;
   participantJid?: string;
   poll?: WhatsAppQaDriverObservedPoll;
+  /** Present only for `kind: "poll_vote"` — a decoded WhatsApp poll vote. */
+  pollVote?: WhatsAppDecodedPollVote;
   quoted?: WhatsAppQaDriverQuotedMessage;
   reaction?: WhatsAppQaDriverObservedReaction;
   text: string;
@@ -276,6 +280,22 @@ function normalizeObservedMessage(
   };
 }
 
+function buildPollVoteObservedMessage(
+  message: WAMessage,
+  vote: WhatsAppDecodedPollVote,
+): WhatsAppQaDriverObservedMessage {
+  return {
+    fromJid: message.key.remoteJid ?? undefined,
+    fromPhoneE164: undefined,
+    kind: "poll_vote",
+    messageId: message.key.id ?? undefined,
+    observedAt: new Date().toISOString(),
+    participantJid: message.key.participant ?? undefined,
+    pollVote: vote,
+    text: "",
+  };
+}
+
 function createConnectionClosedError(update: ConnectionUpdateEvent) {
   const reason = update.lastDisconnect?.error;
   const status = getStatusCode(reason);
@@ -291,6 +311,11 @@ export async function startWhatsAppQaDriverSession(params: {
 }): Promise<WhatsAppQaDriverSession> {
   const sock = await createWaSocket(false, false, { authDir: params.authDir });
   const observedMessages: WhatsAppQaDriverObservedMessage[] = [];
+  // Raw messages by `${remoteJid}:${id}`, so a later poll vote can look up its
+  // poll creation message's encryption key — mirrors the production cache in
+  // extensions/whatsapp/src/inbound/baileys-cache.ts, kept separate here since
+  // the QA driver doesn't share the gateway's socket-session plumbing.
+  const rawMessageCache = new Map<string, proto.IMessage>();
   const waiters = new Set<Waiter>();
   let pendingNotificationsWaiter: VoidWaiter | undefined;
   let closed = false;
@@ -329,6 +354,24 @@ export async function startWhatsAppQaDriverSession(params: {
 
   const onMessagesUpsert = (event: MessageUpsertEvent) => {
     for (const rawMessage of event.messages ?? []) {
+      const remoteJid = rawMessage.key.remoteJid;
+      const id = rawMessage.key.id;
+      if (remoteJid && id && rawMessage.message) {
+        rawMessageCache.set(`${remoteJid}:${id}`, rawMessage.message);
+      }
+      if (rawMessage.message?.pollUpdateMessage) {
+        const vote = decodeWhatsAppPollVote({
+          message: rawMessage.message,
+          key: rawMessage.key,
+          getCachedMessage: (voteRemoteJid, voteMessageId) =>
+            rawMessageCache.get(`${voteRemoteJid}:${voteMessageId}`),
+          selfJid: sock.user?.id,
+        });
+        if (vote) {
+          observe(buildPollVoteObservedMessage(rawMessage, vote));
+        }
+        continue;
+      }
       const observed = normalizeObservedMessage(rawMessage, params.authDir);
       if (observed) {
         observe(observed);

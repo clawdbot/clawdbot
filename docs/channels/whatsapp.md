@@ -253,6 +253,31 @@ Inbound WhatsApp messages can carry personal content, phone numbers, group ident
 
 Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHooks.messageReceived`. Only enable this for plugins you trust with inbound WhatsApp content and identifiers.
 
+Poll votes follow the same opt-in pattern, under a separate flag. When someone
+votes on a poll OpenClaw created (`message(action="poll", ...)`), WhatsApp
+does not broadcast the decoded vote to plugins unless you enable
+`pluginHooks.pollVoteReceived`:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pluginHooks: {
+        pollVoteReceived: true,
+      },
+    },
+  },
+}
+```
+
+Same account-level scoping as above:
+`channels.whatsapp.accounts.<id>.pluginHooks.pollVoteReceived`. The
+`poll_vote_received` hook is passive observation only — it never triggers an
+agent run — and delivers `pollMessageId`, `chatJid`, `voter`, and
+`selectedOptions` (an empty array means the voter retracted their vote). See
+[Plugin hooks → Message hooks](/plugins/hooks#message-hooks) for the full
+payload reference.
+
 ## Access control and activation
 
 <Tabs>
