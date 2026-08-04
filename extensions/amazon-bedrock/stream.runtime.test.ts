@@ -461,7 +461,7 @@ describe("Bedrock stop reasons", () => {
 describe("Bedrock thinking effort mapping", () => {
   it.each([
     { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
-    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+    { reasoning: "off" as const, expected: "off", maxTokens: 128_000, fields: false },
   ])(
     "uses the Opus 5 default for reasoning=$reasoning",
     ({ reasoning, expected, maxTokens, fields }) => {
