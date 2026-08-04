@@ -81,7 +81,7 @@ const stubManager = {
 const getMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) =>
   getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
 );
-const closeMemorySearchManagerMock = vi.fn(async () => {});
+const closeMemorySearchManagerMock = vi.fn(async (_params?: MemoryManagerParams) => {});
 const refreshMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) => {
   await closeMemorySearchManagerMock(params);
   return await getMemorySearchManagerMock(params);
@@ -171,7 +171,7 @@ export function resetMemoryToolMockState(overrides?: {
       lines: params.lines ?? 120,
     }));
   vi.clearAllMocks();
-  closeMemorySearchManagerMock.mockImplementation(async () => {});
+  closeMemorySearchManagerMock.mockImplementation(async (_params?: MemoryManagerParams) => {});
   refreshMemorySearchManagerMock.mockImplementation(async (params: MemoryManagerParams) => {
     await closeMemorySearchManagerMock(params);
     return await getMemorySearchManagerMock(params);
@@ -199,7 +199,7 @@ export function getMemoryCloseMockCalls(): number {
 }
 
 export function setCloseMemorySearchManagerImpl(next: () => Promise<void> | void): void {
-  closeMemorySearchManagerMock.mockImplementation(async () => {
+  closeMemorySearchManagerMock.mockImplementation(async (_params?: MemoryManagerParams) => {
     await next();
   });
 }

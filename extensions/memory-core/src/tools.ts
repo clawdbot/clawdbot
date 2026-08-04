@@ -721,25 +721,34 @@ export function createMemorySearchTool(options: {
                   // (e.g. session memory enabled after the gateway cached the
                   // manager). Refresh once at the owner boundary, then retry.
                   const { refreshMemorySearchManager } = await loadMemoryToolRuntime();
-                  const refreshed = await runWithDefaultDeadline(async () =>
-                    trackMemoryManager(
-                      refreshMemorySearchManager
-                        ? await refreshMemorySearchManager({
-                            cfg,
-                            agentId,
-                            purpose: memoryManagerPurpose,
-                            acquireLocalService: options.acquireLocalService,
-                            withLease: options.withLease,
-                          })
-                        : await getMemoryManagerContextWithPurpose({
-                            cfg,
-                            agentId,
-                            purpose: memoryManagerPurpose,
-                            acquireLocalService: options.acquireLocalService,
-                            withLease: options.withLease,
-                          }),
-                    ),
-                  );
+                  const refreshed = await runWithDefaultDeadline(async () => {
+                    if (refreshMemorySearchManager) {
+                      const result = await refreshMemorySearchManager({
+                        cfg,
+                        agentId,
+                        purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
+                      });
+                      // Normalize nullable manager into the tool context union.
+                      if (!result.manager) {
+                        return trackMemoryManager({ error: result.error });
+                      }
+                      return trackMemoryManager({
+                        manager: result.manager,
+                        debug: result.debug,
+                      });
+                    }
+                    return trackMemoryManager(
+                      await getMemoryManagerContextWithPurpose({
+                        cfg,
+                        agentId,
+                        purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
+                      }),
+                    );
+                  });
                   if ("error" in refreshed) {
                     // Keep the pre-refresh paused reason; reacquisition failure
                     // still surfaces as index unavailable rather than a throw.
