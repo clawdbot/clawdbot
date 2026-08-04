@@ -156,6 +156,7 @@ function makeBot() {
 }
 
 function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] = [0, 0]) {
+  let monotonicNow = dateNowSequence[0] ?? 0;
   let watchdog: (() => void) | undefined;
   let resolveWatchdog: ((fn: () => void) => void) | undefined;
   const watchdogReady = new Promise<() => void>((resolve) => {
@@ -177,6 +178,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
   });
   const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
   const dateNowSpy = vi.spyOn(Date, "now");
+  const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
   for (const value of dateNowSequence) {
     dateNowSpy.mockImplementationOnce(() => value);
   }
@@ -204,6 +206,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
       });
     },
     setNow(now: number) {
+      monotonicNow = now;
       dateNowSpy.mockReset();
       dateNowSpy.mockImplementation(() => now);
     },
@@ -213,6 +216,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
       setTimeoutSpy.mockRestore();
       clearTimeoutSpy.mockRestore();
       dateNowSpy.mockRestore();
+      performanceNowSpy.mockRestore();
     },
   };
 }
