@@ -1691,7 +1691,7 @@ describe("session_status tool", () => {
       },
     });
     // resetSessionStore restores default mocks; install the ACP policy afterward.
-    resolveProviderThinkingProfileMock.mockImplementation(({ context }) => ({
+    resolveProviderThinkingProfileMock.mockImplementation(({ context } = {}) => ({
       levels: [
         { id: "off" },
         { id: "max" },
@@ -1733,7 +1733,7 @@ describe("session_status tool", () => {
         agentRuntimeOverride: "openclaw",
       },
     });
-    resolveProviderThinkingProfileMock.mockImplementation(({ context }) => ({
+    resolveProviderThinkingProfileMock.mockImplementation(({ context } = {}) => ({
       levels: [
         { id: "off" },
         { id: "max" },
