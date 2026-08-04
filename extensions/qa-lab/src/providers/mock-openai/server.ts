@@ -153,7 +153,7 @@ import {
   buildWhatsAppGroupDispatchReply,
   buildWhatsAppBatchedReply,
   countImageInputs,
-  extractLatestImageUserTurn,
+  extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import {
@@ -713,7 +713,7 @@ async function buildResponsesPayload(
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
+  const currentImageRequest = extractCurrentImageRequest(input, body);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -1071,16 +1071,16 @@ async function buildResponsesPayload(
     return buildAssistantEvents("BETA-OK");
   }
   if (
-    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /roundtrip image inspection check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return buildAssistantEvents(
       "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.",
     );
   }
   if (
-    /image understanding check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /image understanding check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return buildAssistantEvents(
       "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",

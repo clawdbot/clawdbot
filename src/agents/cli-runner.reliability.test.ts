@@ -49,6 +49,7 @@ import {
   runPreparedCliAgent,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
+import { createClaudeInputStartedEvent } from "./cli-runner.test-helpers.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
@@ -256,6 +257,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label}`);
   }
   return value as Record<string, unknown>;
+}
+
+function claudeInputStartedJson(data: string): string {
+  const event = createClaudeInputStartedEvent(data);
+  if (!event) {
+    throw new Error("expected Claude user input UUID");
+  }
+  return JSON.stringify(event);
 }
 
 function requireArray(value: unknown, label: string): Array<unknown> {
@@ -2001,7 +2010,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it("forks a synthetic-stalled resume without rebuilding its cached conversation", async () => {
+  it("forks a lifecycle-started resume stall without rebuilding its cached conversation", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const transcriptProbe = vi.fn(async () => false);
@@ -2062,15 +2071,7 @@ describe("runCliAgent reliability", () => {
                     subtype: "init",
                     session_id: "stale-live",
                   }),
-                  JSON.stringify({
-                    type: "assistant",
-                    session_id: "stale-live",
-                    message: {
-                      model: "<synthetic>",
-                      role: "assistant",
-                      content: [{ type: "text", text: "No response requested." }],
-                    },
-                  }),
+                  claudeInputStartedJson(dataValue),
                 ].join("\n") + "\n",
               );
               cb?.();
@@ -2103,6 +2104,7 @@ describe("runCliAgent reliability", () => {
             stdoutListener?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: "forked-live" }),
+                claudeInputStartedJson(dataValue),
                 JSON.stringify({
                   type: "assistant",
                   uuid: "assistant-after-recovery",
@@ -2234,7 +2236,7 @@ describe("runCliAgent reliability", () => {
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
-  it("falls back to transcript reseeding when the cache-preserving fork also stalls", async () => {
+  it("falls back to transcript reseeding when the lifecycle-started fork also stalls", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const spawnedArgv: string[][] = [];
@@ -2277,18 +2279,9 @@ describe("runCliAgent reliability", () => {
             input.onStdout?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                claudeInputStartedJson(dataValue),
                 ...(spawnIndex < 3
-                  ? [
-                      JSON.stringify({
-                        type: "assistant",
-                        session_id: sessionId,
-                        message: {
-                          model: "<synthetic>",
-                          role: "assistant",
-                          content: [{ type: "text", text: "No response requested." }],
-                        },
-                      }),
-                    ]
+                  ? []
                   : [
                       JSON.stringify({
                         type: "result",
@@ -2434,6 +2427,7 @@ describe("runCliAgent reliability", () => {
             input.onStdout?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                claudeInputStartedJson(dataValue),
                 ...(spawnIndex === 1
                   ? []
                   : [

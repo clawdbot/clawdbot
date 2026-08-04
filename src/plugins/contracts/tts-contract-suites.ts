@@ -21,7 +21,7 @@ type SummarizeTextDeps = NonNullable<Parameters<TtsCoreModule["summarizeText"]>[
 
 let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimeInitialized = false;
-let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
+let completeWithPreparedSimpleCompletionModel: SummarizeTextDeps["completeWithPreparedSimpleCompletionModel"];
 let prepareSimpleCompletionModelMock: SummarizeTextDeps["prepareSimpleCompletionModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let summarizeTextCore: TtsCoreModule["summarizeText"];
@@ -137,7 +137,7 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
 
 function createSummarizeTextDeps() {
   return {
-    completeSimple,
+    completeWithPreparedSimpleCompletionModel,
     prepareSimpleCompletionModel: prepareSimpleCompletionModelMock,
     requireApiKey: requireApiKeyMock,
   };
@@ -521,10 +521,10 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("../../plugin-sdk/llm.js"));
+  completeWithPreparedSimpleCompletionModel = vi.fn();
   prepareSimpleCompletionModelMock = createPrepareSimpleCompletionModelMock();
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
-  vi.mocked(completeSimple).mockResolvedValue(
+  vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
     mockAssistantMessage([{ type: "text", text: "Summary" }]),
   );
   vi.mocked(requireApiKeyMock).mockImplementation((auth: { apiKey?: string }) => auth.apiKey ?? "");
@@ -879,7 +879,7 @@ export function describeTtsSummarizationContract() {
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue(
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
@@ -893,18 +893,23 @@ export function describeTtsSummarizationContract() {
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimple).toHaveBeenCalledTimes(1);
+      expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = mockCallAt(vi.mocked(completeSimple), 0);
+      const callArgs = mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0);
       expect(
-        (callArgs[1] as { messages?: Array<{ role?: string }> } | undefined)?.messages?.[0]?.role,
+        (callArgs[0] as { context?: { messages?: Array<{ role?: string }> } } | undefined)?.context
+          ?.messages?.[0]?.role,
       ).toBe("user");
-      expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
-      expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
+      expect(
+        (callArgs[0] as { options?: { maxTokens?: number } } | undefined)?.options?.maxTokens,
+      ).toBe(250);
+      expect(
+        (callArgs[0] as { options?: { temperature?: number } } | undefined)?.options?.temperature,
+      ).toBe(0.3);
       expect(requireApiKeyMock).toHaveBeenCalledWith(
         expect.objectContaining({ apiKey: "test-api-key" }),
         "openai",
@@ -938,7 +943,11 @@ export function describeTtsSummarizationContract() {
       await runSummarizeText();
 
       expect(
-        (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
+        (
+          mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0)[0] as
+            | { model?: { api?: string } }
+            | undefined
+        )?.model?.api,
       ).toBe("openai-completions");
     });
 
@@ -967,7 +976,7 @@ export function describeTtsSummarizationContract() {
         message: mockAssistantMessage([{ type: "text", text: "   " }]),
       },
     ] as const)("throws when summary output is missing or empty: $name", async (testCase) => {
-      vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(testCase.message);
       await expect(runSummarizeText({ text: "text" }), testCase.name).rejects.toThrow(
         "No summary returned",
       );

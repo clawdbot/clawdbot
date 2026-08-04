@@ -659,6 +659,12 @@ describe("normalizeClaudeBackendConfig", () => {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     });
+    expect(backend.liveSessionRequirement).toEqual({
+      capability: "msg_lifecycle_v1",
+      minimumVersion: "2.1.206",
+      versionArgs: ["--version"],
+      updateCommand: "claude update",
+    });
 
     const normalized = normalizeConfig?.({
       ...backend.config,

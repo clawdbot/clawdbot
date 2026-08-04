@@ -6,6 +6,11 @@
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 
+export function hasMultipleHardlinks(raw: string): boolean {
+  const linkCount = parseStrictNonNegativeInteger(raw);
+  return linkCount === undefined ? /^\d+$/.test(raw) : linkCount > 1;
+}
+
 /** Parses file sizes, capping huge integer strings at the largest safe JS integer. */
 export function parseSandboxStatSize(value: string | undefined): number {
   const raw = value ?? "0";

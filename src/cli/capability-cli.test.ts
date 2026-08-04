@@ -518,6 +518,7 @@ describe("capability cli", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENAI_API_KEY", "");
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
