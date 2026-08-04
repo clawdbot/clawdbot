@@ -78,9 +78,9 @@ export class TelegramPollingLivenessTracker {
     const monotonicNow = this.#monotonicNow();
     const checkGap = monotonicNow - this.#lastStallCheckMonotonicAt;
     this.#lastStallCheckMonotonicAt = monotonicNow;
-    // The watchdog cannot distinguish a stalled poll from delayed callbacks when
-    // it did not run for a full threshold. Rebase once, then observe normally.
-    if (checkGap > params.thresholdMs) {
+    // The watchdog cannot distinguish a stalled poll from delayed callbacks after
+    // missing two full detection windows. Rebase once, then observe normally.
+    if (checkGap > params.thresholdMs * 2) {
       this.#lastGetUpdatesActivityMonotonicAt = monotonicNow;
       return null;
     }
