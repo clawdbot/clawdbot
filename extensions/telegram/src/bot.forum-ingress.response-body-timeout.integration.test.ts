@@ -75,28 +75,47 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     const dispatched = vi.fn<
       Parameters<typeof registerTelegramMessageHandlers>[3]["processInboundMessage"]
     >(async () => undefined);
+    const emptyAllow = {
+      entries: [],
+      hasWildcard: false,
+      hasEntries: false,
+      invalidEntries: [],
+    };
     const authorization = {
       authorizeInboundMessage: vi.fn(async () => ({
         allowed: true as const,
-        effectiveDmAllow: {},
+        effectiveDmAllow: emptyAllow,
         context: {
           cfg: {},
+          telegramCfg: {},
+          allowFrom: [],
           dmPolicy: "open" as const,
           storeAllowFrom: [],
-          effectiveGroupAllow: {},
+          effectiveGroupAllow: emptyAllow,
+          hasGroupAllowOverride: false,
         },
       })),
-    } as unknown as Parameters<typeof registerTelegramMessageHandlers>[2];
+    } satisfies Parameters<typeof registerTelegramMessageHandlers>[2];
     const messageRuntime = {
       normalizePromptContextMinTimestampMs: () => undefined,
       promptContextBoundaryOptions: () => ({}),
       releaseDispatchDedupeClaims: () => undefined,
       claimMessageDispatchDedupe: async () => ({ process: true, claims: [] }),
-      buildSyntheticContext: (context: unknown) => context,
-      resolveTelegramSessionState: () => ({ sessionKey: "integration", storePath: "integration" }),
+      buildSyntheticContext: (context, message) => ({
+        message,
+        me: context.me,
+        getFile: context.getFile.bind(context),
+      }),
+      resolveTelegramSessionState: () => ({
+        agentId: "integration",
+        sessionEntry: undefined,
+        sessionKey: "integration",
+        storePath: "integration",
+        model: undefined,
+      }),
       resolvePromptContextAmbientWatermark: () => undefined,
       recordMessageForReplyChain: async () => undefined,
-    } as unknown as Parameters<typeof registerTelegramMessageHandlers>[1];
+    } satisfies Parameters<typeof registerTelegramMessageHandlers>[1];
 
     registerTelegramMessageHandlers(
       {
@@ -104,12 +123,10 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         opts: { botInfo },
         runtime: { error: vi.fn() },
         shouldSkipUpdate: () => false,
-      } as unknown as Parameters<typeof registerTelegramMessageHandlers>[0],
+      } satisfies Parameters<typeof registerTelegramMessageHandlers>[0],
       messageRuntime,
       authorization,
-      { processInboundMessage: dispatched } as unknown as Parameters<
-        typeof registerTelegramMessageHandlers
-      >[3],
+      { processInboundMessage: dispatched },
     );
 
     const headersReceived = new Promise<void>((resolve) => {
