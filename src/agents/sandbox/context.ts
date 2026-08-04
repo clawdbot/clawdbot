@@ -92,7 +92,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
-  // #89743: when the caller omits workspaceDir, resolve the agent's configured
+  // When the caller omits workspaceDir, resolve the agent's configured
   // workspace instead of silently falling back to the process-default path in
   // resolveSandboxWorkspaceLayoutPaths (shared.ts). This keeps skills reads and
   // the sandbox scope key tied to the operator's configured workspace.
