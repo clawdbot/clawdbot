@@ -223,4 +223,50 @@ describe("pending final delivery restart proof", () => {
     expect(entry?.pendingFinalDelivery?.kind).toBe("replayable");
     expect(entry?.pendingFinalDelivery?.text).toContain("retry B");
   });
+
+  it("does not replay a block-deduped payload when only a failed-before-deliver payload is present (#119162)", async () => {
+    // The all-failed shortcut must not retain the block-deduped payload C in the
+    // marker — it was already visible, so recovery must not resend it.
+    const payloadB = setReplyPayloadMetadata(
+      { text: "reply B" },
+      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry B" },
+    );
+    const payloadC = setReplyPayloadMetadata(
+      { text: "reply C" },
+      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry C" },
+    );
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "session",
+        status: "running",
+        startedAt: 10,
+        updatedAt: Date.now(),
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "retry B\n\nretry C",
+          createdAt: 1,
+          intentId: "intent-1",
+        },
+      },
+    );
+    const identity = capturePendingFinalDeliveryIdentity({
+      intentId: "intent-1",
+      sessionKey,
+      storePath,
+    });
+
+    await reconcilePendingFinalDeliveryAfterSettlement({
+      deliveries: [{ outcome: "failed-before-deliver", payload: payloadB }],
+      identity,
+      replies: [payloadB, payloadC],
+      sessionKey,
+      storePath,
+    });
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.pendingFinalDelivery?.kind).toBe("replayable");
+    expect(entry?.pendingFinalDelivery?.text).toBe("retry B");
+    expect(entry?.pendingFinalDelivery?.text).not.toContain("retry C");
+  });
 });

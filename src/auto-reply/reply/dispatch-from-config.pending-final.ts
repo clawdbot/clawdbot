@@ -219,30 +219,31 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
         (delivery) => delivery.outcome === "failed-before-deliver",
       );
 
-      if (
-        relevantDeliveries.length > 0 &&
-        failedBeforeDeliver.length === relevantDeliveries.length
-      ) {
-        return null;
-      }
-      // Data safety: a pending payload with no delivery entry (e.g. content
-      // block-deduped because it was already visible) must not cause a
-      // separately failed-before-deliver payload to be dropped with the whole
-      // marker. Keep the marker whenever anything failed before delivery and
-      // we cannot map the pending payloads, or narrow it to the failed ones.
-      if (!pendingPayloadSet && failedBeforeDeliver.length > 0) {
-        return null;
-      }
-      if (pendingPayloadSet && failedBeforeDeliver.length > 0) {
-        const retryText = buildPendingFinalDeliveryRetryText(
-          failedBeforeDeliver.map((delivery) => delivery.payload),
-        );
-        if (retryText && pending.kind === "replayable") {
-          return {
-            pendingFinalDelivery: { ...pending, text: retryText },
-            updatedAt: Date.now(),
-          };
+      if (pendingPayloadSet) {
+        // Mapped markers: narrow to the failed-before-deliver payloads. Delivered
+        // and block-deduped (no delivery entry) payloads drop out of the retained
+        // marker so recovery never replays already-visible content. When nothing
+        // failed before delivery, clear the marker.
+        if (failedBeforeDeliver.length > 0) {
+          const retryText = buildPendingFinalDeliveryRetryText(
+            failedBeforeDeliver.map((delivery) => delivery.payload),
+          );
+          if (retryText && pending.kind === "replayable") {
+            return {
+              pendingFinalDelivery: { ...pending, text: retryText },
+              updatedAt: Date.now(),
+            };
+          }
         }
+        return {
+          ...buildPendingFinalDeliveryCleanupPatch(entry),
+          updatedAt: Date.now(),
+        };
+      }
+      // Unmapped (legacy) markers: data-safety — keep the marker whenever any
+      // payload failed before delivery, since we cannot identify which to drop.
+      if (failedBeforeDeliver.length > 0) {
+        return null;
       }
       return {
         ...buildPendingFinalDeliveryCleanupPatch(entry),
