@@ -121,4 +121,34 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     });
     expect(isLinked).not.toHaveBeenCalled();
   });
+
+  it("preserves recorded runtime running for a config-disabled but live account", async () => {
+    const account = { enabled: true, configured: true };
+    const plugin = {
+      config: {
+        isEnabled: () => false,
+        disabledReason: () => "not in allowlist",
+        describeAccount: () => ({ accountId: "default", configured: true, linked: true }),
+      },
+    } as unknown as ChannelPlugin<typeof account>;
+
+    const snapshot = await buildChannelAccountSnapshotFromAccount({
+      plugin,
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      account,
+      runtime: { accountId: "default", running: true, connected: true },
+    });
+
+    expect(snapshot).toMatchObject({
+      accountId: "default",
+      enabled: false,
+      configured: true,
+      linked: true,
+      running: true,
+      connected: true,
+      stateReason: "not in allowlist",
+      lastError: null,
+    });
+  });
 });

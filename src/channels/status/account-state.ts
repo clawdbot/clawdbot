@@ -12,6 +12,8 @@ type ChannelAccountState =
       kind: "disabled";
       configured: boolean;
       linked: boolean | undefined;
+      running: boolean;
+      connected?: boolean;
       reason: string;
       failure: string | null;
     }
@@ -37,10 +39,15 @@ function assertNeverState(state: never): never {
 export function resolveChannelAccountState(input: ChannelAccountStateInput): ChannelAccountState {
   const failure = input.runtime?.lastError ?? null;
   if (!input.enabled) {
+    const running = input.runtime?.running === true;
     return {
       kind: "disabled",
       configured: input.configured,
       linked: input.linked,
+      running,
+      ...(running && typeof input.runtime?.connected === "boolean"
+        ? { connected: input.runtime.connected }
+        : {}),
       reason: input.disabledReason ?? "disabled",
       failure,
     };
@@ -95,7 +102,8 @@ function projectChannelAccountState(state: ChannelAccountState): {
       return {
         configured: state.configured,
         ...(typeof state.linked === "boolean" ? { linked: state.linked } : {}),
-        running: false,
+        running: state.running,
+        ...(typeof state.connected === "boolean" ? { connected: state.connected } : {}),
         stateReason: state.reason,
         lastError: state.failure,
       };

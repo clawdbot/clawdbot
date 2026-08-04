@@ -29,12 +29,13 @@ const baseInput = {
 describe("resolveChannelAccountState", () => {
   it.each([
     [
-      "disabled wins over later states",
-      { enabled: false, configured: false, linked: false, runtime: { running: true } },
+      "disabled preserves recorded runtime running",
+      { enabled: false, configured: true, linked: true, runtime: { running: true } },
       {
         kind: "disabled",
-        configured: false,
-        linked: false,
+        configured: true,
+        linked: true,
+        running: true,
         reason: "disabled reason",
         failure: null,
       },
@@ -96,6 +97,7 @@ describe("projectChannelAccountState", () => {
         kind: "disabled",
         configured: false,
         linked: false,
+        running: false,
         reason: "disabled",
         failure: null,
       },
@@ -104,6 +106,25 @@ describe("projectChannelAccountState", () => {
         linked: false,
         running: false,
         stateReason: "disabled",
+        lastError: null,
+      },
+    ],
+    [
+      {
+        kind: "disabled",
+        configured: true,
+        linked: true,
+        running: true,
+        connected: false,
+        reason: "not in allowlist",
+        failure: null,
+      },
+      {
+        configured: true,
+        linked: true,
+        running: true,
+        connected: false,
+        stateReason: "not in allowlist",
         lastError: null,
       },
     ],
