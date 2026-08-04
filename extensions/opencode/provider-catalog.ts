@@ -19,6 +19,7 @@ const OPENCODE_ZEN_ANTHROPIC_BASE_URL = "https://opencode.ai/zen";
 const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
+const OPENCODE_ZEN_PUBLIC_API_KEY = "public";
 
 const FREE_COST: ModelDefinitionConfig["cost"] = {
   input: 0,
@@ -191,6 +192,54 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "qwen3.5-plus": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
   "qwen3.6-plus": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
 };
+
+function normalizeOpencodeModelId(modelId: string | undefined): string | undefined {
+  const normalized = modelId?.trim().toLowerCase();
+  return normalized?.startsWith(`${PROVIDER_ID}/`)
+    ? normalized.slice(PROVIDER_ID.length + 1)
+    : normalized;
+}
+
+function hasZeroInputCost(cost: ModelDefinitionConfig["cost"] | undefined): boolean {
+  return Boolean(
+    cost && cost.input === 0 && (cost.tieredPricing?.every((tier) => tier.input === 0) ?? true),
+  );
+}
+
+export function resolveOpencodeZenSyntheticAuth(params: {
+  modelId?: string;
+  providerConfig?: ModelProviderConfig;
+}) {
+  const normalizedModelId = normalizeOpencodeModelId(params.modelId);
+  const configuredModel = params.providerConfig?.models?.find(
+    (model) => normalizeOpencodeModelId(model.id) === normalizedModelId,
+  );
+  const configuredBaseUrl = configuredModel?.baseUrl ?? params.providerConfig?.baseUrl;
+  if (
+    configuredBaseUrl &&
+    !normalizeOpencodeZenBaseUrl({
+      api: configuredModel?.api ?? params.providerConfig?.api,
+      baseUrl: configuredBaseUrl,
+    })
+  ) {
+    return undefined;
+  }
+  const catalogCost = normalizedModelId ? MODEL_COSTS[normalizedModelId] : undefined;
+  if (!hasZeroInputCost(catalogCost)) {
+    return undefined;
+  }
+  if (configuredModel?.cost && !hasZeroInputCost(configuredModel.cost)) {
+    return undefined;
+  }
+  // OpenCode's official client sends this public key and disables models with
+  // paid input tiers when the user has no account credential configured.
+  return {
+    apiKey: OPENCODE_ZEN_PUBLIC_API_KEY,
+    source: "OpenCode Zen public key",
+    mode: "api-key" as const,
+    allowPreparedDirect: true as const,
+  };
+}
 
 const MODEL_NAMES: Record<string, string> = {
   "big-pickle": "Big Pickle",

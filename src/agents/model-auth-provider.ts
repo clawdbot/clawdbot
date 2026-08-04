@@ -566,6 +566,7 @@ export async function resolveApiKeyForProvider(params: {
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
     cfg,
     provider,
+    modelId: params.modelId,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,

@@ -12,6 +12,10 @@ import type {
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
+import type {
+  ProviderResolveSyntheticAuthContext,
+  ProviderSyntheticAuthResult,
+} from "./provider-external-auth.types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -40,6 +44,9 @@ export type ProviderPolicySurface = {
     ctx: ProviderApplyConfigDefaultsContext,
   ) => OpenClawConfig | null | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
+  resolveSyntheticAuth?: (
+    ctx: ProviderResolveSyntheticAuthContext,
+  ) => ProviderSyntheticAuthResult | null | undefined;
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
@@ -68,6 +75,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "normalizeConfig",
   "applyConfigDefaults",
   "resolveConfigApiKey",
+  "resolveSyntheticAuth",
   "resolveThinkingProfile",
   "resolveModelRoutes",
   "normalizeModelCatalogId",

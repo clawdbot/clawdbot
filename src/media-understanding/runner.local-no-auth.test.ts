@@ -23,6 +23,9 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 
 const modelAuthTestControl = vi.hoisted(() => ({
   forceMissingProvider: false,
+  lastParams: undefined as
+    | Parameters<typeof import("../agents/model-auth.js").resolveApiKeyForProvider>[0]
+    | undefined,
   store: undefined as AuthProfileStore | undefined,
 }));
 
@@ -33,6 +36,7 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
     resolveApiKeyForProvider: async (
       ...args: Parameters<typeof actual.resolveApiKeyForProvider>
     ) => {
+      modelAuthTestControl.lastParams = args[0];
       if (modelAuthTestControl.forceMissingProvider) {
         throw new actual.ProviderAuthError(
           "missing-provider-auth",
@@ -63,6 +67,7 @@ const AUTH_ENV = {
 
 beforeEach(() => {
   modelAuthTestControl.forceMissingProvider = false;
+  modelAuthTestControl.lastParams = undefined;
   modelAuthTestControl.store = undefined;
 });
 
@@ -191,6 +196,7 @@ describe("runCapability local no-auth audio providers", () => {
           expect(result.outputs[0]?.text).toBe(`ok:${CUSTOM_LOCAL_AUTH_MARKER}`);
           expect(transcribeAudio).toHaveBeenCalledTimes(1);
           expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+          expect(modelAuthTestControl.lastParams?.modelId).toBe("whisper-local");
         });
       });
     });

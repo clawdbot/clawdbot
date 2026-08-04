@@ -3,7 +3,15 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  resolveClaudeThinkingProfile,
+  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveOpencodeZenSyntheticAuth } from "./provider-catalog.js";
+
+type ResolveSyntheticAuthContext = Parameters<
+  NonNullable<ProviderPlugin["resolveSyntheticAuth"]>
+>[0];
 
 const GPT_56_THINKING_PROFILE = {
   levels: [
@@ -26,4 +34,8 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
     return GPT_56_THINKING_PROFILE;
   }
   return resolveClaudeThinkingProfile(params.modelId);
+}
+
+export function resolveSyntheticAuth(params: ResolveSyntheticAuthContext) {
+  return resolveOpencodeZenSyntheticAuth(params);
 }

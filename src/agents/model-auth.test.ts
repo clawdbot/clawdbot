@@ -10,6 +10,7 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
+  isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import {
@@ -59,6 +60,15 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>();
+  return {
+    ...actual,
+    hasRuntimeSyntheticAuthCandidateRef: (params: { providerRefs: readonly string[] }) =>
+      params.providerRefs.some((ref) => ref === "opencode" || ref === "secret-synthetic"),
+  };
+});
+
 vi.mock("../plugins/manifest-metadata-scan.js", () => ({
   listOpenClawPluginManifestMetadata: () => [
     {
@@ -67,6 +77,13 @@ vi.mock("../plugins/manifest-metadata-scan.js", () => ({
       manifest: {
         id: "anthropic-vertex",
         nonSecretAuthMarkers: ["gcp-vertex-credentials"],
+      },
+    },
+    {
+      pluginDir: "/external/opencode",
+      origin: "external",
+      manifest: {
+        id: "opencode",
       },
     },
   ],
@@ -118,7 +135,10 @@ vi.mock("../plugins/provider-runtime.js", () => {
         };
       };
       modelApi?: string;
-      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+      context: {
+        modelId?: string;
+        providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] };
+      };
     }) => {
       if (params.provider === "plugin-web") {
         if (
@@ -150,6 +170,21 @@ vi.mock("../plugins/provider-runtime.js", () => {
           apiKey: "native-cli-access-token",
           source: "Native CLI auth",
           mode: "oauth" as const,
+        };
+      }
+      if (params.provider === "opencode" && params.context.modelId === "deepseek-v4-flash-free") {
+        return {
+          apiKey: "public",
+          source: "OpenCode Zen public key",
+          mode: "api-key" as const,
+          allowPreparedDirect: true as const,
+        };
+      }
+      if (params.provider === "secret-synthetic") {
+        return {
+          apiKey: "runtime-secret", // pragma: allowlist secret
+          source: "Synthetic secret fixture",
+          mode: "api-key" as const,
         };
       }
       const effectiveApi = params.modelApi ?? params.context.providerConfig?.api;
@@ -1802,6 +1837,61 @@ describe("resolveApiKeyForProvider", () => {
 });
 
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
+  it("passes the selected model id to provider-owned synthetic auth", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+      modelApi: "openai-completions",
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "public",
+      source: "OpenCode Zen public key",
+      mode: "api-key",
+    });
+  });
+
+  it("keeps provider-declared non-secret auth in prepared direct attempts", async () => {
+    expect(isNonSecretApiKeyMarker("public")).toBe(false);
+    const auth = await resolveApiKeyForProvider({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+      modelApi: "openai-completions",
+      store: { version: 1, profiles: {} },
+      allowAuthProfileFallback: false,
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "public",
+      source: "OpenCode Zen public key",
+      mode: "api-key",
+    });
+  });
+
+  it("does not widen prepared direct attempts into synthetic secret auth", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "secret-synthetic",
+        modelId: "model-a",
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+      }),
+    ).rejects.toThrow('No API key found for provider "secret-synthetic"');
+
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "secret-synthetic",
+        modelId: "model-a",
+        store: { version: 1, profiles: {} },
+      }),
+    ).resolves.toMatchObject({
+      apiKey: "runtime-secret",
+      source: "Synthetic secret fixture",
+      mode: "api-key",
+    });
+  });
+
   it("recognizes local baseUrl variants for synthetic auth config", () => {
     const localBaseUrls = [
       "http://127.0.0.1:8080/v1",

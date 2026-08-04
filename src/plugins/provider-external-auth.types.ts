@@ -15,6 +15,7 @@ export type ProviderAuthOptionBag = {
 export type ProviderResolveSyntheticAuthContext = {
   config?: OpenClawConfig;
   provider: string;
+  modelId?: string;
   providerConfig?: ModelProviderConfig;
 };
 
@@ -23,6 +24,8 @@ export type ProviderSyntheticAuthResult = {
   apiKey: string;
   source: string;
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
+  /** Allows this provider-owned credential in a prepared attempt that disables profile fallback. */
+  allowPreparedDirect?: true;
   expiresAt?: number;
 };
 

@@ -21,6 +21,11 @@ function writeExternalPolicyFixture(): string {
       '    ? { levels: [{ id: "off" }, { id: "high" }, { id: "max" }], defaultLevel: "off" }',
       '    : { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" };',
       "}",
+      "export function resolveSyntheticAuth({ modelId }) {",
+      '  return modelId === "free"',
+      '    ? { apiKey: "public", source: "fixture public auth", mode: "api-key", allowPreparedDirect: true }',
+      "    : undefined;",
+      "}",
       "export function projectConfiguredModelRow() { return null; }",
       "",
     ].join("\n"),
@@ -224,6 +229,17 @@ describe("provider public artifacts", () => {
           ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
+      expect(
+        surface?.resolveSyntheticAuth?.({
+          provider: "fixture-provider",
+          modelId: "free",
+        }),
+      ).toEqual({
+        apiKey: "public",
+        source: "fixture public auth",
+        mode: "api-key",
+        allowPreparedDirect: true,
+      });
       expect(surface).not.toHaveProperty("projectConfiguredModelRow");
     } finally {
       restoreBundledPluginEnv();

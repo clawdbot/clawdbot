@@ -15,6 +15,11 @@ import type {
   ProviderModelRouteSource,
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type {
+  ProviderResolveSyntheticAuthContext,
+  ProviderSyntheticAuthResult,
+} from "../plugins/provider-external-auth.types.js";
+import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
@@ -118,6 +123,9 @@ type CreateModelAuthAvailabilityResolverParams = {
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
+  resolveProviderSyntheticAuth?: (
+    params: ProviderResolveSyntheticAuthContext,
+  ) => ProviderSyntheticAuthResult | null | undefined;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -281,6 +289,12 @@ export function createModelAuthAvailabilityResolver(
   };
   const providerConfig = (provider: string) =>
     resolveMergedModelProviderConfig(params.cfg, provider);
+  const resolveProviderSyntheticAuth =
+    params.resolveProviderSyntheticAuth ??
+    ((context: ProviderResolveSyntheticAuthContext) =>
+      resolveProviderPolicySurface(context.provider, {
+        manifestRegistry: params.metadataSnapshot?.manifestRegistry,
+      })?.resolveSyntheticAuth?.(context));
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
     const configured = providerConfig(provider);
     const configuredModelId = ref.modelId
@@ -612,6 +626,23 @@ export function createModelAuthAvailabilityResolver(
         selectedAuthMode: mode,
         evidence: "environment",
       };
+    }
+    const modelId = target.modelId
+      ? normalizeModelIdForProvider(provider, target.modelId)
+      : undefined;
+    if (
+      provider !== OPENAI_PROVIDER_ID &&
+      provider !== "codex" &&
+      modelId &&
+      synthetic.has(normalizeProvider(provider)) &&
+      resolveProviderSyntheticAuth({
+        config: params.cfg,
+        provider,
+        modelId,
+        providerConfig: configured,
+      })
+    ) {
+      return { availability: true, evidence: "synthetic" };
     }
     const hasCompatibleCodexSyntheticAuth =
       provider === OPENAI_PROVIDER_ID &&

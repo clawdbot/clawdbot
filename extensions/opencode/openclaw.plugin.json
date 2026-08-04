@@ -1,6 +1,7 @@
 {
   "id": "opencode",
   "icon": "https://cdn.simpleicons.org/opencode",
+  "syntheticAuthRefs": ["opencode"],
   "activation": {
     "onStartup": true
   },

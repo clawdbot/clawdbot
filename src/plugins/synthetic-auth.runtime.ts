@@ -37,6 +37,32 @@ function resolveManifestSyntheticAuthProviderRefState(
   };
 }
 
+/** Lists positive synthetic-auth candidates without treating derived absence as authoritative. */
+function resolveRuntimeSyntheticAuthCandidateRefs(
+  params: SyntheticAuthProviderRefParams = {},
+): string[] {
+  const registry = getPluginRegistryState()?.activeRegistry;
+  const runtimeRefs = registry ? resolveRuntimeSyntheticAuthProviderRefState(params).refs : [];
+  if (params.index && (params.registryDiagnostics?.length ?? 0) > 0) {
+    return runtimeRefs;
+  }
+  const result = loadPluginRegistrySnapshotWithMetadata(params);
+  return uniqueProviderRefs([
+    ...runtimeRefs,
+    ...result.snapshot.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+  ]);
+}
+
+/** Returns whether runtime or manifest metadata names one requested synthetic-auth ref. */
+export function hasRuntimeSyntheticAuthCandidateRef(
+  params: SyntheticAuthProviderRefParams & { providerRefs: readonly string[] },
+): boolean {
+  const candidates = new Set(
+    resolveRuntimeSyntheticAuthCandidateRefs(params).map((ref) => normalizeProviderId(ref)),
+  );
+  return params.providerRefs.some((ref) => candidates.has(normalizeProviderId(ref)));
+}
+
 type SyntheticAuthProviderRefParams = LoadPluginRegistryParams & {
   index?: PluginRegistrySnapshot;
   registryDiagnostics?: readonly unknown[];

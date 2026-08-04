@@ -12,7 +12,11 @@ import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildOpencodeZenLiveProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeZenLiveProviderConfig,
+  buildStaticOpencodeZenProviderConfig,
+} from "./provider-catalog.js";
+import { resolveSyntheticAuth as resolvePolicySyntheticAuth } from "./provider-policy-api.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -91,6 +95,110 @@ describe("opencode provider plugin", () => {
       providerId: "opencode",
       modelId: "claude-opus-4.6",
     });
+  });
+
+  it("uses OpenCode's public key only for zero-input-cost Zen models", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const publicAuth = provider.resolveSyntheticAuth?.({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+    } as never);
+    const paidAuth = provider.resolveSyntheticAuth?.({
+      provider: "opencode",
+      modelId: "gpt-5.5",
+    } as never);
+
+    expect(publicAuth).toEqual({
+      apiKey: "public",
+      source: "OpenCode Zen public key",
+      mode: "api-key",
+      allowPreparedDirect: true,
+    });
+    expect(paidAuth).toBeUndefined();
+
+    for (const model of buildStaticOpencodeZenProviderConfig().models ?? []) {
+      const hasPaidInputTier = model.cost.tieredPricing?.some((tier) => tier.input > 0) ?? false;
+      const expectedAuth = model.cost.input > 0 || hasPaidInputTier ? undefined : publicAuth;
+      expect(
+        provider.resolveSyntheticAuth?.({ provider: "opencode", modelId: model.id } as never),
+      ).toEqual(expectedAuth);
+    }
+
+    const { default: discovery } = await import("./provider-discovery.js");
+    expect(
+      discovery.resolveSyntheticAuth?.({
+        provider: "opencode",
+        modelId: "deepseek-v4-flash-free",
+      } as never),
+    ).toEqual(publicAuth);
+    expect(
+      discovery.resolveSyntheticAuth?.({ provider: "opencode", modelId: "gpt-5.5" } as never),
+    ).toBeUndefined();
+    expect(
+      resolvePolicySyntheticAuth({
+        provider: "opencode",
+        modelId: "deepseek-v4-flash-free",
+      }),
+    ).toEqual(publicAuth);
+  });
+
+  it("keeps public auth scoped to the Zen endpoint and configured input cost", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const context = {
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+    };
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        ...context,
+        providerConfig: {
+          baseUrl: "http://127.0.0.1:43119/v1",
+          models: [],
+        },
+      } as never),
+    ).toBeUndefined();
+    expect(
+      provider.resolveSyntheticAuth?.({
+        ...context,
+        providerConfig: {
+          models: [
+            {
+              id: context.modelId,
+              cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      } as never),
+    ).toBeUndefined();
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "opencode",
+        modelId: "unknown-free-model",
+        providerConfig: {
+          models: [
+            {
+              id: "unknown-free-model",
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      } as never),
+    ).toBeUndefined();
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "opencode",
+        modelId: "gpt-5.5",
+        providerConfig: {
+          models: [
+            {
+              id: "gpt-5.5",
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      } as never),
+    ).toBeUndefined();
   });
 
   it("keeps OpenCode Zen catalog coverage aligned with the curated seed", async () => {

@@ -571,6 +571,7 @@ async function resolveProviderExecutionAuth(params: {
       preferredProfile: params.entry.preferredProfile,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      modelId: params.entry.model,
       modelApi,
     });
     const apiKey = requireApiKey(auth, params.providerId);

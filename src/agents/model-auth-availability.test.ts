@@ -661,6 +661,48 @@ describe("createModelAuthAvailabilityResolver", () => {
     expect(result).not.toHaveProperty("selectedRoute");
   });
 
+  it("resolves model-specific synthetic auth for catalog entries", () => {
+    const resolveProviderSyntheticAuth = vi.fn((params: { provider: string; modelId?: string }) =>
+      params.provider === "opencode" && params.modelId === "deepseek-v4-flash-free"
+        ? {
+            apiKey: "public",
+            source: "OpenCode Zen public key",
+            mode: "api-key" as const,
+            allowPreparedDirect: true as const,
+          }
+        : undefined,
+    );
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      syntheticAuthProviderRefs: ["opencode"],
+      resolveProviderSyntheticAuth,
+    });
+
+    expect(
+      resolver.evaluateModelAuth("opencode", {
+        modelId: "deepseek-v4-flash-free",
+        api: "openai-completions",
+      }),
+    ).toMatchObject({ availability: true, evidence: "synthetic" });
+    expect(
+      resolver.evaluateModelAuth("opencode", {
+        modelId: "gpt-5.5",
+        api: "openai-responses",
+      }),
+    ).toMatchObject({ availability: undefined });
+
+    resolveProviderSyntheticAuth.mockClear();
+    expect(
+      resolver.evaluateModelAuth("unrelated-provider", {
+        modelId: "free-looking-model",
+        api: "openai-completions",
+      }),
+    ).toMatchObject({ availability: undefined });
+    expect(resolveProviderSyntheticAuth).not.toHaveBeenCalled();
+  });
+
   it("does not let invalid automatic profile evidence block synthetic Codex ownership", () => {
     expect(
       evaluate({

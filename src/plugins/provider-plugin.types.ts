@@ -613,6 +613,9 @@ export type ProviderPlugin = {
    * Use this when the provider can operate without a real secret for certain
    * configured local/self-hosted cases and wants auth resolution to treat that
    * config as available.
+   *
+   * Set `allowPreparedDirect` only when this exact returned credential may be
+   * reused after the planner disables profile fallback for a direct attempt.
    */
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
