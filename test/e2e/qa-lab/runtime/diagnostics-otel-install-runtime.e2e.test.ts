@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -119,14 +119,41 @@ async function settleCleanup(
 
 async function packPlugin(repoRoot: string, scratch: string) {
   const outputDir = path.join(scratch, "pack");
+  const pluginRoot = path.join(repoRoot, "extensions/diagnostics-otel");
+  const stagingDir = path.join(scratch, "package-source");
+  await cp(pluginRoot, stagingDir, {
+    recursive: true,
+    filter: (source) => {
+      const relative = path.relative(pluginRoot, source);
+      const topLevel = relative.split(path.sep)[0];
+      return topLevel !== "dist" && topLevel !== "node_modules";
+    },
+  });
+  await mkdir(outputDir, { recursive: true });
+  await execFileAsync(process.execPath, ["scripts/lib/plugin-npm-runtime-build.mjs", stagingDir], {
+    cwd: repoRoot,
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: 120_000,
+  });
   await execFileAsync(
-    "bash",
-    ["scripts/plugin-npm-publish.sh", "--pack", "extensions/diagnostics-otel"],
+    process.execPath,
+    [
+      "scripts/lib/plugin-npm-package-manifest.mjs",
+      "--run",
+      stagingDir,
+      "--",
+      "npm",
+      "pack",
+      "--json",
+      "--ignore-scripts",
+      "--pack-destination",
+      outputDir,
+    ],
     {
       cwd: repoRoot,
       env: {
         ...process.env,
-        OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR: outputDir,
+        OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1",
       },
       maxBuffer: 16 * 1024 * 1024,
       timeout: 120_000,
