@@ -40,6 +40,10 @@ function getProviderModelId(model: ProviderModelConfig): string | undefined {
  * but the catalog schema (TypeBox) requires every field. Normalizing here at
  * catalog-publication time preserves the accepted config shape while preventing
  * a persistent `model catalog load issue` warning.
+ *
+ * This must run after duplicate model IDs have been merged, so that a later
+ * row's explicit `cacheRead`/`cacheWrite` values are not overwritten by the
+ * synthetic zeroes filled in for an earlier partial row.
  */
 function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
   if (!model.cost) {
@@ -103,28 +107,32 @@ function normalizeProviderModelsForConfig(
     if (normalizedModel !== model) {
       mutated = true;
     }
-    const costNormalizedModel = normalizeModelCostForCatalog(normalizedModel);
-    if (costNormalizedModel !== normalizedModel) {
-      mutated = true;
-    }
-    const id = getProviderModelId(costNormalizedModel);
+    const id = getProviderModelId(normalizedModel);
     if (id) {
       const existingIndex = seenById.get(id);
       if (existingIndex !== undefined) {
         mutated = true;
         const existing = nextModels.at(existingIndex);
         if (existing) {
-          nextModels[existingIndex] = mergeNormalizedProviderModel(existing, costNormalizedModel);
+          nextModels[existingIndex] = mergeNormalizedProviderModel(existing, normalizedModel);
         }
         continue;
       }
       seenById.set(id, nextModels.length);
     }
-    nextModels.push(costNormalizedModel);
+    nextModels.push(normalizedModel);
   }
 
+  const finalModels = nextModels.map((model) => {
+    const costNormalizedModel = normalizeModelCostForCatalog(model);
+    if (costNormalizedModel !== model) {
+      mutated = true;
+    }
+    return costNormalizedModel;
+  });
+
   return mutated
-    ? { provider: { ...provider, models: nextModels }, mutated }
+    ? { provider: { ...provider, models: finalModels }, mutated }
     : { provider, mutated };
 }
 

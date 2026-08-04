@@ -499,6 +499,41 @@ describe("normalizeProviders", () => {
     }
   });
 
+  it("preserves later explicit cacheRead/cacheWrite when an earlier duplicate row has partial cost", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      type ConfigModel = NonNullable<
+        NonNullable<OpenClawConfig["models"]>["providers"]
+      >[string]["models"][number];
+      const partialCostModel = {
+        ...createModel({ id: "claude-sonnet-5" }),
+        cost: { input: 10, output: 50 },
+      } as ConfigModel;
+      const explicitCostModel = {
+        ...createModel({ id: "claude-sonnet-5" }),
+        cost: { input: 10, output: 50, cacheRead: 0.3, cacheWrite: 3.75 },
+      } as ConfigModel;
+      const providers = {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          models: [partialCostModel, explicitCostModel],
+        },
+      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      const models = normalized?.anthropic?.models;
+      expect(models).toHaveLength(1);
+      expect(models?.[0]?.cost).toEqual({
+        input: 10,
+        output: 50,
+        cacheRead: 0.3,
+        cacheWrite: 3.75,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
