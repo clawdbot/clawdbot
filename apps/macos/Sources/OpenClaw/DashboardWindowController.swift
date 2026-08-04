@@ -998,7 +998,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         guard let url, self.isHTTPURL(url) else { return .ignore }
         return sourceIsLinkBrowser ? .openTab(url) : .openExternal(url)
     }
-
 }
 
 extension DashboardWindowController {
