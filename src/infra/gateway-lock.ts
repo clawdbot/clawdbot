@@ -313,6 +313,7 @@ function resolveGatewayLockPaths(
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
+    legacyConfigLockPath: path.join(legacyLockDir, `gateway.${configHash}.lock`),
     legacyStateLockPath: path.join(legacyLockDir, `gateway.state.${stateHash}.lock`),
     stateDir,
     stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
@@ -320,31 +321,31 @@ function resolveGatewayLockPaths(
 }
 
 async function assertLegacyGatewayLockIsNotActive(params: {
-  legacyStateLockPath: string;
-  stateLockPath: string;
+  currentLockPath: string;
+  legacyLockPath: string;
   staleMs: number;
   now: () => number;
   platform: NodeJS.Platform;
   readProcessCmdline?: (pid: number) => string[] | null;
   readProcessStartTime?: (pid: number) => number | null;
 }): Promise<void> {
-  if (params.legacyStateLockPath === params.stateLockPath) {
+  if (params.legacyLockPath === params.currentLockPath) {
     return;
   }
   let stat: fsSync.Stats;
   try {
-    stat = await fs.stat(params.legacyStateLockPath);
+    stat = await fs.stat(params.legacyLockPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return;
     }
     throw new GatewayLockError(
-      `failed to inspect legacy gateway lock at ${params.legacyStateLockPath}`,
+      `failed to inspect legacy gateway lock at ${params.legacyLockPath}`,
       error,
     );
   }
 
-  const payload = await readLockPayload(params.legacyStateLockPath);
+  const payload = await readLockPayload(params.legacyLockPath);
   if (payload?.pid) {
     const ownerStatus = await resolveGatewayOwnerStatus(
       payload.pid,
@@ -357,12 +358,12 @@ async function assertLegacyGatewayLockIsNotActive(params: {
       return;
     }
     throw new GatewayLockError(
-      `gateway already running (pid ${payload.pid}); legacy lock remains active during state-lock upgrade`,
+      `gateway already running (pid ${payload.pid}); legacy lock remains active during lock-root upgrade`,
     );
   }
   if (params.now() - stat.mtimeMs <= params.staleMs) {
     throw new GatewayLockError(
-      `gateway already running; legacy lock remains active during state-lock upgrade`,
+      `gateway already running; legacy lock remains active during upgrade`,
     );
   }
 }
@@ -383,16 +384,18 @@ export async function readActiveGatewayLockIdentity(
   > = {},
 ): Promise<GatewayLockIdentity | undefined> {
   const env = opts.env ?? process.env;
-  const { configLockPath, legacyStateLockPath, stateLockPath } = resolveGatewayLockPaths(
-    env,
-    opts.lockDir,
-    opts.legacyLockDir ?? (opts.lockDir ? opts.lockDir : undefined),
-  );
+  const { configLockPath, legacyConfigLockPath, legacyStateLockPath, stateLockPath } =
+    resolveGatewayLockPaths(
+      env,
+      opts.lockDir,
+      opts.legacyLockDir ?? (opts.lockDir ? opts.lockDir : undefined),
+    );
   const configIdentity = await readVerifiedGatewayLockIdentity(configLockPath, opts);
   const stateIdentity = await readVerifiedGatewayLockIdentity(stateLockPath, opts);
   return (
     configIdentity ??
     stateIdentity ??
+    (await readVerifiedGatewayLockIdentity(legacyConfigLockPath, opts)) ??
     (await readVerifiedGatewayLockIdentity(legacyStateLockPath, opts))
   );
 }
@@ -440,14 +443,24 @@ export async function acquireGatewayLock(
     opts.lockDir,
     opts.legacyLockDir ?? (opts.lockDir ? opts.lockDir : undefined),
   );
-  await assertLegacyGatewayLockIsNotActive({
-    legacyStateLockPath: paths.legacyStateLockPath,
-    stateLockPath: paths.stateLockPath,
+  // This bridge is deliberately one-way: detect an already-running predecessor without
+  // recreating artifacts outside the configured state directory.
+  const legacyLockCheckOptions = {
     staleMs: resolveTimerTimeoutMs(opts.staleMs, DEFAULT_STALE_MS, 0),
     now: opts.now ?? Date.now,
     platform: opts.platform ?? process.platform,
     readProcessCmdline: opts.readProcessCmdline,
     readProcessStartTime: opts.readProcessStartTime,
+  };
+  await assertLegacyGatewayLockIsNotActive({
+    ...legacyLockCheckOptions,
+    currentLockPath: paths.configLockPath,
+    legacyLockPath: paths.legacyConfigLockPath,
+  });
+  await assertLegacyGatewayLockIsNotActive({
+    ...legacyLockCheckOptions,
+    currentLockPath: paths.stateLockPath,
+    legacyLockPath: paths.legacyStateLockPath,
   });
   const stateLock = await acquireLockFile({
     ...opts,
