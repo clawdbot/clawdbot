@@ -2042,6 +2042,110 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
+  it("stores per-call usage, not cumulative run usage, in the CLI transcript", async () => {
+    const sessionKey = "agent:main:subagent:cli-transcript-usage";
+    const sessionFile = path.join(tmpDir, "session-cli-transcript-usage.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-usage",
+      sessionFile,
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed({
+      [sessionKey]: {
+        ...sessionEntry,
+        updatedAt: 5,
+      },
+    });
+    clearSessionStoreCacheForTest();
+
+    const result = makeCliResult("usage from cli");
+    result.meta.agentMeta!.usage = { input: 12, output: 4, cacheRead: 3, cacheWrite: 0, total: 19 };
+    result.meta.agentMeta!.lastCallUsage = {
+      input: 7,
+      output: 4,
+      cacheRead: 2,
+      cacheWrite: 0,
+      total: 13,
+    };
+
+    await persistCliTranscriptEntry({
+      body: "usage prompt",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+    const assistant = requireRecord(messages.at(-1), "assistant message");
+    expect(assistant.usage).toMatchObject({
+      input: 7,
+      output: 4,
+      cacheRead: 2,
+      cacheWrite: 0,
+      totalTokens: 13,
+    });
+  });
+
+  it("writes zero usage to the CLI transcript when only cumulative usage exists", async () => {
+    const sessionKey = "agent:main:subagent:cli-transcript-cumulative-only";
+    const sessionFile = path.join(tmpDir, "session-cli-transcript-cumulative-only.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-cumulative-only",
+      sessionFile,
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed({
+      [sessionKey]: {
+        ...sessionEntry,
+        updatedAt: 5,
+      },
+    });
+    clearSessionStoreCacheForTest();
+
+    // makeCliResult provides only cumulative `usage`; without a per-call
+    // `lastCallUsage` the transcript must not carry a nonzero prompt snapshot.
+    await persistCliTranscriptEntry({
+      body: "cumulative only",
+      result: makeCliResult("cumulative reply"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+    const assistant = requireRecord(messages.at(-1), "assistant message");
+    expect(assistant.usage).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+    });
+  });
+
   it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
     const sessionKey = "agent:main:direct:cli-recorder-owned-user";
     const sessionFile = path.join(tmpDir, "session-cli-recorder-owned-user.jsonl");

@@ -2184,6 +2184,55 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a stale session snapshot stale when the CLI transcript carries only zero usage", async () => {
+    // persistCliTurnTranscript writes a zero-usage sentinel when a run has only
+    // cumulative usage (no per-call lastCallUsage). That must never be promoted
+    // back into a fresh context snapshot by the memory-flush fallback.
+    const sessionFile = path.join(rootDir, "memory-flush-zero-usage.jsonl");
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+          },
+        },
+      ],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(sessionStore["main"]?.totalTokens).toBeUndefined();
+    expect(sessionStore["main"]?.totalTokensFresh).toBe(false);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("fails when required preflight compaction returns an unknown successful no-op", async () => {
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: true,

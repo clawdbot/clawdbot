@@ -478,7 +478,10 @@ export async function persistCliTurnTranscript(params: {
         api: "cli",
         provider,
         model,
-        usage: params.result.meta.agentMeta?.usage,
+        // Transcript usage feeds later context reads (memory-flush fallback,
+        // fork estimates). Only per-call usage is a valid prompt snapshot;
+        // cumulative run usage would be promoted back as fresh context later.
+        usage: params.result.meta.agentMeta?.lastCallUsage,
       },
       skipAssistantTurn: params.skipAssistantTurn,
     });
