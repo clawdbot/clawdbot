@@ -202,6 +202,10 @@ type RuntimeConfigGateway = {
 
 export type RuntimeConfigCapability = {
   readonly state: ConfigState;
+  readonly canSet?: boolean;
+  readonly canApply?: boolean;
+  readonly canPatch?: boolean;
+  readonly canOpenFile?: boolean;
   ensureLoaded: () => Promise<void>;
   ensureSchemaLoaded: () => Promise<void>;
   refresh: (options?: LoadConfigOptions) => Promise<void>;
@@ -1629,7 +1633,7 @@ export function createRuntimeConfigCapability(
   const afterPendingWritesSettled = <T>(
     task: () => Promise<T>,
     unavailable: T,
-    options: { flushScheduledDraft?: boolean } = {},
+    options: { flushScheduledDraft?: boolean; canDispatch?: () => boolean } = {},
   ): Promise<T> => {
     if (writesSuspended) {
       return Promise.resolve(unavailable);
@@ -1656,6 +1660,11 @@ export function createRuntimeConfigCapability(
           return unavailable;
         }
         if (!client || !isCurrentConfigConnection(state, client, connectionEpoch)) {
+          return unavailable;
+        }
+        // Hello method/scope metadata can change while the client and
+        // connection epoch stay stable. Recheck at the dispatch boundary.
+        if (options.canDispatch && !options.canDispatch()) {
           return unavailable;
         }
         manualFlightInfo = null;
@@ -1859,7 +1868,10 @@ export function createRuntimeConfigCapability(
         }
       },
       false,
-      { flushScheduledDraft: true },
+      {
+        flushScheduledDraft: true,
+        canDispatch: () => canCallConfigMethod("config.patch"),
+      },
     ).finally(() => {
       scheduleAutoSave();
     });
@@ -1868,6 +1880,18 @@ export function createRuntimeConfigCapability(
   return {
     get state() {
       return state;
+    },
+    get canSet() {
+      return canCallConfigMethod("config.set");
+    },
+    get canApply() {
+      return canCallConfigMethod("config.apply");
+    },
+    get canPatch() {
+      return canCallConfigMethod("config.patch");
+    },
+    get canOpenFile() {
+      return canCallConfigMethod("config.openFile", { requireAdvertisement: false });
     },
     ensureLoaded,
     ensureSchemaLoaded,
@@ -1962,37 +1986,45 @@ export function createRuntimeConfigCapability(
     save: () =>
       !canCallConfigMethod("config.set")
         ? Promise.resolve(false)
-        : afterPendingWritesSettled(async () => {
-            cancelAppliedRefresh();
-            try {
-              return await saveConfig(state, (info) => {
-                manualFlightInfo = info;
-              });
-            } finally {
-              reconcileAppliedRefresh();
-            }
-          }, false),
+        : afterPendingWritesSettled(
+            async () => {
+              cancelAppliedRefresh();
+              try {
+                return await saveConfig(state, (info) => {
+                  manualFlightInfo = info;
+                });
+              } finally {
+                reconcileAppliedRefresh();
+              }
+            },
+            false,
+            { canDispatch: () => canCallConfigMethod("config.set") },
+          ),
     apply: () =>
       !canCallConfigMethod("config.apply")
         ? Promise.resolve(false)
-        : afterPendingWritesSettled(async () => {
-            cancelAppliedRefresh();
-            // Checked after the drain: a raw draft whose explicit Save is in
-            // flight resolves clean and may apply. A raw draft that is STILL
-            // dirty here was never reviewed-saved — applying would implicitly
-            // write unreviewed raw text, so refuse and point at the Raw editor.
-            if (state.configFormDirty && state.configFormMode === "raw") {
-              state.configAutoSaveStatus = "error";
-              state.lastError = t("configView.rawDraftBlocksApply");
-              reconcileAppliedRefresh();
-              return false;
-            }
-            try {
-              return await applyConfig(state);
-            } finally {
-              reconcileAppliedRefresh();
-            }
-          }, false),
+        : afterPendingWritesSettled(
+            async () => {
+              cancelAppliedRefresh();
+              // Checked after the drain: a raw draft whose explicit Save is in
+              // flight resolves clean and may apply. A raw draft that is STILL
+              // dirty here was never reviewed-saved — applying would implicitly
+              // write unreviewed raw text, so refuse and point at the Raw editor.
+              if (state.configFormDirty && state.configFormMode === "raw") {
+                state.configAutoSaveStatus = "error";
+                state.lastError = t("configView.rawDraftBlocksApply");
+                reconcileAppliedRefresh();
+                return false;
+              }
+              try {
+                return await applyConfig(state);
+              } finally {
+                reconcileAppliedRefresh();
+              }
+            },
+            false,
+            { canDispatch: () => canCallConfigMethod("config.apply") },
+          ),
     openFile: () =>
       canCallConfigMethod("config.openFile", { requireAdvertisement: false })
         ? run(() => openConfigFile(state))

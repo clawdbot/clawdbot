@@ -607,6 +607,25 @@ describe("config view", () => {
     expect(rawEditor?.hasAttribute("disabled")).toBe(true);
   });
 
+  it("keeps config read-only when mutation access is unavailable", () => {
+    const onOpenFile = vi.fn();
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      mutationAllowed: false,
+      openFileAllowed: false,
+      onOpenFile,
+    });
+
+    expect(findOptionalButtonByText(container, "Open")).toBeUndefined();
+    expect(findButtonByText(container, "Save").disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLTextAreaElement>(".config-raw-field textarea")?.disabled,
+    ).toBe(true);
+    expect(onOpenFile).not.toHaveBeenCalled();
+  });
+
   it("locks form inputs while a config operation is pending", () => {
     const { container } = renderConfigView({
       applying: true,

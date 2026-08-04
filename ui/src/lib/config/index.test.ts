@@ -2895,6 +2895,44 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("rechecks operator access before a queued config write dispatches", async () => {
+    const firstPatch = deferred<unknown>();
+    let patchCalls = 0;
+    let setCalls = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({ config: { count: 1 }, hash: "hash-1", valid: true, issues: [] });
+      }
+      if (method === "config.patch") {
+        patchCalls += 1;
+        return firstPatch.promise;
+      }
+      if (method === "config.set") {
+        setCalls += 1;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const patch = runtimeConfig.patch({ raw: { ui: { prefs: {} } }, note: "test" });
+    const save = runtimeConfig.save();
+    await vi.waitFor(() => expect(patchCalls).toBe(1));
+    publish(true, undefined, {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.patch", "config.set"] },
+    } as GatewayHelloOk);
+    firstPatch.resolve({});
+
+    await patch;
+    await expect(save).resolves.toBe(false);
+    expect(setCalls).toBe(0);
+    expect(runtimeConfig.canSet).toBe(false);
+    runtimeConfig.dispose();
+  });
+
   it("defers autosaves behind a manual write and keeps the newer edit", async () => {
     vi.useFakeTimers();
     const { request, submissions, firstSet } = createDeferredSetServerMock();
