@@ -129,6 +129,32 @@ describe("main session recovery state", () => {
     expect(entry).toEqual(before);
   });
 
+  it("keeps terminal recovery residue blocked while delivery remains owned", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryRuns: [
+        { runId: "recovery-1", lifecycleGeneration: "old-generation-1" },
+        { runId: "recovery-2", lifecycleGeneration: "old-generation-2" },
+      ],
+      restartRecoveryTerminalRunIds: ["recovery-1", "recovery-2"],
+      restartRecoveryDeliveryRunId: "recovery-2",
+      mainRestartRecovery: recoveryState({
+        revision: 5,
+        chargedAttempts: 2,
+      }),
+    });
+    const before = structuredClone(entry);
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "inspect",
+        lifecycleGeneration: "standalone-generation",
+        sessionKey,
+      }),
+    ).toEqual({ kind: "observed", view: { status: "blocked" } });
+    expect(entry).toEqual(before);
+  });
+
   it("marks without charging and replaces an older lifecycle owner for the same run", () => {
     const entry = interruptedEntry({
       restartRecoveryRuns: [

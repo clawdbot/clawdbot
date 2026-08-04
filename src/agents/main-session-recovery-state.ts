@@ -157,6 +157,7 @@ function hasTerminalOnlyMainRestartRecoveryAggregate(
   if (
     !state ||
     !runs?.length ||
+    entry.restartRecoveryDeliveryRunId !== undefined ||
     state.reservation !== undefined ||
     state.foregroundClaims !== undefined ||
     state.tombstone !== undefined
