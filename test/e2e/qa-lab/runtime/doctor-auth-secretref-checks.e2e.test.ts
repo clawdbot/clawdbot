@@ -2,7 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { withSecureTestNodeCommand } from "../../../../src/secrets/test-node-command.test-support.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -18,6 +20,10 @@ afterEach(async () => {
 
 function outputOf(result: { stderr: string; stdout: string }): string {
   return `${result.stdout}\n${result.stderr}`;
+}
+
+function normalizedOutputOf(result: { stderr: string; stdout: string }): string {
+  return stripAnsi(outputOf(result)).replace(/\s+/g, " ").trim();
 }
 
 async function writeConfig(config: OpenClawConfig): Promise<void> {
@@ -103,40 +109,42 @@ describe("doctor auth and SecretRef product proof", () => {
         `fs.writeFileSync(${JSON.stringify(execMarker)}, 'executed');`,
         "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'qa-exec-token' } }));",
       ].join("");
-      await writeConfig({
-        ...localGatewayConfig({
-          source: "exec",
-          provider: "execmain",
-          id: "gateway/token",
-        }),
-        secrets: {
-          providers: {
-            execmain: {
-              source: "exec",
-              command: process.execPath,
-              allowInsecurePath: true,
-              args: ["-e", execScript],
+      await withSecureTestNodeCommand(async (command) => {
+        await writeConfig({
+          ...localGatewayConfig({
+            source: "exec",
+            provider: "execmain",
+            id: "gateway/token",
+          }),
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command,
+                args: ["-e", execScript],
+                trustedDirs: [path.dirname(command)],
+              },
             },
           },
-        },
-      });
-      const execGated = await instance.cli(
-        ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: 120_000 },
-      );
-      expect(execGated.code).toBe(0);
-      expect(outputOf(execGated)).toContain(
-        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
-      );
-      await expect(fs.access(execMarker)).rejects.toThrow();
+        });
+        const execGated = await instance.cli(
+          ["doctor", "--non-interactive", "--no-workspace-suggestions"],
+          { timeoutMs: 120_000 },
+        );
+        expect(execGated.code).toBe(0);
+        expect(normalizedOutputOf(execGated)).toContain(
+          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        );
+        await expect(fs.access(execMarker)).rejects.toThrow();
 
-      const execAllowed = await instance.cli(
-        ["doctor", "--non-interactive", "--allow-exec", "--no-workspace-suggestions"],
-        { timeoutMs: 120_000 },
-      );
-      expect(execAllowed.code).toBe(0);
-      await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
-      expect(outputOf(execAllowed)).not.toContain("qa-exec-token");
+        const execAllowed = await instance.cli(
+          ["doctor", "--non-interactive", "--allow-exec", "--no-workspace-suggestions"],
+          { timeoutMs: 120_000 },
+        );
+        expect(execAllowed.code).toBe(0);
+        await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
+        expect(outputOf(execAllowed)).not.toContain("qa-exec-token");
+      });
 
       delete instance.env.OPENCLAW_GATEWAY_TOKEN;
       await writeConfig(localGatewayConfig());
