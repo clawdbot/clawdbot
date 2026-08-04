@@ -11,6 +11,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
@@ -1409,7 +1410,9 @@ export default {
         expect(persistedDigest).toBe(expectedDigest);
 
         const config = JSON.parse(await readFile(fixture.configPath, "utf8")) as OpenClawConfig;
-        expect(config.agents?.defaults?.model?.primary).toBe("tui-pty-mock/gpt-5.5");
+        expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+          "tui-pty-mock/gpt-5.5",
+        );
         await fixture.run.write("prompt after local auth\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,

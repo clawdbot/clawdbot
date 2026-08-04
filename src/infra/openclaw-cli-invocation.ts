@@ -15,7 +15,7 @@ const OPENCLAW_PACKAGE_ENTRY_PATHS = new Set([
   path.join("src", "entry.ts"),
 ]);
 
-export type OpenClawCliInvocation = Readonly<{
+type OpenClawCliInvocation = Readonly<{
   command: string;
   args: string[];
   cwd: string;
