@@ -533,22 +533,25 @@ describe("repeated request liveness", () => {
     ).toBeUndefined();
   });
 
-  it("clears repeated request evidence on run completion and listener restart", async () => {
+  it("keeps repeated request evidence across same-logical-owner attempt rearming", async () => {
     const ref = { sessionId: "completed-session", sessionKey: "agent:main:completed" };
     const runId = "completed-run";
 
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      markDiagnosticModelStartedForTest({
-        ...ref,
-        runId,
-        provider: "mock",
-        model: "request-model",
-        observationUnit: "request",
-      });
-    }
-    expect(getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs).toBe(0);
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId,
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+
+    markDiagnosticEmbeddedRunEnded(ref);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: undefined,
+      repeatedRequestNoProgressAgeMs: undefined,
+    });
 
     emitTrustedDiagnosticEvent({
       type: "run.completed",
@@ -558,6 +561,34 @@ describe("repeated request liveness", () => {
       outcome: "completed",
     });
     await waitForDiagnosticEventsDrained();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId,
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      hasActiveEmbeddedRun: true,
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeGreaterThanOrEqual(0);
+
+    markDiagnosticEmbeddedRunEnded(ref);
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "successor-run" });
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId: "successor-run",
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
     expect(
       getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
     ).toBeUndefined();

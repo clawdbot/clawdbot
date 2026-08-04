@@ -359,9 +359,13 @@ function recordRunCompleted(
   if (!activity) {
     return;
   }
-  activityByRunId.delete(event.runId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
+  if (activity.repeatedRequestOwnerRunId === event.runId) {
+    touchSessionActivity(activity, "run:attempt_completed"); // This run id re-arms after retries.
+    return;
+  }
+  activityByRunId.delete(event.runId);
   embeddedRunIndex.clear(activity);
   clearArgumentChurnActivity(activity, { runId: event.runId });
   clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
@@ -375,13 +379,11 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   workKey?: string;
 }): void {
   const ownerRunId = params.runId?.trim() || params.sessionId.trim();
-  const activity = resolveSessionActivity({ ...params, runId: ownerRunId, create: true });
-  if (!activity) {
-    return;
+  const activity = resolveSessionActivity({ ...params, runId: ownerRunId, create: true })!;
+  // New owners must not inherit the prior owner's semantic-stall clock.
+  if (activity.repeatedRequestOwnerRunId !== ownerRunId) {
+    clearRepeatedRequestActivity(activity);
   }
-  // Registration is the ownership boundary. A replacement or re-armed run
-  // must never inherit the prior owner's semantic-stall clock.
-  clearRepeatedRequestActivity(activity);
   if (activity.argumentChurnStartedAt !== undefined) {
     clearArgumentChurnActivity(activity, { runId: ownerRunId });
   }
@@ -418,9 +420,8 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   if (activity.activeEmbeddedRuns.size === 0) {
     clearArgumentChurnActivity(activity);
     clearArgumentChurnPolicyWaits(activity);
-    clearRepeatedRequestActivity(activity);
   }
-  touchSemanticSessionActivity(activity, "embedded_run:ended");
+  touchSessionActivity(activity, "embedded_run:ended"); // Retained retry evidence is inert here.
 }
 
 function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {
