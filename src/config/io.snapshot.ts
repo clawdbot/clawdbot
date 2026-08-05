@@ -370,11 +370,20 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
   });
+  const pluginMetadataSnapshot =
+    result.pluginMetadataSnapshot ??
+    (result.snapshot.valid
+      ? context
+          .createValidationPluginMetadataSnapshotLoader({
+            effectiveConfigRaw: result.snapshot.sourceConfig,
+            env: context.deps.env,
+            allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
+          })
+          .load(result.snapshot.sourceConfig)
+      : undefined);
   return {
     snapshot: result.snapshot,
-    ...(result.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: result.pluginMetadataSnapshot }
-      : {}),
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }
 
