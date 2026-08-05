@@ -29,8 +29,7 @@ export default definePluginEntry({
     const quicksilverSession =
       api.registrationMode === "full"
         ? acquireOpenAIQuicksilverBrowserSessionBroker({
-            getConfig: () =>
-              (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
+            getConfig: () => (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig,
             logger: api.logger,
           })
         : undefined;
