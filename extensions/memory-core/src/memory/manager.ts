@@ -1240,6 +1240,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
+  private async reindexAfterPrimaryProviderRecovery(): Promise<MemoryIndexIdentityState> {
+    let indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    // A forced sync may join a fallback-owned generation that was already active
+    // when recovery completed. Recheck after that join and admit one fresh primary
+    // generation so recovery cannot clear fallback state with a stale index.
+    for (let attempt = 0; indexIdentity.status !== "valid" && attempt < 2; attempt += 1) {
+      try {
+        await this.syncAdmitted({ reason: "search", force: true });
+      } catch (err) {
+        log.warn(`memory sync failed (primary-recovery-reindex): ${formatErrorMessage(err)}`);
+      }
+      indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    }
+    return indexIdentity;
+  }
+
   private refreshKeywordFallbackIndexIdentity() {
     const meta = this.readMeta();
     const state = this.resolveCurrentIndexIdentityState({
@@ -1429,19 +1445,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           signal: opts?.signal,
         });
         if (recovered) {
-          indexIdentity = this.refreshIndexIdentityDirty({
-            providerKeyKnown: this.providerInitialized,
-          });
-          if (indexIdentity.status !== "valid") {
-            try {
-              await this.syncAdmitted({ reason: "search", force: true });
-            } catch (err) {
-              log.warn(`memory sync failed (primary-recovery-reindex): ${formatErrorMessage(err)}`);
-            }
-            indexIdentity = this.refreshIndexIdentityDirty({
-              providerKeyKnown: this.providerInitialized,
-            });
-          }
+          indexIdentity = await this.reindexAfterPrimaryProviderRecovery();
         }
       }
       if (indexIdentity.status !== "valid") {

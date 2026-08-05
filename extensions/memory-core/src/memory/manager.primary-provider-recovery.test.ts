@@ -96,6 +96,9 @@ type RecoveryHarness = {
   resolveBatchConfig: () => unknown;
   retireProvider: (provider: EmbeddingProvider) => Promise<void>;
   awaitManagerIdle: () => Promise<void>;
+  refreshIndexIdentityDirty: () => { status: string };
+  reindexAfterPrimaryProviderRecovery: () => Promise<{ status: string }>;
+  syncAdmitted: () => Promise<void>;
 };
 
 function createProvider(id: string): EmbeddingProvider {
@@ -145,6 +148,8 @@ function createRecoveryHarness(): RecoveryHarness {
     computeProviderKey: vi.fn(() => "mock-provider-key"),
     resolveBatchConfig: vi.fn(() => ({ enabled: false })),
     retireProvider: vi.fn(async () => {}),
+    refreshIndexIdentityDirty: vi.fn(() => ({ status: "valid" })),
+    syncAdmitted: vi.fn(async () => {}),
   }) as RecoveryHarness;
   return manager;
 }
@@ -176,6 +181,28 @@ describe("memory manager primary provider recovery", () => {
     expect(manager.fallbackFrom).toBeUndefined();
     expect(manager.providerKey).toBe("mock-provider-key");
     expect(manager.retireProvider).toHaveBeenCalledWith(fallbackProvider);
+  });
+
+  it("queues a fresh primary reindex after joining an active fallback sync", async () => {
+    const manager = createRecoveryHarness();
+    let activeFallbackSync = true;
+    let syncCallCount = 0;
+    manager.refreshIndexIdentityDirty = vi.fn(() => ({
+      status: syncCallCount >= 2 ? "valid" : "mismatched",
+    }));
+    manager.syncAdmitted = vi.fn(async () => {
+      syncCallCount += 1;
+      if (activeFallbackSync) {
+        activeFallbackSync = false;
+      }
+    });
+
+    await expect(manager.reindexAfterPrimaryProviderRecovery()).resolves.toEqual({
+      status: "valid",
+    });
+    expect(manager.syncAdmitted).toHaveBeenCalledTimes(2);
+    expect(manager.syncAdmitted).toHaveBeenNthCalledWith(1, { reason: "search", force: true });
+    expect(manager.syncAdmitted).toHaveBeenNthCalledWith(2, { reason: "search", force: true });
   });
 
   it("serializes overlapping primary recovery probes", async () => {
