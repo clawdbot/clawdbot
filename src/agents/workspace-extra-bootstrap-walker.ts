@@ -12,29 +12,59 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { braceExpand, Minimatch } from "minimatch";
+import { braceExpand, escape as escapeGlobMagic, Minimatch } from "minimatch";
 import { isPathInside } from "../infra/path-guards.js";
 
 const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
 
-// Minimatch options for the walk matcher. Keep the magic detector below in sync
-// with these so the routing gate and the matcher never disagree about which
-// patterns are globs.
-const EXTRA_BOOTSTRAP_MATCH_OPTIONS = {
-  nocomment: true,
-  nonegate: true,
-  windowsPathsNoEscape: true,
-} as const;
+// The glob metacharacters minimatch's `escape` wraps in a single-char class
+// (`[` -> `[[]`, `*` -> `[*]`, `(` -> `[(]`, `{` -> `[{]`, …). A magic-free
+// pattern that reaches the literal reader may carry exactly these wraps when it
+// named one of those characters literally, so the reader reverses them to
+// recover the on-disk path. Only these wraps are reversed, so a genuine
+// single-char class like `[1]` (a real directory literally named `pkg[1]`) is
+// left untouched.
+const ESCAPED_MAGIC_CLASS = /\[([?*()[\]{}])\]/gu;
+
+// Node fs.glob applies case-insensitive matching to MAGIC segments on macOS and
+// Windows (nocase + nocaseMagicOnly) so an existing configured glob like
+// `**/*.MD` still matches `AGENTS.md` there, while literal path segments stay
+// case-sensitive. Mirror that per-platform rule; the flag is read at matcher
+// build time so it always reflects the running OS. Byte-exact literal-segment
+// case parity is intentionally out of scope — nocaseMagicOnly keeps literals
+// case-sensitive, matching Node.
+function extraBootstrapNocase(): boolean {
+  return process.platform === "darwin" || process.platform === "win32";
+}
+
+// Minimatch options for the walk matcher, mirroring Node fs.glob's own
+// createMatcher options (nocase/nocaseMagicOnly/platform) so the walker matches
+// the same file set fs.glob would on each platform. Built per call because
+// `nocase` depends on the running OS. Keep the magic detector below in sync so
+// the routing gate and the matcher never disagree about which patterns are
+// globs.
+function extraBootstrapMatchOptions() {
+  return {
+    nocomment: true,
+    nonegate: true,
+    windowsPathsNoEscape: true,
+    nocase: extraBootstrapNocase(),
+    nocaseMagicOnly: true,
+    platform: process.platform,
+  };
+}
 
 // Magic-detection options: the match options plus `magicalBraces`, which makes
 // `Minimatch.hasMagic()` treat a brace alternation like `{a,b}` as magic. The
 // matcher already expands `{a,b}` into multiple concrete paths, but without this
 // flag `hasMagic()` reports a brace-only pattern as a literal, so the gate and
 // the matcher would disagree and the brace pattern would never reach the walker.
-const EXTRA_BOOTSTRAP_MAGIC_OPTIONS = {
-  ...EXTRA_BOOTSTRAP_MATCH_OPTIONS,
-  magicalBraces: true,
-} as const;
+function extraBootstrapMagicOptions() {
+  return {
+    ...extraBootstrapMatchOptions(),
+    magicalBraces: true,
+  };
+}
 
 export function hasGlobPattern(pattern: string): boolean {
   // Adopt Node glob grammar: a pattern is a glob when Minimatch — the same
@@ -45,7 +75,7 @@ export function hasGlobPattern(pattern: string): boolean {
   // metacharacter-free segment such as a collapsed single-char class) stays a
   // literal file.
   const normalized = normalizeWorkspacePatternPath(pattern);
-  return new Minimatch(normalized, EXTRA_BOOTSTRAP_MAGIC_OPTIONS).hasMagic();
+  return new Minimatch(normalized, extraBootstrapMagicOptions()).hasMagic();
 }
 
 function normalizeWorkspacePatternPath(value: string): string {
@@ -53,6 +83,26 @@ function normalizeWorkspacePatternPath(value: string): string {
     .replaceAll(path.sep, "/")
     .replaceAll("\\", "/")
     .replace(/^\.\/+/u, "");
+}
+
+// Escape a pattern's glob metacharacters into their literal (bracket-wrapped)
+// form so a path meant literally routes back through the literal reader. Used by
+// the doctor extra-bootstrap glob-escape migration to repair configs written
+// before the walker adopted Node glob grammar (a real directory named `pkg[ab]`
+// whose `[ab]` is now read as a character class). windowsPathsNoEscape matches
+// the walk matcher so the escape is walker-consistent.
+export function escapeWorkspacePatternLiteral(pattern: string): string {
+  return escapeGlobMagic(pattern, { windowsPathsNoEscape: true });
+}
+
+// Reverse escapeWorkspacePatternLiteral for the literal reader: minimatch treats
+// a fully-escaped pattern (e.g. `pkg[[]ab[]]`) as magic-free, so hasGlobPattern
+// routes it to the literal branch where the raw string still carries the `[x]`
+// escapes. Unwrap exactly the metacharacter escapes to open the real `pkg[ab]`
+// path; a literal single-char class such as `pkg[1]` carries no metacharacter
+// inside the brackets and is left unchanged.
+export function unescapeWorkspacePatternLiteral(pattern: string): string {
+  return pattern.replace(ESCAPED_MAGIC_CLASS, "$1");
 }
 
 function resolveGlobWalkRoot(pattern: string): string {
@@ -64,7 +114,7 @@ function resolveGlobWalkRoot(pattern: string): string {
   // nothing. Expand braces first (each expansion is brace-free, so its first
   // magic segment is well defined), then walk from the common literal ancestor of
   // every expansion so no possible match ever sits outside the walk root.
-  const roots = braceExpand(normalized, EXTRA_BOOTSTRAP_MAGIC_OPTIONS).map(expansionWalkRoot);
+  const roots = braceExpand(normalized, extraBootstrapMagicOptions()).map(expansionWalkRoot);
   return commonAncestorDir(roots);
 }
 
@@ -140,24 +190,56 @@ function globPrefixCanDescend(dirSegments: string[], patternSegments: string[]):
   return match(0, 0);
 }
 
-// A path segment is "literal" for symlink-descent purposes when its aligned
-// pattern segment carries no glob metacharacters. Index alignment only holds
-// while no earlier `**` is present, because `**` matches a variable number of
-// segments; once a `**` precedes the depth, the symlink was reached through a
-// wildcard and must stay terminal — fs.glob never follows a wildcard-reached
-// symlink even when a later literal segment names it (`**/wl/AGENTS.md` yields
-// nothing for a `wl` symlink).
-function patternSegmentIsLiteralAtDepth(depth: number, patternSegments: string[]): boolean {
-  if (depth < 0 || depth >= patternSegments.length) {
-    return false;
-  }
-  for (let index = 0; index < depth; index += 1) {
-    if (patternSegments[index] === "**") {
+// Decide whether a directory symlink at the current walk depth should be
+// descended, mirroring Node fs.glob's symlink rule: a directory symlink is
+// followed only when its own path segment is named by a LITERAL pattern segment
+// (no glob magic) whose immediately-preceding pattern segment is not `**`. A
+// symlink consumed by a wildcard (`*`/`**`), or one sitting directly after a
+// `**` recursive prefix, is never followed even when a later literal names it
+// (`**/wl/AGENTS.md` yields nothing for a `wl` symlink). A literal segment
+// between the `**` and the symlink does re-enable descent, though
+// (`**/pkg/linked/**` follows the `linked` symlink reached via literal `pkg`).
+// Node tracks this per pattern index (globstar symlink taint); an alignment
+// search over the walked path reproduces the same match set. `**` may match zero
+// or more segments but never consumes the symlink segment itself (that is the
+// wildcard-reached case) and never crosses a leading-dot segment, matching the
+// dot rule in globPrefixCanDescend.
+function symlinkDescentAllowed(dirSegments: string[], patternSegments: string[]): boolean {
+  const dirLength = dirSegments.length;
+  const patternLength = patternSegments.length;
+  const lastDirIndex = dirLength - 1;
+  const literalNotAfterRecursive = (patternIndex: number): boolean =>
+    !hasGlobPattern(patternSegments[patternIndex]!) &&
+    (patternIndex === 0 || patternSegments[patternIndex - 1] !== "**");
+  const align = (dirIndex: number, patternIndex: number): boolean => {
+    if (dirIndex === dirLength || patternIndex === patternLength) {
       return false;
     }
-  }
-  // depth is within [0, patternSegments.length) after the guard above.
-  return !hasGlobPattern(patternSegments[depth]!);
+    const segment = dirSegments[dirIndex]!;
+    const patternSegment = patternSegments[patternIndex]!;
+    if (patternSegment === "**") {
+      // `**` matches zero segments: try the pattern past it against this segment.
+      if (align(dirIndex, patternIndex + 1)) {
+        return true;
+      }
+      // `**` never consumes the final symlink segment (that is wildcard-reached)
+      // and never crosses a leading-dot segment.
+      if (dirIndex === lastDirIndex || segment.startsWith(".")) {
+        return false;
+      }
+      return align(dirIndex + 1, patternIndex);
+    }
+    if (!path.matchesGlob(segment, patternSegment)) {
+      return false;
+    }
+    if (dirIndex === lastDirIndex) {
+      // Final (symlink) segment: descend only when named by a literal that does
+      // not sit directly after a `**`.
+      return literalNotAfterRecursive(patternIndex);
+    }
+    return align(dirIndex + 1, patternIndex + 1);
+  };
+  return align(0, 0);
 }
 
 // Ancestor chain node for the active descent path. Only symlinks can create
@@ -295,12 +377,14 @@ async function* walkWorkspaceFiles(
       }
       if (entry.isSymbolicLink()) {
         // fs.glob descends a directory symlink named literally at its aligned
-        // pattern depth but never one reached through a `*`/`**` wildcard. Apply
-        // the same partial-match prune as real directories so a literal-named
-        // link whose prefix cannot lead to a match stays off the stack.
+        // pattern depth (even after a `**` recursive prefix, as long as a literal
+        // segment sits between the `**` and the link) but never one reached
+        // through a `*`/`**` wildcard. Apply the same partial-match prune as real
+        // directories so a literal-named link whose prefix cannot lead to a match
+        // stays off the stack.
         const childSegments = normalizedChildPath.split("/");
         if (
-          patternSegmentIsLiteralAtDepth(childSegments.length - 1, patternSegments) &&
+          symlinkDescentAllowed(childSegments, patternSegments) &&
           matcher.match(normalizedChildPath, true)
         ) {
           const descendFrame = await resolveSymlinkDescent(
@@ -346,7 +430,7 @@ export async function resolveExtraBootstrapPatternPaths(
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
-  const matcher = new Minimatch(normalizedPattern, EXTRA_BOOTSTRAP_MATCH_OPTIONS);
+  const matcher = new Minimatch(normalizedPattern, extraBootstrapMatchOptions());
   const matches: string[] = [];
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
