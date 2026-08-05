@@ -47,6 +47,8 @@ function createMatrixSessionEntry(sessionId: string, roomId: string, updatedAt: 
 async function runMatrixSessionScenario(params: {
   scenarioId: MatrixScenarioId;
   sharedSessionIdentity: boolean;
+  sharedSessionKey?: boolean;
+  sharedTranscriptId?: boolean;
 }) {
   const scenario = readQaScenarioById(params.scenarioId);
   const config = scenario.execution.config as {
@@ -56,16 +58,16 @@ async function runMatrixSessionScenario(params: {
     secondaryMarker: string;
   };
   const state = createQaBusState();
-  const primarySessionKey = params.sharedSessionIdentity
+  const usesSharedSessionKey = params.sharedSessionKey ?? params.sharedSessionIdentity;
+  const usesSharedTranscriptId = params.sharedTranscriptId ?? params.sharedSessionIdentity;
+  const primarySessionKey = usesSharedSessionKey
     ? sharedSessionKey
     : `agent:qa:matrix:channel:${primaryRoomId}`;
-  const secondarySessionKey = params.sharedSessionIdentity
+  const secondarySessionKey = usesSharedSessionKey
     ? sharedSessionKey
     : `agent:qa:matrix:channel:${secondaryRoomId}`;
   const primarySessionId = "matrix-session-primary";
-  const secondarySessionId = params.sharedSessionIdentity
-    ? primarySessionId
-    : "matrix-session-secondary";
+  const secondarySessionId = usesSharedTranscriptId ? primarySessionId : "matrix-session-secondary";
 
   const readRawQaSessionStore = vi.fn(async () => {
     const inboundMessages = state
@@ -79,9 +81,9 @@ async function runMatrixSessionScenario(params: {
         [primarySessionKey]: createMatrixSessionEntry(primarySessionId, primaryRoomId, 1),
       };
     }
-    if (params.sharedSessionIdentity) {
+    if (usesSharedSessionKey) {
       return {
-        [sharedSessionKey]: createMatrixSessionEntry(primarySessionId, secondaryRoomId, 2),
+        [sharedSessionKey]: createMatrixSessionEntry(secondarySessionId, secondaryRoomId, 2),
       };
     }
     return {
@@ -180,6 +182,17 @@ describe("Matrix DM scenario session identity evidence", () => {
     ).rejects.toThrow(/session|room|isolat|shared/i);
   });
 
+  it("rejects a reused per-room session key even when its transcript id rotates", async () => {
+    await expect(
+      runMatrixSessionScenario({
+        scenarioId: "dm-per-room-session",
+        sharedSessionIdentity: false,
+        sharedSessionKey: true,
+        sharedTranscriptId: false,
+      }),
+    ).rejects.toThrow(/session|room|isolat|shared/i);
+  });
+
   it("accepts one shared user-owned session when both rooms receive the notice and replies", async () => {
     await expect(
       runMatrixSessionScenario({
@@ -194,6 +207,17 @@ describe("Matrix DM scenario session identity evidence", () => {
       runMatrixSessionScenario({
         scenarioId: "dm-shared-session",
         sharedSessionIdentity: false,
+      }),
+    ).rejects.toThrow(/session|room|isolat|shared/i);
+  });
+
+  it("rejects distinct shared-mode session keys even when they alias one transcript id", async () => {
+    await expect(
+      runMatrixSessionScenario({
+        scenarioId: "dm-shared-session",
+        sharedSessionIdentity: true,
+        sharedSessionKey: false,
+        sharedTranscriptId: true,
       }),
     ).rejects.toThrow(/session|room|isolat|shared/i);
   });

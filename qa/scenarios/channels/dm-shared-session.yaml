@@ -118,7 +118,7 @@ flow:
             expr: Boolean(secondarySession)
             message: second Matrix DM turn did not update the persisted session for its distinct room
         - assert:
-            expr: secondarySession[1].sessionId === primarySession[1].sessionId
+            expr: "secondarySession[0] === primarySession[0] && secondarySession[1].sessionId === primarySession[1].sessionId"
             message:
               expr: "`Matrix per-user DM rooms unexpectedly use separate sessions: ${JSON.stringify({ primaryKey: primarySession[0], secondaryKey: secondarySession[0], primarySessionId: primarySession[1].sessionId, secondarySessionId: secondarySession[1].sessionId })}`"
         - waitForOutbound:

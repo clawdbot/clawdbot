@@ -124,9 +124,9 @@ flow:
             expr: Boolean(secondarySession)
             message: second Matrix DM turn did not create a persisted session for a distinct room
         - assert:
-            expr: secondarySession[1].sessionId !== primarySession[1].sessionId
+            expr: "secondarySession[0] !== primarySession[0] && secondarySession[1].sessionId !== primarySession[1].sessionId"
             message:
-              expr: "`Matrix per-room DM sessions share one transcript: ${JSON.stringify({ primaryKey: primarySession[0], secondaryKey: secondarySession[0], sessionId: primarySession[1].sessionId })}`"
+              expr: "`Matrix per-room DM rooms must own distinct session keys and transcripts: ${JSON.stringify({ primaryKey: primarySession[0], secondaryKey: secondarySession[0], primarySessionId: primarySession[1].sessionId, secondarySessionId: secondarySession[1].sessionId })}`"
         - call: sleep
           args:
             - 1500
