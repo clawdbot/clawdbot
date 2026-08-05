@@ -1,11 +1,8 @@
 // Google Meet plugin entrypoint registers its OpenClaw integration.
-import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
-import { ErrorCodes, type GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
-import { createMeetingTranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
 import { GOOGLE_MEET_CLI_DESCRIPTOR } from "./src/cli-output-mode.js";
 import {
   asParamRecord,
@@ -108,14 +105,17 @@ export default definePluginEntry({
         );
       },
     };
-    api.registerTranscriptSourceProvider(
-      createMeetingTranscriptSourceProvider({
-        id: "google-meet",
-        aliases: ["googlemeet", "meet"],
-        name: "Google Meet",
-        runtime: async () => (await ensureRuntime()).transcriptSourceRuntime(),
-      }),
-    );
+    const transcriptSourceRuntime = async () => (await ensureRuntime()).transcriptSourceRuntime();
+    api.registerTranscriptSourceProvider({
+      id: "google-meet",
+      aliases: ["googlemeet", "meet"],
+      name: "Google Meet",
+      sourceKinds: ["live-caption"],
+      start: async (request) =>
+        await (await transcriptSourceRuntime()).startTranscriptSource(request),
+      stop: async (request) =>
+        await (await transcriptSourceRuntime()).stopTranscriptSource(request),
+    });
 
     registerGatewayMethod("googlemeet.join", async (options) => {
       const runtime = await ensureRuntime();
@@ -146,11 +146,7 @@ export default definePluginEntry({
     registerGatewayMethod("googlemeet.transcript", async ({ params, respond }) => {
       const sessionId = normalizeOptionalString(params?.sessionId);
       if (!sessionId) {
-        sendGoogleMeetGatewayError(
-          respond,
-          new Error("sessionId required"),
-          ErrorCodes.INVALID_REQUEST,
-        );
+        sendGoogleMeetGatewayError(respond, new Error("sessionId required"), "INVALID_REQUEST");
         return;
       }
       const sinceIndex = (params as { sinceIndex?: unknown } | undefined)?.sinceIndex;
@@ -161,7 +157,7 @@ export default definePluginEntry({
         sendGoogleMeetGatewayError(
           respond,
           new Error("sinceIndex must be a non-negative safe integer"),
-          ErrorCodes.INVALID_REQUEST,
+          "INVALID_REQUEST",
         );
         return;
       }
@@ -214,11 +210,7 @@ export default definePluginEntry({
     registerGatewayMethod("googlemeet.leave", async ({ params, respond }) => {
       const sessionId = normalizeOptionalString(params?.sessionId);
       if (!sessionId) {
-        sendGoogleMeetGatewayError(
-          respond,
-          new Error("sessionId required"),
-          ErrorCodes.INVALID_REQUEST,
-        );
+        sendGoogleMeetGatewayError(respond, new Error("sessionId required"), "INVALID_REQUEST");
         return;
       }
       const runtime = await ensureRuntime();
@@ -241,11 +233,7 @@ export default definePluginEntry({
     registerGatewayMethod("googlemeet.speak", async ({ params, respond }) => {
       const sessionId = normalizeOptionalString(params?.sessionId);
       if (!sessionId) {
-        sendGoogleMeetGatewayError(
-          respond,
-          new Error("sessionId required"),
-          ErrorCodes.INVALID_REQUEST,
-        );
+        sendGoogleMeetGatewayError(respond, new Error("sessionId required"), "INVALID_REQUEST");
         return;
       }
       const runtime = await ensureRuntime();
@@ -260,6 +248,7 @@ export default definePluginEntry({
     registerGatewayMethod("googlemeet.testListen", async ({ params, client, respond }) => {
       const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
       const runtime = await ensureRuntime();
+      const { readPositiveIntegerParam } = await import("openclaw/plugin-sdk/param-readers");
       respond(
         true,
         await runtime.testListen({
@@ -282,12 +271,14 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const raw = asParamRecord(params);
           const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
-          // Agent ownership comes from trusted tool context, never model-supplied params.
-          // Some harnesses omit agentId but still provide its canonical session key.
-          const contextAgentId =
-            toolContext.agentId ?? parseAgentSessionKey(requesterSessionKey)?.agentId;
-          const agentId = contextAgentId ? normalizeAgentId(contextAgentId) : undefined;
           try {
+            const { normalizeAgentId, parseAgentSessionKey } =
+              await import("openclaw/plugin-sdk/routing");
+            // Agent ownership comes from trusted tool context, never model-supplied params.
+            // Some harnesses omit agentId but still provide its canonical session key.
+            const contextAgentId =
+              toolContext.agentId ?? parseAgentSessionKey(requesterSessionKey)?.agentId;
+            const agentId = contextAgentId ? normalizeAgentId(contextAgentId) : undefined;
             // Main-agent sessions belong to the persistent Gateway runtime. Only
             // non-default identities need trusted in-process routing metadata.
             const needsTrustedAgentRouting = Boolean(agentId && agentId !== "main");

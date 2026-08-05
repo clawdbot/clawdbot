@@ -1,10 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  callGatewayFromCli,
-  ErrorCodes,
-  errorShape,
-  type GatewayRequestHandlerOptions,
-} from "openclaw/plugin-sdk/gateway-runtime";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginApi,
@@ -31,6 +26,16 @@ const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runt
 const loadGoogleMeetNodeInvokePolicyModule = createLazyRuntimeModule(
   () => import("./node-invoke-policy.js"),
 );
+const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/gateway-runtime"),
+);
+
+type GoogleMeetGatewayRuntimeModule = Awaited<
+  ReturnType<typeof loadGoogleMeetGatewayRuntimeModule>
+>;
+type CallGatewayFromCli = GoogleMeetGatewayRuntimeModule["callGatewayFromCli"];
+type GoogleMeetGatewayError = NonNullable<Parameters<GatewayRequestHandlerOptions["respond"]>[2]>;
+type GoogleMeetGatewayErrorCode = GoogleMeetGatewayError["code"];
 
 type LoadGoogleMeetNodeInvokePolicy = (
   config: GoogleMeetConfig,
@@ -66,8 +71,10 @@ export function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
   return raw.join !== false && raw.join !== "false";
 }
 
-const googleMeetToolDeps = {
-  callGatewayFromCli,
+const googleMeetToolDeps: {
+  callGatewayFromCli?: CallGatewayFromCli;
+  platform: () => NodeJS.Platform;
+} = {
   platform: () => process.platform,
 };
 
@@ -164,7 +171,10 @@ export async function callGoogleMeetGatewayFromTool(params: {
     }
     // Standalone agent workers connect as this bundled plugin, not as the
     // model session; its Gateway methods remain the only exposed actions.
-    return await googleMeetToolDeps.callGatewayFromCli(
+    const callGatewayFromCli =
+      googleMeetToolDeps.callGatewayFromCli ??
+      (await loadGoogleMeetGatewayRuntimeModule()).callGatewayFromCli;
+    return await callGatewayFromCli(
       googleMeetGatewayMethodForToolAction(params.action),
       {
         json: true,
@@ -253,25 +263,19 @@ export function formatGoogleMeetGatewayError(err: unknown) {
 export function sendGoogleMeetGatewayError(
   respond: GatewayRequestHandlerOptions["respond"],
   err: unknown,
-  code: Parameters<typeof errorShape>[0] = ErrorCodes.UNAVAILABLE,
+  code: GoogleMeetGatewayErrorCode = "UNAVAILABLE",
 ): void {
   const payload = formatGoogleMeetGatewayError(err);
-  respond(
-    false,
-    payload,
-    errorShape(
-      code,
-      typeof payload.error === "string" ? payload.error : "Google Meet request failed",
-      {
-        details: payload,
-      },
-    ),
-  );
+  respond(false, payload, {
+    code,
+    message: typeof payload.error === "string" ? payload.error : "Google Meet request failed",
+    details: payload,
+  });
 }
 
 export const testing = {
-  setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
-    googleMeetToolDeps.callGatewayFromCli = next ?? callGatewayFromCli;
+  setCallGatewayFromCliForTests(next?: CallGatewayFromCli): void {
+    googleMeetToolDeps.callGatewayFromCli = next;
   },
   setPlatformForTests(next?: () => NodeJS.Platform): void {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
