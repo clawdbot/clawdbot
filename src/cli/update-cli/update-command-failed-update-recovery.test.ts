@@ -14,9 +14,7 @@ const mocks = vi.hoisted(() => ({
   restart: vi.fn(async () => ({ outcome: "completed" as const })),
   recoveryStart: vi.fn(async (_args?: unknown) => undefined),
   // Explicit return type so mockResolvedValue(block) is not narrowed to null.
-  readFutureConfigBlock: vi.fn(
-    async (_action?: string): Promise<FutureConfigBlock | null> => null,
-  ),
+  readFutureConfigBlock: vi.fn(async (_action?: string): Promise<FutureConfigBlock | null> => null),
   readState: vi.fn(async () => ({ installed: true })),
   log: vi.fn(),
   error: vi.fn(),
