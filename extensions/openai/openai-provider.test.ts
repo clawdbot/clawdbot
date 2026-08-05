@@ -2500,6 +2500,18 @@ describe("buildOpenAIProvider", () => {
       description: "read a file",
       parameters: { type: "object", properties: {} },
     };
+    // Context tools arrive as llm-core Tool declarations without a `type` field, while the
+    // payload patch sees the serialized wire shape.
+    const contextManagedWebSearchTool = {
+      name: "web_search",
+      description: managedWebSearchTool.description,
+      parameters: managedWebSearchTool.parameters,
+    };
+    const contextReadTool = {
+      name: "read",
+      description: "read a file",
+      parameters: { type: "object", properties: {} },
+    };
     const payload: Record<string, unknown> = { tools: [managedWebSearchTool, readTool] };
     let capturedOptions: SimpleStreamOptions | undefined;
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -2518,7 +2530,7 @@ describe("buildOpenAIProvider", () => {
     const context = {
       messages: [],
       systemPrompt: "accounted system prompt",
-      tools: [managedWebSearchTool, readTool],
+      tools: [contextManagedWebSearchTool, contextReadTool],
     } as unknown as Context;
     void streamFn?.(
       {
@@ -2534,7 +2546,7 @@ describe("buildOpenAIProvider", () => {
     expect(payload.tools).toEqual([readTool, { type: "web_search" }]);
     const accounting = readProviderPromptAccountingContext(capturedOptions);
     expect(accounting?.systemPrompt).toBe("accounted system prompt");
-    expect(accounting?.tools).toEqual([readTool, { type: "web_search" }]);
+    expect(accounting?.tools).toEqual([contextReadTool, { type: "web_search" }]);
   });
 
   it("does not duplicate a native web_search tool already present in admission accounting", () => {

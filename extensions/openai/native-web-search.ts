@@ -88,12 +88,24 @@ function patchOpenAINativeWebSearchPayload(payload: unknown): OpenAINativeWebSea
   return "injected";
 }
 
+/**
+ * Matches the managed web_search tool in both shapes admission can see: the serialized
+ * payload shape (`type: "function"`) and the llm-core Tool shape (name only, no `type`).
+ */
+function isAccountingManagedWebSearchTool(tool: unknown): boolean {
+  return (
+    isRecord(tool) &&
+    tool.name === OPENAI_WEB_SEARCH_TOOL.type &&
+    (tool.type === undefined || tool.type === "function")
+  );
+}
+
 /** Mirrors the payload tool swap on the admission accounting surface. */
 function projectOpenAINativeWebSearchAccountingTools(tools: unknown): unknown[] | undefined {
   if (!Array.isArray(tools)) {
     return undefined;
   }
-  const filteredTools = tools.filter((tool) => !isManagedWebSearchTool(tool));
+  const filteredTools = tools.filter((tool) => !isAccountingManagedWebSearchTool(tool));
   if (filteredTools.some(isNativeWebSearchTool)) {
     return filteredTools;
   }
