@@ -98,19 +98,28 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
       continue;
     }
     const tagName = html.slice(nameStart, j).toLowerCase();
-    if (HTML_VOID_TAGS.has(tagName)) {
-      continue;
-    }
 
-    let selfClosing = false;
-    for (let k = j; k < len && k < j + 200; k++) {
+    let quote = 0;
+    let k = j;
+    while (k < len) {
       const c = html.charCodeAt(k);
-      if (c === 62) {
-        selfClosing = html.charCodeAt(k - 1) === 47;
+      if (quote !== 0) {
+        if (c === quote) {
+          quote = 0;
+        }
+      } else if (c === 34 || c === 39) {
+        quote = c;
+      } else if (c === 62) {
         break;
       }
+      k += 1;
     }
-    if (selfClosing) {
+    if (k >= len) {
+      return false;
+    }
+    i = k;
+
+    if (HTML_VOID_TAGS.has(tagName) || html.charCodeAt(k - 1) === 47) {
       continue;
     }
 
@@ -121,11 +130,16 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
 
     if (HTML_RAW_TEXT_TAGS.has(tagName)) {
       lowerHtml ??= html.toLowerCase();
-      const bodyStart = lowerHtml.indexOf(">", j);
-      if (bodyStart < 0) {
-        return false;
+      const needle = `</${tagName}`;
+      let closeStart = lowerHtml.indexOf(needle, k + 1);
+      while (closeStart >= 0) {
+        const after = closeStart + needle.length;
+        const boundary = html.charCodeAt(after);
+        if (after >= len || boundary === 62 || boundary === 47 || boundary <= 32) {
+          break;
+        }
+        closeStart = lowerHtml.indexOf(needle, after);
       }
-      const closeStart = lowerHtml.indexOf(`</${tagName}`, bodyStart + 1);
       if (closeStart < 0) {
         return false;
       }

@@ -90,6 +90,30 @@ describe("web readability extractor", () => {
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
 
+  it("does not count tag literals inside quoted attributes", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const attr = `data-template="${"<div>".repeat(900)}"`;
+    const html = SAMPLE_HTML.replace("<article>", `<article ${attr}>`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
+  it("resumes the raw text skip only at a real closing tag boundary", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const script = `<script>"</scripture>";${'render("<div>");'.repeat(900)}</script>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${script}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
   it("still counts nesting inside noscript", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const nested = `<noscript>${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}</noscript>`;
