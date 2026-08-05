@@ -5,6 +5,7 @@ import {
   emitTrustedDiagnosticEvent as emitTrustedDiagnosticEventInternal,
   emitTrustedDiagnosticEventWithPrivateData as emitTrustedDiagnosticEventWithPrivateDataInternal,
 } from "../infra/diagnostic-events.js";
+import type { DiagnosticEventPrivateData } from "../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../logging/redact.js";
 
 const LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;

@@ -2,7 +2,6 @@
 import type {
   DiagnosticEventInput as AllDiagnosticEventInput,
   DiagnosticEventPayload as AllDiagnosticEventPayload,
-  DiagnosticSessionMaintenancePrunedEvent,
 } from "../infra/diagnostic-events.js";
 
 export type {
