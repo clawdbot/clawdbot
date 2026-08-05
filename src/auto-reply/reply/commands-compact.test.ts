@@ -584,7 +584,7 @@ describe("handleCompactCommand", () => {
       },
     });
 
-    await handleCompactCommand(
+    const result = await handleCompactCommand(
       {
         ...buildCompactParams("/compact", {
           commands: { text: true },
@@ -612,7 +612,44 @@ describe("handleCompactCommand", () => {
     expect(call.sessionEntry.sessionId).toBe("target-session");
     expect(call.compactionKind).toBe("context-engine");
     expect(call.tokensAfter).toBe(321);
+    expect(result?.reply?.text).toBe("⚙️ Compacted (999 → 321) • Context 12.1k");
   });
+
+  it.each([
+    { tokensBefore: 0, tokensAfter: 36 },
+    { tokensBefore: 20, tokensAfter: 30 },
+    { tokensBefore: 36, tokensAfter: 36 },
+  ])(
+    "does not render a growth arrow for $tokensBefore → $tokensAfter compaction counts",
+    async ({ tokensBefore, tokensAfter }) => {
+      vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore,
+          tokensAfter,
+        },
+      });
+
+      const result = await handleCompactCommand(
+        {
+          ...buildCompactParams("/compact", {
+            commands: { text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig),
+          sessionEntry: {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+          },
+        } as HandleCommandsParams,
+        true,
+      );
+
+      expect(result?.reply?.text).toBe("⚙️ Compacted • Context 12.1k");
+    },
+  );
 
   it("reports authoritative compaction no-ops without incrementing", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({

@@ -347,19 +347,19 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     return failure;
   }
 
+  const tokensBeforeCompaction = result.result?.tokensBefore;
   const tokensAfterCompaction = result.result?.tokensAfter;
   const didCompact = result.ok && result.compacted;
   const compactLabel =
     result.ok || isBenignCompactionSkipResult(result)
       ? didCompact
-        ? result.compactionKind === "server-endpoint" &&
-          typeof tokensAfterCompaction === "number" &&
-          result.result?.tokensBefore != null
-          ? `Server-side compaction (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-          : typeof tokensAfterCompaction !== "number"
-            ? "Compaction finished (resulting context unknown)"
-            : result.result?.tokensBefore != null
-              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+        ? typeof tokensAfterCompaction !== "number"
+          ? "Compaction finished (resulting context unknown)"
+          : typeof tokensBeforeCompaction === "number" &&
+              tokensBeforeCompaction > tokensAfterCompaction
+            ? `${result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted"} (${runtime.formatTokenCount(tokensBeforeCompaction)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+            : result.compactionKind === "server-endpoint"
+              ? "Server-side compaction"
               : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
