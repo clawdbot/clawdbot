@@ -4,6 +4,7 @@
  * reconstruction.
  */
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -20,7 +21,6 @@ import type {
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
-import { isRecord } from "../utils.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -568,6 +568,42 @@ export function resolveCliStreamJsonOutputLimits(
   };
 }
 
+/** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
+export function normalizeClaudeCliStreamJsonRecord(
+  parsed: Record<string, unknown>,
+): string | undefined {
+  if (parsed.type !== "user" || !isRecord(parsed.message)) {
+    return undefined;
+  }
+  const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+  let normalized = false;
+  for (const result of content) {
+    if (!isRecord(result) || result.type !== "tool_result" || !Array.isArray(result.content)) {
+      continue;
+    }
+    for (const block of result.content) {
+      if (!isRecord(block) || !isRecord(block.source) || block.source.type !== "base64") {
+        continue;
+      }
+      if (
+        block.type !== "image" &&
+        !(block.type === "document" && block.source.media_type === "application/pdf")
+      ) {
+        continue;
+      }
+      const { data, ...source } = block.source;
+      if (typeof data !== "string") {
+        continue;
+      }
+      block.source = source;
+      block.omitted = true;
+      block.bytes = estimateBase64DecodedBytes(data);
+      normalized = true;
+    }
+  }
+  return normalized ? JSON.stringify(parsed) : undefined;
+}
+
 function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
   if (kind === "line") {
     return `CLI JSONL line exceeded ${limit} characters; refusing to parse output.`;
@@ -576,88 +612,6 @@ function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: n
     return `CLI JSONL output exceeded ${limit} lines; refusing to parse output.`;
   }
   return `CLI JSONL output exceeded ${limit} characters; refusing to parse output.`;
-}
-
-/**
- * Strips base64 image payloads from a Claude stream-json line so echoed image
- * tool_result data does not count toward the per-turn output cap or survive in
- * the retained raw-line buffer. The CLI has already sent the image to the model
- * by the time these bytes are streamed back, and no downstream openclaw reader
- * consumes `source.data`, so the base64 is dead weight that only inflates the
- * cap and aborts photo-heavy turns (#119445). Uses the same reduced
- * representation as the gateway display projection: `source.data` removed,
- * `block.omitted` + `block.bytes` retained, preserving block type, tool state,
- * and MIME metadata. Bare-array text tool results and every non-image field are
- * left untouched. Returns the line unchanged when it is not a JSON record
- * carrying such a payload, so the pre-parse hostile-input line ceiling and
- * unparseable-line handling stay intact.
- */
-export function normalizeClaudeStreamJsonImagePayload(line: string): string {
-  if (!line.includes('"base64"')) {
-    return line;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return line;
-  }
-  const { value, changed } = stripImageBase64Payloads(parsed);
-  return changed ? JSON.stringify(value) : line;
-}
-
-function stripImageBase64Payloads(value: unknown): {
-  value: unknown;
-  changed: boolean;
-} {
-  if (Array.isArray(value)) {
-    let changed = false;
-    const mapped = value.map((item) => {
-      const res = stripImageBase64Payloads(item);
-      changed ||= res.changed;
-      return res.value;
-    });
-    return { value: changed ? mapped : value, changed };
-  }
-  if (!isRecord(value)) {
-    return { value, changed: false };
-  }
-  if (value.type === "image") {
-    const stripped = stripImageBlockBase64(value);
-    if (stripped) {
-      return { value: stripped, changed: true };
-    }
-  }
-  let changed = false;
-  const out: Record<string, unknown> = {};
-  for (const [key, val] of Object.entries(value)) {
-    const res = stripImageBase64Payloads(val);
-    changed ||= res.changed;
-    out[key] = res.value;
-  }
-  return { value: changed ? out : value, changed };
-}
-
-function stripImageBlockBase64(entry: Record<string, unknown>): Record<string, unknown> | null {
-  let imageData = typeof entry.data === "string" ? entry.data : undefined;
-  const source = isRecord(entry.source) ? entry.source : undefined;
-  let projectedSource: Record<string, unknown> | undefined;
-  if (source && source.type === "base64" && typeof source.data === "string") {
-    imageData ??= source.data;
-    projectedSource = { ...source };
-    delete projectedSource.data;
-  }
-  if (imageData === undefined) {
-    return null;
-  }
-  const out: Record<string, unknown> = { ...entry };
-  if (projectedSource) {
-    out.source = projectedSource;
-  }
-  delete out.data;
-  out.omitted = true;
-  out.bytes = estimateBase64DecodedBytes(imageData);
-  return out;
 }
 
 function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
@@ -1940,6 +1894,39 @@ export function createCliJsonlStreamingParser(params: {
     emitClaudeVisibleText(delta.delta);
   };
 
+  const handleJsonlLine = (rawLine: string) => {
+    const line = rawLine.trim();
+    if (!line || parseErrorText) {
+      return;
+    }
+    rawLines += 1;
+    if (rawLines > outputLimits.maxTurnLines) {
+      parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
+      lineBuffer = "";
+      return;
+    }
+    const parsedRecords = claudeStreamJson ? parseJsonRecordCandidates(line) : undefined;
+    const normalizedLine =
+      parsedRecords?.length === 1
+        ? (normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!) ?? line)
+        : line;
+    if (claudeStreamJson) {
+      // Claude repeats tool-returned media in stdout; only retained normalized bytes count.
+      rawChars += normalizedLine.length + 1;
+      if (rawChars > outputLimits.maxTurnRawChars) {
+        parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
+        lineBuffer = "";
+        return;
+      }
+    }
+    if (handleCustomJsonlLine(normalizedLine)) {
+      return;
+    }
+    for (const parsed of parsedRecords ?? parseJsonRecordCandidates(line)) {
+      handleParsedRecord(parsed);
+    }
+  };
+
   const flushLines = (flushPartial: boolean) => {
     while (true) {
       if (parseErrorText) {
@@ -1949,38 +1936,16 @@ export function createCliJsonlStreamingParser(params: {
       if (newlineIndex < 0) {
         break;
       }
-      const line = lineBuffer.slice(0, newlineIndex).trim();
+      const line = lineBuffer.slice(0, newlineIndex);
       lineBuffer = lineBuffer.slice(newlineIndex + 1);
-      if (!line) {
-        continue;
-      }
-      rawLines += 1;
-      if (rawLines > outputLimits.maxTurnLines) {
-        parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
-        lineBuffer = "";
-        return;
-      }
-      if (handleCustomJsonlLine(line)) {
-        continue;
-      }
-      for (const parsed of parseJsonRecordCandidates(line)) {
-        handleParsedRecord(parsed);
-      }
+      handleJsonlLine(line);
     }
     if (!flushPartial) {
       return;
     }
-    const tail = lineBuffer.trim();
+    const tail = lineBuffer;
     lineBuffer = "";
-    if (!tail) {
-      return;
-    }
-    if (handleCustomJsonlLine(tail)) {
-      return;
-    }
-    for (const parsed of parseJsonRecordCandidates(tail)) {
-      handleParsedRecord(parsed);
-    }
+    handleJsonlLine(tail);
   };
 
   return {
@@ -1988,11 +1953,13 @@ export function createCliJsonlStreamingParser(params: {
       if (!chunk || parseErrorText) {
         return;
       }
-      rawChars += chunk.length;
-      if (rawChars > outputLimits.maxTurnRawChars) {
-        parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
-        lineBuffer = "";
-        return;
+      if (!claudeStreamJson) {
+        rawChars += chunk.length;
+        if (rawChars > outputLimits.maxTurnRawChars) {
+          parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
+          lineBuffer = "";
+          return;
+        }
       }
       if (lineBuffer.length + chunk.length > outputLimits.maxPendingLineChars) {
         parseErrorText = streamJsonOutputLimitErrorText("line", outputLimits.maxPendingLineChars);

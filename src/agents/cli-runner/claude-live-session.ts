@@ -41,7 +41,7 @@ import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
-  normalizeClaudeStreamJsonImagePayload,
+  normalizeClaudeCliStreamJsonRecord,
   parseCliOutput,
   type CliOutput,
   type CliUsage,
@@ -84,7 +84,6 @@ type ClaudeLiveTurn = {
   outputLimits: ClaudeLiveOutputLimits;
   startedAtMs: number;
   rawLines: string[];
-  rawChars: number;
   sessionId?: string;
   noOutputTimer: NodeJS.Timeout | null;
   /** Last stdout/stderr time; null until the process emits anything this turn. */
@@ -1036,21 +1035,7 @@ function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): Claude
   };
 }
 
-function parseClaudeLiveJsonLine(
-  session: ClaudeLiveSession,
-  trimmed: string,
-): Record<string, unknown> | null {
-  const maxPendingLineChars =
-    session.currentTurn?.outputLimits.maxPendingLineChars ??
-    CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS;
-  if (trimmed.length > maxPendingLineChars) {
-    closeLiveSession(
-      session,
-      "abort",
-      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
-    );
-    return null;
-  }
+function parseClaudeLiveJsonLine(trimmed: string): Record<string, unknown> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
@@ -1337,7 +1322,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (!trimmed) {
     return;
   }
-  const parsed = parseClaudeLiveJsonLine(session, trimmed);
+  const parsed = parseClaudeLiveJsonLine(trimmed);
   if (turn) {
     turn.observedStdout = true;
   }
@@ -1381,17 +1366,12 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   ) {
     turn.hasReplayUnsafeActivity = true;
   }
-  // Strip echoed base64 image payloads before aggregate accounting, the
-  // raw-line buffer, and the streaming parser. The CLI has already sent the
-  // image to the model by the time these bytes stream back, and no downstream
-  // openclaw reader consumes source.data, so the base64 only inflates the
-  // per-turn output cap that aborts photo-heavy turns (#119445).
-  const payload = normalizeClaudeStreamJsonImagePayload(trimmed);
-  turn.rawChars += payload.length + 1;
-  if (
-    turn.rawChars > turn.outputLimits.maxTurnRawChars ||
-    turn.rawLines.length >= turn.outputLimits.maxTurnLines
-  ) {
+  const normalizedLine = normalizeClaudeCliStreamJsonRecord(parsed) ?? trimmed;
+  turn.rawLines.push(normalizedLine);
+  applyBackgroundTasksChanged(session, parsed);
+  const toolEventCountBefore = turn.toolEventCount;
+  turn.streamingParser.push(`${normalizedLine}\n`);
+  if (turn.streamingParser.getErrorText()) {
     closeLiveSession(
       session,
       "abort",
@@ -1399,10 +1379,6 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     );
     return;
   }
-  turn.rawLines.push(payload);
-  applyBackgroundTasksChanged(session, parsed);
-  const toolEventCountBefore = turn.toolEventCount;
-  turn.streamingParser.push(`${payload}\n`);
   turn.sessionId = parsedSessionId ?? turn.sessionId;
   noteClaudeLiveProgress(turn, parsed, turn.toolEventCount !== toolEventCountBefore);
   handleClaudeLiveControlRequest(session, turn, parsed);
@@ -1709,7 +1685,6 @@ function createTurn(params: {
     outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),
     rawLines: [],
-    rawChars: 0,
     noOutputTimer: null,
     lastOutputAtMs: null,
     timeoutTimer: null,

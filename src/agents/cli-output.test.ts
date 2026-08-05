@@ -1,12 +1,10 @@
 /** Tests CLI JSON/JSONL output parsing, streamed deltas, and error extraction. */
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   formatCliOutputError,
-  normalizeClaudeStreamJsonImagePayload,
   parseCliOutput,
   type CliThinkingProgress,
   type CliToolResultDelta,
@@ -3069,6 +3067,46 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
+  it("lets plugin parsers own their frames before lazily parsing fallback JSON", () => {
+    const parseSpy = vi.spyOn(JSON, "parse");
+    const parseCountsAtPluginEntry: number[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "acme", output: "jsonl" },
+      providerId: "acme-cli",
+      parseJsonlEvent: (line) => {
+        parseCountsAtPluginEntry.push(parseSpy.mock.calls.length);
+        if (line === "plain provider frame") {
+          return { kind: "text", text: "plain" };
+        }
+        if (line.includes('"item.completed"')) {
+          return null;
+        }
+        const event = JSON.parse(line) as { text: string };
+        return { kind: "text", text: event.text };
+      },
+      onAssistantDelta: () => {},
+    });
+
+    try {
+      parser.push("plain provider frame\n");
+      expect(parseSpy).not.toHaveBeenCalled();
+
+      parser.push(`${JSON.stringify({ text: " provider JSON" })}\n`);
+      expect(parseSpy).toHaveBeenCalledTimes(1);
+
+      parser.push(
+        `${JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "fallback" },
+        })}\n`,
+      );
+      expect(parseCountsAtPluginEntry).toEqual([0, 0, 1]);
+      expect(parseSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
   it("turns plugin-owned JSONL parser exceptions into bounded provider errors", () => {
     let calls = 0;
     const parser = createCliJsonlStreamingParser({
@@ -3383,6 +3421,190 @@ describe("createCliJsonlStreamingParser", () => {
     expect(results).toEqual([
       { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
     ]);
+  });
+
+  it("omits echoed Claude image and PDF bytes before accumulating tool results", () => {
+    const results: CliToolResultDelta[] = [];
+    const pluginLines: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      parseJsonlEvent: (line) => {
+        pluginLines.push(line);
+        return null;
+      },
+      onAssistantDelta: () => {},
+      onToolResult: (result) => results.push(result),
+    });
+    const base64 = "a".repeat(4_300_000);
+    for (const [type, mediaType] of [
+      ["image", "image/png"],
+      ["document", "application/pdf"],
+    ] as const) {
+      parser.push(
+        `${JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: `read-${type}`,
+                is_error: type === "document",
+                content: [
+                  { type: "text", text: `Read ${type}` },
+                  {
+                    type,
+                    title: `${type} attachment`,
+                    source: { type: "base64", media_type: mediaType, data: base64 },
+                  },
+                  {
+                    type: "image",
+                    source: { type: "url", url: "https://example.test/keep.png" },
+                  },
+                  {
+                    type: "document",
+                    source: { type: "text", media_type: "text/plain", data: "keep text" },
+                  },
+                ],
+              },
+            ],
+          },
+        })}\n`,
+      );
+    }
+    parser.push(`${JSON.stringify({ type: "result", result: "both attachments read" })}\n`);
+    parser.finish();
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutput()?.text).toBe("both attachments read");
+    expect(results).toHaveLength(2);
+    expect(pluginLines).toHaveLength(3);
+    expect(pluginLines[0]).toContain('"omitted":true');
+    expect(pluginLines[0]).not.toContain(base64.slice(0, 64));
+    for (const [index, type, mediaType] of [
+      [0, "image", "image/png"],
+      [1, "document", "application/pdf"],
+    ] as const) {
+      expect(results[index]).toEqual({
+        toolCallId: `read-${type}`,
+        name: "",
+        isError: type === "document",
+        result: [
+          { type: "text", text: `Read ${type}` },
+          {
+            type,
+            title: `${type} attachment`,
+            source: { type: "base64", media_type: mediaType },
+            omitted: true,
+            bytes: 3_225_000,
+          },
+          { type: "image", source: { type: "url", url: "https://example.test/keep.png" } },
+          {
+            type: "document",
+            source: { type: "text", media_type: "text/plain", data: "keep text" },
+          },
+        ],
+      });
+    }
+  });
+
+  it("still enforces raw Claude line and retained-text limits", () => {
+    const createParser = () =>
+      createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        onAssistantDelta: () => {},
+      });
+    const oversizedLineParser = createParser();
+    oversizedLineParser.push(
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "oversized-image",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: "a".repeat(8 * 1024 * 1024),
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      })}\n`,
+    );
+    expect(oversizedLineParser.getErrorText()).toContain("JSONL line exceeded");
+
+    const oversizedTextParser = createParser();
+    for (const toolCallId of ["first", "second"]) {
+      oversizedTextParser.push(
+        `${JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolCallId,
+                content: [{ type: "text", text: "a".repeat(4_300_000) }],
+              },
+            ],
+          },
+        })}\n`,
+      );
+    }
+    expect(oversizedTextParser.getErrorText()).toContain("JSONL output exceeded");
+
+    const excessiveLinesParser = createParser();
+    excessiveLinesParser.push("{}\n".repeat(20_001));
+    expect(excessiveLinesParser.getErrorText()).toContain("exceeded 20000 lines");
+  });
+
+  it.each([
+    { providerId: "codex-cli", jsonlDialect: undefined },
+    { providerId: "pi-cli", jsonlDialect: undefined },
+    { providerId: "google-gemini-cli", jsonlDialect: "gemini-stream-json" as const },
+  ])("preserves $providerId binary tool payloads byte-for-byte", ({ providerId, jsonlDialect }) => {
+    const observedLines: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: providerId, output: "jsonl", ...(jsonlDialect ? { jsonlDialect } : {}) },
+      providerId,
+      parseJsonlEvent: (line) => {
+        observedLines.push(line);
+        return null;
+      },
+      onAssistantDelta: () => {},
+    });
+    const rawLine = JSON.stringify({
+      type: "user",
+      item: {
+        type: "mcp_tool_call",
+        result: { content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }] },
+      },
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "keep-binary",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    parser.push(`${rawLine}\n`);
+
+    expect(observedLines).toEqual([rawLine]);
   });
 
   it("reassembles streamed tool args from input_json_delta chunks", () => {
@@ -3940,139 +4162,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
-  });
-});
-
-describe("normalizeClaudeStreamJsonImagePayload", () => {
-  it("strips base64 image source.data and retains omitted, bytes, and MIME metadata", () => {
-    const line = JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_1",
-            is_error: false,
-            content: [
-              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "AAAA" } },
-              { type: "text", text: "photo 1" },
-            ],
-          },
-        ],
-      },
-    });
-    const normalized = normalizeClaudeStreamJsonImagePayload(line);
-    const parsed = JSON.parse(normalized);
-    const imageBlock = parsed.message.content[0].content[0];
-    expect(imageBlock.type).toBe("image");
-    expect(imageBlock.source).toEqual({ type: "base64", media_type: "image/jpeg" });
-    expect(imageBlock.source.data).toBeUndefined();
-    expect(imageBlock.omitted).toBe(true);
-    expect(imageBlock.bytes).toBeGreaterThan(0);
-    // Text sibling, tool id, and tool state are preserved.
-    expect(parsed.message.content[0].content[1]).toEqual({ type: "text", text: "photo 1" });
-    expect(parsed.message.content[0].tool_use_id).toBe("toolu_1");
-    expect(parsed.message.content[0].is_error).toBe(false);
-  });
-
-  it("shrinks a photo-bearing line below the per-turn cap so the parser no longer aborts", () => {
-    const cap = CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS;
-    const imageBase64 = "B".repeat(cap + 1024);
-    const line = JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_img",
-            content: [
-              {
-                type: "image",
-                source: { type: "base64", media_type: "image/png", data: imageBase64 },
-              },
-            ],
-          },
-        ],
-      },
-    });
-    // The raw line exceeds the 8 MiB cap and trips the parser's aggregate guard.
-    expect(line.length).toBeGreaterThan(cap);
-    const rawParser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
-    });
-    rawParser.push(`${line}\n`);
-    rawParser.finish();
-    expect(rawParser.getErrorText()).toMatch(/exceeded .* characters/);
-
-    // After normalization the line is far below the cap and parses cleanly.
-    const normalized = normalizeClaudeStreamJsonImagePayload(line);
-    expect(normalized.length).toBeLessThan(cap);
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
-    });
-    parser.push(`${normalized}\n`);
-    parser.finish();
-    expect(parser.getErrorText()).toBeNull();
-  });
-
-  it("leaves bare-array text tool results, non-image JSON, and unparseable lines intact", () => {
-    const textOnly = JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "toolu_2", content: "plain text result" }],
-      },
-    });
-    expect(normalizeClaudeStreamJsonImagePayload(textOnly)).toBe(textOnly);
-
-    const controlLine = JSON.stringify({ type: "system", subtype: "init", session_id: "s" });
-    expect(normalizeClaudeStreamJsonImagePayload(controlLine)).toBe(controlLine);
-
-    const unparseable = "{ not json at all base64";
-    expect(normalizeClaudeStreamJsonImagePayload(unparseable)).toBe(unparseable);
-  });
-
-  it("strips every image block in a multi-image tool_result", () => {
-    const line = JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_multi",
-            content: [
-              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "AAAA" } },
-              { type: "image", source: { type: "base64", media_type: "image/png", data: "BBBB" } },
-            ],
-          },
-        ],
-      },
-    });
-    const blocks = JSON.parse(normalizeClaudeStreamJsonImagePayload(line)).message.content[0]
-      .content;
-    expect(blocks[0].source.data).toBeUndefined();
-    expect(blocks[0].omitted).toBe(true);
-    expect(blocks[0].source.media_type).toBe("image/jpeg");
-    expect(blocks[1].source.data).toBeUndefined();
-    expect(blocks[1].omitted).toBe(true);
-    expect(blocks[1].source.media_type).toBe("image/png");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
