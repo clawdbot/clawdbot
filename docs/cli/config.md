@@ -229,7 +229,6 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-path <path>` (required)
     - `--provider-mode <singleValue|json>`
     - `--provider-max-bytes <bytes>`
-    - `--provider-allow-insecure-path`
 
   </Accordion>
   <Accordion title="Exec provider (--provider-source exec)">
@@ -241,8 +240,6 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-env <KEY=VALUE>` (repeatable)
     - `--provider-pass-env <ENV_VAR>` (repeatable)
     - `--provider-trusted-dir <path>` (repeatable)
-    - `--provider-allow-insecure-path`
-    - `--provider-allow-symlink-command`
 
   </Accordion>
 </AccordionGroup>

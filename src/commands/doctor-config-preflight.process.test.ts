@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,14 +21,48 @@ const STARTUP_RECOVERY =
   'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runIsolatedModuleScript(env: NodeJS.ProcessEnv, script: string) {
-  return spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-    env,
-    maxBuffer: 4 * 1024 * 1024,
-    timeout: 30_000,
-  });
+function runIsolatedModuleScript(
+  env: NodeJS.ProcessEnv,
+  script: string,
+  options: { runtimeRoot?: string; timeoutMs?: number } = {},
+) {
+  return spawnSync(
+    process.execPath,
+    [
+      ...(options.runtimeRoot ? ["--preserve-symlinks"] : []),
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      script,
+    ],
+    {
+      cwd: options.runtimeRoot ?? path.resolve("."),
+      encoding: "utf8",
+      env,
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: options.timeoutMs ?? 30_000,
+    },
+  );
+}
+
+function createSourceRuntime(root: string): string {
+  const runtimeRoot = path.join(root, "runtime");
+  fs.mkdirSync(path.join(runtimeRoot, "dist"), { recursive: true });
+  for (const dirname of ["node_modules", "packages", "scripts", "src"]) {
+    fs.symlinkSync(
+      path.resolve(dirname),
+      path.join(runtimeRoot, dirname),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
+  fs.copyFileSync(path.resolve("package.json"), path.join(runtimeRoot, "package.json"));
+  fs.copyFileSync(path.resolve("tsconfig.json"), path.join(runtimeRoot, "tsconfig.json"));
+  fs.writeFileSync(
+    path.join(runtimeRoot, "dist", "build-info.json"),
+    JSON.stringify({ builtAt: "2026-08-05T00:00:00.000Z" }),
+  );
+  return runtimeRoot;
 }
 
 function seedPluginStateConflict(stateDir: string): void {
@@ -140,6 +175,80 @@ describe("gateway startup-migration refusal", () => {
       await fs.promises.rm(root, { recursive: true, force: true });
     }
   }, 45_000);
+
+  it("reuses the state-migration checkpoint when the config file remains absent", async () => {
+    const root = await fs.promises.realpath(tempDirs.make("openclaw-configless-checkpoint-"));
+    const runtimeRoot = createSourceRuntime(root);
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+
+    const preflightUrl = pathToFileURL(
+      path.join(runtimeRoot, "src", "commands", "doctor-config-preflight.ts"),
+    ).href;
+    const checkpointUrl = pathToFileURL(
+      path.join(runtimeRoot, "src", "infra", "startup-migration-checkpoint.ts"),
+    ).href;
+    const script = `
+      const steps = [];
+      const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
+      const { hasActiveStartupMigrationLease } = await import(${JSON.stringify(checkpointUrl)});
+      await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+        requireStateMigrationCheckpoint: true,
+        measure: async (name, run) => {
+          steps.push(name);
+          return await run();
+        },
+      });
+      console.log("__RESULT__" + JSON.stringify({
+        activeLease: hasActiveStartupMigrationLease({ env: process.env }),
+        stateMigrationsImported: steps.includes(
+          "doctor.config-preflight.state-migrations-import",
+        ),
+      }));
+    `;
+    const run = () =>
+      runIsolatedModuleScript(env, script, {
+        runtimeRoot,
+        timeoutMs: 60_000,
+      });
+    const readResult = (result: ReturnType<typeof runIsolatedModuleScript>) => {
+      expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
+      const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
+      expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
+      return JSON.parse(resultLine!.slice("__RESULT__".length)) as {
+        activeLease: boolean;
+        stateMigrationsImported: boolean;
+      };
+    };
+
+    const first = readResult(run());
+    const second = readResult(run());
+
+    expect(first).toEqual({ activeLease: false, stateMigrationsImported: true });
+    expect(second).toEqual({ activeLease: false, stateMigrationsImported: false });
+    expect(fs.existsSync(configPath)).toBe(false);
+  }, 150_000);
 
   it("persists a refreshed legacy plugin index for the next process", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-plugin-index-checkpoint-"));
