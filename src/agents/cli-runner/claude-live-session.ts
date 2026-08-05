@@ -41,6 +41,7 @@ import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
+  frameBoundedCliJsonlChunk,
   normalizeClaudeCliStreamJsonRecord,
   parseCliOutput,
   type CliOutput,
@@ -123,7 +124,7 @@ type ClaudeLiveSession = {
   sessionId?: string;
   noOutputTimeoutMs: number;
   stderr: string;
-  stdoutBuffer: string;
+  stdoutBuffer: { pending: string };
   currentTurn: ClaudeLiveTurn | null;
   idleTimer: NodeJS.Timeout | null;
   cleanup: () => Promise<void>;
@@ -850,7 +851,7 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
     }
     const retryableResumeStall =
       turn.useResume &&
-      session.stdoutBuffer.trim().length === 0 &&
+      session.stdoutBuffer.pending.trim().length === 0 &&
       !turn.hasReplayUnsafeActivity &&
       turn.toolEventCount === 0 &&
       turn.activeTools.size === 0 &&
@@ -1427,26 +1428,21 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   session.currentTurn?.onCliOutput?.(chunk, "stdout");
   resetNoOutputTimer(session);
-  session.stdoutBuffer += chunk;
   const maxPendingLineChars =
     session.currentTurn?.outputLimits.maxPendingLineChars ??
     CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS;
-  if (session.stdoutBuffer.length > maxPendingLineChars) {
-    closeLiveSession(
-      session,
-      "abort",
-      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
-    );
-    return;
-  }
-  const lines = session.stdoutBuffer.split(/\r?\n/g);
-  session.stdoutBuffer = lines.pop() ?? "";
   try {
-    for (const line of lines) {
-      handleClaudeLiveLine(session, line);
-      if (session.closing) {
-        break;
-      }
+    if (
+      !frameBoundedCliJsonlChunk(session.stdoutBuffer, chunk, maxPendingLineChars, (line) => {
+        handleClaudeLiveLine(session, line);
+        return !session.closing;
+      })
+    ) {
+      closeLiveSession(
+        session,
+        "abort",
+        createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
+      );
     }
   } catch (error) {
     closeLiveSession(session, "abort", error);
@@ -1467,15 +1463,15 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
   if (!session.currentTurn) {
     return;
   }
-  if (session.stdoutBuffer.trim()) {
+  if (session.stdoutBuffer.pending.trim()) {
+    const pendingLine = session.stdoutBuffer.pending;
+    session.stdoutBuffer.pending = "";
     try {
-      handleClaudeLiveLine(session, session.stdoutBuffer);
+      handleClaudeLiveLine(session, pendingLine);
     } catch (error) {
-      session.stdoutBuffer = "";
       failTurn(session, error);
       return;
     }
-    session.stdoutBuffer = "";
   }
   if (!session.currentTurn) {
     return;
@@ -1620,7 +1616,7 @@ async function createClaudeLiveSession(params: {
     modelId: params.context.modelId,
     noOutputTimeoutMs: params.noOutputTimeoutMs,
     stderr: "",
-    stdoutBuffer: "",
+    stdoutBuffer: { pending: "" },
     currentTurn: null,
     idleTimer: null,
     cleanup: async () => {

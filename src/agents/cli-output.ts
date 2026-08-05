@@ -568,6 +568,35 @@ export function resolveCliStreamJsonOutputLimits(
   };
 }
 
+/** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
+export function frameBoundedCliJsonlChunk(
+  state: { pending: string },
+  chunk: string,
+  maxLineChars: number,
+  onLine: (line: string) => boolean | void,
+): boolean {
+  for (let offset = 0; offset < chunk.length;) {
+    const newlineIndex = chunk.indexOf("\n", offset);
+    const lineEnd = newlineIndex === -1 ? chunk.length : newlineIndex;
+    if (state.pending.length + (lineEnd - offset) > maxLineChars) {
+      state.pending = "";
+      return false;
+    }
+    state.pending += chunk.slice(offset, lineEnd);
+    if (newlineIndex === -1) {
+      return true;
+    }
+    const line = state.pending;
+    // Control-response writes can synchronously reenter stdout framing.
+    state.pending = "";
+    offset = newlineIndex + 1;
+    if (onLine(line) === false) {
+      return true;
+    }
+  }
+  return true;
+}
+
 /** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
 export function normalizeClaudeCliStreamJsonRecord(
   parsed: Record<string, unknown>,
@@ -1385,7 +1414,7 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
 }) {
-  let lineBuffer = "";
+  const lineBuffer = { pending: "" };
   let assistantText = "";
   let customThinkingText = "";
   let pendingClaudeText = "";
@@ -1610,6 +1639,16 @@ export function createCliJsonlStreamingParser(params: {
     };
   };
 
+  const accountClaudeJsonlLine = (line: string): boolean => {
+    rawChars += line.length + 1;
+    if (rawChars <= outputLimits.maxTurnRawChars) {
+      return true;
+    }
+    parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
+    lineBuffer.pending = "";
+    return false;
+  };
+
   const handleCustomJsonlLine = (line: string): boolean => {
     if (parseErrorText) {
       return true;
@@ -1632,6 +1671,9 @@ export function createCliJsonlStreamingParser(params: {
     }
     if (parsed == null) {
       return false;
+    }
+    if (claudeStreamJson && !accountClaudeJsonlLine(line)) {
+      return true;
     }
     for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
       handleCustomJsonlEvent(event);
@@ -1902,50 +1944,26 @@ export function createCliJsonlStreamingParser(params: {
     rawLines += 1;
     if (rawLines > outputLimits.maxTurnLines) {
       parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
-      lineBuffer = "";
+      lineBuffer.pending = "";
       return;
     }
-    const parsedRecords = claudeStreamJson ? parseJsonRecordCandidates(line) : undefined;
-    const normalizedLine =
-      parsedRecords?.length === 1
-        ? (normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!) ?? line)
-        : line;
+    if (handleCustomJsonlLine(line)) {
+      return;
+    }
+    const parsedRecords = parseJsonRecordCandidates(line);
     if (claudeStreamJson) {
+      const normalizedLine =
+        parsedRecords.length === 1
+          ? (normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!) ?? line)
+          : line;
       // Claude repeats tool-returned media in stdout; only retained normalized bytes count.
-      rawChars += normalizedLine.length + 1;
-      if (rawChars > outputLimits.maxTurnRawChars) {
-        parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
-        lineBuffer = "";
+      if (!accountClaudeJsonlLine(normalizedLine)) {
         return;
       }
     }
-    if (handleCustomJsonlLine(normalizedLine)) {
-      return;
-    }
-    for (const parsed of parsedRecords ?? parseJsonRecordCandidates(line)) {
+    for (const parsed of parsedRecords) {
       handleParsedRecord(parsed);
     }
-  };
-
-  const flushLines = (flushPartial: boolean) => {
-    while (true) {
-      if (parseErrorText) {
-        return;
-      }
-      const newlineIndex = lineBuffer.indexOf("\n");
-      if (newlineIndex < 0) {
-        break;
-      }
-      const line = lineBuffer.slice(0, newlineIndex);
-      lineBuffer = lineBuffer.slice(newlineIndex + 1);
-      handleJsonlLine(line);
-    }
-    if (!flushPartial) {
-      return;
-    }
-    const tail = lineBuffer;
-    lineBuffer = "";
-    handleJsonlLine(tail);
   };
 
   return {
@@ -1957,23 +1975,26 @@ export function createCliJsonlStreamingParser(params: {
         rawChars += chunk.length;
         if (rawChars > outputLimits.maxTurnRawChars) {
           parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
-          lineBuffer = "";
+          lineBuffer.pending = "";
           return;
         }
       }
-      if (lineBuffer.length + chunk.length > outputLimits.maxPendingLineChars) {
+      if (
+        !frameBoundedCliJsonlChunk(lineBuffer, chunk, outputLimits.maxPendingLineChars, (line) => {
+          handleJsonlLine(line);
+          return !parseErrorText;
+        })
+      ) {
         parseErrorText = streamJsonOutputLimitErrorText("line", outputLimits.maxPendingLineChars);
-        lineBuffer = "";
-        return;
       }
-      lineBuffer += chunk;
-      flushLines(false);
     },
     finish() {
       if (parseErrorText) {
         return;
       }
-      flushLines(true);
+      const tail = lineBuffer.pending;
+      lineBuffer.pending = "";
+      handleJsonlLine(tail);
       finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
         flushPendingClaudeAssistantText();

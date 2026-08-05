@@ -3423,7 +3423,7 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
-  it("omits echoed Claude image and PDF bytes before accumulating tool results", () => {
+  it("frames coalesced Claude image and PDF lines before omitting retained binary bytes", () => {
     const results: CliToolResultDelta[] = [];
     const pluginLines: string[] = [];
     const parser = createCliJsonlStreamingParser({
@@ -3437,12 +3437,13 @@ describe("createCliJsonlStreamingParser", () => {
       onToolResult: (result) => results.push(result),
     });
     const base64 = "a".repeat(4_300_000);
+    const rawLines: string[] = [];
     for (const [type, mediaType] of [
       ["image", "image/png"],
       ["document", "application/pdf"],
     ] as const) {
-      parser.push(
-        `${JSON.stringify({
+      rawLines.push(
+        JSON.stringify({
           type: "user",
           message: {
             role: "user",
@@ -3470,18 +3471,17 @@ describe("createCliJsonlStreamingParser", () => {
               },
             ],
           },
-        })}\n`,
+        }),
       );
     }
-    parser.push(`${JSON.stringify({ type: "result", result: "both attachments read" })}\n`);
+    const resultLine = JSON.stringify({ type: "result", result: "both attachments read" });
+    parser.push(`${[...rawLines, resultLine].join("\n")}\n`);
     parser.finish();
 
     expect(parser.getErrorText()).toBeNull();
     expect(parser.getOutput()?.text).toBe("both attachments read");
     expect(results).toHaveLength(2);
-    expect(pluginLines).toHaveLength(3);
-    expect(pluginLines[0]).toContain('"omitted":true');
-    expect(pluginLines[0]).not.toContain(base64.slice(0, 64));
+    expect(pluginLines).toEqual([...rawLines, resultLine]);
     for (const [index, type, mediaType] of [
       [0, "image", "image/png"],
       [1, "document", "application/pdf"],
@@ -3507,6 +3507,47 @@ describe("createCliJsonlStreamingParser", () => {
         ],
       });
     }
+  });
+
+  it("counts raw Claude lines claimed by plugin parsers before dispatching their events", () => {
+    const pluginLines: string[] = [];
+    const assistantDeltas: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      parseJsonlEvent: (line) => {
+        pluginLines.push(line);
+        return { kind: "text", text: "claimed" };
+      },
+      onAssistantDelta: (delta) => assistantDeltas.push(delta.delta),
+    });
+    const rawLine = JSON.stringify({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "claimed-image",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: "a".repeat(4_300_000),
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    parser.push(`${rawLine}\n${rawLine}\n`);
+
+    expect(pluginLines).toEqual([rawLine, rawLine]);
+    expect(assistantDeltas).toEqual(["claimed"]);
+    expect(parser.getErrorText()).toContain("JSONL output exceeded");
   });
 
   it("still enforces raw Claude line and retained-text limits", () => {
@@ -3541,6 +3582,12 @@ describe("createCliJsonlStreamingParser", () => {
       })}\n`,
     );
     expect(oversizedLineParser.getErrorText()).toContain("JSONL line exceeded");
+
+    const growingPartialLineParser = createParser();
+    growingPartialLineParser.push("a".repeat(4_300_000));
+    expect(growingPartialLineParser.getErrorText()).toBeNull();
+    growingPartialLineParser.push("a".repeat(4_300_000));
+    expect(growingPartialLineParser.getErrorText()).toContain("JSONL line exceeded");
 
     const oversizedTextParser = createParser();
     for (const toolCallId of ["first", "second"]) {

@@ -2629,7 +2629,7 @@ describe("runCliAgent spawn path", () => {
     expect(result.text).toBe(largeText);
   });
 
-  it("retains mixed Claude live tool results without counting echoed image and PDF bytes", async () => {
+  it("frames coalesced Claude live image and PDF records before omitting retained bytes", async () => {
     const toolResults: unknown[] = [];
     const stop = onAgentEvent((event) => {
       if (event.stream === "tool" && event.data.phase === "result") {
@@ -2639,12 +2639,14 @@ describe("runCliAgent spawn path", () => {
     const base64 = "a".repeat(4_300_000);
     mockClaudeLiveRun(supervisorSpawnMock, {
       onWrite: ({ emit }) => {
-        emit([{ type: "system", subtype: "init", session_id: "live-binary-results" }]);
+        const events: Record<string, unknown>[] = [
+          { type: "system", subtype: "init", session_id: "live-binary-results" },
+        ];
         for (const [type, mediaType] of [
           ["image", "image/png"],
           ["document", "application/pdf"],
         ] as const) {
-          emit([
+          events.push(
             {
               type: "assistant",
               session_id: "live-binary-results",
@@ -2653,8 +2655,6 @@ describe("runCliAgent spawn path", () => {
                 content: [{ type: "tool_use", id: `read-${type}`, name: "Read", input: {} }],
               },
             },
-          ]);
-          emit([
             {
               type: "user",
               session_id: "live-binary-results",
@@ -2672,9 +2672,14 @@ describe("runCliAgent spawn path", () => {
                 ],
               },
             },
-          ]);
+          );
         }
-        emit([{ type: "result", session_id: "live-binary-results", result: "both files read" }]);
+        events.push({
+          type: "result",
+          session_id: "live-binary-results",
+          result: "both files read",
+        });
+        emit(events);
       },
     });
 
@@ -2705,6 +2710,29 @@ describe("runCliAgent spawn path", () => {
     } finally {
       stop();
     }
+  });
+
+  it.each([
+    {
+      name: "an oversized complete line",
+      chunks: () => [`${"a".repeat(8 * 1024 * 1024 + 1)}\n`],
+    },
+    {
+      name: "an oversized growing unterminated line",
+      chunks: () => ["a".repeat(4_300_000), "a".repeat(4_300_000)],
+    },
+  ])("rejects $name from Claude live stdout", async ({ chunks }) => {
+    const live: ReturnType<typeof mockClaudeLiveRun> = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: () => {
+        for (const chunk of chunks()) {
+          live.spawnInput.onStdout?.(chunk);
+        }
+      },
+    });
+
+    await expect(executePreparedCliRun(buildClaudeLiveRunContext())).rejects.toThrow(
+      "Claude CLI JSONL line exceeded output limit.",
+    );
   });
 
   it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
