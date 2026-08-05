@@ -39,6 +39,9 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+// Cleanup uses process-owned state/SQLite resources, so shutdown may leave a
+// stuck operation settling, but it must not wait forever to restart the gateway.
+const MEDIA_CLEANUP_STOP_TIMEOUT_MS = 5_000;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -374,18 +377,41 @@ export function startGatewayMaintenanceTimers(params: {
     mediaCleanupInterval = setInterval(runMediaMaintenance, 60 * 60_000);
     runMediaMaintenance();
   };
-  const stopMediaCleanup = async () => {
-    mediaCleanupStopped = true;
-    if (mediaCleanupInterval) {
-      clearInterval(mediaCleanupInterval);
-      mediaCleanupInterval = undefined;
-    }
-    const pending = [
-      playbackTranscodeCacheCleanupLoader.peek(),
-      managedOutgoingCleanupLoader.peek(),
-      mediaCleanupInFlight,
-    ].filter((promise): promise is Promise<void> => promise !== undefined && promise !== null);
-    await Promise.allSettled(pending);
+  let stopMediaCleanupPromise: Promise<void> | undefined;
+  const stopMediaCleanup = () => {
+    stopMediaCleanupPromise ??= (async () => {
+      mediaCleanupStopped = true;
+      if (mediaCleanupInterval) {
+        clearInterval(mediaCleanupInterval);
+        mediaCleanupInterval = undefined;
+      }
+      const pending = [
+        playbackTranscodeCacheCleanupLoader.peek(),
+        managedOutgoingCleanupLoader.peek(),
+        mediaCleanupInFlight,
+      ].filter((promise): promise is Promise<void> => promise !== undefined && promise !== null);
+      if (pending.length === 0) {
+        return;
+      }
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<true>((resolve) => {
+        timeout = setTimeout(() => resolve(true), MEDIA_CLEANUP_STOP_TIMEOUT_MS);
+        timeout.unref?.();
+      });
+      const result = await Promise.race([
+        Promise.allSettled(pending).then(() => false as const),
+        timedOut,
+      ]);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (result) {
+        params.logHealth.error(
+          `media cleanup drain exceeded ${MEDIA_CLEANUP_STOP_TIMEOUT_MS}ms; continuing shutdown`,
+        );
+      }
+    })();
+    return stopMediaCleanupPromise;
   };
 
   return {

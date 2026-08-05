@@ -579,6 +579,35 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("bounds shutdown when active media cleanup never settles", async () => {
+    vi.useFakeTimers();
+    cleanupManagedOutgoingMediaRecordsMock.mockImplementation(() => new Promise(() => {}));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+    timers.startMediaCleanup();
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    });
+
+    let stopped = false;
+    const stopping = timers.stopMediaCleanup().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await stopping;
+
+    expect(stopped).toBe(true);
+    expect(deps.logHealth.error).toHaveBeenCalledWith(
+      "media cleanup drain exceeded 5000ms; continuing shutdown",
+    );
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    await stopMaintenanceTimers(timers);
+  });
+
   it("keeps stale buffers for active runs that still have abort controllers", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
