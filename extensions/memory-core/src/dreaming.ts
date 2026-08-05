@@ -758,6 +758,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
+            language: params.config.language,
             logger: params.logger,
             reason: "subagent runtime is unavailable",
           });
@@ -769,6 +770,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
+            language: params.config.language,
             model: params.config.execution?.model,
             logger: params.logger,
             detached: detachNarratives,
