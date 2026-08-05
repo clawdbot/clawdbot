@@ -5228,10 +5228,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "timeout --signal=TERM --kill-after=30s 110m pnpm openclaw qa run",
     );
     expect(runProfileStep.run).toContain("qa_exit_code=$?");
-    expect(runProfileStep.run).toContain('[[ "$qa_exit_code" -eq 124 ]]');
+    for (const [exitCode, timeoutOutcome] of [
+      [124, "term"],
+      [137, "kill"],
+    ] as const) {
+      expect(runProfileStep.run).toMatch(
+        new RegExp(`${exitCode}\\)\\s+timeout_outcome="${timeoutOutcome}"`, "u"),
+      );
+    }
+    expect(runProfileStep.run).toContain('TIMEOUT_OUTCOME="$timeout_outcome"');
     expect(runProfileStep.run).toContain("qa-profile-run-status.json");
     expect(runProfileStep.run).toContain("exitCode: Number(process.env.QA_EXIT_CODE)");
-    expect(runProfileStep.run).toContain('timedOut: process.env.TIMED_OUT === "true"');
+    expect(runProfileStep.run).toContain('timedOut: timeoutOutcome !== "none"');
+    expect(runProfileStep.run).toContain("timeoutOutcome,");
     expect(runProfileStep.run).toContain("completedAt: new Date().toISOString()");
     expect(runProfileStep.run).not.toContain("--allow-failures");
     const failProfileStep = qaRunJob.steps.find(
