@@ -170,6 +170,7 @@
     "!dist/plugin-sdk/qa-runner-runtime.d.ts",
     "!dist/plugin-sdk/realtime-bootstrap-context.d.ts",
     "!dist/plugin-sdk/realtime-transcription.d.ts",
+    "!dist/plugin-sdk/realtime-voice-audio-queue.d.ts",
     "!dist/plugin-sdk/realtime-voice.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
@@ -1125,6 +1126,9 @@
     },
     "./plugin-sdk/realtime-bootstrap-context": {
       "default": "./dist/plugin-sdk/realtime-bootstrap-context.js"
+    },
+    "./plugin-sdk/realtime-voice-audio-queue": {
+      "default": "./dist/plugin-sdk/realtime-voice-audio-queue.js"
     },
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"

@@ -476,16 +476,6 @@ export function registerConfigCli(program: Command) {
       collectOption,
       [] as string[],
     )
-    .option(
-      "--provider-allow-insecure-path",
-      "Provider builder (file|exec): bypass strict path permission checks",
-      false,
-    )
-    .option(
-      "--provider-allow-symlink-command",
-      "Provider builder (exec): allow command symlink path",
-      false,
-    )
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
     .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
