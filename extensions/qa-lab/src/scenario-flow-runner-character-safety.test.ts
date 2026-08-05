@@ -1,7 +1,9 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
 const characterScenarioIds = ["character-vibes-gollum", "character-vibes-c3po"] as const;
@@ -29,7 +31,7 @@ function createCharacterScenarioApi(
 ) {
   return {
     env: {
-      providerMode: "mock-openai",
+      providerMode: "live-frontier",
       gateway: {
         workspaceDir: "/qa-character-workspace",
       },
@@ -59,6 +61,35 @@ function createCharacterScenarioApi(
 }
 
 describe("character scenario transcript safety", () => {
+  it.each(characterScenarioIds)("requires a live provider for %s", (scenarioId) => {
+    const scenario = readQaScenarioById(scenarioId);
+
+    expect(scenario.execution.config?.requiredProviderMode).toBe("live-frontier");
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenarioId],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+      }),
+    ).toThrow(`${scenarioId} (providerMode=live-frontier)`);
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+      }),
+    ).toEqual([]);
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenarioId],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      }),
+    ).toEqual([scenario]);
+  });
+
   it.each(characterScenarioIds)("rejects forbidden model internals in %s", async (scenarioId) => {
     const state = createQaBusState();
 

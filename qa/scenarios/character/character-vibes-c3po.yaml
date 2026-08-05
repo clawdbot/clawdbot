@@ -25,6 +25,7 @@ scenario:
     kind: flow
     summary: Capture a raw natural C-3PO character transcript for later quality grading.
     config:
+      requiredProviderMode: live-frontier
       conversationId: alice
       senderName: Alice
       workspaceFiles:
