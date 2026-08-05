@@ -36,6 +36,7 @@ function resolveStatusGatewayDisplayUrl(connection: StatusGatewayConnection): st
 type StatusGatewayProbe = {
   connectLatencyMs?: number | null;
   error?: string | null;
+  health?: unknown;
 } | null;
 
 type StatusGatewayProbeAuth = {
