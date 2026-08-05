@@ -105,6 +105,7 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
       "Realtime WebRTC SDP answer: text response exceeds 262144 bytes",
     );
     expect(cancel).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
   });
 
   it("rejects a declared oversized SDP answer before acquiring its body reader", async () => {

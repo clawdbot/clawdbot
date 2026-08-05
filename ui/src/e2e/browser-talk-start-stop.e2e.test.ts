@@ -6,6 +6,7 @@ import {
   captureVideoTalkProof,
   installBlockedMicrophoneFixture,
   installBlockedVideoTalkFixture,
+  installOversizedWebRtcSdpFixture,
   installTalkBrowserFixtures,
   installWebRtcSdpFailureFixture,
   type WebRtcSdpE2eProof,
@@ -581,6 +582,7 @@ suite.define(() => {
           bodyCancelCount: 1,
           bodyCancelResolvedCount: 1,
           fetchCount: 1,
+          remoteDescriptionCount: 0,
           statuses: [502],
         });
       console.info(
@@ -588,6 +590,56 @@ suite.define(() => {
           `body.cancel=1/resolved; outcome=visible setup failure`,
       );
     });
+  });
+
+  it("rejects and cancels an oversized OpenAI SDP answer before peer setup", async () => {
+    const context = await browser.newContext({ permissions: ["microphone"] });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.catalog": videoTalkCatalog("openai"),
+        "talk.client.create": {
+          provider: "openai",
+          voiceSessionId: "voice-openai-sdp-oversized-e2e",
+          transport: "webrtc",
+          clientSecret: "test-client-secret",
+          offerUrl: "https://api.openai.com/v1/realtime/calls",
+        },
+      },
+    });
+    await installOversizedWebRtcSdpFixture(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.waitForRequest("talk.client.create");
+
+      const alert = page.locator('.agent-chat__talk-status[role="alert"]');
+      await expect
+        .poll(() => alert.textContent())
+        .toContain("Realtime WebRTC SDP answer: text response exceeds 262144 bytes");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof })
+                .openclawWebRtcSdpE2e,
+          ),
+        )
+        .toEqual({
+          bodyCancelCount: 1,
+          bodyCancelResolvedCount: 1,
+          fetchCount: 1,
+          remoteDescriptionCount: 0,
+          statuses: [200],
+        });
+      console.info(
+        `[webrtc-sdp-e2e] trigger=oversized OpenAI SDP answer; ` +
+          `body.cancel=1/resolved; remote-description=0; outcome=visible size failure`,
+      );
+    } finally {
+      await context.close();
+    }
   });
 
   it("starts Gemini Live Talk, enables a fake camera, and handles describe_view", async () => {

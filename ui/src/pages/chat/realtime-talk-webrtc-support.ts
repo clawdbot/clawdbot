@@ -1,5 +1,6 @@
 // Control UI chat module owns low-level WebRTC offer and media-message helpers.
 import { normalizeRealtimeVoiceResponseOutcome } from "../../../../src/talk/provider-types.js";
+import { readResponseTextWithLimit } from "../../lib/response-body.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
@@ -111,54 +112,6 @@ function resolveRealtimeTalkOfferUrl(offerUrl: string | undefined, gatewayUrl: s
   return new URL(target, gateway).toString();
 }
 
-async function readResponseTextWithLimit(
-  response: Response,
-  label: string,
-  maxBytes?: number,
-): Promise<string> {
-  const rawContentLength = response.headers.get("content-length");
-  if (maxBytes !== undefined && rawContentLength && /^\d+$/u.test(rawContentLength)) {
-    const contentLength = Number(rawContentLength);
-    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new Error(`${label}: text response exceeds ${maxBytes} bytes`);
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let canceled = false;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (maxBytes !== undefined && totalBytes > maxBytes) {
-        canceled = true;
-        void reader.cancel().catch(() => undefined);
-        throw new Error(`${label}: text response exceeds ${maxBytes} bytes`);
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-  return chunks.join("");
-}
-
 export class RealtimeTalkWebRtcOfferExchange {
   private pendingRequest: PendingOfferRequest | null = null;
 
@@ -201,11 +154,15 @@ export class RealtimeTalkWebRtcOfferExchange {
       }
       let answer: string;
       try {
-        answer = await readResponseTextWithLimit(
-          response,
-          "Realtime WebRTC SDP answer",
-          params.session.provider === "openai" ? REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES : undefined,
-        );
+        // OpenAI's server path caps SDP answers at 256 KiB. Custom providers
+        // remain uncapped because the generic WebRTC session contract declares no shared limit.
+        answer =
+          params.session.provider === "openai"
+            ? await readResponseTextWithLimit(response, {
+                maxBytes: REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES,
+                tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES} bytes`,
+              })
+            : await response.text();
       } catch (error) {
         if (!params.isCurrent()) {
           return undefined;

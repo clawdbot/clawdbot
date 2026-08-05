@@ -6,7 +6,13 @@ export type WebRtcSdpE2eProof = {
   bodyCancelCount: number;
   bodyCancelResolvedCount: number;
   fetchCount: number;
+  remoteDescriptionCount: number;
   statuses: number[];
+};
+
+type WebRtcSdpResponseFixture = {
+  body: string;
+  status: number;
 };
 
 export function videoTalkCatalog(activeProvider: "google" | "openai") {
@@ -98,13 +104,14 @@ export async function installTalkBrowserFixtures(page: Page) {
   });
 }
 
-export async function installWebRtcSdpFailureFixture(page: Page) {
+async function installWebRtcSdpResponseFixture(page: Page, fixture: WebRtcSdpResponseFixture) {
   await page.addInitScript(() => {
     const proofWindow = window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof };
     proofWindow.openclawWebRtcSdpE2e = {
       bodyCancelCount: 0,
       bodyCancelResolvedCount: 0,
       fetchCount: 0,
+      remoteDescriptionCount: 0,
       statuses: [],
     };
     const originalFetch = window.fetch.bind(window);
@@ -152,7 +159,12 @@ export async function installWebRtcSdpFailureFixture(page: Page) {
         return { type: "offer" as const, sdp: "offer-sdp" };
       }
       async setLocalDescription() {}
-      async setRemoteDescription() {}
+      async setRemoteDescription() {
+        const proof = proofWindow.openclawWebRtcSdpE2e;
+        if (proof) {
+          proof.remoteDescriptionCount += 1;
+        }
+      }
       close() {
         this.connectionState = "closed";
       }
@@ -165,10 +177,24 @@ export async function installWebRtcSdpFailureFixture(page: Page) {
   });
   await page.route("https://api.openai.com/v1/realtime/calls", async (route) => {
     await route.fulfill({
-      status: 502,
+      status: fixture.status,
       contentType: "application/sdp",
-      body: "provider failure",
+      body: fixture.body,
     });
+  });
+}
+
+export async function installWebRtcSdpFailureFixture(page: Page) {
+  await installWebRtcSdpResponseFixture(page, {
+    status: 502,
+    body: "provider failure",
+  });
+}
+
+export async function installOversizedWebRtcSdpFixture(page: Page) {
+  await installWebRtcSdpResponseFixture(page, {
+    status: 200,
+    body: "x".repeat(256 * 1024 + 1),
   });
 }
 
