@@ -51,10 +51,11 @@ class ProviderPromptRetryNoProgressError extends Error {
 }
 
 class ProviderPromptFinalPayloadOverflowError extends Error {
-  constructor(estimatedTokens: number, contextTokenBudget: number) {
+  constructor(estimatedTokens: number, promptTokenBudget: number, contextTokenBudget: number) {
     super(
-      "Context overflow: final provider payload exceeds the model context window after outbound " +
-        `transforms (estimatedTokens=${estimatedTokens} contextTokenBudget=${contextTokenBudget}).`,
+      "Context overflow: final provider payload exceeds the prompt budget after outbound " +
+        `transforms (estimatedTokens=${estimatedTokens} ` +
+        `promptTokenBudget=${promptTokenBudget} contextTokenBudget=${contextTokenBudget}).`,
     );
     this.name = "ProviderPromptFinalPayloadOverflowError";
   }
@@ -126,18 +127,25 @@ function assertProviderPromptRetryProgress(
 }
 
 /**
- * Rejects a final request body that post-admission transforms grew past the full context window.
- * Admission budgets with reserve and a safety margin, so an unmargined estimate beyond the entire
- * window is unreachable from any admitted context and always means outbound payload drift.
+ * Rejects a final request body that post-admission transforms grew past the reserve-aware prompt
+ * budget. Admission budgets with reserve and a safety margin, so an unmargined estimate beyond
+ * the same reserve-aware budget means outbound payload drift (for example extra_body replacing
+ * messages or tools), never an honestly admitted prompt.
  */
 function assertFinalProviderPromptWithinBudget(params: {
   payload: unknown;
   effectiveContextTokenBudget: number;
+  reserveTokens?: number;
 }): void {
+  const promptTokenBudget = Math.max(
+    1,
+    params.effectiveContextTokenBudget - Math.max(0, Math.floor(params.reserveTokens ?? 0)),
+  );
   const estimatedTokens = estimateProviderPayloadTokenPressure(params.payload);
-  if (estimatedTokens > params.effectiveContextTokenBudget) {
+  if (estimatedTokens > promptTokenBudget) {
     throw new ProviderPromptFinalPayloadOverflowError(
       estimatedTokens,
+      promptTokenBudget,
       params.effectiveContextTokenBudget,
     );
   }
@@ -158,6 +166,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
   streamFn: StreamFn;
   state: ProviderPromptState;
   effectiveContextTokenBudget: number;
+  reserveTokens?: number;
   recordEvent?: (type: string, data?: Record<string, unknown>) => void;
 }): StreamFn {
   return async (model, context, options) => {
@@ -186,6 +195,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         assertFinalProviderPromptWithinBudget({
           payload: finalPayload,
           effectiveContextTokenBudget: params.effectiveContextTokenBudget,
+          reserveTokens: params.reserveTokens,
         });
         // Every pre-dispatch check passed and the transport sends next; admitted
         // candidates may only be adopted from this point on.

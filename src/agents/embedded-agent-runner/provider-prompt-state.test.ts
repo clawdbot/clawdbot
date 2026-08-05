@@ -532,6 +532,65 @@ describe("provider prompt state", () => {
     clearProviderPromptState(runId);
   });
 
+  it("rejects an extra_body replacement above the reserve-aware prompt budget", async () => {
+    const runId = "final-payload-reserve-overflow";
+    const state = getProviderPromptState(runId);
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "small prompt", timestamp: 1 }],
+      tools: [],
+    } as Context;
+    const networkSend = vi.fn();
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      networkSend();
+      return createResultStream("stop");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 40_000,
+      reserveTokens: 8_000,
+    });
+    const replacedPayload = {
+      messages: [{ role: "user", content: "x".repeat(140_000) }],
+      model: model.id,
+    };
+
+    await expect(wrapped(model, context, { onPayload: () => replacedPayload })).rejects.toThrow(
+      "Context overflow: final provider payload exceeds the prompt budget",
+    );
+    expect(networkSend).not.toHaveBeenCalled();
+    clearProviderPromptState(runId);
+  });
+
+  it("admits a final payload within the reserve-aware prompt budget", async () => {
+    const runId = "final-payload-reserve-within";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      return createResultStream("stop");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 40_000,
+      reserveTokens: 8_000,
+    });
+
+    const result = await wrapped(model, context, {
+      onPayload: () => ({
+        messages: [{ role: "user", content: "x".repeat(100_000) }],
+        model: model.id,
+      }),
+    });
+    await result.result();
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    clearProviderPromptState(runId);
+  });
+
   it("admits a final payload whose raw estimate stays below the context window", async () => {
     const runId = "final-payload-within-window";
     const state = getProviderPromptState(runId);

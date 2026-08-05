@@ -238,6 +238,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         1,
         Math.floor(attempt.contextTokenBudget ?? attempt.model.contextWindow),
       ),
+      reserveTokens: Math.max(0, Math.floor(settingsManager.getCompactionReserveTokens())),
       ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },
   });
