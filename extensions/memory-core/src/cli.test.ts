@@ -597,6 +597,37 @@ describe("memory cli", () => {
     });
   });
 
+  it("marks dirty per-source when offsetting sources mask the aggregate (#119411)", async () => {
+    // memory: 0 indexed / 1 on-disk (stale) + sessions: 423 indexed / 0 on-disk
+    // → aggregate 423 / 1 looks clean (423 > 1), but memory is missing a file.
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-08-05", ["offsetting probe"]);
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () =>
+          makeMemoryStatus({
+            workspaceDir,
+            files: 423,
+            chunks: 6343,
+            dirty: false,
+            sourceCounts: [
+              { source: "memory", files: 0, chunks: 0 },
+              { source: "sessions", files: 423, chunks: 6343 },
+            ],
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      // aggregate 423 > 1 (scan total) looks clean, but memory 0 < 1 (scan per-source).
+      // Per-source comparison must flag dirty.
+      expectLogged(log, "Dirty: yes");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("keeps plain status from probing vector or embeddings", async () => {
     const close = vi.fn(async () => {});
     const probeVectorAvailability = vi.fn(async () => {

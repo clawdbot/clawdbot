@@ -62,6 +62,33 @@ type LlamaCppRuntimeStatus = {
   };
   loadError?: string;
 };
+/**
+ * Detects stale index by comparing per-source on-disk files vs indexed files.
+ * Per-source comparison catches drift that an aggregate total masks: e.g.
+ * memory 584/585 (stale) + sessions 423/386 (over-indexed) → aggregate 1007/971
+ * looks clean, but memory is missing a file. (#119411)
+ */
+function resolveMemoryScanDirty(
+  status: ReturnType<MemoryManager["status"]>,
+  scan: MemorySourceScan | undefined,
+): boolean {
+  if (!scan?.sources) {
+    return scan?.totalFiles != null && (status.files ?? 0) < scan.totalFiles;
+  }
+  const indexedBySource = new Map(
+    (status.sourceCounts ?? []).map(({ source, files }) => [source, files]),
+  );
+  for (const scanned of scan.sources) {
+    if (scanned.totalFiles == null) {
+      continue;
+    }
+    const indexed = indexedBySource.get(scanned.source) ?? 0;
+    if (indexed < scanned.totalFiles) {
+      return true;
+    }
+  }
+  return false;
+}
 function readLlamaCppRuntimeStatus(
   status: ReturnType<MemoryManager["status"]>,
 ): LlamaCppRuntimeStatus | null {
@@ -297,8 +324,7 @@ export async function runMemoryStatus(
         agentId,
         status: {
           ...status,
-          dirty:
-            status.dirty || (scan?.totalFiles != null && (status.files ?? 0) < scan.totalFiles),
+          dirty: status.dirty || resolveMemoryScanDirty(status, scan),
         },
         embeddingProbe,
         indexError,
