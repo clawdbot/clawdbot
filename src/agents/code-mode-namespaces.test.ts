@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   createCodeModeNamespaceRuntime,
@@ -181,7 +182,7 @@ describe("Code Mode MCP namespace model", () => {
     // The prompt should mention the node label without a dangling high surrogate.
     const labelMatch = prompt.match(/\(node: (.+)\)/);
     expect(labelMatch).not.toBeNull();
-    const label = labelMatch![1];
+    const label = expectDefined(labelMatch?.[1], "node label capture group");
     // No lone high surrogate at the end: the emoji must be fully present or fully absent.
     expect(label.endsWith("\uD83D")).toBe(false);
     expect(label.length).toBe(127);
