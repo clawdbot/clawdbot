@@ -10,10 +10,14 @@ type PopupMessage = {
   pairingString?: string;
 };
 
-async function loadPopup(params: {
+type PopupState = {
   paired?: boolean;
-  failures: Partial<Record<"pair" | "unpair" | "toggleShareTab", string>>;
-}) {
+  shared?: boolean;
+  failures: Partial<Record<"getStatus" | "pair" | "unpair" | "toggleShareTab", string>>;
+  onFailure?: (message: PopupMessage) => void;
+};
+
+async function loadPopup(params: PopupState) {
   const markup = await fs.readFile(
     path.join(process.cwd(), "extensions/browser/chrome-extension/popup.html"),
     "utf8",
@@ -25,6 +29,7 @@ async function loadPopup(params: {
   const sendMessage = vi.fn(async (message: PopupMessage) => {
     const failure = params.failures[message.type as keyof typeof params.failures];
     if (failure) {
+      params.onFailure?.(message);
       return { ok: false, error: failure };
     }
     switch (message.type) {
@@ -32,13 +37,13 @@ async function loadPopup(params: {
         return {
           paired: params.paired !== false,
           state: "on",
-          sharedTabCount: 0,
+          sharedTabCount: params.shared ? 1 : 0,
           relayUrl: "ws://127.0.0.1:18797/extension",
         };
       case "prepareCopilotPanel":
         return { ok: true, path: "sidepanel.html?binding=fixture" };
       case "isTabShared":
-        return { shared: false };
+        return { shared: params.shared === true };
       default:
         return { ok: true };
     }
@@ -145,7 +150,9 @@ describe("Chrome extension popup action errors", () => {
 
   it("shows a rejected share-toggle error in the visible connected popup", async () => {
     const error = "No tab with id: 44.";
-    const failures: Partial<Record<"toggleShareTab", string>> = { toggleShareTab: error };
+    const failures: Partial<Record<"getStatus" | "toggleShareTab", string>> = {
+      toggleShareTab: error,
+    };
     const { sendMessage } = await loadPopup({ failures });
 
     popupElement("shareButton").click();
@@ -160,6 +167,13 @@ describe("Chrome extension popup action errors", () => {
     await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
     expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
 
+    failures.getStatus = "Could not refresh browser status.";
+    await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
+    expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+
+    delete failures.getStatus;
+    await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
+
     delete failures.toggleShareTab;
     popupElement("shareButton").click();
 
@@ -168,6 +182,143 @@ describe("Chrome extension popup action errors", () => {
       expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
     });
   });
+
+  it.each([
+    { action: "share", initiallyShared: false, nextLabel: "Stop sharing this tab" },
+    { action: "unshare", initiallyShared: true, nextLabel: "Share this tab with OpenClaw" },
+  ])(
+    "refreshes the actual tab controls immediately after a partially failed $action",
+    async ({ initiallyShared, nextLabel }) => {
+      const error = "Could not reconcile browser tab consent.";
+      const popup: PopupState = {
+        shared: initiallyShared,
+        failures: { toggleShareTab: error },
+      };
+      popup.onFailure = () => {
+        popup.shared = !popup.shared;
+      };
+      const { sendMessage } = await loadPopup(popup);
+      const previousPollCount = sendMessage.mock.calls.filter(
+        ([message]) => message.type === "getStatus",
+      ).length;
+
+      popupElement("shareButton").click();
+
+      await vi.waitFor(() => {
+        expect(popupElement("statusLine").textContent).toBe(error);
+        expect(popupElement("shareButton").textContent).toBe(nextLabel);
+        expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+        expect(
+          sendMessage.mock.calls.filter(([message]) => message.type === "getStatus").length,
+        ).toBeGreaterThan(previousPollCount);
+      });
+    },
+  );
+
+  it("clears a partial-unpair error after successfully pairing again", async () => {
+    const error = "Could not reconcile browser pairing.";
+    const popup: PopupState = {
+      paired: true,
+      failures: { unpair: error },
+    };
+    popup.onFailure = () => {
+      popup.paired = false;
+    };
+    const { sendMessage } = await loadPopup(popup);
+
+    popupElement("settingsButton").click();
+    await vi.waitFor(() => {
+      expect(popupElement("settingsSection").classList.contains("hidden")).toBe(false);
+    });
+    popupElement("unpairButton").click();
+    await vi.waitFor(() => {
+      expect(popupElement("statusLine").textContent).toBe(error);
+      expect(popupElement("settingsSection").classList.contains("hidden")).toBe(false);
+      expect(popupElement("unpairButton").classList.contains("hidden")).toBe(true);
+    });
+
+    await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
+    popupElement("settingsButton").click();
+    await vi.waitFor(() => {
+      expect(popupElement("pairSection").classList.contains("hidden")).toBe(false);
+      expect(popupElement("statusLine").textContent).toBe(error);
+    });
+
+    popup.paired = true;
+    popupElement("pairButton").click();
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({ type: "pair", pairingString: "" });
+      expect(popupElement("statusLine").textContent).toBe("Connected · 0 tabs shared");
+      expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+    });
+  });
+
+  it("keeps a partially persisted pairing failure visible after entering the connected view", async () => {
+    const error = "Could not finish browser pairing.";
+    const popup: PopupState = {
+      paired: false,
+      failures: { pair: error },
+    };
+    popup.onFailure = () => {
+      popup.paired = true;
+    };
+    const { sendMessage } = await loadPopup(popup);
+    const pairingInput = popupElement("pairingString") as HTMLTextAreaElement;
+    pairingInput.value = "ws://127.0.0.1:18797/extension#fixture-token";
+
+    popupElement("pairButton").click();
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: "pair",
+        pairingString: pairingInput.value,
+      });
+      expect(popupElement("error").textContent).toBe(error);
+      expect(popupElement("pairSection").classList.contains("hidden")).toBe(true);
+      expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+      expect(popupElement("statusLine").textContent).toBe(error);
+      expect(popupElement("statusLine").closest(".hidden")).toBeNull();
+    });
+
+    await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
+    popupElement("shareButton").click();
+
+    await vi.waitFor(() => {
+      expect(popupElement("statusLine").textContent).toBe("Connected · 0 tabs shared");
+      expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+    });
+  });
+
+  it.each([
+    { view: "connected", section: "connectedSection", settings: false },
+    { view: "settings", section: "settingsSection", settings: true },
+  ])(
+    "keeps the existing $view view when a status poll fails and recovers",
+    async ({ section, settings }) => {
+      const error = "Could not read browser pairing.";
+      const failures: Partial<Record<"getStatus", string>> = {};
+      const { sendMessage } = await loadPopup({ failures });
+      if (settings) {
+        popupElement("settingsButton").click();
+        await vi.waitFor(() => {
+          expect(popupElement("settingsSection").classList.contains("hidden")).toBe(false);
+        });
+      }
+      const previousStatusClass = popupElement("statusDot").className;
+
+      failures.getStatus = error;
+      await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
+      expect(popupElement(section).classList.contains("hidden")).toBe(false);
+      expect(popupElement("pairSection").classList.contains("hidden")).toBe(true);
+      expect(popupElement("statusDot").className).toBe(previousStatusClass);
+
+      delete failures.getStatus;
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(popupElement("statusLine").textContent).toBe("Connected · 0 tabs shared");
+      expect(popupElement(section).classList.contains("hidden")).toBe(false);
+    },
+  );
 
   it("preserves the existing visible pairing failure", async () => {
     const error = "Could not save browser pairing.";

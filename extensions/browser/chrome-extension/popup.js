@@ -48,6 +48,10 @@ function relayHost(relayUrl) {
 
 async function refresh() {
   const status = await chrome.runtime.sendMessage({ type: "getStatus" });
+  if (status?.ok === false) {
+    statusLine.textContent = actionError ?? status.error ?? "Could not refresh browser status.";
+    return;
+  }
   statusDot.className = `status-dot ${status.state}`;
   pairSection.classList.toggle("hidden", status.paired || settingsOpen);
   connectedSection.classList.toggle("hidden", !status.paired || settingsOpen);
@@ -121,10 +125,14 @@ async function onPair() {
     pairingString: pairingInput.value,
   });
   if (!result.ok) {
-    errorLine.textContent = result.error ?? "Pairing failed.";
+    actionError = result.error ?? "Pairing failed.";
+    errorLine.textContent = actionError;
     errorLine.classList.remove("hidden");
+    statusLine.textContent = actionError;
+    await refresh();
     return;
   }
+  actionError = null;
   await refresh();
 }
 
@@ -133,6 +141,7 @@ async function onUnpair() {
   if (result?.ok === false) {
     actionError = result.error ?? "Could not unpair this browser.";
     statusLine.textContent = actionError;
+    await refresh();
     return;
   }
   actionError = null;
@@ -147,6 +156,7 @@ async function onToggleShare() {
     if (result?.ok === false) {
       actionError = result.error ?? "Could not update browser tab sharing.";
       statusLine.textContent = actionError;
+      await refresh();
       return;
     }
     actionError = null;

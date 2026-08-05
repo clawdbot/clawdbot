@@ -478,11 +478,33 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       )
       .toBe(expectedError);
 
-    await evaluateToolbarPopup<void>(
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<number>(
+            browserCdp,
+            attached.sessionId,
+            "window.__openclawPopupRefreshes",
+          ),
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBeGreaterThan(0);
+    const actionRefreshes = await evaluateToolbarPopup<number>(
       browserCdp,
       attached.sessionId,
-      "new Promise((resolve) => setTimeout(resolve, 2_200))",
+      "window.__openclawPopupRefreshes",
     );
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<number>(
+            browserCdp,
+            attached.sessionId,
+            "window.__openclawPopupRefreshes",
+          ),
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBeGreaterThan(actionRefreshes);
     const observed = await evaluateToolbarPopup<{
       refreshes: number;
       status: string;
@@ -497,7 +519,7 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       })`,
     );
 
-    expect(observed.refreshes).toBeGreaterThan(0);
+    expect(observed.refreshes).toBeGreaterThan(actionRefreshes);
     expect(observed.status).toBe(expectedError);
     expect(observed.visible).toBe(true);
   });
