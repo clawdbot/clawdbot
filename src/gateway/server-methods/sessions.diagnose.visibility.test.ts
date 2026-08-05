@@ -58,7 +58,7 @@ test.each([
   {
     name: "label for an incognito session",
     selector: { label: "private-ops" },
-    entry: { incognito: true },
+    entry: { incognito: true as const },
   },
 ])(
   "sessions.diagnose hides $name from identified non-admin clients",
