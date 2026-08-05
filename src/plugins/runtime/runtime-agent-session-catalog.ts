@@ -23,27 +23,30 @@ export function resolveSessionCatalogCreateTarget(
   params: RuntimeSessionCatalogCreateTargetParams,
 ): SessionCatalogCreateTarget | undefined {
   const agentId = params.requestedAgentId ?? resolveDefaultAgentId(params.config);
-  const modelId = params.modelIds.find(
-    (candidate) =>
+  const defaultModel = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  for (const modelId of params.modelIds) {
+    if (
       resolveEffectiveAgentRuntime({
         cfg: params.config,
         provider: params.provider,
-        modelId: candidate,
+        modelId,
         agentId,
-      }) === params.agentRuntime,
-  );
-  if (!modelId) {
-    return undefined;
+      }) !== params.agentRuntime
+    ) {
+      continue;
+    }
+    const model = `${params.provider}/${modelId}`;
+    const allowed = resolveAllowedModelRef({
+      cfg: params.config,
+      catalog: [],
+      raw: model,
+      defaultProvider: defaultModel.provider,
+      defaultModel: defaultModel.model,
+      agentId,
+    });
+    if (!("error" in allowed)) {
+      return { model, agentRuntime: params.agentRuntime };
+    }
   }
-  const model = `${params.provider}/${modelId}`;
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.config, agentId });
-  const allowed = resolveAllowedModelRef({
-    cfg: params.config,
-    catalog: [],
-    raw: model,
-    defaultProvider: defaultModel.provider,
-    defaultModel: defaultModel.model,
-    agentId,
-  });
-  return "error" in allowed ? undefined : { model, agentRuntime: params.agentRuntime };
+  return undefined;
 }
