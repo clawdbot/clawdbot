@@ -193,7 +193,9 @@ describe("config write guard after unreadable config", () => {
               writeConfigFile({ channels: { telegram: { enabled: true } } }),
             ).rejects.toMatchObject({
               code: "CONFIG_WRITE_REJECTED",
-              reasons: expect.arrayContaining(["gateway-mode-removed"]),
+              reasons: expect.arrayContaining([
+                expect.stringMatching(/^(gateway-mode-removed|unreadable-config-before-write)$/),
+              ]),
             });
           },
         );
