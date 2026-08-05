@@ -168,6 +168,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     getBaseSnapshot: () => pluginMetadataSnapshotState.current,
     env: process.env,
   });
+  const invalidatePluginMetadataSnapshot = () => {
+    // Filesystem/install repairs replace authoritative plugin metadata. Clearing the
+    // base makes the next Doctor scope rebuild once instead of reusing stale facts.
+    pluginMetadataSnapshotState.current = undefined;
+  };
   const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T =>
     runWithPluginMetadataSnapshot(
       {
@@ -582,5 +587,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
       : {}),
     runWithPluginMetadataSnapshot,
+    invalidatePluginMetadataSnapshot,
   };
 }

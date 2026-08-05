@@ -1929,6 +1929,7 @@ describe("doctor config flow", () => {
       expect.objectContaining({ preparePluginMetadataSnapshot: true }),
     );
     expect(result.runWithPluginMetadataSnapshot).toEqual(expect.any(Function));
+    expect(result.invalidatePluginMetadataSnapshot).toEqual(expect.any(Function));
     expect(collectDoctorPreviewNotesParamsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         runWithPluginMetadataSnapshot: result.runWithPluginMetadataSnapshot,
@@ -1961,6 +1962,8 @@ describe("doctor config flow", () => {
     };
     expect(scopeParams.getBaseSnapshot()).toBe(refreshedSnapshot);
     expect(scopeParams.getBaseSnapshot()?.index.installRecords).not.toHaveProperty("google-meet");
+    result.invalidatePluginMetadataSnapshot();
+    expect(scopeParams.getBaseSnapshot()).toBeUndefined();
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {

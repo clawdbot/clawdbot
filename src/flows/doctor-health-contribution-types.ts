@@ -25,6 +25,7 @@ type DoctorConfigResult = {
   /** Ephemeral doctor-only auth rename plan; never part of persisted config. */
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  invalidatePluginMetadataSnapshot?: () => void;
 };
 
 export type DoctorHealthFlowContext = {
@@ -51,6 +52,7 @@ export type DoctorHealthFlowContext = {
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  invalidatePluginMetadataSnapshot?: () => void;
 };
 
 /** Internal facts carried through Doctor detect/repair/validate passes without widening the SDK. */
