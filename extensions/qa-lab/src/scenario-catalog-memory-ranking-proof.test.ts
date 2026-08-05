@@ -42,6 +42,7 @@ async function runSessionMemoryRankingFlow(params: {
   providerMode?: ProviderMode;
   query?: string;
   maxResults?: number;
+  omitMaxResults?: boolean;
   corpus?: "memory" | "sessions" | "all";
   includeToolCall?: boolean;
   includeToolResult?: boolean;
@@ -54,7 +55,7 @@ async function runSessionMemoryRankingFlow(params: {
   const includeToolResult = params.includeToolResult !== false;
   const plannedToolArgs = {
     query: params.query ?? searchQuery,
-    maxResults: params.maxResults ?? 6,
+    ...(params.omitMaxResults ? {} : { maxResults: params.maxResults ?? 6 }),
     ...(params.corpus ? { corpus: params.corpus } : {}),
   };
   const toolResultCallId = params.resultCallId ?? searchCallId;
@@ -357,6 +358,24 @@ describe("session memory ranking scenario evidence", () => {
           results: [currentQuestionResult, staleDurableResult, currentSessionResult],
         }),
       ).rejects.toThrow(/rank|stale|durable/i);
+    },
+  );
+
+  it.each(["mock-openai", "live-frontier"] as const)(
+    "accepts an omitted result limit using the canonical six-result product default (%s)",
+    async (providerMode) => {
+      const { result } = await runSessionMemoryRankingFlow({
+        providerMode,
+        results: [
+          currentQuestionResult,
+          currentSessionResult,
+          evergreenUserResult,
+          staleDurableResult,
+        ],
+        omitMaxResults: true,
+      });
+
+      expect(result.status).toBe("pass");
     },
   );
 

@@ -233,7 +233,7 @@ flow:
                   message:
                     expr: "`expected current session and stale durable memory to compete in the same search result: ${JSON.stringify(correlatedSearchResults.map(({ results }) => results.map(({ path, source, corpus, score, snippet, text }) => ({ path, source, corpus, score, snippet: String(snippet ?? text ?? '').slice(0, 140) }))))}`"
               - assert:
-                  expr: rankedSearchResult.args?.maxResults === 6
+                  expr: "(rankedSearchResult.args?.maxResults ?? 6) === 6"
                   message: expected the correlated memory_search call to use maxResults=6
               - set: currentFactRank
                 value:
