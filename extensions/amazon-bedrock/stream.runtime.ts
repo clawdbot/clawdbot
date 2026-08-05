@@ -467,10 +467,12 @@ function resolveSimpleBedrockOptions(
   if (options.reasoning === "off") {
     return {
       ...base,
-      // reasoning-off requests must still forward the resolved model output
-      // cap; without it Bedrock uses its provider default and heavy turns end
-      // with stopReason "length" (#119148).
-      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
+      // Opus 5 reasoning-off requests must still forward the resolved model
+      // output cap; without it Bedrock uses its provider default and heavy
+      // turns end with stopReason "length".
+      ...(usesClaudeOpus5BedrockContract(model)
+        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
+        : {}),
       reasoning: "off",
     } satisfies BedrockOptions;
   }
