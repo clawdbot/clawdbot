@@ -10,8 +10,8 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
 });
 
-afterEach(async () => {
-  await closeOpenClawAgentDatabasesForTest();
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
 });
 
 describe("CronService.remove session cleanup", () => {
