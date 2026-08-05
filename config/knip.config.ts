@@ -436,9 +436,6 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
-    // Private RFC 0013 recovery helpers are direct unit-test contracts until
-    // their hidden host-facing caller lands in the next stacked slice.
-    "src/snapshot/recovery-point.ts": ["exports"],
   },
   workspaces: {
     ".": {
