@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/web-content-extractor";
 
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
-const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
+const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 800;
 const HTML_VOID_TAGS = new Set([
   "area",
   "base",

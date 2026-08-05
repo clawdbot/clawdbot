@@ -64,6 +64,20 @@ describe("web readability extractor", () => {
     expect(extracted.title).toBe("Example Article");
   });
 
+  it("rejects deeply nested markup above the estimated depth cap", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const started = performance.now();
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("does not count void tags toward the nesting limit", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const html = SAMPLE_HTML.replace("<article>", `<article>${"<BR>".repeat(3100)}`);
