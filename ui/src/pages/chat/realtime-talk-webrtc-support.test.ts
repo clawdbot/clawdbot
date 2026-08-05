@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES,
-  RealtimeTalkWebRtcOfferExchange,
-} from "./realtime-talk-webrtc-support.ts";
+import { RealtimeTalkWebRtcOfferExchange } from "./realtime-talk-webrtc-support.ts";
 
-function readAnswer(exchange: RealtimeTalkWebRtcOfferExchange, isCurrent = () => true) {
+const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
+
+function readAnswer(
+  exchange: RealtimeTalkWebRtcOfferExchange,
+  isCurrent = () => true,
+  provider = "openai",
+) {
   return exchange.readAnswer({
     session: {
-      provider: "openai",
+      provider,
       transport: "webrtc",
       clientSecret: "reservation-token",
       offerUrl: "https://gateway.example.test/realtime/calls",
@@ -53,7 +56,7 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
   });
 
   it("accepts an SDP answer at the 256 KiB boundary", async () => {
-    const answer = "x".repeat(REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES);
+    const answer = "x".repeat(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(answer)),
@@ -63,11 +66,22 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     await expect(readAnswer(exchange)).resolves.toBe(answer);
   });
 
+  it("preserves oversized SDP answers for custom providers", async () => {
+    const answer = "x".repeat(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES + 1);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(answer)),
+    );
+    const exchange = new RealtimeTalkWebRtcOfferExchange();
+
+    await expect(readAnswer(exchange, () => true, "custom-provider")).resolves.toBe(answer);
+  });
+
   it("rejects and cancels a streamed SDP answer over the 256 KiB boundary", async () => {
     const cancel = vi.fn(() => Promise.resolve());
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new Uint8Array(REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES));
+        controller.enqueue(new Uint8Array(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES));
         controller.enqueue(new Uint8Array(1));
       },
       cancel,
@@ -106,7 +120,7 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
             ok: true,
             status: 200,
             headers: new Headers({
-              "content-length": String(REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES + 1),
+              "content-length": String(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES + 1),
             }),
             body: { cancel, getReader },
             text: vi.fn(),

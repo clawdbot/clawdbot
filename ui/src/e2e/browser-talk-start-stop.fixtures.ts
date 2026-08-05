@@ -2,6 +2,13 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 
+export type WebRtcSdpE2eProof = {
+  bodyCancelCount: number;
+  bodyCancelResolvedCount: number;
+  fetchCount: number;
+  statuses: number[];
+};
+
 export function videoTalkCatalog(activeProvider: "google" | "openai") {
   return {
     realtime: {
@@ -87,6 +94,80 @@ export async function installTalkBrowserFixtures(page: Page) {
     Object.defineProperty(window, "openclawTalkE2eState", {
       configurable: true,
       value: state,
+    });
+  });
+}
+
+export async function installWebRtcSdpFailureFixture(page: Page) {
+  await page.addInitScript(() => {
+    const proofWindow = window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof };
+    proofWindow.openclawWebRtcSdpE2e = {
+      bodyCancelCount: 0,
+      bodyCancelResolvedCount: 0,
+      fetchCount: 0,
+      statuses: [],
+    };
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await originalFetch(input, init);
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.includes("api.openai.com/v1/realtime/calls")) {
+        return response;
+      }
+      const proof = proofWindow.openclawWebRtcSdpE2e;
+      if (!proof || !response.body) {
+        return response;
+      }
+      proof.fetchCount += 1;
+      proof.statuses.push(response.status);
+      const originalCancel = response.body.cancel.bind(response.body);
+      response.body.cancel = async (reason) => {
+        proof.bodyCancelCount += 1;
+        try {
+          return await originalCancel(reason);
+        } finally {
+          proof.bodyCancelResolvedCount += 1;
+        }
+      };
+      return response;
+    };
+
+    class FakeDataChannel extends EventTarget {
+      readyState = "open";
+      send() {}
+      close() {
+        this.readyState = "closed";
+      }
+    }
+
+    class FakePeerConnection extends EventTarget {
+      connectionState = "new";
+      sctp = { maxMessageSize: 256 * 1024 };
+      channel = new FakeDataChannel();
+      addTrack() {}
+      createDataChannel() {
+        return this.channel;
+      }
+      async createOffer() {
+        return { type: "offer" as const, sdp: "offer-sdp" };
+      }
+      async setLocalDescription() {}
+      async setRemoteDescription() {}
+      close() {
+        this.connectionState = "closed";
+      }
+    }
+
+    Object.defineProperty(window, "RTCPeerConnection", {
+      configurable: true,
+      value: FakePeerConnection,
+    });
+  });
+  await page.route("https://api.openai.com/v1/realtime/calls", async (route) => {
+    await route.fulfill({
+      status: 502,
+      contentType: "application/sdp",
+      body: "provider failure",
     });
   });
 }
