@@ -24,6 +24,7 @@ export function createBlockReplyCoalescer(params: {
   const idleMs = Math.max(0, Math.floor(config.idleMs));
   const joiner = config.joiner ?? "";
   const flushOnEnqueue = config.flushOnEnqueue === true;
+  const paragraphSeparatorPattern = /\n[\t ]*\n+$/;
 
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
@@ -40,7 +41,12 @@ export function createBlockReplyCoalescer(params: {
     if (!text) {
       return bufferText;
     }
-    if (!joiner || bufferText.endsWith(joiner) || text.startsWith(joiner)) {
+    if (
+      !joiner ||
+      bufferText.endsWith(joiner) ||
+      paragraphSeparatorPattern.test(bufferText) ||
+      text.startsWith(joiner)
+    ) {
       return `${bufferText}${text}`;
     }
     return `${bufferText}${joiner}${text}`;

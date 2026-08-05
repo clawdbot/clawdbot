@@ -177,7 +177,10 @@ export class EmbeddedBlockChunker {
       if (this.#chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
+        if (
+          paragraphBreak &&
+          paragraphBreak.index - start + paragraphBreak.length <= paragraphLimit
+        ) {
           const chunk = `${reopenPrefix}${source.slice(
             start,
             paragraphBreak.index + paragraphBreak.length,

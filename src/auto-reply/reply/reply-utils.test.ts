@@ -1121,6 +1121,22 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("does not duplicate a whitespace-bearing paragraph boundary", async () => {
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 0,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph.\n \n" });
+    coalescer.enqueue({ text: "Second paragraph." });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual(["First paragraph.\n \nSecond paragraph."]);
+    coalescer.stop();
+  });
+
   it("keeps buffering newline-style chunks until minChars is reached", async () => {
     vi.useFakeTimers();
     const { flushes, coalescer } = createBlockCoalescerHarness({

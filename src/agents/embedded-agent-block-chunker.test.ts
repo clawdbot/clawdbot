@@ -143,6 +143,23 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toBe("Rest");
   });
 
+  it("does not exceed maxChars when the paragraph starts at the limit", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 10,
+      breakPreference: "paragraph",
+      flushOnParagraph: true,
+    });
+
+    chunker.append("abcdefghij\n\nRest");
+
+    const chunks = drainChunks(chunker);
+
+    expectChunksWithinLength(chunks, 10);
+    expect(chunks).toEqual(["abcdefghij"]);
+    expect(chunker.bufferedText).toBe("Rest");
+  });
+
   it("ignores paragraph breaks inside fences when flushOnParagraph is set", () => {
     // Blank lines inside fenced code are content, not paragraph boundaries.
     const chunker = new EmbeddedBlockChunker({
