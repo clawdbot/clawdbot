@@ -93,7 +93,7 @@ export function resolveMissingOfficialExternalChannelPluginRepairHints(
       !policy.effective &&
       policy.blockedReasons.length === 1 &&
       policy.blockedReasons[0] === "no-channel-owner"
-      ? [hint]
+      ? [{ ...hint, channelId: hint.channelId }]
       : [];
   });
 }
