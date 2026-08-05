@@ -716,6 +716,10 @@ test("sessions.diagnose excludes global and unknown fallback rows unless opted i
   expect(globalResult.payload).toMatchObject({
     outcome: "diagnosed",
     session: { key: "global", sessionId: "sess-global" },
+    live: {
+      diagnostic: { present: false },
+      lane: { lane: "session:global" },
+    },
   });
 
   const unknownResult = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
@@ -810,6 +814,96 @@ test("sessions.diagnose keeps the source agent for global fallback rows", async 
       "openclaw health --verbose",
     ],
   });
+});
+
+test("sessions.diagnose scopes shared-id embedded evidence before ranking global rows", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  await writeSessionStore({
+    storePath: mainStorePath,
+    entries: {
+      global: sessionStoreEntry("sess-shared-global", { updatedAt: 10 }),
+    },
+  });
+  await writeSessionStore({
+    storePath: workStorePath,
+    agentId: "work",
+    entries: {
+      global: sessionStoreEntry("sess-shared-global", { updatedAt: 20 }),
+    },
+  });
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set(
+    "main:global",
+    "sess-shared-global",
+  );
+  ACTIVE_EMBEDDED_RUNS.set("sess-shared-global", {
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort: () => {},
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    includeGlobal: true,
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "highest live or contradictory evidence score",
+    session: {
+      key: "global",
+      sessionId: "sess-shared-global",
+      agentId: "main",
+      hasActiveRun: true,
+    },
+    live: {
+      embeddedRun: {
+        active: true,
+        sessionId: "sess-shared-global",
+      },
+    },
+  });
+});
+
+test("sessions.diagnose omits ambiguous process-wide evidence for multi-agent fallback rows", async () => {
+  const { workStorePath } = await createSelectedGlobalSessionStore();
+  await writeSessionStore({
+    storePath: workStorePath,
+    agentId: "work",
+    entries: {
+      global: sessionStoreEntry("sess-work-global", { updatedAt: 20 }),
+    },
+  });
+  const state = getDiagnosticSessionState({
+    sessionId: "sess-work-global",
+    sessionKey: "global",
+  });
+  state.state = "processing";
+  state.queueDepth = 2;
+  markDiagnosticRunProgressForTest({
+    sessionId: "sess-work-global",
+    sessionKey: "global",
+    reason: "model_call:stream",
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    key: "global",
+    agentId: "work",
+  });
+
+  expect(result.ok).toBe(true);
+  const payload = result.payload;
+  if (!payload) {
+    throw new Error("expected diagnose payload");
+  }
+  expect(payload.session).toMatchObject({
+    key: "global",
+    sessionId: "sess-work-global",
+    agentId: "work",
+    hasActiveRun: false,
+  });
+  expect(payload.live).not.toHaveProperty("diagnostic");
+  expect(payload.live).not.toHaveProperty("lane");
 });
 
 test("sessions.diagnose scopes unknown fallback active runs to the requested agent", async () => {

@@ -26,10 +26,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
-import {
-  collectTrackedActiveSessionRunSnapshot,
-  resolveVisibleActiveSessionRunState,
-} from "./session-active-runs.js";
+import { collectTrackedActiveSessionRunSnapshot } from "./session-active-runs.js";
 import { buildDiagnoseResult } from "./sessions-diagnose-result.js";
 import {
   buildDiagnoseRow,
@@ -37,6 +34,7 @@ import {
   countDiagnoseSelectors,
   DEFAULT_DIAGNOSE_SCAN_LIMIT,
   isDiagnoseRowTerminal,
+  isDiagnoseSharedRuntimeEvidenceUnambiguous,
   STALE_PROGRESS_MIN_AGE_MS,
   type DiagnoseCandidate,
   type DiagnoseParams,
@@ -112,8 +110,9 @@ function scoreDiagnoseCandidatePreselect(params: {
   context: GatewayRequestContext;
   agentId?: string;
   defaultAgentId: string;
+  configuredAgentCount: number;
 }): number {
-  const activeRunState = resolveVisibleActiveSessionRunState({
+  const gatewayRun = collectTrackedActiveSessionRunSnapshot({
     context: params.context,
     requestedKey: params.key,
     canonicalKey: params.key,
@@ -128,20 +127,30 @@ function scoreDiagnoseCandidatePreselect(params: {
     sessionFile: params.entry.sessionFile,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const diagnostic = getDiagnosticSessionStateSnapshot({
-    sessionId: params.entry.sessionId,
-    sessionKey: params.key,
-    ...(params.entry.sessionFile ? { sessionFile: params.entry.sessionFile } : {}),
-  });
-  const activity = getDiagnosticSessionActivitySnapshot({
-    sessionId: params.entry.sessionId,
-    sessionKey: params.key,
-  });
-  const lane = getCommandLaneSnapshot(resolveSessionLane(params.key));
+  const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
+    params.key,
+    params.configuredAgentCount,
+  );
+  const diagnostic = useSharedRuntimeEvidence
+    ? getDiagnosticSessionStateSnapshot({
+        sessionId: params.entry.sessionId,
+        sessionKey: params.key,
+        ...(params.entry.sessionFile ? { sessionFile: params.entry.sessionFile } : {}),
+      })
+    : undefined;
+  const activity = useSharedRuntimeEvidence
+    ? getDiagnosticSessionActivitySnapshot({
+        sessionId: params.entry.sessionId,
+        sessionKey: params.key,
+      })
+    : undefined;
+  const lane = useSharedRuntimeEvidence
+    ? getCommandLaneSnapshot(resolveSessionLane(params.key))
+    : undefined;
   const hasActiveEvidence =
-    activeRunState.active || embeddedRun.active || Boolean(activity.activeWorkKind);
-  const hasQueuedEvidence = (diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0;
-  const hasProcessingEvidence = diagnostic.state === "processing";
+    gatewayRun.hasActiveRun || embeddedRun.active || Boolean(activity?.activeWorkKind);
+  const hasQueuedEvidence = (diagnostic?.queueDepth ?? 0) > 0 || (lane?.queuedCount ?? 0) > 0;
+  const hasProcessingEvidence = diagnostic?.state === "processing";
   const hasCurrentWorkEvidence = hasActiveEvidence || hasQueuedEvidence || hasProcessingEvidence;
   const terminal = isDiagnoseRowTerminal(buildDiagnoseRow(params.key, params.entry));
   let score = 0;
@@ -159,7 +168,7 @@ function scoreDiagnoseCandidatePreselect(params: {
   }
   if (
     hasCurrentWorkEvidence &&
-    activity.lastProgressAgeMs !== undefined &&
+    activity?.lastProgressAgeMs !== undefined &&
     activity.lastProgressAgeMs >= STALE_PROGRESS_MIN_AGE_MS
   ) {
     score += 20;
@@ -240,6 +249,7 @@ function listDiagnoseCandidateRows(params: {
   const hasExplicitNonKeySelector = Boolean(p.sessionId || p.label);
   const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const configuredAgentCount = listAgentIds(cfg).length;
   const targets = requestedAgentId
     ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
     : resolveAllAgentSessionStoreTargetsSync(cfg);
@@ -284,6 +294,7 @@ function listDiagnoseCandidateRows(params: {
           context,
           agentId: candidate.agentId ?? target.agentId,
           defaultAgentId,
+          configuredAgentCount,
         }),
       });
     }
@@ -315,39 +326,37 @@ function scoreDiagnoseCandidate(params: {
     defaultAgentId,
     scopeUnknownByAgent: true,
   });
-  const activeRunState = resolveVisibleActiveSessionRunState({
-    context: params.context,
-    requestedKey: params.row.key,
-    canonicalKey: params.row.key,
-    sessionId: params.row.sessionId,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    defaultAgentId,
-    scopeUnknownByAgent: true,
-  });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.row.sessionId,
     sessionKey: params.row.key,
     ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const diagnostic = getDiagnosticSessionStateSnapshot({
-    sessionId: params.row.sessionId,
-    sessionKey: params.row.key,
-    ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
-  });
-  const activity = getDiagnosticSessionActivitySnapshot({
-    sessionId: params.row.sessionId,
-    sessionKey: params.row.key,
-  });
-  const lane = getCommandLaneSnapshot(resolveSessionLane(params.row.key));
+  const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
+    params.row.key,
+    listAgentIds(params.cfg).length,
+  );
+  const diagnostic = useSharedRuntimeEvidence
+    ? getDiagnosticSessionStateSnapshot({
+        sessionId: params.row.sessionId,
+        sessionKey: params.row.key,
+        ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+      })
+    : undefined;
+  const activity = useSharedRuntimeEvidence
+    ? getDiagnosticSessionActivitySnapshot({
+        sessionId: params.row.sessionId,
+        sessionKey: params.row.key,
+      })
+    : undefined;
+  const lane = useSharedRuntimeEvidence
+    ? getCommandLaneSnapshot(resolveSessionLane(params.row.key))
+    : undefined;
   const terminal = isDiagnoseRowTerminal(params.row);
   const hasActiveEvidence =
-    gatewayRun.hasActiveRun ||
-    activeRunState.active ||
-    embeddedRun.active ||
-    Boolean(activity.activeWorkKind);
-  const hasQueuedEvidence = (diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0;
-  const hasProcessingEvidence = diagnostic.state === "processing";
+    gatewayRun.hasActiveRun || embeddedRun.active || Boolean(activity?.activeWorkKind);
+  const hasQueuedEvidence = (diagnostic?.queueDepth ?? 0) > 0 || (lane?.queuedCount ?? 0) > 0;
+  const hasProcessingEvidence = diagnostic?.state === "processing";
   const hasCurrentWorkEvidence = hasActiveEvidence || hasQueuedEvidence || hasProcessingEvidence;
   let score = 0;
   if (hasActiveEvidence) {
@@ -359,18 +368,12 @@ function scoreDiagnoseCandidate(params: {
   if (hasProcessingEvidence) {
     score += 30;
   }
-  if (
-    terminal &&
-    (gatewayRun.hasActiveRun ||
-      activeRunState.active ||
-      embeddedRun.active ||
-      hasProcessingEvidence)
-  ) {
+  if (terminal && (gatewayRun.hasActiveRun || embeddedRun.active || hasProcessingEvidence)) {
     score += 80;
   }
   if (
     hasCurrentWorkEvidence &&
-    activity.lastProgressAgeMs !== undefined &&
+    activity?.lastProgressAgeMs !== undefined &&
     activity.lastProgressAgeMs >= STALE_PROGRESS_MIN_AGE_MS
   ) {
     score += 20;

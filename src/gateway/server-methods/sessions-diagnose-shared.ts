@@ -3,6 +3,7 @@ import type {
   SessionsDiagnoseResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../../config/sessions.js";
+import { isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 
 const DEFAULT_DIAGNOSE_TAIL = 30;
@@ -46,6 +47,13 @@ export type DiagnoseCandidate = Omit<DiagnoseTarget, "chosenBecause">;
 
 export function countDiagnoseSelectors(p: DiagnoseParams): number {
   return [p.key, p.sessionId, p.label].filter((value) => Boolean(value)).length;
+}
+
+export function isDiagnoseSharedRuntimeEvidenceUnambiguous(
+  key: string,
+  configuredAgentCount: number,
+): boolean {
+  return !isUnscopedSessionKeySentinel(key) || configuredAgentCount <= 1;
 }
 
 export function clampDiagnoseTail(value: number | undefined): number {

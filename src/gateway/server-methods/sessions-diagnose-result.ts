@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsDiagnoseResult } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { getEmbeddedRunDiagnosticSnapshot } from "../../agents/embedded-agent-runner/run-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,6 +14,7 @@ import {
   formatDiagnoseNextCheckCommand,
   FRESH_PROGRESS_MAX_AGE_MS,
   isDiagnoseRowTerminal,
+  isDiagnoseSharedRuntimeEvidenceUnambiguous,
   selectorFromDiagnoseParams,
   STALE_PROGRESS_MIN_AGE_MS,
   type DiagnoseDiagnostic,
@@ -44,14 +45,14 @@ function buildDiagnoseFindings(params: {
   row: DiagnoseRow;
   gatewayRun: DiagnoseGatewayRun;
   embeddedRun: DiagnoseEmbeddedRun;
-  diagnostic: DiagnoseDiagnostic;
-  lane: DiagnoseLane;
+  diagnostic?: DiagnoseDiagnostic;
+  lane?: DiagnoseLane;
   transcriptResolved: boolean;
   deliveryUncertain: boolean;
 }): DiagnoseFinding[] {
   const findings: DiagnoseFinding[] = [];
   const activeVisible = params.gatewayRun.hasActiveRun || params.embeddedRun.active;
-  const activeWork = activeVisible || Boolean(params.diagnostic.activeWorkKind);
+  const activeWork = activeVisible || Boolean(params.diagnostic?.activeWorkKind);
   const terminalStore = isDiagnoseRowTerminal(params.row);
 
   if (activeVisible) {
@@ -64,7 +65,7 @@ function buildDiagnoseFindings(params: {
   }
   if (
     activeWork &&
-    params.diagnostic.lastProgressAgeMs !== undefined &&
+    params.diagnostic?.lastProgressAgeMs !== undefined &&
     params.diagnostic.lastProgressAgeMs <= FRESH_PROGRESS_MAX_AGE_MS
   ) {
     addFinding(findings, {
@@ -77,7 +78,7 @@ function buildDiagnoseFindings(params: {
   }
   if (
     activeWork &&
-    params.diagnostic.lastProgressAgeMs !== undefined &&
+    params.diagnostic?.lastProgressAgeMs !== undefined &&
     params.diagnostic.lastProgressAgeMs >= STALE_PROGRESS_MIN_AGE_MS
   ) {
     addFinding(findings, {
@@ -87,22 +88,25 @@ function buildDiagnoseFindings(params: {
       evidence: [`lastProgressAgeMs=${params.diagnostic.lastProgressAgeMs}`],
     });
   }
-  if (!activeVisible && ((params.diagnostic.queueDepth ?? 0) > 0 || params.lane.queuedCount > 0)) {
+  if (
+    !activeVisible &&
+    ((params.diagnostic?.queueDepth ?? 0) > 0 || (params.lane?.queuedCount ?? 0) > 0)
+  ) {
     addFinding(findings, {
       code: "queued_without_active_run",
       severity: "warn",
       message: "Queued work exists, but no visible active run owns the session.",
       evidence: [
-        `queueDepth=${params.diagnostic.queueDepth ?? 0}`,
-        `laneQueued=${params.lane.queuedCount}`,
+        ...(params.diagnostic ? [`queueDepth=${params.diagnostic.queueDepth ?? 0}`] : []),
+        ...(params.lane ? [`laneQueued=${params.lane.queuedCount}`] : []),
       ],
     });
   }
   if (
     !activeVisible &&
-    params.lane.activeCount === 0 &&
-    (params.diagnostic.activeWorkKind === "tool_call" ||
-      params.diagnostic.activeWorkKind === "model_call")
+    params.lane?.activeCount === 0 &&
+    (params.diagnostic?.activeWorkKind === "tool_call" ||
+      params.diagnostic?.activeWorkKind === "model_call")
   ) {
     addFinding(findings, {
       code: "stale_diagnostic_tool",
@@ -124,18 +128,22 @@ function buildDiagnoseFindings(params: {
       ],
     });
   }
-  if (terminalStore && (activeVisible || params.diagnostic.state === "processing")) {
+  if (terminalStore && (activeVisible || params.diagnostic?.state === "processing")) {
     addFinding(findings, {
       code: "store_terminal_but_live_processing",
       severity: "warn",
       message: "The stored session looks terminal, but live state still reports processing.",
       evidence: [
         `status=${params.row.status ?? "unset"}`,
-        `diagnosticState=${params.diagnostic.state ?? "unset"}`,
+        `diagnosticState=${params.diagnostic?.state ?? "unset"}`,
       ],
     });
   }
-  if (!activeVisible && (params.lane.activeCount > 0 || params.lane.queuedCount > 0)) {
+  if (
+    !activeVisible &&
+    params.lane !== undefined &&
+    (params.lane.activeCount > 0 || params.lane.queuedCount > 0)
+  ) {
     addFinding(findings, {
       code: "lane_blocked",
       severity: "warn",
@@ -164,9 +172,7 @@ function buildDiagnoseFindings(params: {
       code: "unknown_low_confidence",
       severity: "info",
       message: "No dominant stuck-session signal was found from the available evidence.",
-      evidence: [
-        "store, live run, diagnostic, and lane evidence did not produce a stronger finding",
-      ],
+      evidence: ["available stored and live evidence did not produce a stronger finding"],
     });
   }
   return findings;
@@ -307,49 +313,68 @@ export async function buildDiagnoseResult(params: {
     sessionFile: target.entry.sessionFile,
     ...(target.agentId ? { agentId: target.agentId } : {}),
   });
-  const stateSnapshot = getDiagnosticSessionStateSnapshot(
-    {
-      sessionId: target.entry.sessionId,
-      sessionKey: target.key,
-      sessionFile: target.entry.sessionFile,
-    },
-    now,
+  const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
+    target.key,
+    listAgentIds(cfg).length,
   );
-  const activity = getDiagnosticSessionActivitySnapshot(
-    {
-      sessionId: target.entry.sessionId,
-      sessionKey: target.key,
-    },
-    now,
-  );
-  const diagnostic = {
-    present: stateSnapshot.present,
-    ...(stateSnapshot.state ? { state: stateSnapshot.state } : {}),
-    ...(stateSnapshot.queueDepth !== undefined ? { queueDepth: stateSnapshot.queueDepth } : {}),
-    ...(stateSnapshot.activeQueuedTurn !== undefined
-      ? { activeQueuedTurn: stateSnapshot.activeQueuedTurn }
-      : {}),
-    ...(stateSnapshot.generation !== undefined ? { generation: stateSnapshot.generation } : {}),
-    ...(activity.activeWorkKind ? { activeWorkKind: activity.activeWorkKind } : {}),
-    ...(activity.activeToolName ? { activeToolName: activity.activeToolName } : {}),
-    ...(activity.activeToolAgeMs !== undefined
-      ? { activeToolAgeMs: activity.activeToolAgeMs }
-      : {}),
-    ...(stateSnapshot.lastActivityAgeMs !== undefined
-      ? { lastActivityAgeMs: stateSnapshot.lastActivityAgeMs }
-      : {}),
-    ...(activity.lastProgressAgeMs !== undefined
-      ? { lastProgressAgeMs: activity.lastProgressAgeMs }
-      : {}),
-    ...(activity.lastProgressReason ? { lastProgressReason: activity.lastProgressReason } : {}),
-    ...(stateSnapshot.recentToolCalls !== undefined
-      ? { recentToolCalls: stateSnapshot.recentToolCalls }
-      : {}),
-    ...(stateSnapshot.repeatedToolPattern
-      ? { repeatedToolPattern: stateSnapshot.repeatedToolPattern }
-      : {}),
-  };
-  const lane = getCommandLaneSnapshot(resolveSessionLane(target.key));
+  const stateSnapshot = useSharedRuntimeEvidence
+    ? getDiagnosticSessionStateSnapshot(
+        {
+          sessionId: target.entry.sessionId,
+          sessionKey: target.key,
+          sessionFile: target.entry.sessionFile,
+        },
+        now,
+      )
+    : undefined;
+  const activity = useSharedRuntimeEvidence
+    ? getDiagnosticSessionActivitySnapshot(
+        {
+          sessionId: target.entry.sessionId,
+          sessionKey: target.key,
+        },
+        now,
+      )
+    : undefined;
+  const diagnostic =
+    stateSnapshot && activity
+      ? {
+          present: stateSnapshot.present,
+          ...(stateSnapshot.state ? { state: stateSnapshot.state } : {}),
+          ...(stateSnapshot.queueDepth !== undefined
+            ? { queueDepth: stateSnapshot.queueDepth }
+            : {}),
+          ...(stateSnapshot.activeQueuedTurn !== undefined
+            ? { activeQueuedTurn: stateSnapshot.activeQueuedTurn }
+            : {}),
+          ...(stateSnapshot.generation !== undefined
+            ? { generation: stateSnapshot.generation }
+            : {}),
+          ...(activity.activeWorkKind ? { activeWorkKind: activity.activeWorkKind } : {}),
+          ...(activity.activeToolName ? { activeToolName: activity.activeToolName } : {}),
+          ...(activity.activeToolAgeMs !== undefined
+            ? { activeToolAgeMs: activity.activeToolAgeMs }
+            : {}),
+          ...(stateSnapshot.lastActivityAgeMs !== undefined
+            ? { lastActivityAgeMs: stateSnapshot.lastActivityAgeMs }
+            : {}),
+          ...(activity.lastProgressAgeMs !== undefined
+            ? { lastProgressAgeMs: activity.lastProgressAgeMs }
+            : {}),
+          ...(activity.lastProgressReason
+            ? { lastProgressReason: activity.lastProgressReason }
+            : {}),
+          ...(stateSnapshot.recentToolCalls !== undefined
+            ? { recentToolCalls: stateSnapshot.recentToolCalls }
+            : {}),
+          ...(stateSnapshot.repeatedToolPattern
+            ? { repeatedToolPattern: stateSnapshot.repeatedToolPattern }
+            : {}),
+        }
+      : undefined;
+  const lane = useSharedRuntimeEvidence
+    ? getCommandLaneSnapshot(resolveSessionLane(target.key))
+    : undefined;
   const transcript = await readDiagnoseTranscriptEvidence({
     target,
     maxLines: clampDiagnoseTail(p.tail),
@@ -392,8 +417,8 @@ export async function buildDiagnoseResult(params: {
     live: {
       gatewayRun,
       embeddedRun,
-      diagnostic,
-      lane,
+      ...(diagnostic ? { diagnostic } : {}),
+      ...(lane ? { lane } : {}),
     },
     transcript: {
       resolved: transcriptResolved,
