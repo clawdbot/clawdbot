@@ -96,7 +96,7 @@ export async function writeRecoveryJournalRecord(
 }
 
 async function openRecoveryJournal(databasePath: string) {
-  const existed = await fs
+  await fs
     .lstat(databasePath)
     .then((stat) => {
       if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
@@ -122,9 +122,7 @@ async function openRecoveryJournal(databasePath: string) {
       ) STRICT;
     `);
     applyPrivateModeSync(databasePath, PRIVATE_FILE_MODE);
-    if (!existed) {
-      requireDirectorySync(await syncDirectory(path.dirname(databasePath)), "Recovery journal");
-    }
+    requireDirectorySync(await syncDirectory(path.dirname(databasePath)), "Recovery journal");
     return database;
   } catch (error) {
     database.close();

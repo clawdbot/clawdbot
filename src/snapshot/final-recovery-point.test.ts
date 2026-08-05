@@ -6,10 +6,14 @@ import { stableStringify } from "../agents/stable-stringify.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
 import {
@@ -28,6 +32,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -59,6 +64,21 @@ describe("final recovery-point capture", () => {
       protection: { mode: "host-protected" },
     });
     await expect(countCommittedSnapshots(first.recoveryPointPath)).resolves.toBe(2);
+  });
+
+  it("captures the exact registered agent database path instead of deriving the default path", async () => {
+    const fixture = await createFixture({ relocatedAgent: true });
+
+    const result = await captureFinalRecoveryPoint(fixture.request);
+    const agentManifest = JSON.parse(
+      await fs.readFile(path.join(result.components[1]!.snapshotPath, "manifest.json"), "utf8"),
+    ) as { database?: { role?: string; agentId?: string } };
+
+    expect(result.components.map((component) => component.componentId)).toEqual([
+      "sqlite/global",
+      "sqlite/agent/main",
+    ]);
+    expect(agentManifest.database).toMatchObject({ role: "agent", agentId: "main" });
   });
 
   it("quarantines a changed request under the same handoff and generation", async () => {
@@ -132,6 +152,20 @@ describe("final recovery-point capture", () => {
     });
   });
 
+  it("quarantines a committed recovery point whose aggregate manifest bytes changed", async () => {
+    const fixture = await createFixture();
+    const result = await captureFinalRecoveryPoint(fixture.request);
+    const manifest = JSON.parse(await fs.readFile(result.aggregateManifestPath, "utf8"));
+    await fs.writeFile(result.aggregateManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(captureFinalRecoveryPoint(fixture.request)).rejects.toMatchObject({
+      code: "final-capture.operation-conflict",
+      disposition: "quarantine",
+    });
+  });
+
   it("requires explicit closed-writer evidence and canonical owner inventory", () => {
     const base = {
       version: FINAL_RECOVERY_POINT_REQUEST_VERSION,
@@ -180,16 +214,21 @@ describe("final recovery-point capture", () => {
   });
 });
 
-async function createFixture(): Promise<{ request: FinalRecoveryPointRequest }> {
+async function createFixture(
+  options: { relocatedAgent?: boolean } = {},
+): Promise<{ request: FinalRecoveryPointRequest }> {
   const tempDir = tempDirs.make("openclaw-final-recovery-point-");
   const stateDir = path.join(tempDir, "state");
   process.env.OPENCLAW_STATE_DIR = stateDir;
   const globalPath = resolveOpenClawStateSqlitePath();
-  const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  const agentPath = options.relocatedAgent
+    ? path.join(tempDir, "relocated", "openclaw-main.sqlite")
+    : resolveOpenClawAgentSqlitePath({ agentId: "main" });
   await fs.mkdir(path.dirname(globalPath), { recursive: true });
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
   createDatabase(globalPath, "global");
   createDatabase(agentPath, "agent", "main");
+  registerOpenClawAgentDatabase({ agentId: "main", path: agentPath });
   return {
     request: {
       version: FINAL_RECOVERY_POINT_REQUEST_VERSION,
