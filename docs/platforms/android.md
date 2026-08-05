@@ -62,6 +62,10 @@ gh attestation verify OpenClaw-Android.apk \
 Google Play and standalone APK installs use different update channels and may have different signing identities. Android may require uninstalling the existing app before switching channels, which removes its local app data. Stay on one channel for normal updates.
 </Warning>
 
+<Note>
+The sideload verification steps above apply to the official `OpenClaw-Android.apk` published by the OpenClaw project. If you build from source, maintain a fork, or distribute a local build, you must sign it with your own Android signing identity. Do not copy or reuse OpenClaw's release signing credentials. See the [release-owner signing guidance](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) in `apps/android/README.md`.
+</Note>
+
 ## Mirror and control Android from a remote Mac
 
 [scrcpy](https://github.com/Genymobile/scrcpy) mirrors an Android screen in a macOS window and
