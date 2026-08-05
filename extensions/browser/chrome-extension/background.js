@@ -723,7 +723,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
       default:
         sendResponse({ ok: false, error: "unknown message" });
     }
-  })().catch((error) => sendErrorResponse(sendResponse, error));
+  })().catch(sendErrorResponse.bind(null, sendResponse));
   return true; // keep sendResponse alive for the async path
 });
 
