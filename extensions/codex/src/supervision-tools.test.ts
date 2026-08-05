@@ -1039,10 +1039,11 @@ describe("Codex supervision compatibility tools", () => {
     const finegrainedPat = "github_pat_11ABCDEFGH0abcdefghijklmnopqrstuvwxyz1234567890ABCDEF";
     const awsKey = "AKIAIOSFODNN7EXAMPLE";
     const longSecret = "sk-abcdef1234567890abcdef1234567890abcdef1234567890";
+    const ghpToken = "ghp_abcdef1234567890abcdef1234567890abcd";
     const { request } = createRequest({
       id: "thread-1",
       status: { type: "idle" },
-      description: `contact ${googleApiKey}`,
+      description: `contact ${googleApiKey} legacy ${longSecret} gh ${ghpToken}`,
       notes: `repo ${finegrainedPat} aws ${awsKey}`,
       token: longSecret,
       password: longSecret,
@@ -1057,22 +1058,21 @@ describe("Codex supervision compatibility tools", () => {
       ],
     });
     const tools = createTools(request);
-
     const result = await toolByName(tools, "codex_session_read").execute("read", {
       endpoint_id: "local",
       thread_id: "thread-1",
     });
-    const serialized = JSON.stringify(result);
-    // Ordinary fields: credential patterns from core policy are now applied.
-    expect(serialized).not.toContain(googleApiKey);
-    expect(serialized).not.toContain(finegrainedPat);
-    expect(serialized).not.toContain(awsKey);
+    const s = JSON.stringify(result);
+    // Ordinary fields: new credential patterns from core policy are applied.
+    expect(s).not.toContain(googleApiKey);
+    expect(s).not.toContain(finegrainedPat);
+    expect(s).not.toContain(awsKey);
+    // Legacy token classes in ordinary fields: FULL [redacted], not partial hints.
+    expect(s).not.toContain(longSecret);
+    expect(s).not.toContain(ghpToken);
+    expect(s).not.toContain("sk-abc");
+    expect(s).not.toContain("ghp_abcd");
     // Sensitive keys: full [redacted], no prefix/suffix disclosure.
-    expect(serialized).not.toContain(longSecret);
-    expect(serialized).toContain('"[redacted]"');
-    expect(serialized).not.toContain("sk-abc");
-    expect(serialized).not.toContain("7890");
-    // Nested values inside arrays/child objects are also redacted.
-    expect(serialized).not.toContain(googleApiKey);
+    expect(s).toContain('"[redacted]"');
   });
 });

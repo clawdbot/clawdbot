@@ -804,19 +804,32 @@ async function resolveInProgressTurnId(params: {
 // with core if the security owner decides to export that boundary.
 const SUPERVISION_SENSITIVE_KEY_RE = /authorization|password|secret|token|api[-_]?key/i;
 
+// Legacy credential classes that current main fully replaces with [redacted]
+// in ordinary fields. Keep full replacement for these BEFORE applying the
+// shared helper, so the fix does not weaken existing coverage to partial
+// token hints (e.g. sk-abc…7890) for classes both paths recognize.
+const LEGACY_FULL_REDACT_RE =
+  /\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b|\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b|\bBearer\s+[-._~+/a-zA-Z0-9]+=*/g;
+
 /**
  * Redacts secret-bearing fields before legacy tool results leave the plugin.
  *
  * Sensitive field names (authorization/password/secret/token/api[-_]?key) are
  * fully replaced with "[redacted]" to avoid any prefix/suffix disclosure.
- * Ordinary free-text values are passed through the shared core redaction
- * policy (redactToolPayloadText) so the supervision boundary inherits the full
- * credential-pattern set (AIza, github_pat_, AKIA, eyJ, ya29., …) plus any
- * exact-registered secret values, instead of the narrow local regex copy.
+ * Ordinary free-text values first get full [redacted] for the legacy token
+ * classes current main already covered (sk-/glpat-/xox-/gh[opsu]_/Bearer),
+ * then the shared core policy (redactToolPayloadText) layers on top to catch
+ * the broader credential set (AIza, github_pat_, AKIA, ya29., …) plus any
+ * exact-registered secret values — without weakening legacy matches to
+ * partial token hints.
  */
 function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
-    return SUPERVISION_SENSITIVE_KEY_RE.test(key) ? "[redacted]" : redactToolPayloadText(value);
+    if (SUPERVISION_SENSITIVE_KEY_RE.test(key)) {
+      return "[redacted]";
+    }
+    const legacyRedacted = value.replace(LEGACY_FULL_REDACT_RE, "[redacted]");
+    return redactToolPayloadText(legacyRedacted);
   }
   if (Array.isArray(value)) {
     return value.map((entry) => redactCodexSupervisionValue(entry));
