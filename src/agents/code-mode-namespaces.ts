@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Registry and runtime projection for code-mode namespaces. Plugins register
  * namespaced tool scopes here; code mode receives descriptors, virtual API
@@ -341,7 +342,7 @@ function assignMcpNamespaceServerNames(
 }
 
 function mcpNodeLabel(node: NonNullable<McpNamespaceServer["node"]>): string {
-  return (node.displayName?.trim() || node.id).replace(/\s+/gu, " ").slice(0, 128);
+  return truncateUtf16Safe((node.displayName?.trim() || node.id).replace(/\s+/gu, " "), 128);
 }
 
 function createMcpNamespaceModel(
