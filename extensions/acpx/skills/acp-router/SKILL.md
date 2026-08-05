@@ -82,7 +82,7 @@ Required behavior:
 
 Runtime controls:
 
-- Pass explicit reasoning effort in `thinking`, separate from `model`. Codex ACP maps `off`, `minimal`, `low`, `medium`, `high`, and `xhigh` to its reasoning control.
+- Pass explicit reasoning effort in `thinking`, separate from `model`. Codex ACP omits the reasoning override for `off`, maps `minimal` to `low`, and maps `low`, `medium`, `high`, and `xhigh` directly.
 - Do not retry `ACP_BACKEND_UNSUPPORTED_CONTROL` with the same fields. Remove only the rejected optional override or report that the backend cannot honor it.
 
 Example:
