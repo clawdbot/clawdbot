@@ -187,6 +187,36 @@ describe("tools commands cli", () => {
     });
   });
 
+  it("normalizes the requested node ID before querying Gateway", async () => {
+    callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
+      nodeId: "node-1",
+      connected: true,
+      paired: true,
+      commands: ["system.run"],
+    });
+
+    const output = await captureStdout(async () => {
+      await createProgram().parseAsync([
+        "node",
+        "openclaw",
+        "tools",
+        "commands",
+        "list",
+        "--json",
+        "--node",
+        " node-1 ",
+      ]);
+    });
+    const parsed = JSON.parse(output) as { cli: { nodeCommands: Array<{ nodeId: string }> } };
+
+    expect(callNodeDiagnosticsGatewayCliMock).toHaveBeenCalledWith(
+      "node.describe",
+      expect.objectContaining({ json: true }),
+      { nodeId: "node-1" },
+    );
+    expect(parsed.cli.nodeCommands[0]?.nodeId).toBe("node-1");
+  });
+
   it("preserves Gateway-valid command strings from a paired node", async () => {
     callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
       nodeId: "node-1",

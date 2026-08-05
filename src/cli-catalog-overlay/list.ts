@@ -318,11 +318,15 @@ export function renderCatalogListMarkdown(
       "| --- | --- | --- | --- | --- | --- | --- |",
     );
     for (const command of list.cli.nodeCommands) {
+      const commandCell = markdownCodeCell(sanitizeTerminalText(command.command));
       const nodeLabel = sanitizeTerminalText(
         markdownTableCell(command.nodeName ?? command.nodeId ?? "Any"),
       );
+      const invocationHint = command.invocationHint
+        ? markdownCodeCell(sanitizeTerminalText(command.invocationHint))
+        : "None";
       lines.push(
-        `| ${markdownCodeCell(command.command)} | ${nodeLabel} | ${markdownCodeCell(command.availability ?? "unknown")} | ${markdownCodeCell(command.approvalKind ?? "unknown")} | ${markdownCodeCell(command.risk ?? "unknown")} | ${markdownCodeCell(command.effectMode ?? "unknown")} | ${command.invocationHint ? markdownCodeCell(command.invocationHint) : "None"} |`,
+        `| ${commandCell} | ${nodeLabel} | ${markdownCodeCell(command.availability ?? "unknown")} | ${markdownCodeCell(command.approvalKind ?? "unknown")} | ${markdownCodeCell(command.risk ?? "unknown")} | ${markdownCodeCell(command.effectMode ?? "unknown")} | ${invocationHint} |`,
       );
     }
   }

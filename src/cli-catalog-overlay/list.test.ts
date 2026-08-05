@@ -181,4 +181,19 @@ describe("command inventory list", () => {
     expect(markdown).not.toContain(String.fromCharCode(27));
     expect(markdown).not.toContain(String.fromCharCode(7));
   });
+
+  it("sanitizes node command IDs before Markdown terminal output", () => {
+    const command = {
+      ...sampleNodeCommands[0]!,
+      command: `filesystem.${String.fromCharCode(27)}[31mread${String.fromCharCode(7)}`,
+      invocationHint: `nodes invoke ${String.fromCharCode(27)}[31mfilesystem.read`,
+    };
+
+    const markdown = renderCatalogListMarkdown({ nodeCommands: [command] });
+
+    expect(markdown).toContain("| `filesystem.read` | Demo filesystem node |");
+    expect(markdown).toContain("`nodes invoke filesystem.read`");
+    expect(markdown).not.toContain(String.fromCharCode(27));
+    expect(markdown).not.toContain(String.fromCharCode(7));
+  });
 });

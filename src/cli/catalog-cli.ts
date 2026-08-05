@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { inspectCommand, renderCommandInspectionMarkdown } from "../cli-catalog-overlay/inspect.js";
 import { buildCatalogList, renderCatalogListMarkdown } from "../cli-catalog-overlay/list.js";
@@ -32,12 +33,16 @@ async function loadNodeCommandObservation(opts: NodeInventoryOpts) {
   if (!opts.node) {
     return undefined;
   }
+  const nodeId = normalizeOptionalString(opts.node);
+  if (!nodeId) {
+    throw new Error("--node must be a non-empty node id");
+  }
   const result = await callNodeDiagnosticsGatewayCli(
     "node.describe",
     { ...opts, json: true },
-    { nodeId: opts.node },
+    { nodeId },
   );
-  return buildLiveNodeCommandObservation(result, opts.node);
+  return buildLiveNodeCommandObservation(result, nodeId);
 }
 
 function validateOutputOptions(
