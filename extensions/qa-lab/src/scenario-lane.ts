@@ -20,7 +20,7 @@ export function resolveQaScenarioRequiredProviderMode(scenario: QaSeedScenario) 
     );
   }
   const providerMode = configuredMode ?? executionMode;
-  if (providerMode && !isQaProviderModeInput(providerMode)) {
+  if (providerMode !== undefined && !isQaProviderModeInput(providerMode)) {
     throw new Error(`QA scenario ${scenario.id} declares unknown provider mode: ${providerMode}`);
   }
   return providerMode;
