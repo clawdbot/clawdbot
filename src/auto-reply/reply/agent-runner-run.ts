@@ -5,7 +5,6 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -42,6 +41,7 @@ import {
   isAudioPayload,
 } from "./agent-runner-helpers.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { finalizeAcceptedSteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -309,38 +309,18 @@ export async function runReplyAgent(
       },
     );
     if (steerOutcome.queued) {
-      if (replyOperationRunState) {
-        // Transcript commit has already transferred this turn to the active
-        // session. Keep that acceptance even if ingress adoption is later lost:
-        // the losing dispatch must neither replay nor emit its own fallback.
-        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
-      }
-      activeReplyOperation?.recordActivity();
-      try {
-        await turnAdoptionLifecycle?.onAdopted();
-      } catch (error) {
-        if (isIngressAdoptionLostError(error)) {
-          // Claim was tombstoned/superseded/guillotined after transcript commit.
-          // Cancel the active run so steered tools do not keep executing. Keep
-          // admission accepted and do not rethrow: ingress ownership is gone,
-          // so replay or a local no-visible-reply fallback would duplicate or
-          // misreport the already-injected user turn.
-          const abortKey = sessionKey ?? queueKey;
-          if (abortKey) {
-            replyRunRegistry.abort(abortKey);
-          }
-          logVerbose(
-            `queue: active session ${steerSessionId} adoption lost after transcript commit (${error.code}); aborting steered turn without ingress replay`,
-          );
-          typing.cleanup();
-          return undefined;
-        }
-        // Ordinary callback failures: transcript-backed steering is irrevocable.
-        logVerbose(
-          `queue: active session ${steerSessionId} adoption finalizer failed after transcript commit: ${String(
-            error,
-          )}`,
-        );
+      const adoptionDisposition = await finalizeAcceptedSteer({
+        activeReplyOperation,
+        abortKey: sessionKey ?? queueKey,
+        cleanupTyping: () => typing.cleanup(),
+        errorMessage: steerOutcome.errorMessage,
+        onAdopted: turnAdoptionLifecycle ? () => turnAdoptionLifecycle.onAdopted() : undefined,
+        replyOperationRunState,
+        steerSessionId,
+        transcriptCommit: steerOutcome.transcriptCommit,
+      });
+      if (adoptionDisposition === "stop") {
+        return undefined;
       }
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
@@ -356,9 +336,11 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
-    // The active runtime still owns the turn but cannot prove transcript adoption.
-    // Keep the inbound message queued so ingress can finalize after a later run.
-    shouldQueueAfterSteerRejection = steerOutcome.reason === "transcript_commit_wait_unsupported";
+    // A vanished/non-streaming owner can fall through; every rejection from a
+    // still-owning runtime must retain this exact turn as a follow-up.
+    shouldQueueAfterSteerRejection = !["no_active_run", "not_streaming", "stale_run"].includes(
+      steerOutcome.reason,
+    );
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }
@@ -534,6 +516,7 @@ export async function runReplyAgent(
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,
+      originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: opts?.abortSignal,
       onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });
