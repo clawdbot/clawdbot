@@ -600,12 +600,13 @@ export function frameBoundedCliJsonlChunk(
 /** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
 export function normalizeClaudeCliStreamJsonRecord(
   parsed: Record<string, unknown>,
-): string | undefined {
+): { line: string; omittedRawChars: number } | undefined {
   if (parsed.type !== "user" || !isRecord(parsed.message)) {
     return undefined;
   }
   const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
   let normalized = false;
+  let omittedRawChars = 0;
   for (const result of content) {
     if (!isRecord(result) || result.type !== "tool_result" || !Array.isArray(result.content)) {
       continue;
@@ -627,10 +628,11 @@ export function normalizeClaudeCliStreamJsonRecord(
       block.source = source;
       block.omitted = true;
       block.bytes = estimateBase64DecodedBytes(data);
+      omittedRawChars += data.length;
       normalized = true;
     }
   }
-  return normalized ? JSON.stringify(parsed) : undefined;
+  return normalized ? { line: JSON.stringify(parsed), omittedRawChars } : undefined;
 }
 
 function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
@@ -1639,8 +1641,8 @@ export function createCliJsonlStreamingParser(params: {
     };
   };
 
-  const accountClaudeJsonlLine = (line: string): boolean => {
-    rawChars += line.length + 1;
+  const accountClaudeJsonlLine = (lineChars: number): boolean => {
+    rawChars += lineChars + 1;
     if (rawChars <= outputLimits.maxTurnRawChars) {
       return true;
     }
@@ -1649,7 +1651,7 @@ export function createCliJsonlStreamingParser(params: {
     return false;
   };
 
-  const handleCustomJsonlLine = (line: string): boolean => {
+  const handleCustomJsonlLine = (line: string, rawLine: string): boolean => {
     if (parseErrorText) {
       return true;
     }
@@ -1672,7 +1674,7 @@ export function createCliJsonlStreamingParser(params: {
     if (parsed == null) {
       return false;
     }
-    if (claudeStreamJson && !accountClaudeJsonlLine(line)) {
+    if (claudeStreamJson && !accountClaudeJsonlLine(rawLine.length)) {
       return true;
     }
     for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
@@ -1937,8 +1939,11 @@ export function createCliJsonlStreamingParser(params: {
   };
 
   const handleJsonlLine = (rawLine: string) => {
+    if (parseErrorText) {
+      return;
+    }
     const line = rawLine.trim();
-    if (!line || parseErrorText) {
+    if (!line && !claudeStreamJson) {
       return;
     }
     rawLines += 1;
@@ -1947,17 +1952,24 @@ export function createCliJsonlStreamingParser(params: {
       lineBuffer.pending = "";
       return;
     }
-    if (handleCustomJsonlLine(line)) {
+    if (!line) {
+      accountClaudeJsonlLine(rawLine.length);
+      return;
+    }
+    if (handleCustomJsonlLine(line, rawLine)) {
       return;
     }
     const parsedRecords = parseJsonRecordCandidates(line);
     if (claudeStreamJson) {
-      const normalizedLine =
+      const normalized =
         parsedRecords.length === 1
-          ? (normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!) ?? line)
-          : line;
-      // Claude repeats tool-returned media in stdout; only retained normalized bytes count.
-      if (!accountClaudeJsonlLine(normalizedLine)) {
+          ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
+          : undefined;
+      // Exempt actual media bytes only; JSON serialization must not erase wire whitespace.
+      const retainedChars = normalized
+        ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
+        : rawLine.length;
+      if (!accountClaudeJsonlLine(retainedChars)) {
         return;
       }
     }
@@ -1994,7 +2006,9 @@ export function createCliJsonlStreamingParser(params: {
       }
       const tail = lineBuffer.pending;
       lineBuffer.pending = "";
-      handleJsonlLine(tail);
+      if (tail) {
+        handleJsonlLine(tail);
+      }
       finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
         flushPendingClaudeAssistantText();

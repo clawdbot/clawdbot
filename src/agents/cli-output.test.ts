@@ -3509,7 +3509,10 @@ describe("createCliJsonlStreamingParser", () => {
     }
   });
 
-  it("counts raw Claude lines claimed by plugin parsers before dispatching their events", () => {
+  it.each([
+    { name: "echoed media bytes", padded: false },
+    { name: "surrounding raw whitespace", padded: true },
+  ])("counts $name claimed by Claude plugin parsers before dispatch", ({ padded }) => {
     const pluginLines: string[] = [];
     const assistantDeltas: string[] = [];
     const parser = createCliJsonlStreamingParser({
@@ -3521,7 +3524,7 @@ describe("createCliJsonlStreamingParser", () => {
       },
       onAssistantDelta: (delta) => assistantDeltas.push(delta.delta),
     });
-    const rawLine = JSON.stringify({
+    const semanticLine = JSON.stringify({
       type: "user",
       message: {
         content: [
@@ -3534,7 +3537,7 @@ describe("createCliJsonlStreamingParser", () => {
                 source: {
                   type: "base64",
                   media_type: "image/png",
-                  data: "a".repeat(4_300_000),
+                  data: padded ? "YQ==" : "a".repeat(4_300_000),
                 },
               },
             ],
@@ -3542,12 +3545,118 @@ describe("createCliJsonlStreamingParser", () => {
         ],
       },
     });
+    const rawLine = padded ? `${" ".repeat(4_300_000)}${semanticLine}` : semanticLine;
 
     parser.push(`${rawLine}\n${rawLine}\n`);
 
-    expect(pluginLines).toEqual([rawLine, rawLine]);
+    expect(pluginLines).toEqual([semanticLine, semanticLine]);
     expect(assistantDeltas).toEqual(["claimed"]);
     expect(parser.getErrorText()).toContain("JSONL output exceeded");
+  });
+
+  it("counts actual blank Claude frames without invoking hooks or inventing a finish frame", () => {
+    const parseJsonlEvent = vi.fn(() => null);
+    const createParser = () =>
+      createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        parseJsonlEvent,
+        onAssistantDelta: () => {},
+      });
+    const completeParser = createParser();
+    completeParser.push("\r\n".repeat(20_000));
+    completeParser.finish();
+
+    expect(completeParser.getErrorText()).toBeNull();
+    expect(parseJsonlEvent).not.toHaveBeenCalled();
+
+    const overflowParser = createParser();
+    overflowParser.push("\n".repeat(20_001));
+
+    expect(overflowParser.getErrorText()).toContain("exceeded 20000 lines");
+    expect(parseJsonlEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "whitespace-only records",
+      createLine: () => " ".repeat(4_300_000),
+    },
+    {
+      name: "padding around valid JSON",
+      createLine: () => `${" ".repeat(4_300_000)}{}`,
+    },
+    {
+      name: "formatting inside a compacted media record",
+      createLine: () =>
+        JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "padded-image",
+                content: [
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: "YQ==" },
+                  },
+                ],
+              },
+            ],
+          },
+        }).replace('"message":', `"message":${" ".repeat(4_300_000)}`),
+    },
+  ])("charges $name against the Claude raw-output budget", ({ createLine }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    const line = createLine();
+
+    parser.push(`${line}\n${line}\n`);
+
+    expect(parser.getErrorText()).toContain("JSONL output exceeded 8388608 characters");
+  });
+
+  it("normalizes empty Claude image data without treating zero omitted bytes as unchanged", () => {
+    const results: CliToolResultDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onToolResult: (result) => results.push(result),
+    });
+
+    parser.push(
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "empty-image",
+              content: [
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: "" },
+                },
+              ],
+            },
+          ],
+        },
+      })}\n`,
+    );
+
+    expect(results[0]?.result).toEqual([
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png" },
+        omitted: true,
+        bytes: 0,
+      },
+    ]);
   });
 
   it("still enforces raw Claude line and retained-text limits", () => {
@@ -3649,7 +3758,7 @@ describe("createCliJsonlStreamingParser", () => {
         ],
       },
     });
-    parser.push(`${rawLine}\n`);
+    parser.push(`\n \t\r\n${rawLine}\n`);
 
     expect(observedLines).toEqual([rawLine]);
   });

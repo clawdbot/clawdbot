@@ -2735,6 +2735,54 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it.each([
+    {
+      name: "a coalesced blank-frame flood",
+      createChunk: () => "\n".repeat(20_001),
+    },
+    {
+      name: "whitespace-only records exceeding the raw budget",
+      createChunk: () => `${" ".repeat(4_300_000)}\n${" ".repeat(4_300_000)}\n`,
+    },
+    {
+      name: "valid JSON padded beyond the raw budget",
+      createChunk: () => `${" ".repeat(4_300_000)}{}\n${" ".repeat(4_300_000)}{}\n`,
+    },
+    {
+      name: "internal formatting around compacted Claude media",
+      createChunk: () => {
+        const line = JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "padded-live-image",
+                content: [
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: "YQ==" },
+                  },
+                ],
+              },
+            ],
+          },
+        }).replace('"message":', `"message":${" ".repeat(4_300_000)}`);
+        return `${line}\n${line}\n`;
+      },
+    },
+  ])("rejects $name from the managed Claude live session", async ({ createChunk }) => {
+    const live: ReturnType<typeof mockClaudeLiveRun> = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: () => {
+        live.spawnInput.onStdout?.(createChunk());
+      },
+    });
+
+    await expect(executePreparedCliRun(buildClaudeLiveRunContext())).rejects.toThrow(
+      "Claude CLI turn output exceeded limit.",
+    );
+  });
+
   it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
     let markWriteReady: (() => void) | undefined;
     const writeReady = new Promise<void>((resolve) => {

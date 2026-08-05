@@ -1317,10 +1317,30 @@ function handleClaudeLiveControlRequest(
   })();
 }
 
+function pushClaudeLiveTurnLine(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+  line: string,
+): boolean {
+  turn.streamingParser.push(`${line}\n`);
+  if (!turn.streamingParser.getErrorText()) {
+    return true;
+  }
+  closeLiveSession(
+    session,
+    "abort",
+    createOutputLimitError(session, "Claude CLI turn output exceeded limit."),
+  );
+  return false;
+}
+
 function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   const turn = session.currentTurn;
   const trimmed = line.trim();
   if (!trimmed) {
+    if (turn) {
+      pushClaudeLiveTurnLine(session, turn, line);
+    }
     return;
   }
   const parsed = parseClaudeLiveJsonLine(trimmed);
@@ -1367,17 +1387,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   ) {
     turn.hasReplayUnsafeActivity = true;
   }
-  const normalizedLine = normalizeClaudeCliStreamJsonRecord(parsed) ?? trimmed;
+  const normalizedLine = normalizeClaudeCliStreamJsonRecord(parsed)?.line ?? trimmed;
   turn.rawLines.push(normalizedLine);
   applyBackgroundTasksChanged(session, parsed);
   const toolEventCountBefore = turn.toolEventCount;
-  turn.streamingParser.push(`${normalizedLine}\n`);
-  if (turn.streamingParser.getErrorText()) {
-    closeLiveSession(
-      session,
-      "abort",
-      createOutputLimitError(session, "Claude CLI turn output exceeded limit."),
-    );
+  if (!pushClaudeLiveTurnLine(session, turn, line)) {
     return;
   }
   turn.sessionId = parsedSessionId ?? turn.sessionId;
