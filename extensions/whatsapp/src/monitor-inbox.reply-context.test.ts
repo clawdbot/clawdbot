@@ -148,6 +148,32 @@ describe("web monitor inbox reply context", () => {
     await listener.close();
   });
 
+  it("keeps LID-addressed DMs when no PN mapping exists", async () => {
+    const onMessage = vi.fn(async () => {});
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    // No reverse mapping file and lidLookup.getPNForLID resolves null, so
+    // resolveInboundJid() has no PN to fall back to for the LID JID.
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("lid-unmapped"),
+      remoteJid: "999@lid",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.payload.body).toBe("ping");
+    // The LID JID itself becomes the peer so the DM is not silently dropped.
+    expect(inbound.admission?.conversation.id).toBe("999@lid");
+    expect(inbound.admission?.conversation.kind).toBe("direct");
+
+    await listener.close();
+  });
+
   it("resolves LID JIDs via authDir mapping files", async () => {
     const onMessage = vi.fn(async () => {});
     fsSync.writeFileSync(

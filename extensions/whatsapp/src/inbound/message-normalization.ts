@@ -11,6 +11,15 @@ import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js"
 import { isJidGroup } from "./runtime-api.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 
+// Direct LID chats (usernames, click-to-WhatsApp leads) use `@lid`/`@hosted.lid`
+// JIDs. WhatsApp may omit the PN mapping for these, so inbound normalization
+// must keep the LID JID itself as the peer instead of dropping the message.
+const DIRECT_LID_INBOUND_JID_RE = /^(\d+)(?::\d+)?@(?:lid|hosted\.lid)$/i;
+
+function isDirectLidJid(jid: string): boolean {
+  return DIRECT_LID_INBOUND_JID_RE.test(jid);
+}
+
 export type WhatsAppNormalizedInboundMessage = {
   id?: string;
   remoteJid: string;
@@ -75,7 +84,14 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     }
 
     const participantJid = msg.key?.participant ?? undefined;
-    const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);
+    const resolvedFrom = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);
+    // LID-addressed DMs (usernames, CTWA ad leads) arrive with no PN mapping
+    // when WhatsApp omits sender_pn entirely. Keep the LID JID as the peer so
+    // the message is delivered instead of silently dropped (replies route back
+    // through toWhatsappJid(), which passes through any `@`-containing JID).
+    const from =
+      resolvedFrom ??
+      (group || !isDirectLidJid(remoteJid) ? null : remoteJid);
     if (!from) {
       return null;
     }
