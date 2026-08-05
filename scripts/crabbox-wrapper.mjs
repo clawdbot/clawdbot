@@ -268,6 +268,7 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/restart-mac.sh",
 ]);
 const minimumBlacksmithCrabboxVersion = [0, 22, 0];
+const minimumStructuredBrokerAuthCrabboxVersion = [0, 26, 1];
 const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
@@ -854,9 +855,11 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
   const doctor = checkedOutput(binary, doctorArgs);
   if (doctor.status !== 0) {
     const diagnostic = compactDiagnosticText(doctor.text);
+    const brokerAuthFailure =
+      doctorReportsBrokerAuthFailure(doctor.stdout) || legacyBrokerAuthProbeFailed(versionText);
     return {
       ready: false,
-      brokerAuthFailure: doctorReportsBrokerAuthFailure(doctor.stdout),
+      brokerAuthFailure,
       reason: `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`,
       recovery: `run \`${recoveryCommand(doctorArgs)}\``,
     };
@@ -877,16 +880,20 @@ function doctorReportsBrokerAuthFailure(stdout) {
     const checks = JSON.parse(stdout)?.checks;
     return (
       Array.isArray(checks) &&
-      checks.some(
-        (check) =>
-          check?.check === "broker" &&
-          check?.status === "failed" &&
-          check?.details?.class === "broker_auth",
-      )
+      checks.some((check) => check?.status === "failed" && check?.details?.class === "broker_auth")
     );
   } catch {
     return false;
   }
+}
+
+function legacyBrokerAuthProbeFailed(versionText) {
+  // Crabbox <0.26.1 did not classify broker failures in doctor JSON. Retain
+  // its standalone discriminator only for those accepted legacy binaries.
+  return (
+    !satisfiesMinimumCrabboxVersion(versionText, minimumStructuredBrokerAuthCrabboxVersion) &&
+    checkedOutput(binary, ["whoami"]).status !== 0
+  );
 }
 
 function formatProviderReadiness(readiness) {
@@ -935,8 +942,11 @@ function directCloudOverrideEnabled(providerName) {
 
 function managedBrokerConfigured() {
   const parsed = resolvedCrabboxConfig();
+  const brokerAuth = parsed?.brokerAuth;
   return Boolean(
-    parsed?.coordinator && parsed?.brokerMode === "managed" && parsed?.brokerAuth === "configured",
+    parsed?.coordinator &&
+    parsed?.brokerMode === "managed" &&
+    (brokerAuth === "configured" || brokerAuth === "command"),
   );
 }
 
