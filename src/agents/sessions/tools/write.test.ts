@@ -213,6 +213,20 @@ describe("write tool", () => {
     });
   });
 
+  it("writes new Windows batch files with CRLF line endings", async () => {
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute(
+      "call-1",
+      { path: "launch.cmd", content: "@echo off\necho ready\n" },
+      undefined,
+    );
+
+    await expect(fs.readFile(path.join(tmpDir, "launch.cmd"), "utf8")).resolves.toBe(
+      "@echo off\r\necho ready\r\n",
+    );
+  });
+
   it("keeps oversized created-file details bounded", async () => {
     await createTempPath("large-created.txt");
     const content = "x".repeat(1024 * 1024 + 1);

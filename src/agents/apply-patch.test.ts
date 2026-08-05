@@ -203,6 +203,19 @@ describe("applyPatch", () => {
     expect(result.summary.added).toEqual(["hello.txt"]);
   });
 
+  it("writes new Windows batch files with CRLF line endings", async () => {
+    const memory = createMemoryPatchSandbox();
+    const patch = `*** Begin Patch
+*** Add File: launch.cmd
++@echo off
++echo ready
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/launch.cmd")).toBe("@echo off\r\necho ready\r\n");
+  });
+
   it("rejects an add hunk that targets an existing file", async () => {
     const memory = createMemoryPatchSandbox({ "notes.txt": "keep me\n" });
     const patch = `*** Begin Patch

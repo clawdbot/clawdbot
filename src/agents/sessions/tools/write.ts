@@ -14,6 +14,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { structuredPatch } from "diff";
 import { Type } from "typebox";
 import { isMissingPathError } from "../../../infra/errors.js";
+import { normalizeNewWindowsBatchContent } from "../../../infra/windows-batch.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -553,26 +554,36 @@ export function createWriteToolDefinition(
             terminate: true,
           };
         }
-        const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
+        const persistedContent =
+          precheck.beforeStat === null
+            ? normalizeNewWindowsBatchContent(absolutePath, content)
+            : content;
+        const details = await resolveWriteDetails({
+          absolutePath,
+          content: persistedContent,
+          ops,
+          path,
+          precheck,
+        });
         try {
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          await ops.writeFile(absolutePath, content);
+          await ops.writeFile(absolutePath, persistedContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          if (!(await verifyPersistedUtf8File(absolutePath, content, ops))) {
+          if (!(await verifyPersistedUtf8File(absolutePath, persistedContent, ops))) {
             throw new Error(
               `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
             );
           }
-          return successfulWriteResult(path, content, details);
+          return successfulWriteResult(path, persistedContent, details);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
             absolutePath,
-            content,
+            content: persistedContent,
             error,
             ops,
             path,

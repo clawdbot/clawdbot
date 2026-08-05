@@ -672,6 +672,7 @@ exit 0
         OPENCLAW_PROFILE: "default",
       });
       expect(scriptPath.endsWith(".cmd")).toBe(true);
+      expect(content.replaceAll("\r\n", "")).not.toContain("\n");
       expect(content).toContain("@echo off");
       expect(content).toContain("powershell -NoProfile -ExecutionPolicy Bypass -Command");
       expect(content).not.toContain("powershell -NoProfile -ExecutionPolicy Bypass -File");

@@ -8,6 +8,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+import { normalizeNewWindowsBatchContent } from "../infra/windows-batch.js";
 import {
   type ApplyPatchFileOptions,
   createPatchTarget,
@@ -189,7 +190,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         await ensureDir(target.resolved, fileOps);
         await createPatchTarget({
           target,
-          contents: hunk.contents,
+          contents: normalizeNewWindowsBatchContent(target.resolved, hunk.contents),
           ops: fileOps,
           hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
         });
