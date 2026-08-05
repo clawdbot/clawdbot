@@ -478,6 +478,9 @@ export async function recordGroundedShortTermCandidates(params: {
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
         lastRecalledAt,
         queryHashes,
+        // Grounded backfill is synthetic and must not add qualified queries,
+        // but a rerun must preserve interactive evidence already on the key.
+        ...(existing?.userQueryHashes ? { userQueryHashes: existing.userQueryHashes } : {}),
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         provenance,

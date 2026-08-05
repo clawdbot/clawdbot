@@ -1180,6 +1180,74 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("preserves qualified user queries across a grounded backfill rerun", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Keep encrypted router backups in S3 Glacier.";
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+      const groundedItem = {
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 1,
+        snippet,
+        score: 0.9,
+        query: "__dreaming_grounded_backfill__:candidate",
+        signalCount: 1,
+        dayBucket: "2026-04-03",
+      };
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [groundedItem],
+        nowMs: Date.parse("2026-04-03T09:00:00.000Z"),
+      });
+      for (const query of ["router backups", "encrypted retention", "glacier storage"]) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query,
+          nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+          results: [
+            {
+              path: groundedItem.path,
+              startLine: groundedItem.startLine,
+              endLine: groundedItem.endLine,
+              snippet,
+              score: 0.92,
+              source: "memory",
+            },
+          ],
+        });
+      }
+
+      const before = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 1,
+      });
+      expect(before).toHaveLength(1);
+      expect(before[0]?.uniqueQueries).toBe(3);
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [groundedItem],
+        nowMs: Date.parse("2026-04-03T11:00:00.000Z"),
+      });
+
+      const after = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 1,
+      });
+      expect(after).toHaveLength(1);
+      expect(after[0]?.key).toBe(before[0]?.key);
+      expect(after[0]?.uniqueQueries).toBe(3);
+      expect(after[0]?.groundedCount).toBe(2);
+    });
+  });
+
   it("rewards spaced recalls as consolidation instead of only raw count", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
