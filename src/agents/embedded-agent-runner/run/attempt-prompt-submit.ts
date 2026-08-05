@@ -89,26 +89,13 @@ export async function submitEmbeddedAttemptPrompt(input: {
   }
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
 
-  const installProviderPromptHistoryTransform = (): {
-    cleanup: () => void;
-    settleSilentDispatch: () => void;
-  } => {
+  const installProviderPromptHistoryTransform = (): (() => void) => {
     let providerCalls = 0;
     let pendingDispatchCommit: (() => void) | undefined;
     const providerPromptState = getProviderPromptState(attempt.runId);
     const cleanup = installProviderPromptContextAdmission(
       providerPromptState,
       (_model, context, accountingContext) => {
-        if (pendingDispatchCommit) {
-          // A transport that never observes payloads settles silently; adopt its candidate when
-          // the next provider call begins so precheck gating keeps working for it. An observed
-          // but never dispatched candidate means a payload hook failed pre-dispatch: drop it.
-          const commit = pendingDispatchCommit;
-          pendingDispatchCommit = undefined;
-          if (providerPromptState.previousAttemptPayloadObserved !== true) {
-            commit();
-          }
-        }
         const admission = admitProviderPrompt({
           context,
           accountingContext,
@@ -158,19 +145,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
         commit?.();
       },
     );
-    return {
-      cleanup,
-      settleSilentDispatch: () => {
-        // The final provider call of a submission has no next admission to adopt its
-        // candidate. Settle it here when its transport never observed a payload; an
-        // observed but undispatched candidate means the payload chain failed: drop it.
-        if (pendingDispatchCommit && providerPromptState.attemptPayloadObserved !== true) {
-          const commit = pendingDispatchCommit;
-          pendingDispatchCommit = undefined;
-          commit();
-        }
-      },
-    };
+    return cleanup;
   };
 
   input.onFinalPromptText(input.transcriptPrompt);
@@ -200,7 +175,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       captureCurrentPromptForModel = true;
     }
   };
-  const providerPromptHistoryTransform = installProviderPromptHistoryTransform();
+  const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
   try {
     if (input.runtimeOnly) {
       await input.promptActiveSession(input.transcriptPrompt, {
@@ -220,7 +195,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
         cleanupRuntimeContextMessage();
       }
     }
-    providerPromptHistoryTransform.settleSilentDispatch();
     if (pendingMidTurnPrecheckRequest) {
       const request = pendingMidTurnPrecheckRequest;
       pendingMidTurnPrecheckRequest = null;
@@ -233,7 +207,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       input.onSteeringAcknowledged();
     }
   } finally {
-    providerPromptHistoryTransform.cleanup();
+    cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();
   }
 }
