@@ -5,32 +5,53 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildSessionStorageReadinessCondition,
   createSessionStorageReadinessEvidenceResolver,
-  resolveSessionStorageDirectories,
 } from "./session-storage.js";
 
 describe("session storage readiness", () => {
-  it("resolves the state root and deduplicated custom session-store parents", () => {
+  it("resolves the state root and deduplicated custom session-store parents", async () => {
     const stateDir = path.resolve(os.tmpdir(), "openclaw-state");
     const storeRoot = path.resolve(os.tmpdir(), "openclaw-stores");
     const config = {
       agents: { list: [{ id: "main" }, { id: "support" }] },
       session: { store: path.join(storeRoot, "{agentId}", "sessions.json") },
     };
+    const probed: string[] = [];
 
-    expect(resolveSessionStorageDirectories(config, { OPENCLAW_STATE_DIR: stateDir })).toEqual(
+    await createSessionStorageReadinessEvidenceResolver({
+      probe: async (directory) => {
+        probed.push(directory);
+        return {
+          writable: true,
+          reason: "SessionStorageReady",
+          message: "Session storage accepted write, flush, and cleanup probes.",
+        };
+      },
+    })({ config, env: { OPENCLAW_STATE_DIR: stateDir } });
+
+    expect(probed.toSorted()).toEqual(
       [stateDir, path.join(storeRoot, "main"), path.join(storeRoot, "support")].toSorted(),
     );
   });
 
-  it("includes every configured agent's default session-store parent", () => {
+  it("includes every configured agent's default session-store parent", async () => {
     const stateDir = path.resolve(os.tmpdir(), "openclaw-state");
+    const probed: string[] = [];
 
-    expect(
-      resolveSessionStorageDirectories(
-        { agents: { list: [{ id: "main" }, { id: "support" }] } },
-        { OPENCLAW_STATE_DIR: stateDir },
-      ),
-    ).toEqual(
+    await createSessionStorageReadinessEvidenceResolver({
+      probe: async (directory) => {
+        probed.push(directory);
+        return {
+          writable: true,
+          reason: "SessionStorageReady",
+          message: "Session storage accepted write, flush, and cleanup probes.",
+        };
+      },
+    })({
+      config: { agents: { list: [{ id: "main" }, { id: "support" }] } },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(probed.toSorted()).toEqual(
       [
         stateDir,
         path.join(stateDir, "agents", "main", "sessions"),

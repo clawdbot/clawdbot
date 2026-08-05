@@ -1,4 +1,4 @@
-export type SessionDeliveryRuntimeReadinessSnapshot = {
+type SessionDeliveryRuntimeReadinessSnapshot = {
   active: boolean;
   generation: number;
 };

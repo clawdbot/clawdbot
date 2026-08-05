@@ -4,13 +4,14 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   captureExecutionCapabilityReadinessSnapshot,
-  CONTEXT_ENGINE_READY_CRITERION_ID,
   createExecutionCapabilityReadinessResolver,
-  HARNESS_READY_CRITERION_ID,
-  MCP_RUNTIME_READY_CRITERION_ID,
-  SANDBOX_READY_CRITERION_ID,
-  TOOL_CATALOG_READY_CRITERION_ID,
 } from "./execution-capabilities.js";
+
+const CONTEXT_ENGINE_READY_CRITERION_ID = "openclaw.context-engine-ready";
+const TOOL_CATALOG_READY_CRITERION_ID = "openclaw.tool-catalog-ready";
+const MCP_RUNTIME_READY_CRITERION_ID = "openclaw.mcp-runtime-ready";
+const SANDBOX_READY_CRITERION_ID = "openclaw.sandbox-ready";
+const HARNESS_READY_CRITERION_ID = "openclaw.harness-ready";
 
 function createDeps() {
   return {
