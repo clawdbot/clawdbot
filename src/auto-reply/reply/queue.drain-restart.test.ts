@@ -566,6 +566,111 @@ describe("followup queue drain restart after idle window", () => {
     expect(retainedIdentityCount).toBeLessThanOrEqual(2);
   });
 
+  it.each(["old", "new"] as const)(
+    "drains a pending overflow summary after future drops switch to %s",
+    async (dropPolicy) => {
+      resetGatewayWorkAdmission();
+      const key = `test-summary-policy-transition-${dropPolicy}-${Date.now()}`;
+      const summarizeSettings: QueueSettings = {
+        mode: "followup",
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize",
+      };
+      const nonOutcomeAbandoned = vi.fn();
+      const nonOutcomeDisposition = vi.fn();
+      const nonOutcomeSettled = vi.fn();
+      const createRecordedNonOutcome = (prompt: string) => {
+        const run = createRun({ prompt });
+        run.onQueueDisposition = nonOutcomeDisposition;
+        run.turnAdoptionLifecycle = {
+          admission: "cancel-only",
+          onAdopted: vi.fn(),
+          onAbandoned: nonOutcomeAbandoned,
+          onSettled: nonOutcomeSettled,
+        };
+        return run;
+      };
+      const first = createRun({ prompt: "first overflowed message" });
+      const second =
+        dropPolicy === "old"
+          ? createRecordedNonOutcome("second queued message")
+          : createRun({ prompt: "second queued message" });
+      const third =
+        dropPolicy === "new"
+          ? createRecordedNonOutcome("third rejected message")
+          : createRun({ prompt: "third queued message" });
+      const deliveredPrompts: string[] = [];
+      let forcedCleanup = false;
+      let timerFired = false;
+
+      try {
+        expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
+        expect(enqueueFollowupRun(key, second, summarizeSettings)).toBe(true);
+        const queue = getExistingFollowupQueue(key);
+        expect(queue).toMatchObject({
+          dropPolicy: "summarize",
+          droppedCount: 1,
+          summaryLines: ["first overflowed message"],
+        });
+        expect(queue?.summarySources).toEqual([first]);
+        expect(queue?.items).toEqual([second]);
+
+        const admitted = enqueueFollowupRun(key, third, {
+          ...summarizeSettings,
+          dropPolicy,
+        });
+        expect(admitted).toBe(dropPolicy === "old");
+        expect(getExistingFollowupQueue(key)).toBe(queue);
+        expect(queue).toMatchObject({
+          dropPolicy,
+          droppedCount: 1,
+          summaryLines: ["first overflowed message"],
+        });
+        expect(queue?.summarySources).toEqual([first]);
+        expect(queue?.items).toEqual([dropPolicy === "old" ? third : second]);
+
+        const timer = new Promise<void>((resolve) => {
+          setTimeout(() => {
+            timerFired = true;
+            resolve();
+          }, 0);
+        });
+        scheduleFollowupDrain(key, async (run) => {
+          deliveredPrompts.push(run.prompt);
+        });
+
+        for (let pass = 0; pass < 2_000 && getExistingFollowupQueue(key); pass += 1) {
+          await Promise.resolve();
+        }
+        if (getExistingFollowupQueue(key)) {
+          forcedCleanup = true;
+          clearSessionQueues([key]);
+        }
+        await timer;
+        await vi.waitFor(() => {
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+        });
+
+        expect(forcedCleanup).toBe(false);
+        expect(timerFired).toBe(true);
+        expect(deliveredPrompts).toHaveLength(2);
+        expect(deliveredPrompts[0]).toContain("[Queue overflow] Dropped 1 message due to cap.");
+        expect(deliveredPrompts[0]).toContain("first overflowed message");
+        expect(deliveredPrompts[1]).toBe(
+          dropPolicy === "old" ? "third queued message" : "second queued message",
+        );
+        expect(nonOutcomeDisposition).toHaveBeenCalledWith(`queue-cap-${dropPolicy}`);
+        expect(nonOutcomeAbandoned).toHaveBeenCalledOnce();
+        expect(nonOutcomeSettled).toHaveBeenCalledTimes(1);
+        expect(getExistingFollowupQueue(key)).toBeUndefined();
+      } finally {
+        clearSessionQueues([key]);
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
   it("does not process messages after clearSessionQueues clears the callback", async () => {
     const key = `test-clear-callback-${Date.now()}`;
     const calls: FollowupRun[] = [];

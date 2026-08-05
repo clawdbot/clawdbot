@@ -574,7 +574,6 @@ function collectRuntimeMetadata(
 
 type FollowupQueueSummaryState = {
   cap: number;
-  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
@@ -583,6 +582,7 @@ type FollowupQueueSummaryState = {
     contextKey: string;
     count: number;
     sources: FollowupRun[];
+    summaryLines: string[];
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
   evictedSummaryCount: number;
@@ -593,6 +593,16 @@ type QueueSummaryDelivery = {
   droppedCount: number;
   sources: FollowupRun[];
 };
+
+function resolveQueueSummaryLines(
+  queue: Pick<FollowupQueueSummaryState, "summaryLines" | "summarySources">,
+  sources: FollowupRun[],
+): string[] {
+  return sources.map((source) => {
+    const sourceIndex = queue.summarySources.indexOf(source);
+    return expectDefined(queue.summaryLines[sourceIndex], "summary line for retained source");
+  });
+}
 
 function createQueueSummaryDelivery(params: {
   queue: FollowupQueueSummaryState;
@@ -607,11 +617,10 @@ function createQueueSummaryDelivery(params: {
   }
   const droppedCount = params.sources ? sources.length : params.queue.droppedCount;
   const summaryLines = params.sources
-    ? params.queue.summaryLines.slice(0, sources.length)
+    ? resolveQueueSummaryLines(params.queue, sources)
     : [...params.queue.summaryLines];
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },
@@ -649,7 +658,10 @@ function consumeQueueSummaryDelivery(
           "summary elisions entry at elision index",
         );
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
-        entry.sources.splice(elidedSourceIndex, 1);
+        if (elidedSourceIndex >= 0) {
+          entry.sources.splice(elidedSourceIndex, 1);
+          entry.summaryLines.splice(elidedSourceIndex, 1);
+        }
         entry.count = entry.sources.length;
         consumedCount += 1;
         if (entry.sources.length === 0) {
@@ -1010,6 +1022,7 @@ async function drainElidedOverflowSummary(params: {
       continue;
     }
     entry.sources.splice(index, 1);
+    entry.summaryLines.splice(index, 1);
     entry.count = Math.max(0, entry.count - 1);
     params.queue.droppedCount = Math.max(0, params.queue.droppedCount - 1);
     completeFollowupRunLifecycle(source);
@@ -1025,10 +1038,10 @@ async function drainElidedOverflowSummary(params: {
   const elidedCount = entry.sources.length;
   const elidedSources = [...entry.sources];
   const droppedCount = elidedCount + retainedSources.length;
-  const summaryLines = params.queue.summaryLines.slice(0, retainedSources.length);
+  const retainedSummaryLines = resolveQueueSummaryLines(params.queue, retainedSources);
+  const summaryLines = [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap);
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },
@@ -1065,6 +1078,7 @@ async function drainElidedOverflowSummary(params: {
   }
   const consumedCount = Math.min(elidedCount, entry.sources.length);
   const consumedSources = entry.sources.splice(0, consumedCount);
+  entry.summaryLines.splice(0, consumedCount);
   entry.count = entry.sources.length;
   for (const consumedSource of consumedSources) {
     completeFollowupRunLifecycle(consumedSource);

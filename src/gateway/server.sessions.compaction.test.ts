@@ -1530,6 +1530,7 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
     contextKey: "test",
     count: 1,
     sources: [elidedRun],
+    summaryLines: ["elided summary"],
     sourceRefs: new WeakMap(),
   });
 
