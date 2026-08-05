@@ -370,20 +370,18 @@ describe("SystemAgentChatEngine", () => {
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
     const proposalHash = hashSystemAgentOperation(operation);
     const armed: boolean[] = [];
+    const observedInputs: string[] = [];
     const runConfigSet = vi.fn(async () => {});
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       runAgentTurn: async (params) => {
         armed.push(params.approvalArmed);
-        if (!params.approvalArmed) {
+        observedInputs.push(params.input);
+        if (observedInputs.length === 1) {
           params.session.proposalRef.current = proposalHash;
           params.session.proposalRef.operation = operation;
-          return { text: "Change ready." };
         }
-        return {
-          text: "Applying.",
-          directive: { kind: "approved-operation", operation },
-        };
+        return { text: "Change ready." };
       },
       deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
     });
@@ -395,10 +393,26 @@ describe("SystemAgentChatEngine", () => {
     expect(armed).toEqual([false]);
     expect(runConfigSet).not.toHaveBeenCalled();
 
-    await engine.resolveOperatorApproval("allow-once", proposalHash);
+    const wrongProposal = await engine.resolveOperatorApproval("allow-once", "wrong-hash");
+    expect(wrongProposal).toBeNull();
+    expect(runConfigSet).not.toHaveBeenCalled();
 
-    expect(armed).toEqual([false, true]);
+    const applied = await engine.resolveOperatorApproval("allow-once", proposalHash);
+    const duplicate = await engine.resolveOperatorApproval("allow-once", proposalHash);
+    await engine.handle("what changed?");
+
+    expect(armed).toEqual([false, false]);
     expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(runConfigSet).toHaveBeenCalledWith({
+      path: "gateway.port",
+      value: "19001",
+      cliOptions: {},
+    });
+    expect(applied?.text).toContain("[openclaw] done: config.set");
+    expect(duplicate).toBeNull();
+    expect(observedInputs[1]).toContain("[proposal-resolved]");
+    expect(observedInputs[1]).toContain("was approved");
+    expect(observedInputs[1]).not.toContain("host-seeded");
   });
 
   it("refuses delegated hosted-setup directives instead of starting wizards", async () => {
@@ -2613,7 +2627,7 @@ describe("SystemAgentChatEngine", () => {
     );
   });
 
-  it("tells the agent loop when a preserved host proposal was resolved", async () => {
+  it("tells the agent loop when a preserved proposal was resolved", async () => {
     const observedInputs: string[] = [];
     const runConfigSet = vi.fn(async () => {});
     const engine = new SystemAgentChatEngine({
@@ -2632,7 +2646,7 @@ describe("SystemAgentChatEngine", () => {
 
     expect(runConfigSet).toHaveBeenCalledOnce();
     expect(observedInputs).toHaveLength(2);
-    expect(observedInputs[1]).toContain("[host-proposal-resolved]");
+    expect(observedInputs[1]).toContain("[proposal-resolved]");
     expect(observedInputs[1]).toContain("was approved");
   });
 
@@ -2661,7 +2675,7 @@ describe("SystemAgentChatEngine", () => {
     expect(observedInputs).toHaveLength(3);
     expect(observedInputs[0]).toContain("was approved");
     expect(observedInputs[1]).toContain("was approved");
-    expect(observedInputs[2]).not.toContain("host-proposal-resolved");
+    expect(observedInputs[2]).not.toContain("proposal-resolved");
   });
 
   it("clears both proposal stores when the agent takes a directive", async () => {
