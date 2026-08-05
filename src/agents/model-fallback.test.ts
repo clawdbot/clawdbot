@@ -790,13 +790,14 @@ describe("runWithModelFallback", () => {
       return "primary-ok";
     });
 
-    for (let index = 0; index < primaryOutcomes.length; index += 1) {
-      await runWithModelFallback({
+    for (const outcome of primaryOutcomes) {
+      const turn = await runWithModelFallback({
         cfg,
         provider: "openai",
         model: "gpt-5.5",
         run,
       });
+      expect(turn.result).toBe(outcome === "success" ? "primary-ok" : "fallback-ok");
     }
 
     const result = await runWithModelFallback({
@@ -811,8 +812,9 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]).toMatchObject({
       provider: "openai",
       model: "gpt-5.5",
-      reason: "circuit_open",
+      reason: "overloaded",
       status: 503,
+      code: "model_circuit_open",
     });
     expect(run).toHaveBeenLastCalledWith("anthropic", "claude-opus-4-7", {
       isFinalFallbackAttempt: true,

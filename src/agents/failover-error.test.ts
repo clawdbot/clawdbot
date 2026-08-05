@@ -1172,9 +1172,8 @@ describe("failover-error", () => {
     expect(err?.status).toBe(404);
   });
 
-  it("maps overloaded and open circuits to a 503 fallback status", () => {
+  it("maps overloaded to a 503 fallback status", () => {
     expect(resolveFailoverStatus("overloaded")).toBe(503);
-    expect(resolveFailoverStatus("circuit_open")).toBe(503);
   });
 
   it("maps server_error to a 500 fallback status", () => {

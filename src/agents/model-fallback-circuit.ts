@@ -1,6 +1,9 @@
 /** Bounds repeated transient failures for one provider/model fallback route. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { describeFailoverError } from "./failover-error.js";
 import { modelKey } from "./model-ref-shared.js";
 
 const FAILURE_THRESHOLD = 5;
@@ -34,8 +37,9 @@ export type ModelCircuitAttempt = {
 
 export type ModelCircuitGate =
   | { type: "attempt"; attempt: ModelCircuitAttempt }
-  | { type: "open"; error: string };
+  | { type: "open"; error: string; reason: FailoverReason };
 
+const log = createSubsystemLogger("model-fallback");
 const modelCircuitStates = new Map<string, ModelCircuitState>();
 
 function circuitKey(provider: string, model: string, agentDir?: string): string {
@@ -106,15 +110,15 @@ export function acquireModelCircuit(params: {
     return { type: "attempt", attempt: { key, wasHalfOpen: false } };
   }
   if (state.openUntil > now || state.halfOpenInFlight) {
-    return { type: "open", error: formatOpenError(state, now) };
+    return { type: "open", error: formatOpenError(state, now), reason: state.lastReason };
   }
   state.halfOpenInFlight = true;
   state.lastTouchedAt = now;
   return { type: "attempt", attempt: { key, wasHalfOpen: true } };
 }
 
-export function releaseModelCircuitAttempt(attempt: ModelCircuitAttempt): boolean {
-  const state = attempt.wasHalfOpen ? modelCircuitStates.get(attempt.key) : undefined;
+export function releaseModelCircuitAttempt(attempt: ModelCircuitAttempt | undefined): boolean {
+  const state = attempt?.wasHalfOpen ? modelCircuitStates.get(attempt.key) : undefined;
   if (!state) {
     return false;
   }
@@ -180,6 +184,39 @@ export function recordModelCircuitFailure(
   }
   modelCircuitStates.set(attempt.key, state);
   return state.openUntil > now ? { openMs: state.currentOpenMs, reason } : null;
+}
+
+export function recordCandidateCircuitSuccess(params: {
+  attempt: ModelCircuitAttempt | undefined;
+  provider: string;
+  model: string;
+}): void {
+  if (!params.attempt || !recordModelCircuitSuccess(params.attempt)) {
+    return;
+  }
+  log.warn(
+    `Model circuit closed after recovery for ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.model)}`,
+  );
+}
+
+export function recordCandidateCircuitFailure(params: {
+  attempt: ModelCircuitAttempt | undefined;
+  provider: string;
+  model: string;
+  error: unknown;
+}): void {
+  if (!params.attempt) {
+    return;
+  }
+  const opened = recordModelCircuitFailure(
+    params.attempt,
+    describeFailoverError(params.error).reason,
+  );
+  if (opened) {
+    log.warn(
+      `Model circuit open for ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.model)} for ${Math.round(opened.openMs / 1000)}s after ${sanitizeForLog(opened.reason)}`,
+    );
+  }
 }
 
 /** @internal – exposed for focused state-machine tests only. */
