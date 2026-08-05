@@ -12,7 +12,11 @@ type DeliveryDeps = {
     sessionId?: string;
     isActive: boolean;
   };
-  isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
+  isRequesterSessionAbandoned: (
+    requesterSessionKey: string,
+    sessionId: string | undefined,
+    agentId: string,
+  ) => boolean;
   loadSessionEntry: typeof import("./subagent-announce-delivery.runtime.js").loadSessionEntry;
   loadRequesterSessionEntry: typeof import("./subagent-announce-delivery.js").loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (

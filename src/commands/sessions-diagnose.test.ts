@@ -79,7 +79,6 @@ const diagnoseResult = (
   },
   transcript: {
     resolved: true,
-    source: "sessionFile",
     recentEventCount: 2,
   },
   findings: [

@@ -9,6 +9,7 @@ import {
 import {
   clearActiveEmbeddedRun,
   isEmbeddedRunAbandoned,
+  markActiveEmbeddedRunAbandoned,
   resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -113,6 +114,20 @@ describe("embedded-agent scoped fallback run registry", () => {
     });
     expect(ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(mainSessionFile)).toBe(false);
     expect(ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(workSessionFile)).toBe("session-shared");
+    expect(
+      isEmbeddedRunAbandoned({
+        sessionId: "session-shared",
+        sessionKey: "agent:main:global",
+        agentId: "main",
+      }),
+    ).toBe(false);
+    expect(
+      isEmbeddedRunAbandoned({
+        sessionId: "session-shared",
+        sessionKey: "agent:work:global",
+        agentId: "work",
+      }),
+    ).toBe(true);
   });
 
   it("clears a prior scoped fallback abandonment when a replacement starts", () => {
@@ -205,5 +220,42 @@ describe("embedded-agent scoped fallback run registry", () => {
       false,
     );
     expect(resolveActiveEmbeddedRunHandleSessionId("global", "work")).toBe("session-shared");
+  });
+
+  it("does not let one agent's fallback abandonment suppress another owner", () => {
+    const mainHandle = createRunHandle();
+    const workHandle = createRunHandle();
+
+    setActiveEmbeddedRun("session-shared", mainHandle, "global", undefined, "main");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-shared",
+        handle: mainHandle,
+        sessionKey: "global",
+        agentId: "main",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    setActiveEmbeddedRun("session-shared", workHandle, "global", undefined, "work");
+
+    expect(ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.has("session-shared")).toBe(false);
+    expect(ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has("global")).toBe(false);
+    expect(
+      isEmbeddedRunAbandoned({
+        sessionId: "session-shared",
+        sessionKey: "agent:main:global",
+        agentId: "main",
+      }),
+    ).toBe(true);
+    expect(
+      isEmbeddedRunAbandoned({
+        sessionId: "session-shared",
+        sessionKey: "agent:work:global",
+        agentId: "work",
+      }),
+    ).toBe(false);
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-shared", sessionKey: "global" })).toBe(
+      false,
+    );
   });
 });

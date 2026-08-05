@@ -148,7 +148,7 @@ const SessionsDiagnoseLaneSchema = Type.Object(
     lane: NonEmptyString,
     queuedCount: Type.Integer({ minimum: 0 }),
     activeCount: Type.Integer({ minimum: 0 }),
-    maxConcurrent: Type.Integer({ minimum: 1 }),
+    maxConcurrent: Type.Integer({ minimum: 0 }),
     draining: Type.Boolean(),
     generation: Type.Integer({ minimum: 0 }),
   },
@@ -219,7 +219,6 @@ export const SessionsDiagnoseResultSchema = Type.Object(
       Type.Object(
         {
           resolved: Type.Boolean(),
-          source: Type.Optional(Type.Union([Type.Literal("sessionFile"), Type.Literal("store")])),
           recentEventCount: Type.Optional(Type.Integer({ minimum: 0 })),
         },
         { additionalProperties: false },

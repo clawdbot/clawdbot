@@ -1,18 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsDiagnoseResult } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { getEmbeddedRunDiagnosticSnapshot } from "../../agents/embedded-agent-runner/run-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-session-state.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { collectTrackedActiveSessionRunSnapshot } from "./session-active-runs.js";
 import {
   clampDiagnoseTail,
   formatDiagnoseNextCheckCommand,
   FRESH_PROGRESS_MAX_AGE_MS,
+  getDiagnoseLaneSnapshot,
   isDiagnoseRowTerminal,
   isDiagnoseSharedRuntimeEvidenceUnambiguous,
   selectorFromDiagnoseParams,
@@ -31,7 +30,6 @@ import type { GatewayRequestContext } from "./types.js";
 
 type DiagnoseTranscriptEvidence = {
   resolved: boolean;
-  source: "sessionFile" | "store";
   recentEventCount: number;
 };
 
@@ -280,7 +278,6 @@ async function readDiagnoseTranscriptEvidence(params: {
     return {
       resolved:
         Boolean(result.transcriptPath) || result.totalMessages > 0 || result.messages.length > 0,
-      source: params.target.entry.sessionFile ? "sessionFile" : "store",
       recentEventCount: result.messages.length,
     };
   } catch {
@@ -312,7 +309,7 @@ export async function buildDiagnoseResult(params: {
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: target.entry.sessionId,
     sessionKey: target.key,
-    sessionFile: target.entry.sessionFile,
+    sessionFile: target.key,
     ...(target.agentId ? { agentId: target.agentId } : {}),
   });
   const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
@@ -324,7 +321,7 @@ export async function buildDiagnoseResult(params: {
         {
           sessionId: target.entry.sessionId,
           sessionKey: target.key,
-          sessionFile: target.entry.sessionFile,
+          sessionFile: target.key,
         },
         now,
       )
@@ -374,9 +371,7 @@ export async function buildDiagnoseResult(params: {
             : {}),
         }
       : undefined;
-  const lane = useSharedRuntimeEvidence
-    ? getCommandLaneSnapshot(resolveSessionLane(target.key))
-    : undefined;
+  const lane = useSharedRuntimeEvidence ? getDiagnoseLaneSnapshot(target.key) : undefined;
   const transcript = await readDiagnoseTranscriptEvidence({
     target,
     maxLines: clampDiagnoseTail(p.tail),
@@ -424,9 +419,7 @@ export async function buildDiagnoseResult(params: {
     },
     transcript: {
       resolved: transcriptResolved,
-      ...(transcript
-        ? { source: transcript.source, recentEventCount: transcript.recentEventCount }
-        : {}),
+      ...(transcript ? { recentEventCount: transcript.recentEventCount } : {}),
     },
     ...(deliveryUncertain || lastChannel || lastTo || lastThreadId
       ? {

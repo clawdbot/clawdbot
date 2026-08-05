@@ -95,7 +95,11 @@ type SubagentAnnounceDeliveryDeps = {
     sessionId?: string;
     isActive: boolean;
   };
-  isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
+  isRequesterSessionAbandoned: (
+    requesterSessionKey: string,
+    sessionId: string | undefined,
+    agentId: string,
+  ) => boolean;
   loadSessionEntry: typeof loadSessionEntry;
   loadRequesterSessionEntry: typeof loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
@@ -118,8 +122,8 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
       isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
     };
   },
-  isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
-    isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
+  isRequesterSessionAbandoned: (requesterSessionKey, sessionId, agentId) =>
+    isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId, agentId }),
   loadSessionEntry,
   loadRequesterSessionEntry,
   queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -600,8 +604,15 @@ async function maybeSteerSubagentAnnounce(params: {
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
+  const requesterAgentId = resolveAgentIdFromSessionKey(canonicalKey, resolveDefaultAgentId(cfg));
   const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
-  if (subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(canonicalKey, sessionId)) {
+  if (
+    subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(
+      canonicalKey,
+      sessionId,
+      requesterAgentId,
+    )
+  ) {
     return { status: "none" };
   }
   if (!sessionId || !isActive) {
@@ -944,11 +955,16 @@ async function sendSubagentAnnounceDirectly(params: {
       completionRouteRequiresMessageToolDelivery ||
       subagentDirectMessageCompletionRequiresMessageTool;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    const requesterAgentId = resolveAgentIdFromSessionKey(
+      canonicalRequesterSessionKey,
+      resolveDefaultAgentId(cfg),
+    );
     if (
       params.expectsCompletionMessage &&
       subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(
         canonicalRequesterSessionKey,
         requesterActivity.sessionId,
+        requesterAgentId,
       )
     ) {
       return {

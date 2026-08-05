@@ -443,14 +443,13 @@ describe("lazy protocol validators", () => {
             lane: "session:agent:main:main",
             queuedCount: 0,
             activeCount: 1,
-            maxConcurrent: 1,
+            maxConcurrent: 0,
             draining: false,
             generation: 1,
           },
         },
         transcript: {
           resolved: true,
-          source: "sessionFile",
           recentEventCount: 3,
         },
         findings: [

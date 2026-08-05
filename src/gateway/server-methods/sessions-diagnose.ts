@@ -6,7 +6,6 @@ import {
   validateSessionsDiagnoseParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { getEmbeddedRunDiagnosticSnapshot } from "../../agents/embedded-agent-runner/run-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { listSessionEntries } from "../../config/sessions/session-accessor.js";
@@ -18,7 +17,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-session-state.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   resolveSessionStoreAgentId,
@@ -33,6 +31,7 @@ import {
   buildNotFoundDiagnosis,
   countDiagnoseSelectors,
   DEFAULT_DIAGNOSE_SCAN_LIMIT,
+  getDiagnoseLaneSnapshot,
   isDiagnoseRowTerminal,
   isDiagnoseSharedRuntimeEvidenceUnambiguous,
   STALE_PROGRESS_MIN_AGE_MS,
@@ -125,7 +124,7 @@ function scoreDiagnoseCandidatePreselect(params: {
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.entry.sessionId,
     sessionKey: params.key,
-    sessionFile: params.entry.sessionFile,
+    sessionFile: params.key,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
@@ -136,7 +135,7 @@ function scoreDiagnoseCandidatePreselect(params: {
     ? getDiagnosticSessionStateSnapshot({
         sessionId: params.entry.sessionId,
         sessionKey: params.key,
-        ...(params.entry.sessionFile ? { sessionFile: params.entry.sessionFile } : {}),
+        sessionFile: params.key,
       })
     : undefined;
   const activity = useSharedRuntimeEvidence
@@ -145,9 +144,7 @@ function scoreDiagnoseCandidatePreselect(params: {
         sessionKey: params.key,
       })
     : undefined;
-  const lane = useSharedRuntimeEvidence
-    ? getCommandLaneSnapshot(resolveSessionLane(params.key))
-    : undefined;
+  const lane = useSharedRuntimeEvidence ? getDiagnoseLaneSnapshot(params.key) : undefined;
   const hasActiveEvidence =
     gatewayRun.hasActiveRun || embeddedRun.active || Boolean(activity?.activeWorkKind);
   const hasQueuedEvidence = (diagnostic?.queueDepth ?? 0) > 0 || (lane?.queuedCount ?? 0) > 0;
@@ -312,7 +309,6 @@ function listDiagnoseCandidateRows(params: {
 
 function scoreDiagnoseCandidate(params: {
   row: DiagnoseRow;
-  sessionFile?: string;
   context: GatewayRequestContext;
   cfg: OpenClawConfig;
   agentId?: string;
@@ -332,7 +328,7 @@ function scoreDiagnoseCandidate(params: {
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.row.sessionId,
     sessionKey: params.row.key,
-    ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+    sessionFile: params.row.key,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
@@ -343,7 +339,7 @@ function scoreDiagnoseCandidate(params: {
     ? getDiagnosticSessionStateSnapshot({
         sessionId: params.row.sessionId,
         sessionKey: params.row.key,
-        ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+        sessionFile: params.row.key,
       })
     : undefined;
   const activity = useSharedRuntimeEvidence
@@ -352,9 +348,7 @@ function scoreDiagnoseCandidate(params: {
         sessionKey: params.row.key,
       })
     : undefined;
-  const lane = useSharedRuntimeEvidence
-    ? getCommandLaneSnapshot(resolveSessionLane(params.row.key))
-    : undefined;
+  const lane = useSharedRuntimeEvidence ? getDiagnoseLaneSnapshot(params.row.key) : undefined;
   const terminal = isDiagnoseRowTerminal(params.row);
   const hasActiveEvidence =
     gatewayRun.hasActiveRun || embeddedRun.active || Boolean(activity?.activeWorkKind);
@@ -446,7 +440,6 @@ async function resolveDiagnoseTarget(params: {
       candidate,
       score: scoreDiagnoseCandidate({
         row: candidate.row,
-        sessionFile: candidate.entry.sessionFile,
         context,
         cfg,
         agentId: candidate.agentId,

@@ -363,6 +363,11 @@ async function deliverTelegramDirectMessageCompletion(params: {
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
   requesterAbandoned?: boolean;
+  onAbandonmentCheck?: (
+    requesterSessionKey: string,
+    sessionId: string | undefined,
+    agentId: string,
+  ) => void;
   origin?: {
     channel: "telegram";
     to: string;
@@ -385,7 +390,10 @@ async function deliverTelegramDirectMessageCompletion(params: {
           : (params.requesterSessionId ?? "requester-session-telegram"),
       isActive: params.isActive === true,
     }),
-    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
+    isRequesterSessionAbandoned: (checkedSessionKey, sessionId, agentId) => {
+      params.onAbandonmentCheck?.(checkedSessionKey, sessionId, agentId);
+      return params.requesterAbandoned === true;
+    },
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
@@ -2178,6 +2186,25 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
+
+  it("checks fallback abandonment with the requester's resolved agent owner", async () => {
+    const onAbandonmentCheck = vi.fn();
+
+    await deliverTelegramDirectMessageCompletion({
+      callGateway: createPayloadGatewayMock({ text: "child completion output" }),
+      sendMessage: createSendMessageMock(),
+      requesterSessionKey: "agent:work:global",
+      requesterSessionId: "session-shared",
+      requesterAbandoned: true,
+      onAbandonmentCheck,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "scoped fallback completion",
+      }),
+    });
+
+    expect(onAbandonmentCheck).toHaveBeenCalledWith("agent:work:global", "session-shared", "work");
   });
 
   it("uses steer fallback when a completion handoff has no visible output", async () => {

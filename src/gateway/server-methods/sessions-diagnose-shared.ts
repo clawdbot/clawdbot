@@ -2,7 +2,9 @@ import type {
   SessionsDiagnoseParams,
   SessionsDiagnoseResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../../config/sessions.js";
+import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 
@@ -54,6 +56,18 @@ export function isDiagnoseSharedRuntimeEvidenceUnambiguous(
   configuredAgentCount: number,
 ): boolean {
   return !isUnscopedSessionKeySentinel(key) || configuredAgentCount <= 1;
+}
+
+export function getDiagnoseLaneSnapshot(key: string): DiagnoseLane {
+  const snapshot = getCommandLaneSnapshot(resolveSessionLane(key));
+  return {
+    lane: snapshot.lane,
+    queuedCount: snapshot.queuedCount,
+    activeCount: snapshot.activeCount,
+    maxConcurrent: snapshot.maxConcurrent,
+    draining: snapshot.draining,
+    generation: snapshot.generation,
+  };
 }
 
 export function clampDiagnoseTail(value: number | undefined): number {
