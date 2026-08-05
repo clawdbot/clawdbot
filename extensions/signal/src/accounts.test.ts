@@ -263,6 +263,27 @@ describe("resolveSignalAccount", () => {
     });
   });
 
+  it("preserves a canonical same-port path endpoint", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: {
+            kind: "managed-native",
+            url: "http://127.0.0.1:8181/proxy",
+            httpPort: 8181,
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg }).transport).toMatchObject({
+      kind: "managed-native",
+      baseUrl: "http://127.0.0.1:8181/proxy",
+      httpHost: "127.0.0.1",
+      httpPort: 8181,
+    });
+  });
+
   it("rejects an explicit managed port used by its own independent local endpoint", () => {
     const cfg = {
       channels: {

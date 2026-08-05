@@ -79,6 +79,9 @@ export function inferLegacyManagedNativePortFromConnectionUrl(
   if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
     return undefined;
   }
+  if (new URL(transport.url).pathname !== "/") {
+    return undefined;
+  }
   const candidate: SignalManagedNativeTransport = { ...transport, httpPort: localPort };
   return isSignalManagedNativeConnectionUrlForBind(candidate) ? localPort : undefined;
 }
@@ -90,9 +93,9 @@ export function isSignalManagedNativeConnectionUrlForBind(
     return false;
   }
   const connectionUrl = new URL(transport.url);
-  // A path-prefixed URL addresses a local proxy, not signal-cli's root daemon endpoint.
-  // Keep it independent so bind-port allocation never rewrites the proxy URL.
-  if (connectionUrl.pathname !== "/") {
+  // Legacy path-prefixed URLs have no bind port to align; preserve them as independent proxies.
+  // Canonical transports with an explicit port retain endpoint-to-bind alignment semantics.
+  if (connectionUrl.pathname !== "/" && transport.httpPort === undefined) {
     return false;
   }
   // signal-cli's daemon bind is plain HTTP. A local HTTPS URL is an independent proxy endpoint,

@@ -87,9 +87,18 @@ describe("assignSignalManagedNativePort", () => {
     expect(next.httpPort).toBe(8080);
   });
 
-  it("keeps a path-prefixed proxy URL independent on bind-port changes", () => {
+  it("rewrites an explicit canonical path endpoint with its daemon bind", () => {
     const next = assignSignalManagedNativePort(
       managedTransport("http://127.0.0.1:8080/signal", "127.0.0.1"),
+      9090,
+    );
+    expect(next.url).toBe("http://127.0.0.1:9090/signal");
+    expect(next.httpPort).toBe(9090);
+  });
+
+  it("keeps a legacy path-prefixed proxy URL independent", () => {
+    const next = assignSignalManagedNativePort(
+      { kind: "managed-native", url: "http://127.0.0.1:8080/signal" },
       9090,
     );
     expect(next.url).toBe("http://127.0.0.1:8080/signal");
