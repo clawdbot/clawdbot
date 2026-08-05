@@ -5772,23 +5772,8 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-.session-row-host:is(:hover, :focus-within) .session-row-trail,
-.session-row-host:not(.session-row-host--running):is(:hover, :focus-within) .session-row-state {
+.session-row-host:is(:hover, :focus-within) :is(.session-row-trail, .session-row-state) {
   opacity: 0;
-}
-
-/* Active runs outrank hover metadata: keep their spinner beside the row
-   actions so management controls remain usable without hiding progress. */
-.session-row-host--running:is(:hover, :focus-within) .session-row-aside {
-  column-gap: 1px;
-}
-
-.session-row-host--running:is(:hover, :focus-within) .session-row-state {
-  grid-area: 1 / 1;
-}
-
-.session-row-host--running:is(:hover, :focus-within) .session-row-actions {
-  grid-area: 1 / 2;
 }
 
 /* Sidebar rows are now the direct management surface after removing the

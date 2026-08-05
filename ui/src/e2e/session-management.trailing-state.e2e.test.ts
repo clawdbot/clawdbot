@@ -13,7 +13,7 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("keeps an active turn visible beside hover and focus management actions", async () => {
+  it("swaps an active turn spinner for hover and focus management actions", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -39,20 +39,42 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const state = row.locator(".session-row-state");
       const pin = row.getByRole("button", { name: "Pin thread" });
+      const menu = row.getByRole("button", { name: "Open thread menu" });
+      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
+      await expect.poll(() => actionOpacity(state)).toBe("1");
+
       await row.hover();
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
-      await expect.poll(() => actionOpacity(state)).toBe("1");
+      await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
+      await expect.poll(() => actionOpacity(menu)).toBe("1");
 
-      const [stateBounds, pinBounds] = await Promise.all([state.boundingBox(), pin.boundingBox()]);
-      if (!stateBounds || !pinBounds) {
-        throw new Error("Expected visible hovered state and action geometry");
+      const [nameBounds, pinBounds, menuBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__name").boundingBox(),
+        pin.boundingBox(),
+        menu.boundingBox(),
+      ]);
+      if (!nameBounds || !pinBounds || !menuBounds) {
+        throw new Error("Expected visible hovered action geometry");
       }
-      expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
 
+      await page.mouse.move(0, 0);
       await pin.focus();
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
-      await expect.poll(() => actionOpacity(state)).toBe("1");
+      await expect.poll(() => actionOpacity(state)).toBe("0");
+      await expect.poll(() => actionOpacity(pin)).toBe("1");
+      await expect.poll(() => actionOpacity(menu)).toBe("1");
+
+      const [focusedNameBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__name").boundingBox(),
+        pin.boundingBox(),
+        menu.boundingBox(),
+      ]);
+      if (!focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
+        throw new Error("Expected visible focused action geometry");
+      }
+      expect(focusedNameBounds.x + focusedNameBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
+      expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
       await context.close();
     }
@@ -93,6 +115,7 @@ suite.define(() => {
       const pin = row.getByRole("button", { name: "Pin thread" });
       const menu = row.getByRole("button", { name: "Open thread menu" });
       await expect.poll(() => state.locator(".session-row-fork-indicator").isVisible()).toBe(true);
+      await expect.poll(() => state.locator(".session-run-spinner").count()).toBe(0);
 
       const [nameBounds, stateBounds, pinBounds, menuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
@@ -241,19 +264,19 @@ suite.define(() => {
       await row.hover();
       const pin = row.getByRole("button", { name: "Pin thread" });
       const menu = row.getByRole("button", { name: "Open thread menu" });
+      await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
+      await expect.poll(() => actionOpacity(menu)).toBe("1");
 
-      const [nameBounds, stateBounds, pinBounds, menuBounds] = await Promise.all([
+      const [nameBounds, pinBounds, menuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
-        state.boundingBox(),
         pin.boundingBox(),
         menu.boundingBox(),
       ]);
-      if (!nameBounds || !stateBounds || !pinBounds || !menuBounds) {
-        throw new Error("Expected visible combined session state geometry");
+      if (!nameBounds || !pinBounds || !menuBounds) {
+        throw new Error("Expected visible combined session action geometry");
       }
-      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(stateBounds.x);
-      expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
     } finally {
       await context.close();
