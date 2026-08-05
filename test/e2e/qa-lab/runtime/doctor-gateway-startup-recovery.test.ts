@@ -35,21 +35,26 @@ describe("doctor gateway startup recovery producer", () => {
         OPENCLAW_STATE_DIR: "/tmp/host-state",
         OPENCLAW_SUPERVISOR_MODE: "external",
         PATH: "/usr/bin",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/999/bus",
         SUDO_COMMAND: "/usr/bin/sudo openclaw doctor",
         SUDO_GID: "1000",
         SUDO_UID: "1000",
         SUDO_USER: "ambient-admin",
+        XDG_RUNTIME_DIR: "/run/user/999",
       },
       accountHome,
+      1001,
     );
 
     expect(env).toMatchObject({
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1001/bus",
       HOME: accountHome,
       OPENCLAW_CONFIG_PATH: path.join(accountHome, ".openclaw-qa-doctor-policy", "openclaw.json"),
       OPENCLAW_PROFILE: "qa-doctor-policy",
       OPENCLAW_SKIP_CHANNELS: "1",
       OPENCLAW_STATE_DIR: path.join(accountHome, ".openclaw-qa-doctor-policy"),
       PATH: "/usr/bin",
+      XDG_RUNTIME_DIR: "/run/user/1001",
     });
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();

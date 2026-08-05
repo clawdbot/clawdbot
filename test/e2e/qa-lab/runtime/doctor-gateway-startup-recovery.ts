@@ -114,6 +114,9 @@ function commandEnv(
   profile: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
   accountHome: string = os.userInfo().homedir,
+  accountUid: number | undefined = typeof process.geteuid === "function"
+    ? process.geteuid()
+    : undefined,
 ): NodeJS.ProcessEnv {
   const stateDir = path.join(accountHome, `.openclaw-${profile}`);
   const env: NodeJS.ProcessEnv = {
@@ -139,14 +142,21 @@ function commandEnv(
     "OPENCLAW_GATEWAY_PASSWORD",
     "OPENCLAW_SERVICE_REPAIR_POLICY",
     "OPENCLAW_SUPERVISOR_MODE",
+    "DBUS_SESSION_BUS_ADDRESS",
     "SUDO_COMMAND",
     "SUDO_GID",
     "SUDO_UID",
     "SUDO_USER",
     "VITEST",
     "VITEST_WORKER_ID",
+    "XDG_RUNTIME_DIR",
   ]) {
     delete env[key];
+  }
+  if (accountUid !== undefined) {
+    const runtimeDir = `/run/user/${accountUid}`;
+    env.XDG_RUNTIME_DIR = runtimeDir;
+    env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${runtimeDir}/bus`;
   }
   return env;
 }
