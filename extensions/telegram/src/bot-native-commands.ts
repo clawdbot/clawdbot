@@ -1761,17 +1761,26 @@ export const registerTelegramNativeCommands = ({
                     suppression: { reason: "no_visible_result" as const },
                   };
             },
-            onDelivered: (_payload, _info, result) => {
+            onDelivered: (_payload, info, result) => {
+              // Only a final suppression may suppress the fallback; tool/block
+              // suppressions must not erase a later final failure's visible
+              // outcome. A failed final outweighs later suppression.
               const reason = result?.suppression?.reason;
               if (
-                reason === "cancelled_by_reply_payload_sending_hook" ||
-                reason === "empty_after_reply_payload_sending_hook"
+                info.kind === "final" &&
+                deliveryState.failedNonSilent === 0 &&
+                (reason === "cancelled_by_reply_payload_sending_hook" ||
+                  reason === "empty_after_reply_payload_sending_hook")
               ) {
                 deliveryState.intentionallySuppressed = true;
               }
             },
             onError: (err, info) => {
               deliveryState.failedNonSilent += 1;
+              if (info.kind === "final") {
+                // A failed final outweighs any earlier suppression until a final delivers.
+                deliveryState.intentionallySuppressed = false;
+              }
               runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
             },
           },
@@ -1787,7 +1796,7 @@ export const registerTelegramNativeCommands = ({
         if (
           !deliveryState.delivered &&
           !deliveryState.intentionallySuppressed &&
-          deliveryState.skippedNonSilent > 0 &&
+          (deliveryState.skippedNonSilent > 0 || deliveryState.failedNonSilent > 0) &&
           (!turnResult.dispatched ||
             turnResult.dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" ||
             deliveryState.failedNonSilent > 0)
