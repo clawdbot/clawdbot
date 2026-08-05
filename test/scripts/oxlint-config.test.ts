@@ -260,6 +260,12 @@ describe("oxlint config", () => {
           "max-lines": ["error", { max: 1200, skipBlankLines: true, skipComments: true }],
         },
       },
+      {
+        files: ["src/agents/cli-runner/claude-live-session.background-tasks.test.ts"],
+        rules: {
+          "max-lines": ["error", { max: 1100, skipBlankLines: true, skipComments: true }],
+        },
+      },
     ]);
   });
 
