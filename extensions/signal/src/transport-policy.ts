@@ -75,11 +75,27 @@ export function inferLegacyManagedNativePortFromConnectionUrl(
   if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
     return undefined;
   }
+  let connectionUrl: URL;
+  try {
+    connectionUrl = new URL(transport.url);
+  } catch {
+    return undefined;
+  }
+  const authority = transport.url.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1];
+  const hostPort = authority?.slice(authority.lastIndexOf("@") + 1);
+  const hasExplicitPort = hostPort
+    ? hostPort.startsWith("[")
+      ? /^\[[^\]]+\]:\d+$/.test(hostPort)
+      : /:\d+$/.test(hostPort)
+    : false;
+  if (!hasExplicitPort) {
+    return undefined;
+  }
   const localPort = resolveLocalSignalTransportPort(transport.url);
   if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
     return undefined;
   }
-  if (new URL(transport.url).pathname !== "/") {
+  if (connectionUrl.pathname !== "/") {
     return undefined;
   }
   const candidate: SignalManagedNativeTransport = { ...transport, httpPort: localPort };
