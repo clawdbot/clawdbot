@@ -43,7 +43,11 @@ vi.mock("./pw-session.js", () => ({
   getPageForTargetId: stateMocks.getPageForTargetId,
 }));
 
-import { setDeviceViaPlaywright } from "./pw-tools-core.state.js";
+import {
+  setDeviceViaPlaywright,
+  setLocaleViaPlaywright,
+  setTimezoneViaPlaywright,
+} from "./pw-tools-core.state.js";
 
 function createPage() {
   const send = vi.fn(async (_method: string, _params?: Record<string, unknown>) => ({}));
@@ -61,6 +65,29 @@ describe("setDeviceViaPlaywright", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stateMocks.ensurePageState.mockReturnValue({});
+  });
+
+  it("keeps one page-scoped CDP session attached for persistent emulation", async () => {
+    const fixture = createPage();
+    stateMocks.getPageForTargetId.mockResolvedValue(fixture.page);
+
+    await setTimezoneViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      timezoneId: "America/New_York",
+    });
+    await setLocaleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      locale: "en-GB",
+    });
+
+    expect(fixture.newCDPSession).toHaveBeenCalledTimes(1);
+    expect(fixture.detach).not.toHaveBeenCalled();
+    expect(fixture.send.mock.calls).toEqual([
+      ["Emulation.setTimezoneOverride", { timezoneId: "America/New_York" }],
+      ["Emulation.setLocaleOverride", { locale: "en-GB" }],
+    ]);
   });
 
   it("fully replaces iPhone 14 emulation with Desktop Chrome", async () => {
@@ -112,7 +139,8 @@ describe("setDeviceViaPlaywright", () => {
       ],
       ["Emulation.setTouchEmulationEnabled", { enabled: false }],
     ]);
-    expect(fixture.detach).toHaveBeenCalledTimes(2);
+    expect(fixture.newCDPSession).toHaveBeenCalledTimes(1);
+    expect(fixture.detach).not.toHaveBeenCalled();
   });
 
   it("derives mobile orientation from the effective screen instead of the viewport", async () => {

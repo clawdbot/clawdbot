@@ -2,15 +2,15 @@
  * Browser context and emulation state helpers for Playwright-backed tools.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Page } from "playwright-core";
+import type { CDPSession, Page } from "playwright-core";
 import { playwrightCore } from "./playwright-core.runtime.js";
+import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 const { devices: playwrightDevices } = playwrightCore;
-const deviceTransitionTails = new WeakMap<Page, Promise<void>>();
 
 type DeviceSize = { width: number; height: number };
+type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 
 type PlaywrightDeviceDescriptor = {
   userAgent: string;
@@ -21,13 +21,50 @@ type PlaywrightDeviceDescriptor = {
   hasTouch: boolean;
 };
 
+function resolvePageEmulationState(state: PageState): NonNullable<PageState["emulation"]> {
+  return (state.emulation ??= {});
+}
+
+function resolvePageEmulationSession(page: Page, state: PageState): Promise<CDPSession> {
+  const emulation = resolvePageEmulationState(state);
+  if (emulation.session) {
+    return emulation.session;
+  }
+  const pending = page.context().newCDPSession(page);
+  emulation.session = pending;
+  void pending.catch(() => {
+    if (emulation.session === pending) {
+      delete emulation.session;
+    }
+  });
+  return pending;
+}
+
+async function withPageEmulationCdpClient<T>(params: {
+  page: Page;
+  state: PageState;
+  run: (send: PageCdpSend) => Promise<T>;
+}): Promise<T> {
+  const session = await resolvePageEmulationSession(params.page, params.state);
+  return await params.run((method, values) =>
+    (
+      session.send as unknown as (
+        method: string,
+        values?: Record<string, unknown>,
+      ) => Promise<unknown>
+    )(method, values),
+  );
+}
+
 async function runDeviceTransition(params: {
   page: Page;
+  state: PageState;
   signal?: AbortSignal;
   run: () => Promise<void>;
 }): Promise<void> {
   params.signal?.throwIfAborted();
-  const previous = deviceTransitionTails.get(params.page) ?? Promise.resolve();
+  const emulation = resolvePageEmulationState(params.state);
+  const previous = emulation.deviceTransitionTail ?? Promise.resolve();
   const transition = previous
     .catch(() => {})
     .then(async () => {
@@ -37,12 +74,12 @@ async function runDeviceTransition(params: {
       await params.run();
     });
   const tail = transition.catch(() => {});
-  deviceTransitionTails.set(params.page, tail);
+  emulation.deviceTransitionTail = tail;
   try {
     await transition;
   } finally {
-    if (deviceTransitionTails.get(params.page) === tail) {
-      deviceTransitionTails.delete(params.page);
+    if (emulation.deviceTransitionTail === tail) {
+      delete emulation.deviceTransitionTail;
     }
   }
 }
@@ -149,16 +186,15 @@ export async function setLocaleViaPlaywright(opts: {
   locale: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const pageState = ensurePageState(page);
   const locale = normalizeOptionalString(opts.locale) ?? "";
   if (!locale) {
     throw new Error("locale is required");
   }
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
+  await withPageEmulationCdpClient({
     page,
-    targetId: opts.targetId,
-    fn: async (send) => {
+    state: pageState,
+    run: async (send) => {
       try {
         await send("Emulation.setLocaleOverride", { locale });
       } catch (err) {
@@ -178,16 +214,15 @@ export async function setTimezoneViaPlaywright(opts: {
   timezoneId: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const pageState = ensurePageState(page);
   const timezoneId = normalizeOptionalString(opts.timezoneId) ?? "";
   if (!timezoneId) {
     throw new Error("timezoneId is required");
   }
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
+  await withPageEmulationCdpClient({
     page,
-    targetId: opts.targetId,
-    fn: async (send) => {
+    state: pageState,
+    run: async (send) => {
       try {
         await send("Emulation.setTimezoneOverride", { timezoneId });
       } catch (err) {
@@ -212,7 +247,7 @@ export async function setDeviceViaPlaywright(opts: {
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const pageState = ensurePageState(page);
   const name = normalizeOptionalString(opts.name) ?? "";
   if (!name) {
     throw new Error("device name is required");
@@ -226,6 +261,7 @@ export async function setDeviceViaPlaywright(opts: {
 
   await runDeviceTransition({
     page,
+    state: pageState,
     signal: opts.signal,
     run: async () => {
       const screen = descriptor.screen ?? descriptor.viewport;
@@ -238,11 +274,10 @@ export async function setDeviceViaPlaywright(opts: {
         height: descriptor.viewport.height,
       });
 
-      await withPageScopedCdpClient({
-        cdpUrl: opts.cdpUrl,
+      await withPageEmulationCdpClient({
         page,
-        targetId: opts.targetId,
-        fn: async (send) => {
+        state: pageState,
+        run: async (send) => {
           await send("Emulation.setUserAgentOverride", {
             userAgent: descriptor.userAgent,
           });

@@ -159,6 +159,21 @@ assert_device_state() {
   ' "$@"
 }
 
+profile evaluate --fn '() => { const meta = document.createElement("meta"); meta.name = "viewport"; meta.content = "width=device-width, initial-scale=1"; document.head.append(meta); return meta.content; }' \
+  >/tmp/profile-viewport-meta.json
+
+profile set timezone America/New_York >/tmp/profile-timezone.json
+profile set locale en-GB >/tmp/profile-locale.json
+profile evaluate --fn '() => ({ locale: Intl.DateTimeFormat().resolvedOptions().locale, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })' \
+  >/tmp/profile-locale-timezone-state.json
+node -e '
+  const fs = require("node:fs");
+  const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).result;
+  if (state?.locale !== "en-GB" || state?.timeZone !== "America/New_York") {
+    throw new Error(`locale/timezone state mismatch: ${JSON.stringify(state)}`);
+  }
+' /tmp/profile-locale-timezone-state.json
+
 profile set device "iPhone 14" >/tmp/profile-device-phone.json
 profile evaluate --fn '() => ({ userAgent: navigator.userAgent, width: innerWidth, height: innerHeight, dpr: devicePixelRatio, screenWidth: screen.width, screenHeight: screen.height, touchPoints: navigator.maxTouchPoints, orientation: screen.orientation.type })' \
   >/tmp/profile-device-phone-state.json
