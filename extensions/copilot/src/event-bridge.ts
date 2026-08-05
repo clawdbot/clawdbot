@@ -4,6 +4,7 @@ import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildAssistantMessage,
   hasOwnKeys,
@@ -254,7 +255,7 @@ export function attachEventBridge(
       });
     deltaChain = deltaQueue.then(() => {
       if (firstDeltaError !== undefined) {
-        throw toLintErrorObject(firstDeltaError, "Non-Error thrown");
+        throw toErrorObject(firstDeltaError, "Non-Error thrown");
       }
     });
     void deltaChain.catch(() => undefined);
@@ -985,18 +986,4 @@ function registerListener<K extends SessionEventType>(
   unsubscribeFns.push(() => {
     session.off?.(eventType, handler as (...args: unknown[]) => void);
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

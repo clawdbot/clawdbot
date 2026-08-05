@@ -905,6 +905,9 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    // Symlinked assets that resolve inside the root are served; fs-safe still
+    // rejects hops whose canonical target escapes the control-ui root.
+    rejectSymlinks: false,
     rejectHardlinks,
   });
   if (!opened.ok) {

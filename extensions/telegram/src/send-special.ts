@@ -1,29 +1,17 @@
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import {
   resolveTelegramApiContext,
   withTelegramApiContextLease,
   type TelegramApiContext,
-  type TelegramApiOverride,
 } from "./send-context.js";
-import type { TelegramSendResult } from "./send-message-types.js";
+import type {
+  TelegramSendOpts,
+  TelegramSendResult,
+  TelegramThreadedSendOpts,
+} from "./send-message-types.js";
 import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
-import { normalizePollInput, type OpenClawConfig, type PollInput } from "./send.runtime.js";
+import { normalizePollInput, type PollInput } from "./send.runtime.js";
 
 type TelegramSendPollParams = Parameters<TelegramApiContext["api"]["sendPoll"]>[3];
-
-type TelegramStickerOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  api?: TelegramApiOverride;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
-  /** Message ID to reply to (for threading) */
-  replyToMessageId?: number;
-  /** Forum topic thread ID (for forum supergroups) */
-  messageThreadId?: number;
-};
 
 /**
  * Send a sticker to a Telegram chat by file_id.
@@ -34,7 +22,7 @@ type TelegramStickerOpts = {
 export async function sendStickerTelegram(
   to: string,
   fileId: string,
-  opts: TelegramStickerOpts,
+  opts: TelegramThreadedSendOpts,
 ): Promise<TelegramSendResult> {
   if (!fileId?.trim()) {
     throw new Error("Telegram sticker file_id is required");
@@ -50,7 +38,7 @@ export async function sendStickerTelegram(
 async function sendStickerTelegramWithContext(
   to: string,
   fileId: string,
-  opts: TelegramStickerOpts,
+  opts: TelegramThreadedSendOpts,
   context: TelegramApiContext,
 ): Promise<TelegramSendResult> {
   const { api } = context;
@@ -79,23 +67,11 @@ async function sendStickerTelegramWithContext(
   });
 }
 
-type TelegramPollOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  api?: TelegramApiOverride;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
-  /** Message ID to reply to (for threading) */
-  replyToMessageId?: number;
-  /** Forum topic thread ID (for forum supergroups) */
-  messageThreadId?: number;
-  /** Send message silently (no notification). Defaults to false. */
-  silent?: boolean;
-  /** Whether votes are anonymous. Defaults to true (Telegram default). */
-  isAnonymous?: boolean;
-};
+type TelegramPollOpts = TelegramThreadedSendOpts &
+  Pick<TelegramSendOpts, "silent"> & {
+    /** Whether votes are anonymous. Defaults to true (Telegram default). */
+    isAnonymous?: boolean;
+  };
 
 /**
  * Send a poll to a Telegram chat.

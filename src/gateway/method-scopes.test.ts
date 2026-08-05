@@ -43,6 +43,7 @@ describe("method scope resolution", () => {
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
+    ["audit.run.inspect", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
     ["users.self", ["operator.write"]],
@@ -634,6 +635,16 @@ describe("operator scope authorization", () => {
     ["config.patch", ["operator.admin"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
+  });
+
+  it("authorizes execution identity inspection with operator.read and rejects unrelated scopes", () => {
+    expect(authorizeOperatorScopesForMethod("audit.run.inspect", ["operator.read"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("audit.run.inspect", ["operator.approvals"])).toEqual({
+      allowed: false,
+      missingScope: "operator.read",
+    });
   });
 
   it("requires operator.write for write methods", () => {

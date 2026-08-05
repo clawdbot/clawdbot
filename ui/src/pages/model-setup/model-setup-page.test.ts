@@ -72,6 +72,7 @@ function createContext() {
       auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
       features: {
         methods: [
+          "config.set",
           "openclaw.setup.detect",
           "openclaw.setup.verify",
           "openclaw.setup.activate",

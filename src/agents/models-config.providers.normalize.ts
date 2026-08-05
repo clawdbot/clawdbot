@@ -2,7 +2,7 @@
  * Normalizes configured provider model rows for runtime/discovery use.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import {
@@ -124,6 +124,7 @@ export function normalizeProviders(params: {
   sourceSecretDefaults?: SecretDefaults;
   secretRefManagedProviders?: Set<string>;
   manifestPlugins?: ProviderModelNormalizationOptions["manifestPlugins"];
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ModelsConfig["providers"] {
   const { providers } = params;
   if (!providers) {
@@ -198,7 +199,7 @@ export function normalizeProviders(params: {
       );
     const profileApiKey = needsProfileApiKey ? resolveProfileApiKey(normalizedKey) : undefined;
     const providerApiKeyResolver = needsProfileApiKey
-      ? resolveProviderConfigApiKeyResolver(normalizedKey)
+      ? resolveProviderConfigApiKeyResolver(normalizedKey, undefined, params.manifestRegistry)
       : undefined;
     const providerWithApiKey = resolveMissingProviderApiKey({
       providerKey: normalizedKey,
@@ -216,6 +217,7 @@ export function normalizeProviders(params: {
     const providerSpecificNormalized = normalizeProviderSpecificConfig(
       normalizedKey,
       normalizedProvider,
+      params.manifestRegistry,
     );
     if (providerSpecificNormalized !== normalizedProvider) {
       mutated = true;

@@ -31,7 +31,7 @@ require the `node` role.
 
 | Scope                   | Meaning                                                                                                                                                       |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`         | Read-only status, lists, catalog, logs, session reads, and other non-mutating calls.                                                                          |
+| `operator.read`         | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
 | `operator.write`        | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
 | `operator.admin`        | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
 | `operator.pairing`      | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
@@ -77,6 +77,13 @@ Session mutation RPCs are authorized by their negotiated operator scopes,
 independent of the connecting client's `client.id` or `client.mode`. Client
 identity can still affect connection and device-auth policy, but it neither
 grants nor removes session mutation authority.
+
+`audit.run.inspect` intentionally uses `operator.read`. Every client with that
+scope in a Gateway operator domain may receive the retained execution-identity
+context, including bounded pseudonymized references and secret-redacted display
+labels. `operator.read` is not a per-user or hostile multi-tenant privacy
+boundary. Operators who must keep this data separate need separate Gateway
+trust domains.
 
 ## Device pairing approvals
 

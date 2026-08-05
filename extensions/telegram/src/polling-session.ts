@@ -314,6 +314,7 @@ export class TelegramPollingSession {
         accountId: this.opts.accountId,
         botInfo: this.opts.botInfo,
         ...(botApiAbortSignal ? { fetchAbortSignal: botApiAbortSignal } : {}),
+        ...(this.opts.abortSignal ? { accountAbortSignal: this.opts.abortSignal } : {}),
         mediaAbortSignal: cycleAbortSignal,
         minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         ...(updateOffset ? { updateOffset } : {}),

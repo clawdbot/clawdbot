@@ -13,28 +13,18 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket, { type RawData } from "ws";
-import { XAI_BASE_URL } from "./api.js";
+import { XAI_BASE_URL } from "./model-definitions.js";
+import {
+  isValidXaiTtsVoice,
+  normalizeXaiLanguageCode,
+  normalizeXaiTtsBaseUrl,
+} from "./speech-provider-metadata.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
-export { XAI_BASE_URL };
 
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 const XAI_TTS_VOICE_LIST_TIMEOUT_MS = 30_000;
 const XAI_TTS_VOICE_LIST_MAX_BYTES = 1024 * 1024;
 const XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS = 15_000;
-export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
-
-export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return XAI_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
-
-export function isValidXaiTtsVoice(voice: string): boolean {
-  return trimToUndefined(voice) !== undefined;
-}
-
 export async function listXaiTtsVoices(params: {
   apiKey: string;
   baseUrl?: string;
@@ -80,20 +70,6 @@ export async function listXaiTtsVoices(params: {
   } finally {
     await release();
   }
-}
-
-export function normalizeXaiLanguageCode(value: unknown): string | undefined {
-  const trimmed = trimToUndefined(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "auto" || /^[a-z]{2,3}(?:-[a-z]{2,4})?$/.test(normalized)) {
-    return normalized;
-  }
-  throw new Error(
-    `xAI language must be "auto" or a BCP-47 tag (e.g. "en", "pt-br", "zh-cn"); got: ${normalized}`,
-  );
 }
 
 type XaiTtsResponseFormat = "mp3" | "wav" | "pcm" | "mulaw" | "alaw";

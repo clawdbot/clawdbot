@@ -2157,10 +2157,98 @@ describe("createTelegramBot", () => {
     },
   );
 
+  describe("model picker auth profile compatibility", () => {
+    it.each([
+      {
+        name: "preserves a compatible auth profile on a same-provider picker switch",
+        callbackData: "mdl_sel_openai/gpt-4.1",
+        expectedProfile: "team:prod",
+      },
+      {
+        name: "clears an incompatible auth profile on a cross-provider picker switch",
+        callbackData: "mdl_sel_anthropic/claude-sonnet-4-5",
+        expectedProfile: undefined,
+      },
+    ])("$name", async ({ callbackData, expectedProfile }) => {
+      onSpy.mockClear();
+      editMessageTextSpy.mockClear();
+
+      const storePath = createTelegramTestStorePath("model-auth-profile");
+      const config = {
+        auth: {
+          profiles: { "team:prod": { provider: "openai", mode: "api_key" } },
+        },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5",
+            models: {
+              "openai/gpt-4.1": {},
+              "openai/gpt-5": {},
+              "anthropic/claude-sonnet-4-5": {},
+            },
+          },
+        },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        session: { store: storePath },
+      } satisfies OpenClawConfig;
+      const route = resolveTelegramConversationRoute({
+        cfg: config,
+        accountId: "default",
+        chatId: 1234,
+        isGroup: false,
+        senderId: 9,
+      }).route;
+      const sessionKey = resolveTelegramConversationBaseSessionKey({
+        cfg: config,
+        route,
+        chatId: 1234,
+        isGroup: false,
+        senderId: 9,
+      });
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "model-auth-profile",
+          updatedAt: 1,
+          providerOverride: "openai",
+          modelOverride: "gpt-4o",
+          authProfileOverride: "team:prod",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 2,
+        },
+      });
+      const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
+      buildModelsProviderDataMock.mockResolvedValueOnce({
+        byProvider: new Map([
+          ["openai", new Set(["gpt-4.1", "gpt-5"])],
+          ["anthropic", new Set(["claude-sonnet-4-5"])],
+        ]),
+        providers: ["anthropic", "openai"],
+        resolvedDefault: { provider: "openai", model: "gpt-5" },
+        modelNames: new Map(),
+      });
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      await getTelegramCallbackHandlerForTests()(
+        createTelegramCallbackContext({
+          id: `cbq-model-auth-${expectedProfile ? "same" : "cross"}`,
+          data: callbackData,
+        }),
+      );
+
+      const entry = readOnlySessionEntry(storePath);
+      expect(entry?.authProfileOverride).toBe(expectedProfile);
+      expect(entry?.authProfileOverrideSource).toBe(expectedProfile ? "user" : undefined);
+      expect(entry?.authProfileOverrideCompactionCount).toBe(expectedProfile ? 2 : undefined);
+      expect(entry?.liveModelSwitchPending).toBe(true);
+    });
+  });
+
   it("renders model callback lists with configured display names", async () => {
     const storePath = createTelegramTestStorePath("model-display-names");
-    const buildModelsProviderDataMock =
-      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
     buildModelsProviderDataMock.mockResolvedValueOnce({
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],

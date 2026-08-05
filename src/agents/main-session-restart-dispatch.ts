@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -418,6 +420,7 @@ export async function resumeMainSession(params: {
   }
   const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
+  const executionIdentityCollectionEnabled = isExecutionIdentityCollectionEnabled(params.cfg);
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   let reservation: MainSessionRecoveryReservation | undefined;
@@ -445,6 +448,12 @@ export async function resumeMainSession(params: {
         now: Date.now(),
         observation: params.observation,
         runId: recoveryRunId,
+        executionIdentity: executionIdentityCollectionEnabled
+          ? {
+              state: "enabled",
+              token: createExecutionIdentityAdmissionToken(recoveryRunId),
+            }
+          : { state: "disabled" },
       },
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
@@ -510,6 +519,12 @@ export async function resumeMainSession(params: {
       expectedExistingSessionId: params.entry.sessionId,
       ...(params.sessionWorkAdmissionHandoffId
         ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
+        : {}),
+      ...(reservation.executionIdentityAdmission
+        ? {
+            internalExecutionIdentityRetry:
+              reservation.executionIdentityAdmission.kind === "retry-reference",
+          }
         : {}),
       idempotencyKey: recoveryRunId,
       deliver:

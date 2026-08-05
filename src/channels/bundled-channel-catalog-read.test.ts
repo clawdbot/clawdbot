@@ -39,7 +39,10 @@ vi.mock("../infra/openclaw-root.js", () => ({
 
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
+import {
+  findBundledChannelCatalogMetadata,
+  listBundledChannelCatalogEntries,
+} from "./bundled-channel-catalog-read.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
 const tempDirs: string[] = [];
@@ -126,6 +129,12 @@ function seedGeneratedChannelCatalog(
     label: string;
     docsPath: string;
     blurb: string;
+    doctorCapabilities?: {
+      dmAllowFromMode?: "topOnly" | "nestedOnly";
+      groupModel?: "sender" | "route" | "hybrid";
+      groupAllowFromFallbackToAllowFrom?: boolean;
+      warnOnEmptyGroupSenderAllowlist?: boolean;
+    };
   },
 ): void {
   const { packageName, ...channel } = params;
@@ -220,6 +229,31 @@ describe("listBundledChannelCatalogEntries", () => {
     const ids = new Set(entries.map((entry) => entry.id));
     expect(ids.has("qqbot")).toBe(true);
     expect(ids.has("telegram")).toBe(true);
+  });
+
+  it("finds doctor capabilities from the generated catalog when the package is excluded", () => {
+    const root = seedRoot("bcr-generated-doctor-");
+    useBundledPluginsDir(undefined);
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/discord",
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "downloadable channel",
+      doctorCapabilities: {
+        dmAllowFromMode: "topOnly",
+        groupModel: "route",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: false,
+      },
+    });
+
+    expect(findBundledChannelCatalogMetadata("Discord")?.doctorCapabilities).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    });
   });
 
   it("keeps bundled package metadata when generated catalog entries are stale", () => {
