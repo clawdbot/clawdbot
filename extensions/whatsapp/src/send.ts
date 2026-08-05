@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements send behavior.
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OutboundLocation } from "openclaw/plugin-sdk/core";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
@@ -389,48 +390,103 @@ export async function sendReactionWhatsApp(
   }
 }
 
-export async function sendPollWhatsApp(
-  to: string,
-  poll: PollInput,
-  options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
-): Promise<{ messageId: string; toJid: string }> {
+type WhatsAppStructuredSendOptions = {
+  verbose: boolean;
+  accountId?: string;
+  cfg: OpenClawConfig;
+};
+
+async function sendStructuredWhatsApp(params: {
+  to: string;
+  options: WhatsAppStructuredSendOptions;
+  configOperation: string;
+  kind: "location" | "poll";
+  logFields?: Record<string, unknown>;
+  send: (active: ActiveWebListener, accountId: string) => Promise<WhatsAppSendResult>;
+}): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp poll");
-  const { listener: active } = requireOutboundActiveWebListener({
+  const cfg = requireRuntimeConfig(params.options.cfg, params.configOperation);
+  const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
     cfg,
-    accountId: options.accountId,
+    accountId: params.options.accountId,
   });
-  const redactedTo = redactIdentifier(to);
+  const redactedTo = redactIdentifier(params.to);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
     to: redactedTo,
   });
   try {
-    const jid = toWhatsappJid(to);
+    const jid = toWhatsappJid(params.to);
     const redactedJid = redactIdentifier(jid);
-    const normalized = normalizePollInput(poll, { maxOptions: 12 });
-    outboundLog.info(`Sending poll -> ${redactedJid}`);
-    logger.info(
-      {
-        jid: redactedJid,
-        optionCount: normalized.options.length,
-        maxSelections: normalized.maxSelections,
-      },
-      "sending poll",
-    );
+    outboundLog.info(`Sending ${params.kind} -> ${redactedJid}`);
+    logger.info({ jid: redactedJid, ...params.logFields }, `sending ${params.kind}`);
     if (!isWhatsAppNewsletterJid(jid)) {
-      await active.assertSendReady?.(to);
+      await active.assertSendReady?.(params.to);
     }
-    const result = requireWhatsAppAcceptedSendResult(await active.sendPoll(to, normalized));
+    const result = requireWhatsAppAcceptedSendResult(await params.send(active, resolvedAccountId));
     const messageId = result.messageId;
     const durationMs = Date.now() - startedAt;
-    outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
-    logger.info({ jid: redactedJid, messageId }, "sent poll");
+    outboundLog.info(`Sent ${params.kind} ${messageId} -> ${redactedJid} (${durationMs}ms)`);
+    logger.info({ jid: redactedJid, messageId }, `sent ${params.kind}`);
     return { messageId, toJid: resolveActualSentRemoteJid(result, jid) };
   } catch (err) {
-    logger.error({ err: String(err), to: redactedTo }, "failed to send poll via web session");
+    logger.error(
+      { err: String(err), to: redactedTo },
+      `failed to send ${params.kind} via web session`,
+    );
     throw err;
   }
+}
+
+export async function sendLocationWhatsApp(
+  to: string,
+  location: OutboundLocation,
+  options: WhatsAppStructuredSendOptions & { quotedMessageKey?: WhatsAppQuotedMessageKey },
+): Promise<{ messageId: string; toJid: string }> {
+  return await sendStructuredWhatsApp({
+    to,
+    options,
+    configOperation: "WhatsApp location send",
+    kind: "location",
+    send: async (active, resolvedAccountId) => {
+      const sendOptions =
+        options.quotedMessageKey || options.accountId?.trim()
+          ? {
+              ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
+              ...(options.accountId?.trim() ? { accountId: resolvedAccountId } : {}),
+            }
+          : undefined;
+      const locationPayload = {
+        degreesLatitude: location.latitude,
+        degreesLongitude: location.longitude,
+        accuracyInMeters: location.accuracy,
+        name: location.name,
+        address: location.address,
+      };
+      return sendOptions
+        ? await active.sendLocation(to, locationPayload, sendOptions)
+        : await active.sendLocation(to, locationPayload);
+    },
+  });
+}
+
+export async function sendPollWhatsApp(
+  to: string,
+  poll: PollInput,
+  options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
+): Promise<{ messageId: string; toJid: string }> {
+  const normalized = normalizePollInput(poll, { maxOptions: 12 });
+  return await sendStructuredWhatsApp({
+    to,
+    options,
+    configOperation: "WhatsApp poll",
+    kind: "poll",
+    logFields: {
+      optionCount: normalized.options.length,
+      maxSelections: normalized.maxSelections,
+    },
+    send: async (active) => await active.sendPoll(to, normalized),
+  });
 }

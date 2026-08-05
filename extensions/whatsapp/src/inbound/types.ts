@@ -28,6 +28,14 @@ export type ActiveWebSendOptions = {
   asDocument?: boolean;
 };
 
+export type WhatsAppStructuredLocationSend = {
+  accuracyInMeters?: number;
+  address?: string;
+  degreesLatitude: number;
+  degreesLongitude: number;
+  name?: string;
+};
+
 export type ActiveWebListener = {
   assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
@@ -38,6 +46,11 @@ export type ActiveWebListener = {
     options?: ActiveWebSendOptions,
   ) => Promise<WhatsAppSendResult>;
   sendPoll: (to: string, poll: PollInput) => Promise<WhatsAppSendResult>;
+  sendLocation: (
+    to: string,
+    location: WhatsAppStructuredLocationSend,
+    options?: ActiveWebSendOptions,
+  ) => Promise<WhatsAppSendResult>;
   sendReaction: (
     chatJid: string,
     messageId: string,

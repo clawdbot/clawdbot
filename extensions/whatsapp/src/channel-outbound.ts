@@ -4,7 +4,10 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import type {
+  ChannelOutboundAdapter,
+  OutboundDeliveryResult,
+} from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
@@ -12,7 +15,7 @@ import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+import { sendLocationWhatsApp, sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 const loadWhatsAppApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
@@ -65,6 +68,7 @@ export const whatsappChannelOutbound = {
         ...options,
         preserveLeadingWhitespace: true,
       }),
+    sendLocationWhatsApp,
     sendPollWhatsApp,
     shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
     resolveTarget: ({ to, allowFrom, mode }) =>
@@ -81,10 +85,10 @@ export const whatsappChannelOutbound = {
 };
 
 function toWhatsAppMessageSendResult(
-  result: Awaited<ReturnType<NonNullable<typeof whatsappChannelOutbound.sendText>>>,
+  result: OutboundDeliveryResult,
   replyToId?: string | null,
+  kind: "text" | "card" = "text",
 ): ChannelMessageSendResult {
-  const source = result as typeof result & { toJid?: string };
   const receipt =
     result.receipt ??
     createMessageReceiptFromOutboundResults({
@@ -93,11 +97,11 @@ function toWhatsAppMessageSendResult(
             {
               channel: "whatsapp",
               messageId: result.messageId,
-              toJid: source.toJid,
+              toJid: result.toJid,
             },
           ]
         : [],
-      kind: "text",
+      kind,
       ...(replyToId ? { replyToId } : {}),
     });
   return {
@@ -111,6 +115,7 @@ export const whatsappMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
+      payload: true,
       replyTo: true,
       messageSendingHooks: true,
     },
@@ -126,6 +131,17 @@ export const whatsappMessageAdapter = defineChannelMessageAdapter({
           : undefined,
       });
       return toWhatsAppMessageSendResult(result, ctx.replyToId);
+    },
+    payload: async ({ onDeliveryResult, ...ctx }) => {
+      const result = await whatsappChannelOutbound.sendPayload!({
+        ...ctx,
+        onDeliveryResult: onDeliveryResult
+          ? async (progress) => {
+              await onDeliveryResult(toWhatsAppMessageSendResult(progress, ctx.replyToId, "card"));
+            }
+          : undefined,
+      });
+      return toWhatsAppMessageSendResult(result, ctx.replyToId, "card");
     },
   },
 });

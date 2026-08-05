@@ -100,6 +100,7 @@ describe("WhatsApp delivery recovery", () => {
       );
       const listener: ActiveWebListener = {
         sendComposingTo: vi.fn(async () => {}),
+        sendLocation: vi.fn(async () => createAcceptedWhatsAppSendResult("location", "location")),
         sendMessage,
         sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll")),
         sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction")),

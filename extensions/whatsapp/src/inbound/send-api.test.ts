@@ -272,19 +272,41 @@ describe("createWebSendApi", () => {
   });
 
   it("sends structured location messages through the canonical send path", async () => {
-    const res = await api.sendLocation("+1555", {
-      degreesLatitude: 37.7749,
-      degreesLongitude: -122.4194,
-      name: "QA Location",
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      location: {
-        address: undefined,
+    const res = await api.sendLocation(
+      "+1555",
+      {
+        accuracyInMeters: 8,
         degreesLatitude: 37.7749,
         degreesLongitude: -122.4194,
         name: "QA Location",
       },
+      {
+        quotedMessageKey: {
+          id: "quoted-location",
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: false,
+          messageText: "Where?",
+        },
+      },
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      {
+        location: {
+          address: undefined,
+          accuracyInMeters: 8,
+          degreesLatitude: 37.7749,
+          degreesLongitude: -122.4194,
+          name: "QA Location",
+        },
+      },
+      expect.any(Object),
+    );
+    const quoted = requireRecord(requireSendOptions().quoted, "quoted location");
+    expectRecordFields(requireRecord(quoted.key, "quoted location key"), {
+      remoteJid: "1555@s.whatsapp.net",
+      id: "quoted-location",
     });
     expectSendResultFields(res, {
       kind: "location",

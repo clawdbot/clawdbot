@@ -10,11 +10,13 @@ import { whatsappApprovalCapability } from "./approval-native.js";
 import { cacheInboundMessageMeta } from "./quoted-message.js";
 
 const hoisted = vi.hoisted(() => ({
+  sendLocationWhatsApp: vi.fn(async () => ({ messageId: "location-1", toJid: "jid" })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" })),
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "jid" })),
 }));
 
 vi.mock("./send.js", () => ({
+  sendLocationWhatsApp: hoisted.sendLocationWhatsApp,
   sendMessageWhatsApp: hoisted.sendMessageWhatsApp,
   sendPollWhatsApp: hoisted.sendPollWhatsApp,
 }));

@@ -67,6 +67,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
 
 describe("WhatsApp gateway voice delivery", () => {
   const sendComposingTo = vi.fn(async () => {});
+  const sendLocation = vi.fn(async () =>
+    createAcceptedWhatsAppSendResult("location", "location123"),
+  );
   const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));
   const sendPoll = vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll123"));
   const sendReaction = vi.fn(async () =>
@@ -86,6 +89,7 @@ describe("WhatsApp gateway voice delivery", () => {
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("default", {
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
@@ -155,6 +159,7 @@ describe("WhatsApp gateway voice delivery", () => {
     );
     hoisted.controllerListeners.set("default", {
       sendComposingTo,
+      sendLocation,
       sendMessage: listenerSendMessage,
       sendPoll,
       sendReaction,

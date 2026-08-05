@@ -22,18 +22,11 @@ import {
   type WhatsAppSendKind,
   type WhatsAppSendResult,
 } from "./send-result.js";
-import type { ActiveWebSendOptions } from "./types.js";
+import type { ActiveWebSendOptions, WhatsAppStructuredLocationSend } from "./types.js";
 
 type StructuredContactSend = {
   displayName: string;
   vcard: string;
-};
-
-type StructuredLocationSend = {
-  address?: string;
-  degreesLatitude: number;
-  degreesLongitude: number;
-  name?: string;
 };
 
 type StructuredStickerSendOptions = {
@@ -101,10 +94,28 @@ export function createWebSendApi(params: {
     to: string,
     content: AnyMessageContent,
     kind: WhatsAppSendKind,
+    sendOptions?: ActiveWebSendOptions,
   ): Promise<WhatsAppSendResult> => {
     const jid = resolveOutboundJid(to);
-    return await runAcceptedSend(kind, params.defaultAccountId, async (capture) => {
-      capture(await params.sock.sendMessage(jid, content), kind);
+    const quotedOpts = buildQuotedMessageOptions({
+      messageId: sendOptions?.quotedMessageKey?.id,
+      remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
+      fromMe: sendOptions?.quotedMessageKey?.fromMe,
+      participant: sendOptions?.quotedMessageKey?.participant,
+      destinationJid: jid,
+      requestedJid: toWhatsappJid(to),
+      lookupTargetJid: sendOptions?.quotedMessageKey?.lookupTargetJid,
+      messageText: sendOptions?.quotedMessageKey?.messageText,
+      media: sendOptions?.quotedMessageKey?.media,
+    });
+    const accountId = sendOptions?.accountId ?? params.defaultAccountId;
+    return await runAcceptedSend(kind, accountId, async (capture) => {
+      capture(
+        quotedOpts
+          ? await params.sock.sendMessage(jid, content, quotedOpts)
+          : await params.sock.sendMessage(jid, content),
+        kind,
+      );
     });
   };
 
@@ -239,7 +250,8 @@ export function createWebSendApi(params: {
     },
     sendLocation: async (
       to: string,
-      location: StructuredLocationSend,
+      location: WhatsAppStructuredLocationSend,
+      sendOptions?: ActiveWebSendOptions,
     ): Promise<WhatsAppSendResult> => {
       return await sendStructuredMessage(
         to,
@@ -247,11 +259,13 @@ export function createWebSendApi(params: {
           location: {
             degreesLatitude: location.degreesLatitude,
             degreesLongitude: location.degreesLongitude,
+            accuracyInMeters: location.accuracyInMeters,
             name: location.name,
             address: location.address,
           },
         } as AnyMessageContent,
         "location",
+        sendOptions,
       );
     },
     sendSticker: async (

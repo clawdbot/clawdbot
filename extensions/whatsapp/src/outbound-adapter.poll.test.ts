@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
+  sendLocationWhatsApp: vi.fn(),
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "1555@s.whatsapp.net" })),
   sendReactionWhatsApp: vi.fn(async () => undefined),
 }));
@@ -18,6 +19,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("./send.js", () => ({
+  sendLocationWhatsApp: hoisted.sendLocationWhatsApp,
   sendPollWhatsApp: hoisted.sendPollWhatsApp,
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));

@@ -166,6 +166,7 @@ export async function attachWebInboxToSocket(
     signalClose: socketSession.signalClose,
     assertSendReady: socketSession.assertSendReady,
     sendComposingTo: sendApi.sendComposingTo,
+    sendLocation: sendApi.sendLocation,
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,
     sendReaction: sendApi.sendReaction,
