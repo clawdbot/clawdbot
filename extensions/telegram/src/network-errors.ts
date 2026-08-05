@@ -305,6 +305,10 @@ export function isTelegramClientRejection(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);
 }
 
+export function isTelegramBadRequestError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code === 400);
+}
+
 export function isRecoverableTelegramNetworkError(
   err: unknown,
   options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},

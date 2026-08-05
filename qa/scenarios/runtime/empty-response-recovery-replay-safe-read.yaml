@@ -8,6 +8,7 @@ scenario:
       - agent-runtime.failure-recovery-empty-response-recovery
       - agent-runtime.failure-recovery-retry-policy
       - agent-runtime.failure-recovery-evidence
+    secondary:
       - agent-runtime.progress-visibility-failure-recovery
   objective: Verify an empty visible GPT turn after a replay-safe read auto-continues into a visible answer.
   successCriteria:

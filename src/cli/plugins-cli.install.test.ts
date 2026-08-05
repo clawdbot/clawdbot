@@ -40,7 +40,7 @@ import {
   runtimeErrors,
   runtimeLogs,
   writeConfigFile,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -430,10 +430,10 @@ function hookNpmInstallCall(callIndex = 0): PluginInstallCall {
 }
 
 function persistedInstallRecords(callIndex = 0): Record<string, PersistedInstallRecord> {
-  return mockCallArg(writePersistedInstalledPluginIndexInstallRecords, callIndex) as Record<
-    string,
-    PersistedInstallRecord
-  >;
+  return mockCallArg(
+    writePersistedInstalledPluginIndexInstallRecordsWithLease,
+    callIndex,
+  ) as Record<string, PersistedInstallRecord>;
 }
 
 function persistedInstallRecord(pluginId: string, callIndex = 0): PersistedInstallRecord {
@@ -1273,8 +1273,23 @@ describe("plugins cli install", () => {
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
+    const alphaRoot = cliInstallPath("alpha");
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "alpha", kind: "memory" }],
+      plugins: [
+        {
+          id: "alpha",
+          kind: "memory",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: alphaRoot,
+          source: `${alphaRoot}/index.js`,
+          manifestPath: `${alphaRoot}/openclaw.plugin.json`,
+        },
+      ],
       diagnostics: [],
     });
     applyExclusiveSlotSelection.mockReturnValue({

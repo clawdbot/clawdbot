@@ -21,11 +21,41 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
 
-import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
+import {
+  resolveBundledPluginCompatibleActivationInputs,
+  withActivatedPluginIds,
+} from "./activation-context.js";
 
 afterEach(() => {
   clearCurrentPluginMetadataSnapshot();
   applyPluginAutoEnableMock.mockClear();
+});
+
+describe("withActivatedPluginIds", () => {
+  it("keeps omitted plugin ids outside restrictive allowlists", () => {
+    expect(
+      withActivatedPluginIds({
+        config: {
+          plugins: {
+            allow: ["memory-core"],
+            deny: ["blocked"],
+            entries: {
+              disabled: { enabled: false },
+            },
+          },
+        },
+        pluginIds: ["openai", "blocked", "disabled"],
+      }),
+    ).toEqual({
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["blocked"],
+        entries: {
+          disabled: { enabled: false },
+        },
+      },
+    });
+  });
 });
 
 describe("resolveBundledPluginCompatibleActivationInputs", () => {

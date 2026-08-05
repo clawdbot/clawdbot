@@ -107,6 +107,7 @@ const hasDirectOpenAiKey = (
   });
 
 beforeEach(() => {
+  vi.stubEnv("OPENAI_API_KEY", "");
   authMocks.resolveEnvApiKey.mockReset();
   authMocks.resolveEnvApiKey.mockImplementation(
     (provider: string, _env?: unknown, options?: { config?: unknown }) =>

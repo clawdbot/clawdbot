@@ -9,7 +9,6 @@ import {
   resolveBrowserExtractTimeoutMs,
   validateBrowserExtractSchema,
 } from "../browser-extract.js";
-import { runCommandWithRuntime } from "../core-api.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   extractAssistantText,
@@ -23,9 +22,11 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  printBrowserJsonResult,
+  runBrowserCliCommand as runBrowserObserve,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, getRuntimeConfig, shortenHomePath } from "./core-api.js";
+import { defaultRuntime, getRuntimeConfig, shortenHomePath } from "./core-api.js";
 
 const browserCliExtractDeps = {
   completeWithPreparedSimpleCompletionModel,
@@ -56,13 +57,6 @@ function parseSchemaOption(value: string | undefined): JsonSchemaObject | undefi
     throw new Error("--schema must be a JSON Schema object.");
   }
   return parsed as JsonSchemaObject;
-}
-
-function runBrowserObserve(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
 }
 
 /** Registers Browser commands that observe current page state without direct input. */
@@ -140,8 +134,7 @@ export function registerBrowserActionObserveCommands(
           const text = result.content.find((block) => block.type === "text")?.text;
           throw new Error(text || "Browser extract failed");
         }
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         const text = result.content.find((block) => block.type === "text")?.text;
@@ -173,8 +166,7 @@ export function registerBrowserActionObserveCommands(
           },
           { timeoutMs: 20000 },
         );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.writeJson(result.messages);
@@ -199,8 +191,7 @@ export function registerBrowserActionObserveCommands(
           },
           { timeoutMs: 20000 },
         );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(`PDF: ${shortenHomePath(result.path)}`);
@@ -241,8 +232,7 @@ export function registerBrowserActionObserveCommands(
           },
           { timeoutMs: timeoutMs ?? 20000 },
         );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(result.response.body);

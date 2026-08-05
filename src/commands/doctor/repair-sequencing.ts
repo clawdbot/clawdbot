@@ -5,6 +5,7 @@ import {
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
+import { migrateLegacyTailscaleProfileIdentities } from "../../state/user-profiles-tailscale-migration.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
@@ -230,6 +231,7 @@ export async function runDoctorRepairSequence(params: {
 
   await applyRepairStages([maybeRepairLegacyToolsBySenderKeys, maybeRepairExecSafeBinProfiles]);
   appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
+  appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
   appendRepairNotes(
     migrateLegacyOnboardingRecommendationsScope({

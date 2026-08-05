@@ -6,8 +6,9 @@ scenario:
   coverage:
     primary:
       - agent-runtime.failure-recovery-reasoning-only-recovery
-      - agent-runtime.failure-recovery-retry-policy
       - agent-runtime.failure-recovery-no-fake-progress
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
   objective: Verify a GPT-style reasoning-only turn after a mutating write stays replay-unsafe and does not auto-retry.
   successCriteria:
     - Scenario is mock-openai only so live lanes do not pick it up implicitly.

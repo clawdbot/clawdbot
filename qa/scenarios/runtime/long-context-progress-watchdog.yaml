@@ -44,9 +44,9 @@ flow:
             - ref: env
             - 60000
         - assert:
-            expr: "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === config.harnessRuntime"
+            expr: "env.runtimeId === config.harnessRuntime"
             message:
-              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
+              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.runtimeId}`"
         - call: reset
         - set: logCursor
           value:

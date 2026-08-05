@@ -24,6 +24,7 @@ const BUILT_CLI_REQUIREMENT =
   "cliMode=built requires readable openclaw.mjs and at least one readable dist/entry.js or dist/entry.mjs";
 
 export const TUI_PTY_TEST_FILE_ALLOWLIST = [
+  "src/tui/tui-pty-harness-assertion-test-support.test.ts",
   "src/tui/tui-pty-harness.e2e.test.ts",
   LOCAL_PTY_TEST_FILE,
   "src/tui/tui-reset-transition-pty.e2e.test.ts",

@@ -1,10 +1,10 @@
 /** Tracks the current plugin metadata snapshot for control-plane lookups. */
-import { setCurrentManifestModelIdNormalizationRecords } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   currentPluginMetadataConfigIdentityCache,
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
+  type CurrentPluginMetadataSnapshotRevision,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
@@ -23,6 +23,28 @@ type CurrentPluginMetadataSnapshotState = ReturnType<
   configIdentities: WeakSet<OpenClawConfig>;
 };
 
+type CurrentPluginMetadataSnapshotOptions = {
+  config?: OpenClawConfig;
+  compatibleConfigs?: readonly OpenClawConfig[];
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+};
+
+type TemporaryPluginMetadataSnapshotLeaseState = {
+  parent: TemporaryPluginMetadataSnapshotLeaseState | undefined;
+  previousState: CurrentPluginMetadataSnapshotState;
+  revision: CurrentPluginMetadataSnapshotRevision;
+  released: boolean;
+};
+
+type TemporaryPluginMetadataSnapshotLease = {
+  release: () => boolean;
+};
+
+let activeTemporaryPluginMetadataSnapshotLease:
+  | TemporaryPluginMetadataSnapshotLeaseState
+  | undefined;
+
 function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
   options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
@@ -33,17 +55,10 @@ function resolvePluginMetadataControlPlaneFingerprint(
   });
 }
 
-// Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
-// never accumulate historical metadata snapshots here.
-export function setCurrentPluginMetadataSnapshot(
+function publishCurrentPluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot | undefined,
-  options: {
-    config?: OpenClawConfig;
-    compatibleConfigs?: readonly OpenClawConfig[];
-    env?: NodeJS.ProcessEnv;
-    workspaceDir?: string;
-  } = {},
-): void {
+  options: CurrentPluginMetadataSnapshotOptions,
+): CurrentPluginMetadataSnapshotRevision {
   currentPluginMetadataConfigIdentityCache.clear();
   const compatiblePolicyHashes = snapshot
     ? options.compatibleConfigs?.map((config) => resolveInstalledPluginIndexPolicyHash(config))
@@ -83,17 +98,15 @@ export function setCurrentPluginMetadataSnapshot(
     (configFingerprint === defaultDiscoveryConfigFingerprint ||
       snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
       Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint)));
-  setCurrentManifestModelIdNormalizationRecords(
-    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
-  );
-  setCurrentPluginMetadataSnapshotState(
+  const revision = setCurrentPluginMetadataSnapshotState(
     snapshot,
     configFingerprint,
     compatiblePolicyHashes,
     compatibleConfigFingerprints,
+    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
   );
   if (!snapshot) {
-    return;
+    return revision;
   }
   if (options.config) {
     const policyHash = resolveInstalledPluginIndexPolicyHash(options.config);
@@ -107,45 +120,96 @@ export function setCurrentPluginMetadataSnapshot(
   for (const config of options.compatibleConfigs ?? []) {
     currentPluginMetadataConfigIdentityCache.add(config);
   }
+  return revision;
 }
 
-export function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
+// Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
+// never accumulate historical metadata snapshots here.
+export function setCurrentPluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot | undefined,
+  options: CurrentPluginMetadataSnapshotOptions = {},
+): void {
+  activeTemporaryPluginMetadataSnapshotLease = undefined;
+  publishCurrentPluginMetadataSnapshot(snapshot, options);
+}
+
+function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
   return {
     ...getCurrentPluginMetadataSnapshotState(),
     configIdentities: currentPluginMetadataConfigIdentityCache.capture(),
   };
 }
 
-export function restoreCurrentPluginMetadataSnapshotState(
+function restoreCapturedCurrentPluginMetadataSnapshotState(
   state: CurrentPluginMetadataSnapshotState,
-): void {
+): CurrentPluginMetadataSnapshotRevision {
   currentPluginMetadataConfigIdentityCache.restore(state.configIdentities);
-  const snapshot = state.snapshot as PluginMetadataSnapshot | undefined;
-  const defaultDiscoveryConfigFingerprint = snapshot
-    ? resolvePluginMetadataControlPlaneFingerprint(
-        {},
-        {
-          index: snapshot.index,
-          policyHash: snapshot.policyHash,
-          workspaceDir: snapshot.workspaceDir,
-        },
-      )
-    : undefined;
-  const defaultDiscoveryCompatible =
-    snapshot &&
-    defaultDiscoveryConfigFingerprint &&
-    (state.configFingerprint === defaultDiscoveryConfigFingerprint ||
-      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
-      Boolean(state.compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint)));
-  setCurrentManifestModelIdNormalizationRecords(
-    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
-  );
-  setCurrentPluginMetadataSnapshotState(
+  return setCurrentPluginMetadataSnapshotState(
     state.snapshot,
     state.configFingerprint,
     state.compatiblePolicyHashes,
     state.compatibleConfigFingerprints,
+    state.manifestModelIdNormalizationRecords,
   );
+}
+
+function resolveTemporaryPluginMetadataSnapshotLeaseParent():
+  | TemporaryPluginMetadataSnapshotLeaseState
+  | undefined {
+  const active = activeTemporaryPluginMetadataSnapshotLease;
+  if (active && getCurrentPluginMetadataSnapshotState().revision !== active.revision) {
+    activeTemporaryPluginMetadataSnapshotLease = undefined;
+    return undefined;
+  }
+  return active;
+}
+
+function releaseTemporaryPluginMetadataSnapshotLease(
+  lease: TemporaryPluginMetadataSnapshotLeaseState,
+): boolean {
+  if (lease.released) {
+    return false;
+  }
+  lease.released = true;
+  if (activeTemporaryPluginMetadataSnapshotLease !== lease) {
+    return false;
+  }
+
+  let restored = false;
+  while (activeTemporaryPluginMetadataSnapshotLease?.released) {
+    const current: TemporaryPluginMetadataSnapshotLeaseState =
+      activeTemporaryPluginMetadataSnapshotLease;
+    if (getCurrentPluginMetadataSnapshotState().revision !== current.revision) {
+      activeTemporaryPluginMetadataSnapshotLease = undefined;
+      return restored;
+    }
+    const restoredRevision = restoreCapturedCurrentPluginMetadataSnapshotState(
+      current.previousState,
+    );
+    activeTemporaryPluginMetadataSnapshotLease = current.parent;
+    if (activeTemporaryPluginMetadataSnapshotLease) {
+      activeTemporaryPluginMetadataSnapshotLease.revision = restoredRevision;
+    }
+    restored = true;
+  }
+  return restored;
+}
+
+/** Temporarily publishes metadata without restoring over lifecycle-owned replacements. */
+export function installTemporaryCurrentPluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot,
+  options: CurrentPluginMetadataSnapshotOptions = {},
+): TemporaryPluginMetadataSnapshotLease {
+  const lease: TemporaryPluginMetadataSnapshotLeaseState = {
+    parent: resolveTemporaryPluginMetadataSnapshotLeaseParent(),
+    previousState: captureCurrentPluginMetadataSnapshotState(),
+    revision: publishCurrentPluginMetadataSnapshot(snapshot, options),
+    released: false,
+  };
+  activeTemporaryPluginMetadataSnapshotLease = lease;
+  return {
+    release: () => releaseTemporaryPluginMetadataSnapshotLease(lease),
+  };
 }
 
 export function getCurrentPluginMetadataSnapshot(

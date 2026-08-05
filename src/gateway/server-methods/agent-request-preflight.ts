@@ -237,6 +237,17 @@ export function prepareAgentRequestPreflight(
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
   const isRestartRecoveryResumeRun =
     canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
+  if (request.internalExecutionIdentityRetry !== undefined && !isRestartRecoveryResumeRun) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "internal execution identity retry mode is reserved for main-session restart recovery.",
+      ),
+    );
+    return undefined;
+  }
   if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
     params.respond(
       false,

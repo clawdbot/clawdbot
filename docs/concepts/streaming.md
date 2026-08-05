@@ -145,12 +145,18 @@ replies**, not final replies or tool summaries.
   once, possibly multiple chunks if very long).
 - **No block streaming:** `blockStreamingDefault: "off"` (only final reply).
 
-Block streaming is **off unless** `*.streaming.block.enabled` is explicitly
-set to `true` (exception: QQ Bot has no `streaming.block` keys and streams
-block replies unless `channels.qqbot.streaming.mode` is `"off"`). Channels can
-stream a live preview (`channels.<channel>.streaming.mode`) without block
-replies. The `blockStreaming*` defaults live under `agents.defaults`, not the
-config root.
+Block streaming follows `agents.defaults.blockStreamingDefault` unless a
+channel or account sets `*.streaming.block.enabled` explicitly. QQ Bot has no
+`streaming.block` keys and streams block replies unless
+`channels.qqbot.streaming.mode` is `"off"`. Channels can stream a live preview
+(`channels.<channel>.streaming.mode`) without block replies. The
+`blockStreaming*` defaults live under `agents.defaults`, not the config root.
+
+For Discord and Telegram, an explicitly configured non-`off` preview mode
+takes precedence over inherited `agents.defaults.blockStreamingDefault: "on"`.
+Set that channel's `streaming.block.enabled: true` when block replies should
+override its preview. If the preview is unavailable for a turn, inherited block
+delivery still applies.
 
 ## Preview streaming modes
 

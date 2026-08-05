@@ -6,6 +6,8 @@ import { startQaMockOpenAiServer } from "./server.js";
 const cleanups: Array<() => Promise<void>> = [];
 const QA_COMPACTION_RETRY_PROMPT =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
+const QA_COMPACTION_SUMMARY_INSTRUCTIONS =
+  "You are a context summarization assistant. Produce a structured summary. Do not continue.";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -406,6 +408,49 @@ describe("QA mock OpenAI Responses WebSocket", () => {
         errorCode: "context_length_exceeded",
         rawByteLength: expect.any(Number),
       }),
+    ]);
+  });
+
+  it.each([
+    {
+      faultMode: "empty-output-once",
+      marker: "QA-COMPACTION-EMPTY-OUTPUT-ONCE-websocket",
+      recoveredMarker: "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY",
+    },
+    {
+      faultMode: "reasoning-only-output-once",
+      marker: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-websocket",
+      recoveredMarker: "QA-COMPACTION-REASONING-RECOVERED-SUMMARY",
+    },
+  ] as const)("preserves $faultMode compaction recovery on WebSocket", async (testCase) => {
+    const server = await startServer();
+    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const request = {
+      type: "response.create",
+      model: "gpt-5.6-sol",
+      stream: true,
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: `<conversation>${testCase.marker}</conversation>` },
+          ],
+        },
+      ],
+    };
+
+    const first = readCompletedResponse(await collectResponseEvents(socket, request));
+    expect(JSON.stringify(first.output)).not.toContain(testCase.recoveredMarker);
+    const recovered = readCompletedResponse(await collectResponseEvents(socket, request));
+    expect(JSON.stringify(recovered.output)).toContain(testCase.recoveredMarker);
+
+    const requests = (await fetch(`${server.baseUrl}/debug/requests`).then((response) =>
+      response.json(),
+    )) as Array<Record<string, unknown>>;
+    expect(requests.map((entry) => entry.compactionSummaryFaultMode)).toEqual([
+      testCase.faultMode,
+      "none",
     ]);
   });
 

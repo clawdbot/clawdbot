@@ -757,7 +757,7 @@ async function containerSendReceipt(params: {
 }
 
 /**
- * Send a reaction to a message via bbernhard container REST API.
+ * Add or remove a message reaction via the bbernhard container REST API.
  */
 async function containerSendReaction(params: {
   baseUrl: string;
@@ -768,6 +768,7 @@ async function containerSendReaction(params: {
   targetTimestamp: number;
   groupId?: string;
   timeoutMs?: number;
+  remove?: boolean;
 }): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
     recipient: params.recipient,
@@ -783,41 +784,7 @@ async function containerSendReaction(params: {
   const result = await containerRestRequest<{ timestamp?: number }>(
     `/v1/reactions/${encodeURIComponent(params.account)}`,
     { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    payload,
-  );
-
-  return result ?? {};
-}
-
-/**
- * Remove a reaction from a message via bbernhard container REST API.
- */
-async function containerRemoveReaction(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const payload: Record<string, unknown> = {
-    recipient: params.recipient,
-    reaction: params.emoji,
-    target_author: params.targetAuthor,
-    timestamp: params.targetTimestamp,
-  };
-
-  if (params.groupId) {
-    payload.group_id = params.groupId;
-  }
-
-  const result = await containerRestRequest<{ timestamp?: number }>(
-    `/v1/reactions/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "DELETE",
+    params.remove ? "DELETE" : "POST",
     payload,
   );
 
@@ -942,9 +909,9 @@ export async function containerRpcRequest<T = unknown>(
         targetTimestamp: p.targetTimestamp as number,
         groupId: formattedGroupId,
         timeoutMs: opts.timeoutMs,
+        remove: Boolean(p.remove),
       };
-      const fn = p.remove ? containerRemoveReaction : containerSendReaction;
-      return (await fn(reactionParams)) as T;
+      return (await containerSendReaction(reactionParams)) as T;
     }
 
     case "getAttachment": {

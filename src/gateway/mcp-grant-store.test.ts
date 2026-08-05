@@ -4,6 +4,7 @@ import {
   deactivateMcpLoopbackClientGrantCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
+  registerMcpLoopbackClientGrantRevocationListener,
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant,
   revokeAttachGrant,
@@ -203,6 +204,40 @@ describe("mcp-grant-store", () => {
     expect(revokeMcpLoopbackClientGrant(first.token)).toBe(false);
     expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(true);
     expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(false);
+  });
+
+  it("notifies revocation listeners for single and runtime-wide cleanup", () => {
+    const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const unregister = registerMcpLoopbackClientGrantRevocationListener((event) => {
+      events.push(event);
+    });
+    try {
+      const first = mintMcpLoopbackClientGrant({
+        context: { sessionKey: "agent:main:first", senderIsOwner: false },
+        runtimeOwnerToken: "runtime-one",
+      });
+      const second = mintMcpLoopbackClientGrant({
+        context: { sessionKey: "agent:main:second", senderIsOwner: false },
+        runtimeOwnerToken: "runtime-one",
+      });
+
+      expect(revokeMcpLoopbackClientGrant(first.token)).toBe(true);
+      expect(revokeMcpLoopbackClientGrant(first.token)).toBe(false);
+      expect(revokeMcpLoopbackClientGrantsForRuntime("runtime-one")).toBe(1);
+      expect(events).toEqual([
+        { token: first.token, runtimeOwnerToken: "runtime-one" },
+        { token: second.token, runtimeOwnerToken: "runtime-one" },
+      ]);
+    } finally {
+      unregister();
+    }
+
+    const afterUnregister = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:later", senderIsOwner: false },
+      runtimeOwnerToken: "runtime-one",
+    });
+    expect(revokeMcpLoopbackClientGrant(afterUnregister.token)).toBe(true);
+    expect(events).toHaveLength(2);
   });
 
   it("requires a session key for loopback client grants", () => {

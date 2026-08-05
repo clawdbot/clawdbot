@@ -1712,6 +1712,71 @@ describe("maybeCompactCodexAppServerSession", () => {
     warn.mockRestore();
   });
 
+  it("bounds ignored compaction override warnings through the compact entry point", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+
+    async function runWithIgnoredOverrides(index: number): Promise<void> {
+      const agentId = `cap-${index}`;
+      await maybeCompactCodexAppServerSession({
+        sessionId: `session-${index}`,
+        sessionKey: `agent:${agentId}:session-${index}`,
+        sessionFile: path.join(tempDir, `${agentId}.jsonl`),
+        workspaceDir: tempDir,
+        trigger: "budget",
+        config: {
+          agents: {
+            list: [
+              {
+                id: agentId,
+                compaction: {
+                  model: "openai/gpt-5.4-mini",
+                  provider: "custom-summary",
+                },
+              },
+            ],
+          },
+        },
+      });
+    }
+
+    // Fill exactly the advertised 4,096-entry cap: every distinct key warns once.
+    for (let index = 0; index < 4_096; index += 1) {
+      await runWithIgnoredOverrides(index);
+    }
+    expect(warn).toHaveBeenCalledTimes(4_096);
+
+    // At exactly 4,096 entries the oldest key is still retained, so a duplicate stays suppressed.
+    await runWithIgnoredOverrides(0);
+    expect(warn).toHaveBeenCalledTimes(4_096);
+
+    // The 4,097th distinct key pushes past the cap and evicts the LRU entry. The duplicate
+    // check on key 0 refreshed its recency, so the evicted key is 1.
+    await runWithIgnoredOverrides(4_096);
+    expect(warn).toHaveBeenCalledTimes(4_097);
+
+    // The evicted key warns again on reappearance.
+    await runWithIgnoredOverrides(1);
+    expect(warn).toHaveBeenCalledTimes(4_098);
+
+    // A recent duplicate stays suppressed.
+    await runWithIgnoredOverrides(4_096);
+    expect(warn).toHaveBeenCalledTimes(4_098);
+    expect(warn.mock.calls.at(-1)).toEqual([
+      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+      {
+        sessionId: "session-1",
+        sessionKey: "agent:cap-1:session-1",
+        ignoredConfig: [
+          "agents.list.cap-1.compaction.model",
+          "agents.list.cap-1.compaction.provider",
+        ],
+      },
+    ]);
+    info.mockRestore();
+    warn.mockRestore();
+  });
+
   it("warns when active agent compaction overrides are ignored", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const fake = createFakeCodexClient();

@@ -187,12 +187,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
     };
     const upstreamTrace = parseDiagnosticTraceparent(req.traceparent);
-    const requestDispatch = upstreamTrace
-      ? runWithDiagnosticTraceContext(
-          createChildDiagnosticTraceContext(upstreamTrace),
-          executeRequest,
-        )
-      : executeRequest();
+    const dispatchRequest = () =>
+      upstreamTrace
+        ? runWithDiagnosticTraceContext(
+            createChildDiagnosticTraceContext(upstreamTrace),
+            executeRequest,
+          )
+        : executeRequest();
+    const requestDispatch =
+      client.connect.role === "node"
+        ? params.handler.nodeLifecycleDispatch.dispatch(req.method, dispatchRequest)
+        : dispatchRequest();
     if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
       const barrier = requestDispatch.finally(() => {
         if (deviceCredentialMutationBarrier === barrier) {

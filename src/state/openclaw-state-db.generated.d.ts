@@ -640,6 +640,16 @@ export interface ExecApprovalsConfig {
   updated_at_ms: number;
 }
 
+export interface ExecutionIdentityContexts {
+  context_bytes: number;
+  context_id: string;
+  context_json: string;
+  coverage_state: string;
+  created_at: number;
+  execution_id: string;
+  run_id: string;
+}
+
 export interface FleetCells {
   container_name: string;
   created_at_ms: number;
@@ -1588,6 +1598,7 @@ export interface DB {
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  execution_identity_contexts: ExecutionIdentityContexts;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
