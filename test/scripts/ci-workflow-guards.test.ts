@@ -5308,9 +5308,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expect(result.stderr).toContain("child-locale:POSIX");
         expect(result.timeoutVersion).toContain("(GNU coreutils)");
 
+        const supervisorSignals: readonly ("TERM" | "KILL")[] = scenario.supervisorSignals;
         for (const signal of ["TERM", "KILL"] as const) {
           const diagnostic = `timeout: sending signal ${signal} to command 'env'`;
-          if (scenario.supervisorSignals.includes(signal)) {
+          if (supervisorSignals.includes(signal)) {
             expect(result.stderr).toContain(diagnostic);
           } else {
             expect(result.stderr).not.toContain(diagnostic);
