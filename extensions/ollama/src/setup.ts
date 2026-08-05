@@ -7,9 +7,6 @@ type OllamaSetupRuntime = typeof import("./setup.runtime.js");
 
 const loadOllamaSetupRuntime = createLazyRuntimeModule(() => import("./setup.runtime.js"));
 
-export const checkOllamaCloudAuth: OllamaSetupRuntime["checkOllamaCloudAuth"] = async (...args) =>
-  await (await loadOllamaSetupRuntime()).checkOllamaCloudAuth(...args);
-
 export const promptAndConfigureOllama: OllamaSetupRuntime["promptAndConfigureOllama"] = async (
   ...args
 ) => await (await loadOllamaSetupRuntime()).promptAndConfigureOllama(...args);

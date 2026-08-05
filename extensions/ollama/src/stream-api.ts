@@ -3,12 +3,10 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 export {
   createConfiguredOllamaCompatStreamWrapper,
   isOllamaCompatProvider,
-  resolveConfiguredOllamaProviderConfig,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "./stream-compat.js";
-export { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 
 type OllamaStreamRuntime = typeof import("./stream.runtime.js");
 

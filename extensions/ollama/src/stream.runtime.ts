@@ -43,12 +43,10 @@ import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
 export {
   createConfiguredOllamaCompatStreamWrapper,
   isOllamaCompatProvider,
-  resolveConfiguredOllamaProviderConfig,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "./stream-compat.js";
-export { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
