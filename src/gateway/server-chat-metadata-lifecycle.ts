@@ -57,6 +57,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
           runtime.invalidate();
           return;
         }
+        if (event.phase === "failed") {
+          runtime.fail(event.error);
+          return;
+        }
         refreshLogged();
       });
     const unregisterSkillsChange = registerSkillsChangeListener(() => {

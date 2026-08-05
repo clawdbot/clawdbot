@@ -4,9 +4,11 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
+  getPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
+  rejectPendingPreparedModelRuntimeReplacement,
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -46,6 +48,66 @@ describe("prepared model runtime snapshots", () => {
     await refreshPreparedModelRuntimeSnapshots({});
 
     expect(events).toEqual(["invalidated", "published"]);
+  });
+
+  it("makes the replacement owner readable before announcing publication", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const initialConfig = {};
+    const replacementConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
+    let publishedOwner: ReturnType<typeof getPreparedModelRuntimeSnapshot>;
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "published") {
+        publishedOwner = getPreparedModelRuntimeSnapshot({
+          agentId: "default",
+          agentDir: "/tmp/unused-agent",
+          inheritedAuthDir: "/tmp/unused-agent",
+          config: replacementConfig,
+        });
+      }
+    });
+
+    await refreshPreparedModelRuntimeSnapshots(replacementConfig);
+    unregister();
+
+    expect(publishedOwner).toMatchObject({ config: replacementConfig });
+  });
+
+  it("announces invalidation from the direct stale owner boundary", async () => {
+    mocks.configuredAgentIds = ["default"];
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event.phase);
+    });
+
+    markPreparedModelRuntimeSnapshotsStale("test direct reload stale edge", {
+      waitForReplacement: true,
+    });
+    unregister();
+
+    expect(events).toEqual(["invalidated"]);
+  });
+
+  it("announces a failed replacement so lifecycle readers do not wait indefinitely", async () => {
+    mocks.configuredAgentIds = ["default"];
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const events: Array<{ phase: string; error?: Error }> = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event);
+    });
+    const replacementError = new Error("replacement aborted");
+
+    const gateId = markPreparedModelRuntimeSnapshotsStale("test failed reload", {
+      waitForReplacement: true,
+    });
+    rejectPendingPreparedModelRuntimeReplacement(gateId, replacementError);
+    unregister();
+
+    expect(events).toEqual([
+      { phase: "invalidated" },
+      { phase: "failed", error: replacementError },
+    ]);
   });
 
   it("does not let a read-only draft replace a configured gateway owner", async () => {

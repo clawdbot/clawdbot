@@ -50,6 +50,12 @@ type PreparedMetadataGeneration = {
   metadataByKey: Map<string, Promise<ChatMetadataResult>>;
 };
 
+type MetadataReplacement = {
+  promise: Promise<void>;
+  reject: (error: Error) => void;
+  resolve: () => void;
+};
+
 type ChatMetadataRuntimeDeps = {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayRequestContext;
@@ -76,7 +82,20 @@ type ChatMetadataRuntimeDeps = {
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
 
-export class ChatMetadataSnapshotUnavailableError extends Error {
+function createMetadataReplacement(): MetadataReplacement {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  // Reads and lifecycle refreshes observe the original promise. This handler only prevents an
+  // unobserved rejection when shutdown or reload failure occurs without a concurrent reader.
+  void promise.catch(() => {});
+  return { promise, reject, resolve };
+}
+
+class ChatMetadataSnapshotUnavailableError extends Error {
   constructor(message = "prepared chat metadata snapshot is unavailable") {
     super(message);
     this.name = "ChatMetadataSnapshotUnavailableError";
@@ -225,6 +244,7 @@ export function createGatewayChatMetadataRuntime(params: {
   deps?: Partial<ChatMetadataRuntimeDeps>;
 }): {
   invalidate: () => void;
+  fail: (error: unknown) => void;
   refresh: () => Promise<void>;
   read: (params: { agentId: string; sessionEntry?: SessionEntry }) => Promise<ChatMetadataResult>;
 } {
@@ -240,11 +260,14 @@ export function createGatewayChatMetadataRuntime(params: {
     ...params.deps,
   };
   let current: PreparedMetadataGeneration | undefined;
+  let lastError: Error | undefined;
+  let replacement: MetadataReplacement | undefined;
   let invalidationEpoch = 0;
   let refreshTail: Promise<void> = Promise.resolve();
   let pending:
     | {
         facts?: PreparedGenerationFacts;
+        epoch: number;
         promise: Promise<void>;
       }
     | undefined;
@@ -334,26 +357,53 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const refresh = (): Promise<void> => {
-    if (params.beforeRefresh) {
-      if (pending) {
-        return pending.promise;
-      }
-      const promise = refreshTail.catch(() => {}).then(runRefresh);
+    const trackRefresh = (
+      promise: Promise<void>,
+      epoch: number,
+      facts?: PreparedGenerationFacts,
+    ): Promise<void> => {
       refreshTail = promise;
-      pending = { promise };
+      pending = { ...(facts ? { facts } : {}), epoch, promise };
       const clearPending = () => {
         if (pending?.promise === promise) {
           pending = undefined;
         }
       };
-      void promise.then(clearPending, clearPending);
+      void promise.then(
+        () => {
+          clearPending();
+          if (epoch !== invalidationEpoch) {
+            return;
+          }
+          lastError = undefined;
+          const committedReplacement = replacement;
+          replacement = undefined;
+          committedReplacement?.resolve();
+        },
+        (error: unknown) => {
+          clearPending();
+          if (epoch === invalidationEpoch) {
+            fail(error);
+          }
+        },
+      );
       return promise;
+    };
+    if (params.beforeRefresh) {
+      if (pending) {
+        return pending.promise;
+      }
+      const epoch = invalidationEpoch;
+      const promise = refreshTail.catch(() => {}).then(runRefresh);
+      return trackRefresh(promise, epoch);
     }
     let facts: PreparedGenerationFacts;
     try {
       facts = captureGenerationFacts(deps);
     } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+      const refreshError = error instanceof Error ? error : new Error(formatErrorMessage(error));
+      fail(refreshError);
+      return Promise.reject(refreshError);
     }
     if (current && generationFactsMatch(current.facts, facts)) {
       return Promise.resolve();
@@ -361,24 +411,27 @@ export function createGatewayChatMetadataRuntime(params: {
     if (pending?.facts && generationFactsMatch(pending.facts, facts)) {
       return pending.promise;
     }
+    const epoch = invalidationEpoch;
     const promise = refreshTail.catch(() => {}).then(runRefresh);
-    refreshTail = promise;
-    pending = { facts, promise };
-    const clearPending = () => {
-      if (pending?.promise === promise) {
-        pending = undefined;
-      }
-    };
-    void promise.then(clearPending, clearPending);
-    return promise;
+    return trackRefresh(promise, epoch, facts);
   };
 
   const read = async (readParams: {
     agentId: string;
     sessionEntry?: SessionEntry;
   }): Promise<ChatMetadataResult> => {
-    if (pending) {
-      await pending.promise;
+    for (;;) {
+      const replacementPromise = replacement?.promise;
+      if (replacementPromise) {
+        await replacementPromise;
+        continue;
+      }
+      const refreshPromise = pending?.promise;
+      if (refreshPromise) {
+        await refreshPromise;
+        continue;
+      }
+      break;
     }
     let generation = current;
     if (!generation && params.refreshOnRead) {
@@ -386,6 +439,9 @@ export function createGatewayChatMetadataRuntime(params: {
       generation = current;
     }
     if (!generation) {
+      if (lastError) {
+        throw lastError;
+      }
       throw new ChatMetadataSnapshotUnavailableError();
     }
     if (params.refreshOnRead) {
@@ -425,7 +481,18 @@ export function createGatewayChatMetadataRuntime(params: {
   const invalidate = () => {
     invalidationEpoch += 1;
     current = undefined;
+    lastError = undefined;
+    replacement ??= createMetadataReplacement();
   };
 
-  return { invalidate, read, refresh };
+  const fail = (error: unknown) => {
+    const replacementError = error instanceof Error ? error : new Error(formatErrorMessage(error));
+    current = undefined;
+    lastError = replacementError;
+    const failedReplacement = replacement;
+    replacement = undefined;
+    failedReplacement?.reject(replacementError);
+  };
+
+  return { fail, invalidate, read, refresh };
 }

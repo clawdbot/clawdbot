@@ -134,6 +134,22 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
   });
 
+  test("reuses the prepared generation for an equivalent config replacement", async () => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+    const first = await harness.runtime.read({ agentId: "main" });
+
+    harness.setConfig({
+      agents: { list: [{ id: "main", default: true }] },
+    });
+    await harness.runtime.refresh();
+    const second = await harness.runtime.read({ agentId: "main" });
+
+    expect(second).toBe(first);
+    expect(harness.buildCommands).toHaveBeenCalledTimes(1);
+    expect(harness.buildModels).toHaveBeenCalledTimes(1);
+  });
+
   test("refreshes config, catalog-auth, skills, and plugin generations", async () => {
     const harness = createHarness();
     await harness.runtime.refresh();
@@ -167,6 +183,59 @@ describe("gateway chat metadata runtime", () => {
     ]);
     expect(harness.buildCommands).toHaveBeenCalledTimes(4);
     expect(harness.buildModels).toHaveBeenCalledTimes(4);
+  });
+
+  test("waits for an invalidated generation to be replaced before serving reads", async () => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+
+    harness.runtime.invalidate();
+    const read = harness.runtime.read({ agentId: "main" });
+    let settled = false;
+    void read.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    const nextConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { swarm: { enabled: true } },
+    };
+    harness.setConfig(nextConfig);
+    harness.setOwner(createOwner(nextConfig, "replacement"));
+    await harness.runtime.refresh();
+
+    await expect(read).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "replacement" })],
+      swarmEnabled: true,
+    });
+  });
+
+  test("rejects replacement waiters on failure and recovers on a later generation", async () => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+
+    harness.runtime.invalidate();
+    const failedRead = harness.runtime.read({ agentId: "main" });
+    harness.runtime.fail(new Error("replacement failed"));
+    await expect(failedRead).rejects.toThrow("replacement failed");
+    await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("replacement failed");
+
+    const nextConfig = { agents: { list: [{ id: "main", default: true }] } };
+    harness.setConfig(nextConfig);
+    harness.setOwner(createOwner(nextConfig, "recovered"));
+    harness.runtime.invalidate();
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "recovered" })],
+    });
   });
 
   test("omits failed command preparation without losing models", async () => {

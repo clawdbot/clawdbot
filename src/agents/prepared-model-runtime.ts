@@ -62,9 +62,9 @@ let refreshRequestEpoch = 0;
 let pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
 type AuthMutationEvent = { agentDir?: string; affectsInheritedStores: boolean };
 const pendingAuthMutations: AuthMutationEvent[] = [];
-export type PreparedModelRuntimePublicationEvent = {
-  phase: "invalidated" | "published";
-};
+type PreparedModelRuntimePublicationEvent =
+  | { phase: "invalidated" | "published" }
+  | { phase: "failed"; error: Error };
 const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
 
 /** Observes committed prepared model/auth generations without starting discovery. */
@@ -75,12 +75,10 @@ export function registerPreparedModelRuntimePublicationListener(
   return () => publicationListeners.delete(listener);
 }
 
-function notifyPreparedModelRuntimePublication(
-  phase: PreparedModelRuntimePublicationEvent["phase"],
-): void {
+function notifyPreparedModelRuntimePublication(event: PreparedModelRuntimePublicationEvent): void {
   for (const listener of publicationListeners) {
     try {
-      listener({ phase });
+      listener(event);
     } catch (error) {
       log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
     }
@@ -493,6 +491,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
     owner.needsRefresh = true;
     owner.refreshError = staleError;
   }
+  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   return pendingModelRuntimeReplacement?.gateId;
 }
 
@@ -506,7 +505,9 @@ export function rejectPendingPreparedModelRuntimeReplacement(
     return;
   }
   pendingModelRuntimeReplacement = undefined;
-  replacement.reject(toError(error));
+  const replacementError = toError(error);
+  replacement.reject(replacementError);
+  notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
 /** Rebuilds active owners after config/plugin runtime publication. */
@@ -594,7 +595,6 @@ export function refreshPreparedModelRuntimeSnapshots(
 ): Promise<void> {
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
   markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
-  notifyPreparedModelRuntimePublication("invalidated");
   const requestEpoch = refreshRequestEpoch;
   const replacement = pendingModelRuntimeReplacement;
   return enqueuePreparedModelRuntimePublication(async () => {
@@ -606,7 +606,6 @@ export function refreshPreparedModelRuntimeSnapshots(
       return;
     }
     await drainPendingAuthMutations();
-    notifyPreparedModelRuntimePublication("published");
   }).then(
     () => {
       if (
@@ -616,6 +615,9 @@ export function refreshPreparedModelRuntimeSnapshots(
       ) {
         pendingModelRuntimeReplacement = undefined;
         replacement.resolve();
+        // Publication listeners may synchronously read the committed owner. Clear the lifecycle
+        // gate before announcing availability so they cannot observe a false missing generation.
+        notifyPreparedModelRuntimePublication({ phase: "published" });
       }
     },
     (error: unknown) => {
@@ -637,6 +639,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       ) {
         pendingModelRuntimeReplacement = undefined;
         replacement.reject(refreshError);
+        notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
       }
       throw refreshError;
     },
@@ -707,16 +710,18 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     // mutation would immediately stale that initial generation even though no prior owner existed.
     return;
   }
-  notifyPreparedModelRuntimePublication("invalidated");
+  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   pendingAuthMutations.push(normalizedEvent);
   void enqueuePreparedModelRuntimePublication(async () => {
     await drainPendingAuthMutations();
-    notifyPreparedModelRuntimePublication("published");
+    notifyPreparedModelRuntimePublication({ phase: "published" });
   }).catch((error: unknown) => {
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
       return;
     }
-    log.warn(`auth-triggered model runtime refresh failed: ${String(error)}`);
+    const refreshError = toError(error);
+    notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+    log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
   });
 }
 

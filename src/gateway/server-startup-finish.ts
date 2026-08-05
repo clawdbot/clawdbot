@@ -16,6 +16,10 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import {
+  attachInitialGatewayLifetimeSidecars,
+  publishGatewayLifetimeSidecars,
+} from "./server-lifetime-sidecars.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import {
@@ -30,9 +34,7 @@ import {
 
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
-
 const [POST_READY_MAINTENANCE_DELAY_MS, RETAINED_PLUGIN_CLEANUP_DELAY_MS] = [250, 30_000];
-
 export async function finishGatewayStartup(params: {
   coreRuntime: GatewayCoreRuntime;
   port: number;
@@ -295,18 +297,11 @@ export async function finishGatewayStartup(params: {
       broadcastVoiceWakeRoutingChanged,
     });
   });
-  await chatMetadataLifecycle.attachContext(
+  await attachInitialGatewayLifetimeSidecars({
+    chatMetadataLifecycle,
     gatewayRequestContext,
-    runtimeState.gatewayLifetimeSidecars,
-  );
-  const sessionChangeSidecar = {
-    stop: async () => {
-      const { flushPendingSessionsChangedEvents } =
-        await import("./server-methods/session-change-event.js");
-      flushPendingSessionsChangedEvents(gatewayRequestContext);
-    },
-  };
-  runtimeState.gatewayLifetimeSidecars.push(sessionChangeSidecar);
+    sidecars: runtimeState.gatewayLifetimeSidecars,
+  });
   pluginGatewayContext.current = gatewayRequestContext;
   const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
   const gatewayInstanceRuntimeLocal = createGatewayInstanceRuntime({
@@ -318,7 +313,6 @@ export async function finishGatewayStartup(params: {
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntimeLocal;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntimeLocal.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntimeLocal.recovery;
-
   const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
     () => gatewayRequestContext,
   );
@@ -329,7 +323,6 @@ export async function finishGatewayStartup(params: {
         }
       : () => {},
   );
-
   const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
     "gateway.ws-imports",
     () =>
@@ -495,15 +488,12 @@ export async function finishGatewayStartup(params: {
             }
           },
           onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
-            const lifetimeSidecars = [sessionChangeSidecar, ...gatewayLifetimeSidecars];
-            runtimeState.gatewayLifetimeSidecars = lifetimeSidecars;
-            stopPostReadySidecarsAfterCloseStarted({
-              postReadySidecars: lifetimeSidecars,
+            runtimeState.gatewayLifetimeSidecars = publishGatewayLifetimeSidecars({
+              registered: runtimeState.gatewayLifetimeSidecars,
+              published: gatewayLifetimeSidecars,
               closeStarted: lifecycle.closePreludeStarted,
+              stopAfterCloseStarted: stopPostReadySidecarsAfterCloseStarted,
             });
-            if (lifecycle.closePreludeStarted) {
-              runtimeState.gatewayLifetimeSidecars = [];
-            }
           },
           ...(workerPlacementRuntime
             ? {
