@@ -48,7 +48,10 @@ const buildToolResult = (params: {
   content: [{ type: "text" as const, text: params.text }],
 });
 
-function sanitizeSingleToolCallId(id: string, mode: "strict" | "strict9" = "strict"): string {
+function sanitizeSingleToolCallId(
+  id: string,
+  mode: "strict" | "strict9" | "strict-anthropic" = "strict",
+): string {
   const out = sanitizeToolCallIdsForCloudCodeAssist(
     castAgentMessages([
       {
@@ -734,5 +737,70 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(out).not.toBe(input);
       expectSingleToolCallRewrite(out, "functions", "strict9");
     });
+  });
+});
+
+describe("strict-anthropic tool call id mode", () => {
+  const ANTHROPIC_TOOL_USE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+  it("rewrites native Kimi-format ids so Anthropic replay passes tool_use.id validation", () => {
+    const rewritten = sanitizeSingleToolCallId("functions.read:0", "strict-anthropic");
+    expect(rewritten).not.toBe("functions.read:0");
+    expect(rewritten).toMatch(ANTHROPIC_TOOL_USE_ID_PATTERN);
+    // Deterministic: sanitizing the sanitized id is a no-op.
+    expect(sanitizeSingleToolCallId(rewritten, "strict-anthropic")).toBe(rewritten);
+  });
+
+  it("keeps native Kimi-format ids unchanged in strict mode for Kimi-bound replay", () => {
+    expect(sanitizeSingleToolCallId("functions.read:0", "strict")).toBe("functions.read:0");
+  });
+
+  it("preserves native Anthropic tool_use ids when preservation is enabled", () => {
+    const out = sanitizeToolCallIdsForCloudCodeAssist(
+      castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "toolu_01AbCdEf", name: "read", arguments: {} }],
+        },
+        buildToolResult({ toolCallId: "toolu_01AbCdEf", text: "ok" }),
+      ]),
+      "strict-anthropic",
+      { preserveNativeAnthropicToolUseIds: true },
+    );
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = assistant.content?.[0] as { id?: string };
+    expect(toolCall.id).toBe("toolu_01AbCdEf");
+    const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(result.toolCallId).toBe("toolu_01AbCdEf");
+  });
+
+  it("keeps tool_use/tool_result pairing when Kimi-format ids are rewritten", () => {
+    const out = sanitizeToolCallIdsForCloudCodeAssist(
+      castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.search:0", name: "search", arguments: {} }],
+        },
+        buildToolResult({ toolCallId: "functions.search:0", text: "one" }),
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.search:0", name: "search", arguments: {} }],
+        },
+        buildToolResult({ toolCallId: "functions.search:0", text: "two" }),
+      ]),
+      "strict-anthropic",
+    );
+    const first = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const firstCall = first.content?.[0] as { id?: string };
+    const firstResult = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    const second = out[2] as Extract<AgentMessage, { role: "assistant" }>;
+    const secondCall = second.content?.[0] as { id?: string };
+    const secondResult = out[3] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(firstResult.toolCallId).toBe(firstCall.id);
+    expect(secondResult.toolCallId).toBe(secondCall.id);
+    expect(firstCall.id).not.toBe(secondCall.id);
+    for (const id of [firstCall.id, secondCall.id]) {
+      expect(id).toMatch(ANTHROPIC_TOOL_USE_ID_PATTERN);
+    }
   });
 });

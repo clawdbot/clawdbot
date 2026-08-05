@@ -78,7 +78,7 @@ export function buildStrictAnthropicReplayPolicy(
     ...(sanitizeToolCallIds
       ? {
           sanitizeToolCallIds: true,
-          toolCallIdMode: "strict" as const,
+          toolCallIdMode: "strict-anthropic" as const,
           ...(options.preserveNativeAnthropicToolUseIds
             ? { preserveNativeAnthropicToolUseIds: true }
             : {}),

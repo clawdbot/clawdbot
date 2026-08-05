@@ -5,7 +5,7 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
 type ProviderReplaySanitizeMode = "full" | "images-only";
 
-type ProviderReplayToolCallIdMode = "strict" | "strict9";
+type ProviderReplayToolCallIdMode = "strict" | "strict9" | "strict-anthropic";
 
 export type ProviderReasoningOutputMode = "native" | "tagged";
 
