@@ -199,6 +199,7 @@ export function listSqliteSessionEntryKeysReadOnly(
 /** Exact persisted-key probe on the read-only handle, for per-row hot paths. */
 export function loadExactSqliteSessionEntryReadOnly(
   scope: SessionAccessScope,
+  options?: { strictStoreAvailable?: boolean },
 ): ExactSessionEntry | undefined {
   const sessionKey = scope.sessionKey.trim();
   if (!sessionKey) {
@@ -209,7 +210,17 @@ export function loadExactSqliteSessionEntryReadOnly(
     (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
     toDatabaseOptions(resolved),
   );
-  return result.found && result.value
+  if (!result.found) {
+    if (options?.strictStoreAvailable === true && result.reason !== "database-missing") {
+      // Fail-closed callers (destructive cleanup) must observe a present-but-
+      // unusable store (missing schema/tables) instead of an absent entry that
+      // looks like "no sessions". database-missing stays an absence: discovery
+      // legitimately probes candidate paths that may not exist yet.
+      throw new Error(`session store is unavailable (${result.reason}) for ${sessionKey}`);
+    }
+    return undefined;
+  }
+  return result.value
     ? {
         sessionKey,
         entry: scope.clone === false ? result.value : cloneSessionEntry(result.value),

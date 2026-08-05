@@ -186,12 +186,18 @@ function loadGatewaySessionLookupStoreUncached(
     if (options.exactKeys) {
       const store: Record<string, SessionEntry> = {};
       for (const sessionKey of options.exactKeys) {
-        const match = loadExactSessionEntryReadOnly({
-          ...(agentId ? { agentId } : {}),
-          clone: false,
-          sessionKey,
-          storePath,
-        });
+        // Strict readers must see a present-but-unusable store (missing schema
+        // or tables surface as a typed non-throwing result) as a failure, not
+        // as an absent entry.
+        const match = loadExactSessionEntryReadOnly(
+          {
+            ...(agentId ? { agentId } : {}),
+            clone: false,
+            sessionKey,
+            storePath,
+          },
+          options.strict ? { strictStoreAvailable: true } : undefined,
+        );
         if (match) {
           store[match.sessionKey] = match.entry;
         }

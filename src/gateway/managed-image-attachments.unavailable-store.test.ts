@@ -8,6 +8,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -136,6 +137,28 @@ describe("cleanupManagedOutgoingMediaRecords with a real SQLite session store", 
       );
       const agentSqlitePath = await createRealSessionStore(stateDir);
       await fs.chmod(agentSqlitePath, 0o000);
+
+      const result = await cleanupManagedOutgoingMediaRecords({ stateDir });
+
+      expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+      await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("retains a record when the session store is missing its session tables", async () => {
+    await withEnvAsync({ ...process.env, OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const fixture = await createManagedMediaFixture(
+        stateDir,
+        "55555555-5555-4555-8555-555555555555",
+      );
+      const agentSqlitePath = await createRealSessionStore(stateDir);
+      // A store that opens but lost its session tables reports a non-throwing
+      // table-missing result on ordinary reads; strict cleanup must still
+      // treat it as unknown retention state, not as "no sessions".
+      const { DatabaseSync } = requireNodeSqlite();
+      const database = new DatabaseSync(agentSqlitePath);
+      database.exec("DROP TABLE session_nodes");
+      database.close();
 
       const result = await cleanupManagedOutgoingMediaRecords({ stateDir });
 
