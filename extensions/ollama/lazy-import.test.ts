@@ -13,13 +13,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 describe("ollama lazy imports", () => {
   afterEach(() => {
     for (const moduleId of [
-      "./src/embedding-provider.js",
+      "./src/embedding-provider.runtime.js",
       "./src/media-understanding-provider.js",
       "./src/memory-embedding-adapter.js",
       "./src/node-inference.js",
-      "./src/setup.js",
-      "./src/stream.js",
-      "./src/web-search-provider.js",
+      "./src/setup.runtime.js",
+      "./src/stream.runtime.js",
+      "./src/web-search-provider.runtime.js",
       "./src/wsl2-crash-loop-check.js",
       "openclaw/plugin-sdk/runtime-env",
     ]) {
@@ -46,7 +46,7 @@ describe("ollama lazy imports", () => {
         return false;
       },
     }));
-    vi.doMock("./src/embedding-provider.js", () => {
+    vi.doMock("./src/embedding-provider.runtime.js", () => {
       embeddingImports += 1;
       return {
         createOllamaEmbeddingProvider: async () => ({
@@ -102,7 +102,7 @@ describe("ollama lazy imports", () => {
         }),
       };
     });
-    vi.doMock("./src/setup.js", () => {
+    vi.doMock("./src/setup.runtime.js", () => {
       setupImports += 1;
       return {
         promptAndConfigureOllama: async () => ({
@@ -111,13 +111,13 @@ describe("ollama lazy imports", () => {
         }),
       };
     });
-    vi.doMock("./src/stream.js", () => {
+    vi.doMock("./src/stream.runtime.js", () => {
       streamImports += 1;
       return {
         createConfiguredOllamaStreamFn: () => async () => ({ transport: "ollama" }),
       };
     });
-    vi.doMock("./src/web-search-provider.js", () => {
+    vi.doMock("./src/web-search-provider.runtime.js", () => {
       webSearchImports += 1;
       return {
         createOllamaWebSearchProvider: () => ({

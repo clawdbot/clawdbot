@@ -74,8 +74,8 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./src/setup.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./src/setup.js")>()),
+vi.mock("./src/setup.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/setup.runtime.js")>()),
   checkOllamaCloudAuth: checkOllamaCloudAuthMock,
   configureOllamaNonInteractive: configureOllamaNonInteractiveMock,
   ensureOllamaModelPulled: ensureOllamaModelPulledMock,

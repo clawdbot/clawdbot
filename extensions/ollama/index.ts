@@ -84,9 +84,9 @@ import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./src/stream-contract.js";
 import { createLazyConfiguredOllamaStreamFn } from "./src/stream-registration.js";
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
-const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.js"));
+const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
 const loadOllamaEmbeddingProvider = createLazyRuntimeModule(
-  () => import("./src/embedding-provider.js"),
+  () => import("./src/embedding-provider.runtime.js"),
 );
 const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
   async () =>
@@ -202,7 +202,7 @@ async function validateOllamaNonInteractive(
   );
 
   if (requestedModel && isOllamaCloudModel(requestedModel)) {
-    const { checkOllamaCloudAuth } = await import("./src/setup.js");
+    const { checkOllamaCloudAuth } = await loadOllamaSetup();
     const cloudAuth = await checkOllamaCloudAuth(baseUrl);
     if (!cloudAuth.signedIn) {
       ctx.runtime.error(

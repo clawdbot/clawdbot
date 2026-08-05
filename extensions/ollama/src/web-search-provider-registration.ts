@@ -7,7 +7,7 @@ import {
 } from "./web-search-contract.js";
 
 const loadOllamaWebSearchProvider = createLazyRuntimeModule(
-  () => import("./web-search-provider.js"),
+  () => import("./web-search-provider.runtime.js"),
 );
 
 export function createLazyOllamaWebSearchProvider(): WebSearchProviderPlugin {
