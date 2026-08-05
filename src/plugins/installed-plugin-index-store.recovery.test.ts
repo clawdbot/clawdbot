@@ -382,14 +382,17 @@ describe("installed plugin index policy recovery", () => {
       ]);
     });
 
-    it("skips broad discovery when a recoverable record collides with a persisted plugin id", async () => {
+    it("skips broad discovery when a recoverable record collides with a configured plugin path", async () => {
       const stateDir = makeTempDir();
       const existingPluginDir = path.join(stateDir, "plugins", "existing");
       const retainedPluginDir = path.join(stateDir, "plugins", "retained");
+      const configuredPluginDir = path.join(stateDir, "plugins", "configured");
       fs.mkdirSync(existingPluginDir, { recursive: true });
       fs.mkdirSync(retainedPluginDir, { recursive: true });
-      const existingCandidate = createCandidate(existingPluginDir, "Case-Collision");
+      fs.mkdirSync(configuredPluginDir, { recursive: true });
+      const existingCandidate = createCandidate(existingPluginDir, "existing");
       createCandidate(retainedPluginDir, "case-collision");
+      createCandidate(configuredPluginDir, "Case-Collision");
       const env = {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         OPENCLAW_VERSION: "2026.4.25",
@@ -419,18 +422,153 @@ describe("installed plugin index policy recovery", () => {
         env,
         installRecords,
       });
-      expectPluginIds(initial, ["Case-Collision"]);
+      expectPluginIds(initial, ["existing"]);
       discoverSpy.mockClear();
 
       const refreshed = await store.refreshPersistedInstalledPluginIndex({
         reason: "policy-changed",
         stateDir,
         env,
+        config: {
+          plugins: {
+            load: { paths: [configuredPluginDir] },
+          },
+        },
         policyPluginIds: [],
       });
 
       expect(discoverSpy).not.toHaveBeenCalled();
-      expectPluginIds(refreshed, ["Case-Collision"]);
+      expectPluginIds(refreshed, ["existing"]);
+      expectInstallRecord(refreshed, "case-collision", {
+        source: "npm",
+        installPath: retainedPluginDir,
+      });
+    });
+
+    it("skips broad discovery when only configured plugins can materialize", async () => {
+      const stateDir = makeTempDir();
+      const configuredPluginDir = path.join(stateDir, "plugins", "configured");
+      const malformedPluginDir = path.join(stateDir, "plugins", "malformed");
+      fs.mkdirSync(configuredPluginDir, { recursive: true });
+      fs.mkdirSync(malformedPluginDir, { recursive: true });
+      createCandidate(configuredPluginDir, "configured-only");
+      fs.writeFileSync(path.join(malformedPluginDir, "index.ts"), "export default {};", "utf8");
+      fs.writeFileSync(
+        path.join(malformedPluginDir, "openclaw.plugin.json"),
+        "{ malformed",
+        "utf8",
+      );
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const installRecords = {
+        malformed: {
+          source: "npm" as const,
+          spec: "malformed@1.0.0",
+          installPath: malformedPluginDir,
+        },
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=configured-only-recovery",
+      );
+      await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [],
+        diagnostics: [{ level: "warn", message: "policy fast-path sentinel" }],
+        env,
+        installRecords,
+      });
+      discoverSpy.mockClear();
+
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        config: {
+          plugins: {
+            load: { paths: [configuredPluginDir] },
+          },
+        },
+        policyPluginIds: [],
+      });
+
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, []);
+      expectInstallRecord(refreshed, "malformed", {
+        source: "npm",
+        installPath: malformedPluginDir,
+      });
+      expect(refreshed.diagnostics).toEqual([
+        { level: "warn", message: "policy fast-path sentinel" },
+      ]);
+    });
+
+    it("uses the filename id for manifestless configured plugin files in collision gating", async () => {
+      const stateDir = makeTempDir();
+      const existingPluginDir = path.join(stateDir, "plugins", "existing");
+      const retainedPluginDir = path.join(stateDir, "plugins", "retained");
+      const configuredPluginFile = path.join(stateDir, "plugins", "Case-Collision.ts");
+      fs.mkdirSync(existingPluginDir, { recursive: true });
+      fs.mkdirSync(retainedPluginDir, { recursive: true });
+      const existingCandidate = createCandidate(existingPluginDir, "existing");
+      createCandidate(retainedPluginDir, "case-collision");
+      fs.writeFileSync(configuredPluginFile, "export default {};", "utf8");
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const installRecords = {
+        "case-collision": {
+          source: "npm" as const,
+          spec: "case-collision@1.0.0",
+          installPath: retainedPluginDir,
+        },
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=manifestless-configured-file-collision",
+      );
+      const initial = await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [existingCandidate],
+        env,
+        installRecords,
+      });
+      expectPluginIds(initial, ["existing"]);
+      discoverSpy.mockClear();
+
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        config: {
+          plugins: {
+            load: { paths: [configuredPluginFile] },
+          },
+        },
+        policyPluginIds: [],
+      });
+
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, ["existing"]);
       expectInstallRecord(refreshed, "case-collision", {
         source: "npm",
         installPath: retainedPluginDir,

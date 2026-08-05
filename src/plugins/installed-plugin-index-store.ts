@@ -473,7 +473,7 @@ function hasPolicyRefreshTargets(
 function hasPotentiallyRecoverableInstallRecord(
   persisted: InstalledPluginIndex,
   missingInstallRecordPluginIds: readonly string[],
-  env: NodeJS.ProcessEnv,
+  params: RefreshInstalledPluginIndexParams,
 ): boolean {
   const installRecords = {} as Record<string, InstalledPluginInstallRecordInfo>;
   for (const pluginId of missingInstallRecordPluginIds) {
@@ -482,10 +482,13 @@ function hasPotentiallyRecoverableInstallRecord(
       installRecords[pluginId] = record;
     }
   }
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return hasMaterializableInstalledPluginRecords({
     installRecords,
     existingPluginIds: persisted.plugins.map((plugin) => plugin.pluginId),
-    env,
+    configuredLoadPaths: normalizedConfig.loadPaths,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    env: params.env ?? process.env,
   });
 }
 
@@ -505,13 +508,7 @@ function buildRecoverableInstallRecordRefresh(
   // recoverable, a recovery refresh would run broad bundled/global discovery
   // without any chance of restoring them, so stay on the scan-free policy fast
   // path like the pre-recovery behavior.
-  if (
-    !hasPotentiallyRecoverableInstallRecord(
-      persisted,
-      missingInstallRecordPluginIds,
-      params.env ?? process.env,
-    )
-  ) {
+  if (!hasPotentiallyRecoverableInstallRecord(persisted, missingInstallRecordPluginIds, params)) {
     return undefined;
   }
   const current = refreshInstalledPluginIndex({

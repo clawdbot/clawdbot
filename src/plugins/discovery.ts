@@ -23,6 +23,7 @@ import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manif
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  isCoreReservedPluginId,
   loadPluginManifest,
   type PluginManifest,
   resolvePackageExtensionEntries,
@@ -686,10 +687,39 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
   return compatible ? resolvedManifest.manifest.id : undefined;
 }
 
+function resolveConfiguredPluginCandidateId(params: {
+  candidate: PluginCandidate;
+  configuredFileSources: ReadonlySet<string>;
+  env: NodeJS.ProcessEnv;
+  realpathCache: Map<string, string>;
+}): string | undefined {
+  const pluginId = resolveMaterializableInstalledPluginCandidateId({
+    candidate: params.candidate,
+    env: params.env,
+    realpathCache: params.realpathCache,
+  });
+  if (pluginId) {
+    return pluginId;
+  }
+  if (
+    params.candidate.origin !== "config" ||
+    isCoreReservedPluginId(params.candidate.idHint) ||
+    !params.configuredFileSources.has(path.resolve(params.candidate.source))
+  ) {
+    return undefined;
+  }
+  // The manifest registry assigns an explicit manifestless configured file
+  // the filename-derived idHint. Keep the recovery collision context aligned
+  // with that registry behavior without treating the configured file as an
+  // installed record that can itself trigger recovery.
+  return params.candidate.idHint;
+}
+
 /** Returns whether any installed record can cross the manifest registry materialization boundary. */
 export function hasMaterializableInstalledPluginRecords(params: {
   installRecords?: Record<string, PluginInstallRecord>;
   existingPluginIds?: readonly string[];
+  configuredLoadPaths?: readonly string[];
   ownershipUid?: number | null;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -708,7 +738,16 @@ export function hasMaterializableInstalledPluginRecords(params: {
     realpathCache,
     packageManifestCache: new Map<string, PackageManifest | null>(),
   });
-  const materializablePluginIds = result.candidates.flatMap((candidate) => {
+  const configuredCandidates =
+    params.configuredLoadPaths && params.configuredLoadPaths.length > 0
+      ? discoverConfiguredPluginLoadPaths({
+          loadPaths: params.configuredLoadPaths,
+          ownershipUid: params.ownershipUid,
+          workspaceDir: params.workspaceDir,
+          env,
+        }).candidates
+      : [];
+  const materializableInstalledPluginIds = result.candidates.flatMap((candidate) => {
     const pluginId = resolveMaterializableInstalledPluginCandidateId({
       candidate,
       env,
@@ -717,9 +756,24 @@ export function hasMaterializableInstalledPluginRecords(params: {
     });
     return pluginId ? [pluginId] : [];
   });
-  if (materializablePluginIds.length === 0) {
+  if (materializableInstalledPluginIds.length === 0) {
     return false;
   }
+  const configuredFileSources = new Set(
+    (params.configuredLoadPaths ?? [])
+      .map((loadPath) => resolveUserPath(loadPath, env))
+      .filter((loadPath) => safeStatSync(loadPath)?.isFile() === true)
+      .map((loadPath) => path.resolve(loadPath)),
+  );
+  const configuredPluginIds = configuredCandidates.flatMap((candidate) => {
+    const pluginId = resolveConfiguredPluginCandidateId({
+      candidate,
+      configuredFileSources,
+      env,
+      realpathCache,
+    });
+    return pluginId ? [pluginId] : [];
+  });
 
   // The manifest registry rejects every record when distinct declared IDs share
   // one normalized policy ID. Keep recovery eligibility equivalent to that
@@ -731,7 +785,7 @@ export function hasMaterializableInstalledPluginRecords(params: {
     declaredIds.add(pluginId);
     declaredIdsByPolicyId.set(policyId, declaredIds);
   }
-  for (const pluginId of materializablePluginIds) {
+  for (const pluginId of [...configuredPluginIds, ...materializableInstalledPluginIds]) {
     const policyId = normalizePluginPolicyId(pluginId);
     const declaredIds = declaredIdsByPolicyId.get(policyId) ?? new Set<string>();
     declaredIds.add(pluginId);
@@ -742,7 +796,7 @@ export function hasMaterializableInstalledPluginRecords(params: {
       .filter(([, declaredIds]) => declaredIds.size > 1)
       .map(([policyId]) => policyId),
   );
-  return materializablePluginIds.some(
+  return materializableInstalledPluginIds.some(
     (pluginId) => !collidingPolicyIds.has(normalizePluginPolicyId(pluginId)),
   );
 }
