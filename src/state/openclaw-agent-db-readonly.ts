@@ -26,7 +26,7 @@ type OpenClawAgentReadOnlyDatabase = {
   path: string;
 };
 
-export type OpenClawAgentDatabaseReadOnlyResult<T> =
+type OpenClawAgentDatabaseReadOnlyResult<T> =
   | { found: true; value: T }
   | { found: false; reason: "database-missing" | "schema-missing" | "table-missing" };
 

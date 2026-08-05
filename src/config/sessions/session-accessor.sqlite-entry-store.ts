@@ -225,19 +225,6 @@ export function readExactSessionEntryJsonForCanonicalRepair(
   )?.entry_json;
 }
 
-export function hasExactSessionEntryRow(
-  database: OpenClawAgentDatabaseReader,
-  sessionKey: string,
-): boolean {
-  const db = getSessionKysely(database.db);
-  return Boolean(
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      db.selectFrom("session_nodes").select("session_key").where("session_key", "=", sessionKey),
-    ),
-  );
-}
-
 export function readExactSessionEntryRowValidated(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,

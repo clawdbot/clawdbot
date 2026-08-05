@@ -1,10 +1,7 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import {
-  type OpenClawAgentDatabaseReadOnlyResult,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
@@ -36,7 +33,6 @@ import {
   collectSessionEntryLookupKeys,
   createSqliteSessionIdentitySnapshot,
   deleteLegacySessionEntryRows,
-  hasExactSessionEntryRow,
   readExactSessionEntryRowValidated,
   readSessionEntryRow,
   readSqliteLifecycleTargetSnapshot,
@@ -204,56 +200,21 @@ export function listSqliteSessionEntryKeysReadOnly(
 export function loadExactSqliteSessionEntryReadOnly(
   scope: SessionAccessScope,
 ): ExactSessionEntry | undefined {
-  const result = loadExactSqliteSessionEntryReadOnlyResult(scope);
-  return result.found ? result.value : undefined;
-}
-
-type ExactSessionEntryReadOnlyResult =
-  | OpenClawAgentDatabaseReadOnlyResult<ExactSessionEntry | undefined>
-  | { found: false; reason: "row-invalid" };
-
-/** Exact persisted-key probe that preserves database and row availability. */
-export function loadExactSqliteSessionEntryReadOnlyResult(
-  scope: SessionAccessScope,
-): ExactSessionEntryReadOnlyResult {
   const sessionKey = scope.sessionKey.trim();
   if (!sessionKey) {
-    return { found: true, value: undefined };
+    return undefined;
   }
   const resolved = resolveSqliteScope(scope);
-  let result: OpenClawAgentDatabaseReadOnlyResult<{
-    entry: SessionEntry | undefined;
-    rowExists: boolean;
-  }>;
-  try {
-    result = withOpenClawAgentDatabaseReadOnly((database) => {
-      const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
-      return { entry, rowExists: entry ? true : hasExactSessionEntryRow(database, sessionKey) };
-    }, toDatabaseOptions(resolved));
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error as { code?: unknown }).code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED"
-    ) {
-      return { found: false, reason: "row-invalid" };
-    }
-    throw error;
-  }
-  if (!result.found) {
-    return result;
-  }
-  if (!result.value.entry) {
-    return result.value.rowExists
-      ? { found: false, reason: "row-invalid" }
-      : { found: true, value: undefined };
-  }
-  return {
-    found: true,
-    value: {
-      sessionKey,
-      entry: scope.clone === false ? result.value.entry : cloneSessionEntry(result.value.entry),
-    },
-  };
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
+    toDatabaseOptions(resolved),
+  );
+  return result.found && result.value
+    ? {
+        sessionKey,
+        entry: scope.clone === false ? result.value : cloneSessionEntry(result.value),
+      }
+    : undefined;
 }
 
 /** Lists direct child rows without cloning or rebuilding the complete session store. */

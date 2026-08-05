@@ -13,7 +13,7 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets.js";
+import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
@@ -209,10 +209,10 @@ async function prepareManagedSessionStore(stateDir: string): Promise<void> {
     { sessionId: "sess-1", updatedAt: Date.now() },
   );
   closeOpenClawAgentDatabasesForTest();
-  const { loadExactSqliteSessionEntryReadOnlyResult } =
-    await import("../config/sessions/session-accessor.sqlite-entry.js");
+  const { loadExactSessionEntryReadOnlyResult } =
+    await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
   expect(
-    loadExactSqliteSessionEntryReadOnlyResult({
+    loadExactSessionEntryReadOnlyResult({
       agentId: "main",
       env,
       sessionKey: "agent:main:main",
@@ -2245,10 +2245,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(
       resolveExistingAgentSessionStoreTargetsReadOnlyResult(config, "retired", { env }),
     ).toEqual({ available: true, targets: [{ agentId: "retired", storePath }] });
-    const { loadExactSqliteSessionEntryReadOnlyResult } =
-      await import("../config/sessions/session-accessor.sqlite-entry.js");
+    const { loadExactSessionEntryReadOnlyResult } =
+      await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
     expect(
-      loadExactSqliteSessionEntryReadOnlyResult({
+      loadExactSessionEntryReadOnlyResult({
         agentId: "retired",
         sessionKey: "agent:retired:main",
         storePath,
@@ -2501,10 +2501,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toMatchObject({ available: true });
-    const { loadExactSqliteSessionEntryReadOnlyResult } =
-      await import("../config/sessions/session-accessor.sqlite-entry.js");
+    const { loadExactSessionEntryReadOnlyResult } =
+      await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
     expect(
-      loadExactSqliteSessionEntryReadOnlyResult({
+      loadExactSessionEntryReadOnlyResult({
         agentId: "work",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         sessionKey: "global",

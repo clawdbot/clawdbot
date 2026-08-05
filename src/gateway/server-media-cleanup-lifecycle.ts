@@ -17,7 +17,7 @@ export function registerMediaCleanupDrain(drain: Promise<void>): void {
 /** Defers a replacement cleanup owner until every prior gateway generation settles. */
 export async function waitForMediaCleanupDrainsToSettle(): Promise<void> {
   while (mediaCleanupDrains.size > 0) {
-    await Promise.allSettled([...mediaCleanupDrains]);
+    await Promise.allSettled(mediaCleanupDrains);
   }
 }
 

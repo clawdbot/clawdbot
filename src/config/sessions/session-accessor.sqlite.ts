@@ -10,7 +10,6 @@ export {
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
   loadExactSqliteSessionEntryReadOnly,
-  loadExactSqliteSessionEntryReadOnlyResult,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
