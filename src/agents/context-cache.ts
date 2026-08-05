@@ -1,23 +1,7 @@
 /** Process-local model context window cache keyed by model id. */
-export let MODEL_CONTEXT_TOKEN_CACHE = new Map<string, number>();
-export let MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE = new Map<string, number>();
-export let MODEL_CONTEXT_WINDOW_CACHE = new Map<string, number>();
-
-/** Publish one complete cache generation without an O(N) main-loop copy. */
-export function replaceContextWindowCaches(params: {
-  configuredTokenCache: Map<string, number>;
-  discoveredTokenCache: Map<string, number>;
-  contextWindowCache: Map<string, number>;
-}): void {
-  MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE = params.configuredTokenCache;
-  MODEL_CONTEXT_TOKEN_CACHE = params.discoveredTokenCache;
-  MODEL_CONTEXT_WINDOW_CACHE = params.contextWindowCache;
-}
-
-/** Publish one complete discovered-metadata generation. */
-export function replaceDiscoveredContextTokenCache(cache: Map<string, number>): void {
-  MODEL_CONTEXT_TOKEN_CACHE = cache;
-}
+export const MODEL_CONTEXT_TOKEN_CACHE = new Map<string, number>();
+export const MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE = new Map<string, number>();
+export const MODEL_CONTEXT_WINDOW_CACHE = new Map<string, number>();
 
 const PROVIDER_CONTEXT_TOKEN_CACHE_PREFIX = "\0provider:";
 

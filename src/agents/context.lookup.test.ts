@@ -3,10 +3,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "./context-resolution.js";
-import {
-  beginContextWindowCacheRefresh,
-  CONTEXT_WINDOW_RUNTIME_STATE,
-} from "./context-runtime-state.js";
+import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 
 type DiscoveredModel = {
   id: string;
@@ -24,17 +21,6 @@ const contextTestState = vi.hoisted(() => {
     runtimeConfigSnapshot: null as OpenClawConfig | null,
     runtimeConfigSourceSnapshot: null as OpenClawConfig | null,
     loadModelCatalogOwnerSnapshot: vi.fn(async (_params: unknown) => ({
-      config: state.loadConfigImpl() as OpenClawConfig,
-      agentDir: "/tmp/context-catalog-agent",
-      modelCatalog: {
-        entries: state.discoveredModels,
-        routeVariants: [],
-        staticEntries: state.staticCatalogModels,
-      },
-    })),
-    loadPublishedModelCatalogOwnerSnapshot: vi.fn(async (_params: unknown) => ({
-      config: state.loadConfigImpl() as OpenClawConfig,
-      agentDir: "/tmp/context-catalog-agent",
       modelCatalog: {
         entries: state.discoveredModels,
         routeVariants: [],
@@ -58,8 +44,6 @@ vi.mock("../config/runtime-source-projection.js", () => ({
 
 vi.mock("./prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogOwnerSnapshot: contextTestState.loadModelCatalogOwnerSnapshot,
-  loadPublishedPreparedModelCatalogOwnerSnapshot:
-    contextTestState.loadPublishedModelCatalogOwnerSnapshot,
 }));
 
 function mockContextDeps(params: {
@@ -98,28 +82,6 @@ function createContextOverrideConfig(
         [provider]: {
           baseUrl: "https://example.invalid",
           models: [{ id: model, contextWindow } as never],
-        },
-      },
-    },
-  };
-}
-
-function createLargeContextOverrideConfig(prefix: string, modelCount: number): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        synthetic: {
-          baseUrl: "https://example.invalid",
-          api: "openai-completions",
-          models: Array.from({ length: modelCount }, (_, index) => ({
-            id: `${prefix}-${index}`,
-            name: `${prefix} ${index}`,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 8_192,
-          })),
         },
       },
     },
@@ -172,18 +134,6 @@ describe("lookupContextTokens", () => {
     contextTestState.runtimeConfigSourceSnapshot = null;
     contextTestState.loadModelCatalogOwnerSnapshot.mockClear();
     contextTestState.loadModelCatalogOwnerSnapshot.mockImplementation(async () => ({
-      config: contextTestState.loadConfigImpl() as OpenClawConfig,
-      agentDir: "/tmp/context-catalog-agent",
-      modelCatalog: {
-        entries: contextTestState.discoveredModels,
-        routeVariants: [],
-        staticEntries: contextTestState.staticCatalogModels,
-      },
-    }));
-    contextTestState.loadPublishedModelCatalogOwnerSnapshot.mockClear();
-    contextTestState.loadPublishedModelCatalogOwnerSnapshot.mockImplementation(async () => ({
-      config: contextTestState.loadConfigImpl() as OpenClawConfig,
-      agentDir: "/tmp/context-catalog-agent",
       modelCatalog: {
         entries: contextTestState.discoveredModels,
         routeVariants: [],
@@ -429,31 +379,6 @@ describe("lookupContextTokens", () => {
     ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("cooperatively projects a large catalog when request-time loading starts first", async () => {
-    const modelCount = 1_025;
-    const config = createContextOverrideConfig("synthetic", "configured", 128_000);
-    contextTestState.discoveredModels = Array.from({ length: modelCount }, (_, index) => ({
-      id: `request-discovered-${index}`,
-      provider: "synthetic",
-      contextWindow: 64_000,
-    }));
-    const immediateSpy = vi.spyOn(globalThis, "setImmediate");
-    try {
-      await contextModule.ensureContextWindowCacheLoaded(config);
-
-      expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
-      expect(immediateSpy).toHaveBeenCalled();
-      expect(
-        contextModule.lookupContextTokens("request-discovered-1024", {
-          allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
-        }),
-      ).toBe(64_000);
-    } finally {
-      immediateSpy.mockRestore();
-    }
-  });
-
   it("warms fresh caches instead of reusing a pre-generation load promise", async () => {
     const legacyLoadPromise = Promise.resolve();
     CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = legacyLoadPromise;
@@ -497,110 +422,6 @@ describe("lookupContextTokens", () => {
       await expect(waitResult).resolves.toBe("timeout");
     } finally {
       vi.useRealTimers();
-    }
-  });
-
-  it("cooperatively warms the published owner without exact-config matching", async () => {
-    const modelCount = 1_025;
-    const config = createLargeContextOverrideConfig("configured", modelCount);
-    contextTestState.loadConfigImpl = () => config;
-    contextTestState.discoveredModels = Array.from({ length: modelCount }, (_, index) => ({
-      id: `discovered-${index}`,
-      provider: "synthetic",
-      contextWindow: 64_000,
-    }));
-    const immediateSpy = vi.spyOn(globalThis, "setImmediate");
-    try {
-      await contextModule.prewarmContextWindowCacheAfterReady({ config });
-
-      expect(contextTestState.loadPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ config, readOnly: true }),
-      );
-      expect(contextTestState.loadModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
-      expect(immediateSpy).toHaveBeenCalled();
-      expect(
-        contextModule.lookupContextTokens("discovered-1024", {
-          allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
-        }),
-      ).toBe(64_000);
-      expect(
-        contextModule.lookupContextTokens("configured-1024", {
-          allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
-        }),
-      ).toBe(128_000);
-    } finally {
-      immediateSpy.mockRestore();
-    }
-  });
-
-  it("does not yield while warming a small published catalog", async () => {
-    const config = createContextOverrideConfig("synthetic", "configured-small", 128_000);
-    contextTestState.loadConfigImpl = () => config;
-    contextTestState.discoveredModels = [
-      { id: "discovered-small", provider: "synthetic", contextWindow: 64_000 },
-    ];
-    const immediateSpy = vi.spyOn(globalThis, "setImmediate");
-    try {
-      await contextModule.prewarmContextWindowCacheAfterReady({ config });
-      expect(immediateSpy).not.toHaveBeenCalled();
-    } finally {
-      immediateSpy.mockRestore();
-    }
-  });
-
-  it("does not publish a cooperatively prepared stale generation", async () => {
-    const config = createLargeContextOverrideConfig("stale", 1_025);
-    contextTestState.loadConfigImpl = () => config;
-    const originalSetImmediate = globalThis.setImmediate;
-    const immediateSpy = vi
-      .spyOn(globalThis, "setImmediate")
-      .mockImplementationOnce((callback, ...args) =>
-        originalSetImmediate(() => {
-          beginContextWindowCacheRefresh();
-          callback(...args);
-        }),
-      );
-    try {
-      await contextModule.prewarmContextWindowCacheAfterReady({ config });
-      expect(
-        contextModule.lookupContextTokens("stale-0", {
-          allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
-        }),
-      ).toBeUndefined();
-    } finally {
-      immediateSpy.mockRestore();
-    }
-  });
-
-  it("stops an in-flight optional warmup without publishing partial caches", async () => {
-    const config = createLargeContextOverrideConfig("cancelled", 1_025);
-    contextTestState.loadConfigImpl = () => config;
-    let cancelled = false;
-    const originalSetImmediate = globalThis.setImmediate;
-    const immediateSpy = vi
-      .spyOn(globalThis, "setImmediate")
-      .mockImplementationOnce((callback, ...args) =>
-        originalSetImmediate(() => {
-          cancelled = true;
-          callback(...args);
-        }),
-      );
-    try {
-      await contextModule.prewarmContextWindowCacheAfterReady({
-        config,
-        isCancelled: () => cancelled,
-      });
-      expect(
-        contextModule.lookupContextTokens("cancelled-0", {
-          allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
-        }),
-      ).toBeUndefined();
-    } finally {
-      immediateSpy.mockRestore();
     }
   });
 

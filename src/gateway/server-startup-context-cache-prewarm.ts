@@ -14,7 +14,7 @@ type ContextCachePrewarmHandle = {
 };
 
 export function scheduleContextCachePrewarm(params: {
-  getConfig: () => OpenClawConfig;
+  cfgAtStart: OpenClawConfig;
   startupTrace?: StartupTrace;
   log: { warn: (msg: string) => void };
 }): ContextCachePrewarmHandle {
@@ -23,12 +23,9 @@ export function scheduleContextCachePrewarm(params: {
     if (stopped) {
       return;
     }
-    const { prewarmContextWindowCacheAfterReady } = await import("../agents/context.js");
+    const { ensureContextWindowCacheLoaded } = await import("../agents/context.js");
     if (!stopped) {
-      await prewarmContextWindowCacheAfterReady({
-        config: params.getConfig(),
-        isCancelled: () => stopped,
-      });
+      await ensureContextWindowCacheLoaded(params.cfgAtStart);
     }
   };
 
