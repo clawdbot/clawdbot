@@ -72,6 +72,25 @@ export function readManagedServiceEnvKeysFromEnvironment(
   return new Set();
 }
 
+export function clearMissingManagedServiceEnvKeys(params: {
+  environment: Record<string, string | undefined>;
+  managedKeys: Iterable<string>;
+  presentKeys: Iterable<string>;
+  preserveKeys?: Iterable<string>;
+}): void {
+  const presentKeys = new Set(
+    [...params.presentKeys, ...(params.preserveKeys ?? [])].flatMap((key) => {
+      const normalized = normalizeServiceEnvKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
+  const missingKeys = [...params.managedKeys].filter((key) => {
+    const normalized = normalizeServiceEnvKey(key);
+    return normalized !== null && !presentKeys.has(normalized);
+  });
+  deleteManagedServiceEnvKeys(params.environment, missingKeys);
+}
+
 function deleteManagedServiceEnvKeys(
   environment: Record<string, string | undefined>,
   keys: Iterable<string>,

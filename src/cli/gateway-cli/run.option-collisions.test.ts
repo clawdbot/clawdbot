@@ -51,6 +51,7 @@ const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinConfigDir = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinRuntimePaths = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 type RuntimeDotEnvLoadResult = {
+  dotenvPresentKeys: string[];
   gatewayEnvAppliedKeys: string[];
   stateEnvAppliedKeys: string[];
 };
@@ -185,6 +186,7 @@ vi.mock("../../utils.js", async (importOriginal) => ({
 vi.mock("../../infra/dotenv-global.js", () => ({
   loadGlobalRuntimeDotEnvFiles: (opts?: unknown) =>
     loadGlobalRuntimeDotEnvFiles(opts) ?? {
+      dotenvPresentKeys: [],
       gatewayEnvAppliedKeys: [],
       stateEnvAppliedKeys: [],
     },
@@ -1292,6 +1294,7 @@ describe("gateway run option collisions", () => {
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
         setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-reset-retargeted");
         return {
+          dotenvPresentKeys: ["OPENCLAW_STATE_DIR"],
           gatewayEnvAppliedKeys: [],
           stateEnvAppliedKeys: ["OPENCLAW_STATE_DIR"],
         };
@@ -1587,6 +1590,46 @@ describe("gateway run option collisions", () => {
       expect.objectContaining({
         overrideKeys: new Set(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]),
       }),
+    );
+  });
+
+  it("clears only missing managed keys after reading the selected config", async () => {
+    configState.snapshot = {
+      config: {},
+      exists: true,
+      sourceConfig: {
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "SECRET_REF_KEY" },
+            },
+          },
+        },
+      },
+      valid: true,
+    };
+    loadGlobalRuntimeDotEnvFiles.mockReturnValue({
+      dotenvPresentKeys: [],
+      gatewayEnvAppliedKeys: [],
+      stateEnvAppliedKeys: [],
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "REMOVED_KEY,SECRET_REF_KEY",
+        REMOVED_KEY: "stale-service-value",
+        SECRET_REF_KEY: "file-backed-value",
+        OPERATOR_KEY: "operator-value",
+      },
+      async () => {
+        const { prepareGatewayRunBootstrap, selectGatewayRunEnvironment } =
+          await import("./pre-bootstrap.js");
+        await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
+        expect(process.env.REMOVED_KEY).toBeUndefined();
+        expect(process.env.SECRET_REF_KEY).toBe("file-backed-value");
+        expect(process.env.OPERATOR_KEY).toBe("operator-value");
+        await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
+      },
     );
   });
 

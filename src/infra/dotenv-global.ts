@@ -29,7 +29,7 @@ type LoadedDotEnvFile = {
 type GlobalRuntimeDotEnvOptions = {
   additionalEnvPaths?: string[];
   entryFilter?: (key: string, value: string) => boolean;
-  /** Keys whose service-managed inherited values may be replaced by the state dotenv. */
+  /** Keys whose service-managed inherited values may be replaced by trusted dotenv files. */
   overrideKeys?: Iterable<string>;
   quiet?: boolean;
   stateEnvPath?: string;
@@ -81,7 +81,6 @@ export function readDotEnvFile(params: {
 function loadParsedDotEnvFiles(
   files: LoadedDotEnvFile[],
   overrideKeys?: Iterable<string>,
-  overrideFilePath?: string,
 ): Map<string, string[]> {
   const preExistingKeys = new Set(Object.keys(process.env));
   const normalizedOverrideKeys = new Set(
@@ -96,10 +95,7 @@ function loadParsedDotEnvFiles(
 
   for (const file of files) {
     for (const { key, value } of file.entries) {
-      const mayOverride =
-        normalizedOverrideKeys.has(key) &&
-        overrideFilePath !== undefined &&
-        file.filePath === overrideFilePath;
+      const mayOverride = normalizedOverrideKeys.has(key);
       if (preExistingKeys.has(key) && !mayOverride) {
         continue;
       }
@@ -180,8 +176,9 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) 
     parsedFiles.push(gatewayEnv);
   }
   const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
-  const appliedKeysByFile = loadParsedDotEnvFiles(parsed, opts?.overrideKeys, stateEnvPath);
+  const appliedKeysByFile = loadParsedDotEnvFiles(parsed, opts?.overrideKeys);
   return {
+    dotenvPresentKeys: [...new Set(parsed.flatMap((file) => file.entries.map(({ key }) => key)))],
     stateEnvAppliedKeys: globalEnvs.flatMap((file) =>
       file ? (appliedKeysByFile.get(file.filePath) ?? []) : [],
     ),

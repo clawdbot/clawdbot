@@ -248,7 +248,8 @@ async function guardGatewayRunSelectedConfig(
     { normalizeEnv },
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
-    { readManagedServiceEnvKeysFromEnvironment },
+    { collectEnvSecretRefIds },
+    { clearMissingManagedServiceEnvKeys, readManagedServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
     import("../../config/config-env-vars.js"),
@@ -256,6 +257,7 @@ async function guardGatewayRunSelectedConfig(
     import("../../infra/env.js"),
     import("../../config/paths.js"),
     import("../../utils.js"),
+    import("../../config/types.secrets.js"),
     import("../../daemon/service-managed-env.js"),
   ]);
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
@@ -343,6 +345,14 @@ async function guardGatewayRunSelectedConfig(
       }
       return params.opts.reset === true;
     }
+    // The service marker also owns config SecretRefs. Only dotenv-absent keys with no current
+    // config reference are stale; clearing the broad marker blindly would drop file-backed refs.
+    clearMissingManagedServiceEnvKeys({
+      environment: process.env,
+      managedKeys: readManagedServiceEnvKeysFromEnvironment(process.env),
+      presentKeys: trustedEnvLoad.dotenvPresentKeys,
+      preserveKeys: collectEnvSecretRefIds(snapshot.sourceConfig),
+    });
     const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
     applySelectedConfigEnv(snapshot);
     // Only selection inputs survive a selection hop. Reload credentials once the final config and

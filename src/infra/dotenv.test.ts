@@ -157,7 +157,7 @@ describe("loadDotEnv", () => {
         process.env.MANAGED_API_KEY = "stale-service-value";
         process.env.OPERATOR_API_KEY = "operator-service-value";
 
-        loadGlobalRuntimeDotEnvFiles({
+        const loaded = loadGlobalRuntimeDotEnvFiles({
           stateEnvPath,
           overrideKeys: ["MANAGED_API_KEY"],
           quiet: true,
@@ -165,6 +165,7 @@ describe("loadDotEnv", () => {
 
         expect(process.env.MANAGED_API_KEY).toBe("from-state");
         expect(process.env.OPERATOR_API_KEY).toBe("operator-service-value");
+        expect(loaded.dotenvPresentKeys).toEqual(["MANAGED_API_KEY", "OPERATOR_API_KEY"]);
       });
     });
   });
