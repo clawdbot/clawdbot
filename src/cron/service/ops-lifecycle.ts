@@ -90,17 +90,12 @@ export async function start(state: CronServiceState) {
       state.store.jobs = jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
     }
     if (repairedAnyStartupRun || jobs.length > 0) {
-      const persisted = await persist(
-        state,
-        repairedAnyStartupRun ? undefined : { stateOnly: true },
-      );
       // Recovery notifications describe repaired durable rows, so never
       // publish them until the startup write has committed successfully.
-      if (persisted) {
-        for (const notify of postPersistNotifications) {
-          notify();
-        }
-      }
+      await persist(state, {
+        ...(repairedAnyStartupRun ? {} : { stateOnly: true }),
+        postPersistNotifications,
+      });
     }
   });
 
@@ -126,12 +121,9 @@ export async function start(state: CronServiceState) {
       deferredNotifications: postPersistMaintenanceNotifications,
     });
     if (changed) {
-      const persisted = await persist(state);
-      if (persisted) {
-        for (const notify of postPersistMaintenanceNotifications) {
-          notify();
-        }
-      }
+      await persist(state, {
+        postPersistNotifications: postPersistMaintenanceNotifications,
+      });
     }
     for (const interrupted of interruptedRuns) {
       const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);

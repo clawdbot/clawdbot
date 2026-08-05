@@ -28,7 +28,10 @@ import {
   uiProtocolFreshnessIssueToHealthFinding,
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
-import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
+import {
+  collectCodexRuntimeCompatibilityWarnings,
+  collectDisabledCodexPluginRouteIssues,
+} from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -43,6 +46,7 @@ import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -639,6 +643,7 @@ function noteTextToFinding(params: {
   checkId: string;
   severity: HealthFinding["severity"];
   text: string;
+  target?: string;
 }): HealthFinding {
   const lines = params.text.split("\n");
   const first = normalizeDoctorNoteLine(lines[0] ?? params.text);
@@ -647,6 +652,7 @@ function noteTextToFinding(params: {
     checkId: params.checkId,
     severity: params.severity,
     message: first,
+    ...(params.target ? { target: params.target } : {}),
     ...(rest ? { fixHint: rest } : {}),
   };
 }
@@ -820,10 +826,10 @@ const legacyCronStoreCheck: SplitHealthCheckInput = {
 const codexSessionRoutesCheck: HealthCheck = {
   id: CODEX_SESSION_ROUTES_CHECK_ID,
   kind: "core",
-  description: "Codex runtime routes have a registered Codex plugin harness before sessions run.",
+  description: "Codex runtime routes are compatible with the configured plugin harness.",
   source: "doctor",
   async detect(ctx) {
-    return collectDisabledCodexPluginRouteIssues(ctx.cfg).map(
+    const disabledPluginFindings = collectDisabledCodexPluginRouteIssues(ctx.cfg, ctx.env).map(
       (issue): HealthFinding => ({
         checkId: CODEX_SESSION_ROUTES_CHECK_ID,
         severity: "warning",
@@ -845,6 +851,15 @@ const codexSessionRoutesCheck: HealthCheck = {
             ].join(" "),
       }),
     );
+    const compatibilityFindings = collectCodexRuntimeCompatibilityWarnings(ctx.cfg, ctx.env).map(
+      (text) =>
+        noteTextToFinding({
+          checkId: CODEX_SESSION_ROUTES_CHECK_ID,
+          severity: "warning",
+          text,
+        }),
+    );
+    return [...disabledPluginFindings, ...compatibilityFindings];
   },
 };
 
@@ -1240,15 +1255,22 @@ function createWorkspaceSuggestionsCheck(
     defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
-      const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-      const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
-      return notes.map((text) =>
-        noteTextToFinding({
-          checkId: "core/doctor/workspace-suggestions",
-          severity: "info",
-          text,
+      const scopes = resolveDoctorWorkspaceSuggestionScopes(ctx.cfg);
+      const findings = await Promise.all(
+        scopes.map(async ({ agentId, workspaceDir, labelAgent }) => {
+          const prefix = labelAgent ? `Agent "${agentId}": ` : "";
+          const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
+          return notes.map((text) =>
+            noteTextToFinding({
+              checkId: "core/doctor/workspace-suggestions",
+              severity: "info",
+              text: `${prefix}${text}`,
+              ...(labelAgent ? { target: agentId } : {}),
+            }),
+          );
         }),
       );
+      return findings.flat();
     },
   };
 }

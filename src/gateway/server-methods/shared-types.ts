@@ -1,6 +1,7 @@
 import type {
   SessionApprovalReplay,
   SystemAgentChatQuestion,
+  WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
@@ -52,6 +53,7 @@ import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
 } from "../worker-environments/service-contract.js";
+import type { ChatMetadataReadParams, ChatMetadataResult } from "./chat-metadata-contract.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /**
@@ -67,6 +69,8 @@ export type GatewayClient = {
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
   authenticatedUserId?: string;
+  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
+  authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -131,6 +135,12 @@ type GatewaySystemAgentSession = {
       message: string,
       options?: { uiContext?: { page: string } },
     ) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
+    }>;
+    answerWizard: (answer: WizardAnswer) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
@@ -210,6 +220,7 @@ export type GatewayRequestContext = {
     agentDir?: string;
     workspaceDir?: string;
   }) => Promise<ModelCatalogEntry[] | undefined>;
+  readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;

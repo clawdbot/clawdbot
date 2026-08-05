@@ -101,6 +101,11 @@ export async function prepareReplyAgentPayloads(state: {
   if (deliberateSilentTerminalReply) {
     opts?.onDeliberateSilentTerminalReply?.();
   }
+  const pendingContinuation =
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  if (pendingContinuation) {
+    opts?.onPendingContinuation?.();
+  }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
     blockReplyPipeline,
@@ -144,8 +149,7 @@ export async function prepareReplyAgentPayloads(state: {
         isMessageToolOnly:
           (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
           "message_tool_only",
-        hasPendingContinuation:
-          runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+        hasPendingContinuation: pendingContinuation,
         hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
         sessionCtx,

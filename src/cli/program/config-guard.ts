@@ -246,7 +246,7 @@ export async function ensureConfigReady(
         ...(commandName === "status" ? { observe: false } : {}),
         ...(shouldRequireStartupMigrationCheckpoint(commandPath)
           ? { requireStartupMigrationCheckpoint: true }
-          : {}),
+          : { requireStateMigrationCheckpoint: true }),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),

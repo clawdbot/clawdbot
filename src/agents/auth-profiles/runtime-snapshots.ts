@@ -5,6 +5,7 @@ import path from "node:path";
  */
 import { isDeepStrictEqual } from "node:util";
 import { cloneAuthProfileStore } from "./clone.js";
+import { mergeAuthProfileStores } from "./persisted.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -221,6 +222,27 @@ export function getRuntimeAuthProfileStoreSnapshot(
 ): RuntimeAuthProfileStore | undefined {
   const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir));
   return store ? cloneAuthProfileStore(store) : undefined;
+}
+
+/**
+ * Reads the effective prepared auth store without falling back to persisted storage.
+ * Lifecycle consumers use this after auth publication so request paths never reopen SQLite.
+ */
+export function getPreparedRuntimeAuthProfileStoreSnapshot(
+  agentDir?: string,
+  inheritedAuthDir?: string,
+): AuthProfileStore | undefined {
+  const inherited = getRuntimeAuthProfileStoreSnapshot(inheritedAuthDir);
+  const requested = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  if (!agentDir || resolveRuntimeStoreKey(agentDir) === resolveRuntimeStoreKey(inheritedAuthDir)) {
+    return requested ?? inherited;
+  }
+  if (inherited && requested) {
+    return mergeAuthProfileStores(inherited, requested, {
+      preserveBaseRuntimeExternalProfiles: true,
+    });
+  }
+  return requested ?? inherited;
 }
 
 /** Lists cloned live snapshots for transactional rollback composition. */

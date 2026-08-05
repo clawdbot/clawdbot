@@ -1,0 +1,31 @@
+title: Channel health monitor lifecycle
+
+scenario:
+  id: channel-health-monitor-lifecycle
+  surface: observability
+  category: observability.health-and-repair
+  coverage:
+    primary:
+      - observability.background-health-monitor-loop
+      - observability.startup-grace
+      - observability.restart-logging
+  objective: Prove the production channel health monitor schedules, evaluates, and repairs unhealthy account lifecycles.
+  successCriteria:
+    - No health evaluation runs before startup grace expires.
+    - Connect grace, stale transport, busy, and stuck snapshots follow the production health policy.
+    - A restart performs stop, restart-attempt reset, and start in order and emits the exact restart reason.
+    - Slow checks never overlap, settled checks rearm, cooldown and hourly caps bound restart attempts, and failures do not stop the loop.
+    - Shutdown prevents future checks and abandons restart resurrection.
+  docsRefs:
+    - docs/gateway/health.md
+  codeRefs:
+    - src/gateway/channel-health-monitor.ts
+    - src/gateway/channel-health-policy.ts
+    - test/e2e/qa-lab/runtime/channel-health-monitor-lifecycle-runtime.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/channel-health-monitor-lifecycle-runtime.ts
+    summary: Runs the production channel health monitor with controlled real-time account snapshots and captures lifecycle operations and logs.
+    args:
+      - --artifact-base
+      - ${outputDir}

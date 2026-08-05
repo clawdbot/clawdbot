@@ -13,10 +13,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const WORKFLOW = ".github/workflows/openclaw-performance.yml";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
   name?: string;
@@ -84,23 +86,66 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "283070760a16655b28835061774158b8b11b4aff";
-    const legacyKovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
+    const canonicalKovaRef = "0f9e678e239b45db46d2bd930b7983203580df78";
+    const legacyKovaRef = "0f9e678e239b45db46d2bd930b7983203580df78";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
 
     expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
     expect(workflow).toContain(`KOVA_LEGACY_LIST_CONFIG_REF: ${legacyKovaRef}`);
+    expect(workflow).toContain("kova_config_contract:");
+    expect(workflow).toContain("Optional fixture-contract override for a custom Kova ref");
     expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_ref).toBe(
       "${{ steps.resolve.outputs.kova_ref }}",
     );
+    expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_config_contract).toBe(
+      "${{ steps.resolve.outputs.kova_config_contract }}",
+    );
+    expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_ref_trusted_for_live).toBe(
+      "${{ steps.resolve.outputs.kova_ref_trusted_for_live }}",
+    );
     expect(resolveTarget.env?.KOVA_REF_INPUT).toBe("${{ inputs.kova_ref }}");
+    expect(resolveTarget.env?.KOVA_CONFIG_CONTRACT_INPUT).toBe(
+      "${{ inputs.kova_config_contract }}",
+    );
     expect(resolveTarget.run).toContain("zod-schema.agent-defaults.ts?ref=${resolved_sha}");
     expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
     expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
+    expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
+    expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
+    expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
+    expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
+    expect(resolveTarget.run).toContain(
+      'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
+    );
+    expect(resolveTarget.run).toContain('if schema_content="$({');
+    expect(resolveTarget.run).toContain('elif [[ -z "$kova_ref" ]]; then');
+    expect(resolveTarget.run).toContain('schema_content=""');
+    expect(resolveTarget.run).toContain("Supply kova_ref explicitly");
+    expect(
+      resolveTarget.run?.indexOf('if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then'),
+    ).toBeLessThan(resolveTarget.run?.indexOf('schema_content="$({') ?? -1);
+    expect(resolveTarget.run).toContain(
+      'echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"',
+    );
+    expect(resolveTarget.run).toContain(
+      'if [[ "$kova_ref" == "$KOVA_CANONICAL_CONFIG_REF" || "$kova_ref" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then',
+    );
+    expect(resolveTarget.run).toContain(
+      'echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"',
+    );
+    expect(resolveTarget.run).toContain(
+      'echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"',
+    );
     expect(readWorkflow().jobs?.kova?.env?.KOVA_REF).toBe(
       "${{ needs.resolve_target.outputs.kova_ref }}",
+    );
+    expect(readWorkflow().jobs?.kova?.env?.KOVA_OPENCLAW_CONFIG_CONTRACT).toBe(
+      "${{ needs.resolve_target.outputs.kova_config_contract }}",
+    );
+    expect(readWorkflow().jobs?.kova?.env?.KOVA_REF_TRUSTED_FOR_LIVE).toBe(
+      "${{ needs.resolve_target.outputs.kova_ref_trusted_for_live }}",
     );
     expect(installRun).toContain(
       'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
@@ -119,6 +164,67 @@ describe("OpenClaw performance workflow", () => {
       "KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}",
     );
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
+  });
+
+  it("keeps live credentials away from custom Kova refs", () => {
+    const decideLane = findStep("Decide lane");
+    const configureLiveAuth = findStep("Configure live OpenAI auth");
+    const runKova = findStep("Run Kova");
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "openclaw-kova-live-ref-"));
+    const output = join(root, "output");
+    const decideLaneRun = (decideLane.run ?? "")
+      .replaceAll("${{ github.event_name }}", "workflow_dispatch")
+      .replaceAll("${{ inputs.deep_profile || 'false' }}", "false")
+      .replaceAll("${{ inputs.live_openai_candidate || 'false' }}", "true");
+
+    expect(decideLane.run).toContain(
+      'if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$KOVA_REF_TRUSTED_FOR_LIVE" != "true" ]]; then',
+    );
+    expect(decideLane.run).toContain(
+      "The live OpenAI lane only executes a reviewed immutable Kova default.",
+    );
+    expect(decideLane.run?.indexOf("KOVA_REF_TRUSTED_FOR_LIVE")).toBeLessThan(
+      decideLane.run?.indexOf('echo "run=$run_lane"') ?? -1,
+    );
+    expect(configureLiveAuth.if).toBe(
+      "${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}",
+    );
+    expect(runKova.env?.OPENAI_API_KEY).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}",
+    );
+    expect(runKova.env?.OPENAI_BASE_URL).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}",
+    );
+
+    try {
+      const rejected = spawnSync("bash", ["-c", decideLaneRun], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          KOVA_REF_TRUSTED_FOR_LIVE: "false",
+          LANE_ID: "live-openai-candidate",
+        },
+      });
+      expect(rejected.status).toBe(1);
+      expect(rejected.stdout).toContain(
+        "The live OpenAI lane only executes a reviewed immutable Kova default.",
+      );
+
+      const accepted = spawnSync("bash", ["-c", decideLaneRun], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          KOVA_REF_TRUSTED_FOR_LIVE: "true",
+          LANE_ID: "live-openai-candidate",
+        },
+      });
+      expect(accepted.status).toBe(0);
+      expect(readFileSync(output, "utf8")).toContain("run=true\n");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("pins the OCM release archive and checksum", () => {
@@ -766,12 +872,77 @@ esac
     const runKova = findStep("Run Kova");
 
     expect(runKova.run).toContain(
-      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
+      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
     expect(runKova.run).toContain(
       "profiling-affected resource thresholds with no baseline regression",
     );
+  });
+
+  it("preserves required PARTIAL failures and clears only advisory PARTIAL failures", () => {
+    const run = findStep("Run Kova").run ?? "";
+    const startMarker = 'effective_status="$status"';
+    const endMarker = 'echo "effective_status=$effective_status" >> "$GITHUB_OUTPUT"';
+    const start = run.indexOf(startMarker);
+    const end = run.indexOf(endMarker, start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const gateScript = run.slice(start, end + endMarker.length);
+    const root = tempDirs.make("openclaw-kova-partial-gate-");
+    const binDir = join(root, "bin");
+    const fakeNode = join(binDir, "node");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      fakeNode,
+      [
+        "#!/bin/sh",
+        'printf "%s\\n" "$*" >> "$GATE_INVOCATIONS"',
+        '[ "$PARTIAL_POLICY" = "advisory" ]',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeNode, 0o755);
+
+    for (const [partialPolicy, expectedStatus] of [
+      ["required", "17"],
+      ["advisory", "0"],
+    ] as const) {
+      const output = join(root, `${partialPolicy}.output`);
+      const summary = join(root, `${partialPolicy}.summary`);
+      const invocations = join(root, `${partialPolicy}.invocations`);
+      const result = spawnSync("bash", ["-c", gateScript], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          evidence_status: "0",
+          FAIL_ON_REGRESSION: "true",
+          GATE_INVOCATIONS: invocations,
+          GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: summary,
+          KOVA_CANONICAL_CONFIG_REF: "trusted",
+          KOVA_LEGACY_LIST_CONFIG_REF: "trusted",
+          KOVA_REF: "trusted",
+          PARTIAL_POLICY: partialPolicy,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          PERFORMANCE_HELPER_DIR: root,
+          report_json: join(root, `${partialPolicy}.json`),
+          status: "17",
+        },
+      });
+      expect(result.status).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(`effective_status=${expectedStatus}\n`);
+      expect(readFileSync(invocations, "utf8")).toContain(
+        "--require-instrumented-performance-contract",
+      );
+      if (partialPolicy === "advisory") {
+        expect(readFileSync(summary, "utf8")).toContain(
+          "trusted report adapter found only filtered coverage",
+        );
+      } else {
+        expect(existsSync(summary)).toBe(false);
+      }
+    }
   });
 
   it("passes one comma-delimited include set to the lane plan and run", () => {
@@ -894,6 +1065,22 @@ esac
     expect(run).toContain('--include "$INCLUDE_FILTERS"');
     expect(run).toContain('--auth "$AUTH_MODE"');
     expect(run).toContain('--model "$PERFORMANCE_MODEL_ID"');
+    expect(run).toContain('gate_args=("$report_json")');
+    expect(run).toContain(
+      'if [[ "$KOVA_REF" == "$KOVA_CANONICAL_CONFIG_REF" || "$KOVA_REF" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then',
+    );
+    expect(run).toContain("gate_args+=(--require-instrumented-performance-contract)");
+    expect(run).toContain(
+      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
+    );
+    expect(run.indexOf('gate_args=("$report_json")')).toBeLessThan(
+      run.indexOf("gate_args+=(--require-instrumented-performance-contract)"),
+    );
+    expect(run.indexOf("gate_args+=(--require-instrumented-performance-contract)")).toBeLessThan(
+      run.indexOf(
+        'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
+      ),
+    );
   });
 
   it("selects exactly one full Kova report across producer and publisher paths", () => {
@@ -937,6 +1124,12 @@ esac
     expect(configureAuth.run).toContain("cannot run without live evidence");
     expect(configureAuth.run).toContain("exit 1");
     expect(configureAuth.run).not.toContain("will be skipped");
+    expect(runKova.env?.OPENAI_API_KEY).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}",
+    );
+    expect(runKova.env?.OPENAI_BASE_URL).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}",
+    );
     expect(runKova.run).not.toContain('echo "skipped=true" >> "$GITHUB_OUTPUT"');
   });
 

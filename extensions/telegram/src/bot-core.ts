@@ -32,6 +32,7 @@ import {
   createTelegramMessageProcessor,
   resolveTelegramMessageTurnSettings,
 } from "./bot-message.js";
+import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   ensureTelegramMessageProcessingResult,
@@ -64,7 +65,7 @@ import {
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
 import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import { getTelegramSequentialConstraints } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 type TelegramBotRuntime = {
@@ -233,7 +234,7 @@ export function createTelegramBotCore(
     await next();
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
+  bot.use(botRuntime.sequentialize(getTelegramSequentialConstraints));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
 
@@ -389,7 +390,10 @@ export function createTelegramBotCore(
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     opts,
-    telegramDeps,
+    telegramDeps: {
+      ...telegramDeps,
+      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+    },
   });
 
   registerTelegramHandlers({

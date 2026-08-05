@@ -44,11 +44,15 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/non-isolated-runner.ts!",
   "test/vitest/*-runtime.ts!",
   "test/vitest/vitest*.config.ts!",
+  "test/vitest/vitest*.setup.ts!",
+  "test/vitest/vitest*.global-setup.ts!",
   // Test drivers and Docker fixtures are executed by path from package scripts
   // and the test-project registry.
   "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts!",
   "test/e2e/qa-lab/runtime/docker-e2e-lane.ts!",
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
+  // The identity scenario spawns this process-isolated repeated-turn driver by path.
+  "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
   // Invoked directly by the Docker image-auth scenario.
   "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts!",
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",

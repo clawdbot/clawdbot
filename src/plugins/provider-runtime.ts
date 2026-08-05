@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataRegistryView,
@@ -446,12 +446,15 @@ export function normalizeProviderConfigWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   context: ProviderNormalizeConfigContext;
   allowRuntimePluginLoad?: boolean;
 }): ModelProviderConfig | undefined {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
     normalized !== params.context.providerConfig;
-  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider, {
+    manifestRegistry: params.manifestRegistry,
+  });
   if (bundledSurface?.normalizeConfig) {
     const normalized = bundledSurface.normalizeConfig(params.context);
     return normalized && hasConfigChange(normalized) ? normalized : undefined;
@@ -489,10 +492,13 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   context: ProviderResolveConfigApiKeyContext;
   allowRuntimePluginLoad?: boolean;
 }): string | undefined {
-  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider, {
+    manifestRegistry: params.manifestRegistry,
+  });
   if (bundledSurface?.resolveConfigApiKey) {
     return normalizeOptionalString(bundledSurface.resolveConfigApiKey(params.context));
   }

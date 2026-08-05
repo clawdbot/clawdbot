@@ -749,6 +749,45 @@ describe("qa suite planning helpers", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      reason: "explicit scenario isolation",
+      makeScenario: () => makeQaSuiteTestScenario("isolated", { suiteIsolation: "isolated" }),
+    },
+    {
+      reason: "gateway runtime changes",
+      makeScenario: () =>
+        makeQaSuiteTestScenario("runtime-options", { gatewayRuntime: { forwardHostHome: true } }),
+    },
+    {
+      reason: "scenario-owned plugins",
+      makeScenario: () => makeQaSuiteTestScenario("plugin", { plugins: ["diagnostics-otel"] }),
+    },
+    {
+      reason: "memory state",
+      makeScenario: () => makeQaSuiteTestScenario("memory", { surface: "memory" }),
+    },
+    {
+      reason: "image generation setup",
+      makeScenario: () =>
+        makeQaSuiteTestScenario("image-generation", { config: { ensureImageGeneration: true } }),
+    },
+    {
+      reason: "state-mutating flow calls",
+      makeScenario: () => readQaScenarioById("plugin-lifecycle-hot-reload"),
+    },
+  ])("isolates serial runs for $reason", ({ makeScenario }) => {
+    const scenario = makeScenario();
+
+    expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("baseline"), scenario],
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
   it("does not isolate plain serial scenario runs", () => {
     expect(
       shouldUseIsolatedQaSuiteScenarioWorkers({

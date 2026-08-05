@@ -5,18 +5,14 @@ import {
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  executeSessionBackfill,
-  executeSessionBackfillBatch,
-  normalizeSessionBackfillSelection,
-  type RunSessionBackfillParams,
-  type SessionBackfillResult,
-} from "./session-backfill.js";
+import type { SessionBackfillResult } from "./session-backfill-contract.js";
+import { normalizeSessionBackfillSelection } from "./session-backfill-selection.js";
 
 const SESSION_BACKFILL_GATEWAY_METHODS = {
   preview: "memory.sessionBackfill.preview",
@@ -24,10 +20,12 @@ const SESSION_BACKFILL_GATEWAY_METHODS = {
   rollback: "memory.sessionBackfill.rollback",
 } as const;
 
-type SessionBackfillGatewayParams = Pick<
-  RunSessionBackfillParams,
-  "agentId" | "from" | "to" | "limitDays"
->;
+type SessionBackfillGatewayParams = {
+  agentId: string;
+  from?: string;
+  to?: string;
+  limitDays: number;
+};
 
 type SessionBackfillGatewayResult = {
   days: number;
@@ -43,6 +41,10 @@ type SessionBackfillGatewayResult = {
 };
 
 class InvalidSessionBackfillRequestError extends Error {}
+
+const loadSessionBackfillGatewayRuntime = createLazyRuntimeModule(
+  () => import("./session-backfill-gateway.runtime.js"),
+);
 
 function paramsRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -91,10 +93,7 @@ function readRollbackParams(value: unknown): { agentId: string } {
 
 function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
   const config = api.runtime.config.current() as OpenClawConfig;
-  const configuredAgentIds = (config.agents?.list ?? []).map((entry) => normalizeAgentId(entry.id));
-  if (configuredAgentIds.length === 0) {
-    configuredAgentIds.push(resolveSessionAgentIds({ config }).sessionAgentId);
-  }
+  const configuredAgentIds = listAgentIds(config);
   if (!configuredAgentIds.includes(agentId)) {
     throw new InvalidSessionBackfillRequestError(`Unknown agent id "${agentId}".`);
   }
@@ -168,6 +167,7 @@ export function registerSessionBackfillGatewayMethods(api: OpenClawPluginApi): v
         }
         try {
           const context = resolveExecutionContext(api, request.agentId);
+          const { executeSessionBackfillBatch } = await loadSessionBackfillGatewayRuntime();
           const execution = await executeSessionBackfillBatch({
             ...request,
             ...context,
@@ -206,6 +206,7 @@ export function registerSessionBackfillGatewayMethods(api: OpenClawPluginApi): v
       }
       try {
         const context = resolveExecutionContext(api, request.agentId);
+        const { executeSessionBackfill } = await loadSessionBackfillGatewayRuntime();
         const result = await executeSessionBackfill({ ...request, ...context, rollback: true });
         respond(true, {
           removedDiaryEntries: result.rollback?.removedDiaryEntries ?? 0,

@@ -24,9 +24,9 @@ export function resolvePendingOperatorProposal(
 export async function resolveOperatorApprovalDecision<T>(params: {
   decision: "allow-once" | "allow-always" | "deny" | null;
   proposalHash: string;
-  getProposal: () => { hash: string } | null;
+  getProposal: () => { operation: SystemAgentOperation; hash: string } | null;
   clear: () => void;
-  apply: (message: string) => Promise<T>;
+  apply: (operation: SystemAgentOperation) => Promise<T>;
   denied: () => T;
 }): Promise<T | null> {
   const proposal = params.getProposal();
@@ -37,7 +37,8 @@ export async function resolveOperatorApprovalDecision<T>(params: {
     params.clear();
     return params.denied();
   }
-  return await params.apply(
-    `[operator-approved] Human approved ${params.proposalHash}. Apply exact proposal; approved=true.`,
-  );
+  // Consume authority before applying so duplicate callbacks and failures
+  // cannot replay an already-approved operation.
+  params.clear();
+  return await params.apply(proposal.operation);
 }

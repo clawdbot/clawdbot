@@ -1832,6 +1832,81 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
+  it.each(["old", "new"] as const)(
+    "keeps a local overflow summary after future drops switch to %s",
+    async (nextDropPolicy) => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      const active = deferred<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, unknown>;
+      }>();
+      const collected = deferred<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, unknown>;
+      }>();
+      agentCommandFromIngressMock
+        .mockReturnValueOnce(active.promise)
+        .mockReturnValueOnce(collected.promise);
+      let dropPolicy: "summarize" | "old" | "new" = "summarize";
+      let cap = 1;
+      loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+        cfg: { messages: { queue: { mode: "collect", cap, drop: dropPolicy } } },
+        canonicalKey: sessionKey,
+        storePath: "/tmp/openclaw-sessions.json",
+        store: {},
+        entry: { queueDebounceMs: 0 },
+      }));
+
+      const backend = new EmbeddedTuiBackend();
+      backend.start();
+      try {
+        await backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "active turn",
+          runId: `run-local-policy-active-${nextDropPolicy}`,
+        });
+        await backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "first overflowed message",
+          runId: `run-local-policy-first-${nextDropPolicy}`,
+        });
+        await backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "second queued message",
+          runId: `run-local-policy-second-${nextDropPolicy}`,
+        });
+
+        dropPolicy = nextDropPolicy;
+        cap = 2;
+        await backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "third queued message",
+          runId: `run-local-policy-third-${nextDropPolicy}`,
+        });
+
+        active.resolve({ payloads: [{ text: "active done" }], meta: {} });
+        await vi.waitFor(() => {
+          expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+        });
+        const queuedCall = agentCommandFromIngressMock.mock.calls[1];
+        if (!queuedCall) {
+          throw new Error("expected queued local followup call");
+        }
+        const queuedPrompt = (queuedCall[0] as { message: string }).message;
+        expect(queuedPrompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+        expect(queuedPrompt).toContain("first overflowed message");
+        expect(queuedPrompt).toContain("second queued message");
+        expect(queuedPrompt).toContain("third queued message");
+        expect(queuedPrompt.match(/\[Queue overflow\]/g) ?? []).toHaveLength(1);
+
+        collected.resolve({ payloads: [{ text: "collected done" }], meta: {} });
+        await flushMicrotasks();
+      } finally {
+        await backend.stop();
+      }
+    },
+  );
+
   it("applies the local queue cap and drop-new policy", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{

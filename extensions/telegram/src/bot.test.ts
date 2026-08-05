@@ -19,6 +19,12 @@ import {
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import {
+  registerSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+  unregisterSessionBindingAdapter,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -121,7 +127,6 @@ const CHECK_MARK_EMOJI = "\u{2705}";
 const THUMBS_UP_EMOJI = "\u{1F44D}";
 const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
-const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
 
 type TelegramChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
@@ -224,13 +229,18 @@ function createTelegramPluginCallbackHandler(params: {
   handler: TelegramInteractiveHandlerRegistration["handler"];
   namespace?: string;
   pluginId?: string;
+  pluginRoot?: string;
   config?: NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 }) {
-  registerPluginInteractiveHandler(params.pluginId ?? "codex-plugin", {
-    channel: "telegram",
-    namespace: params.namespace ?? "codexapp",
-    handler: params.handler as never,
-  });
+  registerPluginInteractiveHandler(
+    params.pluginId ?? "codex-plugin",
+    {
+      channel: "telegram",
+      namespace: params.namespace ?? "codexapp",
+      handler: params.handler as never,
+    },
+    params.pluginRoot ? { pluginRoot: params.pluginRoot } : undefined,
+  );
   createTelegramBot({
     token: "tok",
     config: params.config ?? {
@@ -2147,10 +2157,98 @@ describe("createTelegramBot", () => {
     },
   );
 
+  describe("model picker auth profile compatibility", () => {
+    it.each([
+      {
+        name: "preserves a compatible auth profile on a same-provider picker switch",
+        callbackData: "mdl_sel_openai/gpt-4.1",
+        expectedProfile: "team:prod",
+      },
+      {
+        name: "clears an incompatible auth profile on a cross-provider picker switch",
+        callbackData: "mdl_sel_anthropic/claude-sonnet-4-5",
+        expectedProfile: undefined,
+      },
+    ])("$name", async ({ callbackData, expectedProfile }) => {
+      onSpy.mockClear();
+      editMessageTextSpy.mockClear();
+
+      const storePath = createTelegramTestStorePath("model-auth-profile");
+      const config = {
+        auth: {
+          profiles: { "team:prod": { provider: "openai", mode: "api_key" } },
+        },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5",
+            models: {
+              "openai/gpt-4.1": {},
+              "openai/gpt-5": {},
+              "anthropic/claude-sonnet-4-5": {},
+            },
+          },
+        },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        session: { store: storePath },
+      } satisfies OpenClawConfig;
+      const route = resolveTelegramConversationRoute({
+        cfg: config,
+        accountId: "default",
+        chatId: 1234,
+        isGroup: false,
+        senderId: 9,
+      }).route;
+      const sessionKey = resolveTelegramConversationBaseSessionKey({
+        cfg: config,
+        route,
+        chatId: 1234,
+        isGroup: false,
+        senderId: 9,
+      });
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "model-auth-profile",
+          updatedAt: 1,
+          providerOverride: "openai",
+          modelOverride: "gpt-4o",
+          authProfileOverride: "team:prod",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 2,
+        },
+      });
+      const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
+      buildModelsProviderDataMock.mockResolvedValueOnce({
+        byProvider: new Map([
+          ["openai", new Set(["gpt-4.1", "gpt-5"])],
+          ["anthropic", new Set(["claude-sonnet-4-5"])],
+        ]),
+        providers: ["anthropic", "openai"],
+        resolvedDefault: { provider: "openai", model: "gpt-5" },
+        modelNames: new Map(),
+      });
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      await getTelegramCallbackHandlerForTests()(
+        createTelegramCallbackContext({
+          id: `cbq-model-auth-${expectedProfile ? "same" : "cross"}`,
+          data: callbackData,
+        }),
+      );
+
+      const entry = readOnlySessionEntry(storePath);
+      expect(entry?.authProfileOverride).toBe(expectedProfile);
+      expect(entry?.authProfileOverrideSource).toBe(expectedProfile ? "user" : undefined);
+      expect(entry?.authProfileOverrideCompactionCount).toBe(expectedProfile ? 2 : undefined);
+      expect(entry?.liveModelSwitchPending).toBe(true);
+    });
+  });
+
   it("renders model callback lists with configured display names", async () => {
     const storePath = createTelegramTestStorePath("model-display-names");
-    const buildModelsProviderDataMock =
-      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
     buildModelsProviderDataMock.mockResolvedValueOnce({
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],
@@ -5213,9 +5311,63 @@ describe("createTelegramBot", () => {
       expectedAuth: true,
     },
   ])("$name", async ({ sender, messageId, expectedAuth }) => {
-    let observedAuth: TelegramInteractiveHandlerContext["auth"] | undefined;
-    const handler = vi.fn(async ({ auth }: TelegramInteractiveHandlerContext) => {
-      observedAuth = auth;
+    const pluginId = "qa-telegram-interactive-binding";
+    const pluginRoot = "/plugins/qa-telegram-interactive-binding";
+    const conversationId = "-100999:topic:99";
+    let binding: SessionBindingRecord | null = null;
+    const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
+      binding = {
+        bindingId: "qa-telegram-interactive-binding",
+        targetSessionKey: input.targetSessionKey,
+        targetKind: input.targetKind,
+        conversation: input.conversation,
+        status: "active",
+        boundAt: 1,
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      };
+      return binding;
+    });
+    const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>((ref) =>
+      binding?.conversation.conversationId === ref.conversationId ? binding : null,
+    );
+    const unbind = vi.fn<NonNullable<SessionBindingAdapter["unbind"]>>(async (input) => {
+      if (!binding || input.bindingId !== binding.bindingId) {
+        return [];
+      }
+      const removed = binding;
+      binding = null;
+      return [removed];
+    });
+    const adapter: SessionBindingAdapter = {
+      channel: "telegram",
+      accountId: "default",
+      capabilities: { bindSupported: true, unbindSupported: true, placements: ["current"] },
+      bind,
+      listBySession: () => [],
+      resolveByConversation,
+      unbind,
+    };
+    let observed:
+      | {
+          auth: TelegramInteractiveHandlerContext["auth"];
+          request: Awaited<
+            ReturnType<TelegramInteractiveHandlerContext["requestConversationBinding"]>
+          >;
+          current: Awaited<
+            ReturnType<TelegramInteractiveHandlerContext["getCurrentConversationBinding"]>
+          >;
+          detach: Awaited<
+            ReturnType<TelegramInteractiveHandlerContext["detachConversationBinding"]>
+          >;
+        }
+      | undefined;
+    const handler = vi.fn(async (context: TelegramInteractiveHandlerContext) => {
+      observed = {
+        auth: context.auth,
+        request: await context.requestConversationBinding({ summary: "Refresh this topic" }),
+        current: await context.getCurrentConversationBinding(),
+        detach: await context.detachConversationBinding(),
+      };
       return { handled: true };
     });
 
@@ -5239,23 +5391,64 @@ describe("createTelegramBot", () => {
     const callbackHandler = createTelegramPluginCallbackHandler({
       handler: handler as never,
       config,
+      pluginId,
+      pluginRoot,
     });
-
-    await callbackHandler(
-      createTelegramCallbackContext({
-        id: `cbq-plugin-auth-${expectedAuth}`,
-        data: "codexapp:resume:thread-1",
-        from: sender,
-        message: {
-          chat: { id: -100999, type: "supergroup", title: "Test Group" },
-          message_id: messageId,
-          text: "Select a thread",
+    registerSessionBindingAdapter(adapter);
+    try {
+      await bind({
+        targetSessionKey: "agent:qa:telegram:interactive-binding",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId,
+          parentConversationId: "-100999",
         },
-      }),
-    );
+        metadata: { pluginBindingOwner: "plugin", pluginId, pluginRoot },
+      });
+      bind.mockClear();
+      resolveByConversation.mockClear();
+      unbind.mockClear();
 
-    expect(handler).toHaveBeenCalledOnce();
-    expect(observedAuth?.isAuthorizedSender).toBe(expectedAuth);
+      await callbackHandler(
+        createTelegramCallbackContext({
+          id: `cbq-plugin-auth-${expectedAuth}`,
+          data: "codexapp:resume:thread-1",
+          from: sender,
+          message: {
+            chat: { id: -100999, type: "supergroup", title: "Test Group", is_forum: true },
+            message_id: messageId,
+            message_thread_id: 99,
+            is_topic_message: true,
+            text: "Select a thread",
+          },
+        }),
+      );
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(observed?.auth.isAuthorizedSender).toBe(expectedAuth);
+      if (expectedAuth) {
+        expect(observed?.request).toMatchObject({
+          status: "bound",
+          binding: { conversationId, threadId: 99 },
+        });
+        expect(observed?.current).toMatchObject({ conversationId, threadId: 99 });
+        expect(observed?.detach).toEqual({ removed: true });
+        expect(bind).toHaveBeenCalledOnce();
+        expect(resolveByConversation).toHaveBeenCalled();
+        expect(unbind).toHaveBeenCalledOnce();
+      } else {
+        expect(observed?.request).toMatchObject({ status: "error" });
+        expect(observed?.current).toBeNull();
+        expect(observed?.detach).toEqual({ removed: false });
+        expect(bind).not.toHaveBeenCalled();
+        expect(resolveByConversation).not.toHaveBeenCalled();
+        expect(unbind).not.toHaveBeenCalled();
+      }
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
+    }
   });
 
   it("passes true command auth to Telegram plugin callbacks for access-group DM senders", async () => {
@@ -5697,9 +5890,10 @@ describe("createTelegramBot", () => {
     ]);
   });
 
-  it("routes forum group reactions to the general topic (thread id not available on reactions)", async () => {
-    // MessageReactionUpdated does not include message_thread_id in the Bot API,
-    // so forum reactions always route to the general topic (1).
+  it("drops forum reactions whose topic is no longer in the message cache", async () => {
+    // MessageReactionUpdated carries no message_thread_id, and this message was never
+    // cached, so the topic is unknown. Guessing General would authorize and enqueue
+    // against a topic the user did not react in.
     await dispatchTelegramReaction({
       updateId: 505,
       channelConfig: { dmPolicy: "open", reactionNotifications: "all" },
@@ -5711,31 +5905,7 @@ describe("createTelegramBot", () => {
       },
     });
 
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(firstSystemEventArg(0)).toBe(
-      `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
-    );
-    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
-    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:100:10");
-  });
-
-  it("uses correct session key for forum group reactions in general topic", async () => {
-    await dispatchTelegramReaction({
-      updateId: 506,
-      channelConfig: { dmPolicy: "open", reactionNotifications: "all" },
-      reaction: {
-        chat: { id: 5678, type: "supergroup", is_forum: true },
-        message_id: 101,
-        // No message_thread_id - should default to general topic (1)
-        user: { id: 10, first_name: "Bob" },
-        new_reaction: [{ type: "emoji", emoji: EYES_EMOJI }],
-      },
-    });
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(firstSystemEventArg(0)).toBe(`Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101`);
-    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
-    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:101:10");
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 
   it("uses correct session key for regular group reactions without topic", async () => {

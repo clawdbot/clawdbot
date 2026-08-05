@@ -18,7 +18,7 @@ import {
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
-import { isTransientNetworkError } from "../infra/unhandled-rejections.js";
+import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";

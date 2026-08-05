@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "../agents/sessions/index.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,

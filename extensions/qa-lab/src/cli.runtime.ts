@@ -713,6 +713,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       fastMode: opts.fastMode,
       failFast: opts.failFast,
       scenarioIds: scenarios.map((scenario) => scenario.id),
+      explicitScenarioSelection: requestedScenarioIds.length > 0,
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
       channelDriver: profileReport.channelDriver,
@@ -815,7 +816,9 @@ function resolveQaReportOnlyOptionalScenarioNames(params: {
   scenarioIds: readonly string[];
   explicitScenarioSelection?: boolean;
 }): ReadonlySet<string> | undefined {
-  if (params.explicitScenarioSelection || params.scenarioIds.length > 0) {
+  const explicitScenarioSelection =
+    params.explicitScenarioSelection ?? params.scenarioIds.length > 0;
+  if (explicitScenarioSelection) {
     return undefined;
   }
   return resolveQaReportOnlyOptionalScenarioNamesFromCatalog(readQaScenarioPack().scenarios);

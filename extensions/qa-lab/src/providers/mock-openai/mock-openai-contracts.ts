@@ -7,6 +7,36 @@ import { writeJson } from "../shared/http-json.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
+export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockCompactionSummaryFaultMode =
+  | "none"
+  | "empty-output-once"
+  | "reasoning-only-output-once";
+
+type MockOpenAiRequestOutcome = "success" | "error";
+
+export type QaMockProviderDispatchRequest = {
+  route: "responses" | "anthropic-messages";
+  body: Record<string, unknown>;
+  raw: string;
+};
+
+export type QaMockProviderFailure = {
+  status: number;
+  type: string;
+  code?: string;
+  message: string;
+  presentation?: "anthropic-thinking";
+};
+
+export type QaMockProviderDispatchResult = {
+  events: StreamEvent[];
+  model: string;
+  failure?: QaMockProviderFailure;
+  onResponseSent?: () => void;
+  previewPauseMs?: number;
+};
+
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
   | {
@@ -122,7 +152,13 @@ export type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  requestKind: MockOpenAiRequestKind;
+  compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
+  outcome: MockOpenAiRequestOutcome;
+  errorCode?: string;
+  rawByteLength: number;
   plannedToolCallId?: string;
+  plannedToolItemId?: string;
   plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
@@ -270,7 +306,6 @@ export const QA_SUBAGENT_TERMINAL_MARKERS = {
   fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
 } as const;
 export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
-export const QA_SUBAGENT_TERMINAL_WORKER_DELAY_MS = 5_000;
 export const QA_NATIVE_STOP_DELAY_PROMPT_RE =
   /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
 export const QA_NATIVE_STOP_DELAY_MS = 180_000;
@@ -303,6 +338,8 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
+  compactionOverflowInjected: boolean;
+  compactionRetryActive: boolean;
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;

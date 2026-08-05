@@ -15,6 +15,7 @@ describe("renderChannelWizard", () => {
       render(nothing, container);
     }
     document.body.replaceChildren();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
@@ -45,6 +46,10 @@ describe("renderChannelWizard", () => {
           channelLabel: (channelId) => channelId,
           multiselectValues: [],
           onToggleMultiselect: vi.fn(),
+          textValue: "",
+          secretVisible: false,
+          onTextInput: vi.fn(),
+          onToggleSecretVisibility: vi.fn(),
           onAnswer: vi.fn(),
           onClose: vi.fn(),
           whatsappQrDataUrl: null,
@@ -64,8 +69,78 @@ describe("renderChannelWizard", () => {
       expect(label?.textContent).toBe("New Matrix account id");
       expect(input?.type).toBe(expectedType);
       expect(input?.labels).toContain(label);
+      if (sensitive) {
+        expect(container.querySelector(".oc-sensitive-toggle")).not.toBeNull();
+      } else {
+        expect(container.querySelector(".oc-sensitive-toggle")).toBeNull();
+      }
     },
   );
+
+  it("reveals only the replacement value entered in a sensitive step", () => {
+    const container = document.createElement("div");
+    const onTextInput = vi.fn();
+    const onToggleSecretVisibility = vi.fn();
+    document.body.append(container);
+    const renderSensitiveStep = (secretVisible: boolean, textValue: string) =>
+      render(
+        renderChannelWizard({
+          wizard: {
+            phase: "step",
+            channel: "twitch",
+            step: {
+              id: "client-secret",
+              type: "text",
+              message: "Twitch Client Secret",
+              sensitive: true,
+            },
+            stepIndex: 1,
+            busy: false,
+            validationError: null,
+          },
+          channelLabel: (channelId) => channelId,
+          multiselectValues: [],
+          onToggleMultiselect: vi.fn(),
+          textValue,
+          secretVisible,
+          onTextInput,
+          onToggleSecretVisibility,
+          onAnswer: vi.fn(),
+          onClose: vi.fn(),
+          whatsappQrDataUrl: null,
+          whatsappMessage: null,
+          whatsappConnected: null,
+          whatsappBusy: false,
+          onWhatsAppStart: vi.fn(),
+          onWhatsAppWait: vi.fn(),
+        }),
+        container,
+      );
+
+    renderSensitiveStep(false, "");
+    const hiddenInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
+    const toggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
+    expect(hiddenInput?.type).toBe("password");
+    expect(hiddenInput?.value).toBe("");
+    expect(toggle?.getAttribute("aria-label")).toBe("Reveal value");
+    expect(toggle?.dataset.sensitiveIcon).toBe("eye");
+    if (hiddenInput) {
+      hiddenInput.value = "new-secret";
+      hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    toggle?.click();
+    expect(onTextInput).toHaveBeenCalledWith("new-secret");
+    expect(onToggleSecretVisibility).toHaveBeenCalledOnce();
+
+    renderSensitiveStep(true, "new-secret");
+    const revealedInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
+    const hideToggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
+    expect(revealedInput?.type).toBe("text");
+    expect(revealedInput?.value).toBe("new-secret");
+    expect(hideToggle?.getAttribute("aria-label")).toBe("Hide value");
+    expect(hideToggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(hideToggle?.dataset.sensitiveIcon).toBe("eye-off");
+  });
 
   it("copies setup text through the plain-HTTP clipboard fallback", async () => {
     vi.stubGlobal("navigator", {});
@@ -94,6 +169,10 @@ describe("renderChannelWizard", () => {
         channelLabel: (channelId) => channelId,
         multiselectValues: [],
         onToggleMultiselect: vi.fn(),
+        textValue: "",
+        secretVisible: false,
+        onTextInput: vi.fn(),
+        onToggleSecretVisibility: vi.fn(),
         onAnswer: vi.fn(),
         onClose: vi.fn(),
         whatsappQrDataUrl: null,
@@ -111,7 +190,79 @@ describe("renderChannelWizard", () => {
     copy?.click();
 
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe("Copied!"));
+    expect(copy?.getAttribute("aria-label")).toBe("Copied!");
     expect(copiedText).toBe("openclaw channels add");
     expect(document.querySelector("textarea")).toBeNull();
   });
+
+  it.each([true, false])(
+    "keeps channel-copy success %s accessible across locale rerenders",
+    async (copied) => {
+      const writeText = vi.fn().mockImplementation(async () => {
+        if (!copied) {
+          throw new DOMException("Clipboard access denied");
+        }
+      });
+      const execCommand = vi.fn(() => false);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+      const schedule = vi.spyOn(window, "setTimeout");
+      const container = document.createElement("div");
+      document.body.append(container);
+      const props = {
+        wizard: {
+          phase: "step",
+          channel: null,
+          step: { id: "copy-command", type: "note", message: "openclaw channels add" },
+          stepIndex: 1,
+          busy: false,
+          validationError: null,
+        },
+        channelLabel: (channelId) => channelId,
+        multiselectValues: [],
+        onToggleMultiselect: vi.fn(),
+        textValue: "",
+        secretVisible: false,
+        onTextInput: vi.fn(),
+        onToggleSecretVisibility: vi.fn(),
+        onAnswer: vi.fn(),
+        onClose: vi.fn(),
+        whatsappQrDataUrl: null,
+        whatsappMessage: null,
+        whatsappConnected: null,
+        whatsappBusy: false,
+        onWhatsAppStart: vi.fn(),
+        onWhatsAppWait: vi.fn(),
+      } satisfies Parameters<typeof renderChannelWizard>[0];
+      render(renderChannelWizard(props), container);
+      const button = container.querySelector<HTMLButtonElement>(".channels-wizard__links button");
+
+      button?.click();
+
+      const feedback = copied ? "Copied!" : "Copy failed";
+      await vi.waitFor(() => expect(button?.textContent?.trim()).toBe(feedback));
+      expect(button?.getAttribute("aria-label")).toBe(feedback);
+      expect(writeText).toHaveBeenCalledWith("openclaw channels add");
+      expect(execCommand).toHaveBeenCalledTimes(copied ? 0 : 1);
+
+      await i18n.setLocale("de");
+      try {
+        expect(() => render(renderChannelWizard(props), container)).not.toThrow();
+        expect(button?.textContent?.trim()).toBe("Kopieren");
+        const reset = schedule.mock.calls.find(
+          ([, delay]) => delay === (copied ? 1_500 : 2_000),
+        )?.[0];
+        if (typeof reset !== "function") {
+          throw new Error("Expected copy feedback to schedule its reset");
+        }
+        reset();
+        expect(button?.textContent?.trim()).toBe("Kopieren");
+        expect(button?.getAttribute("aria-label")).toBe("Kopieren");
+        expect(button?.dataset[copied ? "copied" : "error"]).toBeUndefined();
+      } finally {
+        await i18n.setLocale("en");
+      }
+    },
+  );
 });
