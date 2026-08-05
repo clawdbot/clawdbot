@@ -1,6 +1,7 @@
 // Slack tests cover dispatch.preview fallback plugin behavior.
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackMonitorContext } from "../context.js";
 
 const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
@@ -158,6 +159,10 @@ function requireCapturedTyping() {
     throw new Error("expected Slack typing callback");
   }
   return capturedTyping;
+}
+
+function createSlackThreadStatusMock() {
+  return vi.fn<SlackMonitorContext["setSlackThreadStatus"]>(async () => undefined);
 }
 
 function createSealedTypingController(): Parameters<
@@ -1842,7 +1847,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps Slack typing callbacks when channel replies are message-tool-only", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -1886,7 +1891,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps thread status visible until every queued explicit turn settles", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     let sharedContext: unknown;
     const createTurn = async (ts: string) => {
       const lifecycle = {
@@ -1941,7 +1946,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps existing implicit-thread typing visible while its followup is queued", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const mentionContext = {
       WasMentioned: true,
       ExplicitlyMentionedBot: false,
@@ -2239,7 +2244,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     vi.useFakeTimers();
     try {
       mockedDispatchSequence = [];
-      const setSlackThreadStatus = vi.fn(async () => undefined);
+      const setSlackThreadStatus = createSlackThreadStatusMock();
       const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
         ctx: unknown;
       };
@@ -2282,7 +2287,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       vi.useFakeTimers();
       try {
         mockedDispatchSequence = [];
-        const setSlackThreadStatus = vi.fn(async () => undefined);
+        const setSlackThreadStatus = createSlackThreadStatusMock();
         const firstPrepared = createPreparedSlackMessage({
           cfg: { agents: { defaults: { typingIntervalSeconds: configuredSeconds } } },
           setSlackThreadStatus,
@@ -2356,7 +2361,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("clears a passively retained thread status when queued ownership is canceled", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
       ctx: unknown;
     };
@@ -2399,7 +2404,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("retains a queued owner admitted before its thread status first starts", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
       ctx: unknown;
     };
@@ -2496,7 +2501,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("does not retain thread status for rejected queued ownership", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
       ctx: unknown;
     };
@@ -2524,7 +2529,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("preserves never typing mode when a sibling turn already owns thread status", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({
       cfg: { agents: { defaults: { typingMode: "never" } } },
       setSlackThreadStatus,
@@ -2554,7 +2559,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("preserves agent-specific never typing mode over a global instant default", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({
       cfg: {
         agents: {
@@ -2592,7 +2597,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   it.each(["message", "thinking"])(
     "does not show queued %s typing before the existing typing policy starts it",
     async (typingMode) => {
-      const setSlackThreadStatus = vi.fn(async () => undefined);
+      const setSlackThreadStatus = createSlackThreadStatusMock();
       const firstPrepared = createPreparedSlackMessage({
         cfg: {
           agents: {
@@ -2655,7 +2660,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   );
 
   it("restarts the adopted queued turn when a later turn owns the sealed controller", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({
       cfg: {
         agents: {
@@ -2731,7 +2736,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("does not restart queued message typing for silent streamed reply prefixes", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -2765,7 +2770,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("preserves default delayed typing for an unmentioned queued group message", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({
       cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
       ctxPayload: { ChatType: "channel", WasMentioned: true },
@@ -2828,7 +2833,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps status ownership scoped to its Slack account and thread", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
       ctx: unknown;
     };
@@ -2858,7 +2863,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("releases thread status even when the existing queued settlement callback throws", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
     const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
       ctx: unknown;
     };
