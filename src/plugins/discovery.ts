@@ -632,6 +632,19 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
   installRecords?: Record<string, PluginInstallRecord>;
   realpathCache: Map<string, string>;
 }): string | undefined {
+  const matchInstalledRecord = (pluginId: string) => {
+    if (!params.installRecords || params.candidate.origin === "bundled") {
+      return pluginId;
+    }
+    return matchesInstalledPluginRecord({
+      pluginId,
+      candidate: params.candidate,
+      env: params.env,
+      installRecords: params.installRecords,
+    })
+      ? pluginId
+      : undefined;
+  };
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
     origin: params.candidate.origin,
     rootDir: params.candidate.rootDir,
@@ -646,7 +659,7 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
         bundleFormat: params.candidate.bundleFormat,
         rejectHardlinks,
       });
-    return bundleManifest?.ok ? bundleManifest.manifest.id : undefined;
+    return bundleManifest?.ok ? matchInstalledRecord(bundleManifest.manifest.id) : undefined;
   }
   const resolvedManifest = resolveCandidateManifest(params.candidate.rootDir, rejectHardlinks);
   if (!resolvedManifest) {
@@ -684,7 +697,7 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
       resolveCompatibilityHostVersion(params.env),
       packagePluginApiRangeCheck.range,
     );
-  return compatible ? resolvedManifest.manifest.id : undefined;
+  return compatible ? matchInstalledRecord(resolvedManifest.manifest.id) : undefined;
 }
 
 function resolveConfiguredPluginCandidateId(params: {

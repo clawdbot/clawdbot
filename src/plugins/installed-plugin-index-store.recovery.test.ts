@@ -382,6 +382,123 @@ describe("installed plugin index policy recovery", () => {
       ]);
     });
 
+    it("skips broad discovery for an ordinary record whose manifest id changed", async () => {
+      const stateDir = makeTempDir();
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=ordinary-record-id-mismatch",
+      );
+      const pluginDir = path.join(stateDir, "plugins", "old-id");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {};", "utf8");
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "new-id", configSchema: { type: "object" } }),
+        "utf8",
+      );
+      const installRecords = {
+        "old-id": {
+          source: "npm" as const,
+          spec: "@vendor/old-id@1.0.0",
+          installPath: pluginDir,
+        },
+      };
+      await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [],
+        diagnostics: [{ level: "warn", message: "policy fast-path sentinel" }],
+        env,
+        installRecords,
+      });
+      discoverSpy.mockClear();
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, []);
+      expectInstallRecord(refreshed, "old-id", {
+        source: "npm",
+        spec: "@vendor/old-id@1.0.0",
+        installPath: pluginDir,
+      });
+      expect(refreshed.diagnostics).toEqual([
+        { level: "warn", message: "policy fast-path sentinel" },
+      ]);
+    });
+
+    it("skips broad discovery for a bundle record whose manifest id changed", async () => {
+      const stateDir = makeTempDir();
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=bundle-record-id-mismatch",
+      );
+      const bundleDir = path.join(stateDir, "plugins", "old-bundle");
+      fs.mkdirSync(path.join(bundleDir, ".codex-plugin"), { recursive: true });
+      fs.writeFileSync(
+        path.join(bundleDir, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "new bundle", skills: "skills" }),
+        "utf8",
+      );
+      const installRecords = {
+        "old-bundle": {
+          source: "npm" as const,
+          spec: "old-bundle@1.0.0",
+          installPath: bundleDir,
+        },
+      };
+      await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [],
+        diagnostics: [{ level: "warn", message: "policy fast-path sentinel" }],
+        env,
+        installRecords,
+      });
+      discoverSpy.mockClear();
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, []);
+      expectInstallRecord(refreshed, "old-bundle", {
+        source: "npm",
+        spec: "old-bundle@1.0.0",
+        installPath: bundleDir,
+      });
+      expect(refreshed.diagnostics).toEqual([
+        { level: "warn", message: "policy fast-path sentinel" },
+      ]);
+    });
+
     it("skips broad discovery when a recoverable record collides with a configured plugin path", async () => {
       const stateDir = makeTempDir();
       const existingPluginDir = path.join(stateDir, "plugins", "existing");
