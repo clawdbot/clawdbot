@@ -395,6 +395,130 @@ describe("gateway startup-migration refusal", () => {
     }
   }, 60_000);
 
+  it("reloads tool ownership after updater-managed manifest repair", async () => {
+    const root = await fs.promises.realpath(tempDirs.make("openclaw-updater-manifest-repair-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const pluginId = "updater-tool-owner";
+    const pluginDir = path.join(root, "plugins", pluginId);
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const config = {
+      gateway: { mode: "local", auth: { mode: "none" } },
+      plugins: {
+        load: { paths: [pluginDir] },
+        entries: { [pluginId]: { enabled: true } },
+      },
+    } satisfies OpenClawConfig;
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: `@openclaw/${pluginId}`,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        id: pluginId,
+        tools: ["updater_tool"],
+        configSchema: { type: "object" },
+      }),
+    );
+
+    const configFlowUrl = new URL("./doctor-config-flow.ts", import.meta.url).href;
+    const currentSnapshotUrl = new URL(
+      "../plugins/current-plugin-metadata-snapshot.ts",
+      import.meta.url,
+    ).href;
+    const healthRunnersUrl = new URL(
+      "../flows/doctor-health-contribution-runners.state.ts",
+      import.meta.url,
+    ).href;
+    const prompterUrl = new URL("./doctor-prompter.ts", import.meta.url).href;
+    const result = runIsolatedModuleScript(
+      env,
+      `
+        const fs = await import("node:fs");
+        const { loadAndMaybeMigrateDoctorConfig } = await import(${JSON.stringify(configFlowUrl)});
+        const { getCurrentPluginMetadataSnapshot } =
+          await import(${JSON.stringify(currentSnapshotUrl)});
+        const { runLegacyPluginManifestHealth } = await import(${JSON.stringify(healthRunnersUrl)});
+        const { createDoctorPrompter } = await import(${JSON.stringify(prompterUrl)});
+        const options = { nonInteractive: true, repair: true };
+        const runtime = {
+          log: () => {},
+          warn: () => {},
+          error: () => {},
+          exit: (code) => { throw new Error("doctor exited " + code); },
+        };
+        const prompter = createDoctorPrompter({ runtime, options });
+        const configResult = await loadAndMaybeMigrateDoctorConfig({
+          options,
+          confirm: async () => false,
+          runtime,
+          prompter,
+        });
+        const readToolOwners = () =>
+          configResult.runWithPluginMetadataSnapshot(
+            { config: configResult.cfg },
+            () => [
+              ...(getCurrentPluginMetadataSnapshot({ config: configResult.cfg })
+                ?.owners.contracts.get("tools") ?? []),
+            ],
+          );
+        const before = readToolOwners();
+        await runLegacyPluginManifestHealth({
+          cfg: configResult.cfg,
+          runtime,
+          prompter,
+          invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
+        });
+        const after = readToolOwners();
+        const manifest = JSON.parse(fs.readFileSync(${JSON.stringify(manifestPath)}, "utf8"));
+        console.log("__RESULT__" + JSON.stringify({
+          retainedBaseSnapshot: configResult.pluginMetadataSnapshot !== undefined,
+          before,
+          after,
+          legacyTools: manifest.tools,
+          contractTools: manifest.contracts?.tools,
+        }));
+      `,
+      { timeoutMs: 60_000 },
+    );
+    expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
+    const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
+    expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
+    expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
+      retainedBaseSnapshot: false,
+      before: [],
+      after: [pluginId],
+      contractTools: ["updater_tool"],
+    });
+  }, 90_000);
+
   it("keeps full Doctor plugin metadata scans bounded and complete", async () => {
     const runDoctorConfigFlow = async (
       pluginCount: number,

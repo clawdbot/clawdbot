@@ -264,7 +264,7 @@ export async function runDoctorConfigPreflight(
   let doctorMediaPersistenceAttempted = false;
   let legacyConfigMigrationComplete = false;
   let configSnapshotRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
-  const runWithPluginMetadataSnapshot = createDoctorPluginMetadataSnapshotScope({
+  const { run: runWithPluginMetadataSnapshot } = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => configSnapshotRead?.pluginMetadataSnapshot,
     env: process.env,
   });

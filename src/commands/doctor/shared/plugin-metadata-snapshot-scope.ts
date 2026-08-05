@@ -13,6 +13,11 @@ export type DoctorPluginMetadataSnapshotState = {
   current?: PluginMetadataSnapshot;
 };
 
+export type DoctorPluginMetadataSnapshotScope = {
+  run: PluginMetadataSnapshotScopeRunner;
+  invalidate: () => void;
+};
+
 /** Promotes validation-scoped metadata to a complete immutable Doctor snapshot. */
 export function completeDoctorPluginMetadataSnapshot(params: {
   snapshot?: PluginMetadataSnapshot;
@@ -35,7 +40,7 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
   baseSnapshot?: PluginMetadataSnapshot;
   getBaseSnapshot?: () => PluginMetadataSnapshot | undefined;
   env?: NodeJS.ProcessEnv;
-}): PluginMetadataSnapshotScopeRunner {
+}): DoctorPluginMetadataSnapshotScope {
   const env = params.env ?? process.env;
   const snapshotsByWorkspace = new Map<string | undefined, PluginMetadataSnapshot>();
   const readBaseSnapshot = () => params.getBaseSnapshot?.() ?? params.baseSnapshot;
@@ -76,12 +81,22 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
     return snapshot;
   };
 
-  return (scope, run) => {
+  const run: PluginMetadataSnapshotScopeRunner = (scope, operation) => {
     const snapshot = resolveSnapshot(scope.config, scope.workspaceDir);
-    return withPluginMetadataSnapshotScope(snapshot, run, {
+    return withPluginMetadataSnapshotScope(snapshot, operation, {
       config: scope.config,
       env,
       ...(scope.workspaceDir ? { workspaceDir: scope.workspaceDir } : {}),
     });
+  };
+
+  return {
+    run,
+    invalidate: () => {
+      // Inventory repairs invalidate every derived workspace generation even
+      // when updater preflight intentionally left the base snapshot absent.
+      currentBaseSnapshot = undefined;
+      snapshotsByWorkspace.clear();
+    },
   };
 }

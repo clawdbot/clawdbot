@@ -164,14 +164,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
-  const runWithPluginMetadataSnapshot = createDoctorPluginMetadataSnapshotScope({
+  const pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => pluginMetadataSnapshotState.current,
     env: process.env,
   });
+  const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {
-    // Filesystem/install repairs replace authoritative plugin metadata. Clearing the
-    // base makes the next Doctor scope rebuild once instead of reusing stale facts.
+    // Filesystem/install repairs replace the authoritative plugin generation.
     pluginMetadataSnapshotState.current = undefined;
+    pluginMetadataSnapshotScope.invalidate();
   };
   const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T =>
     runWithPluginMetadataSnapshot(

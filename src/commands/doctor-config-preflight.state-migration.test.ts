@@ -224,7 +224,10 @@ vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
 }));
 
 vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
-  createDoctorPluginMetadataSnapshotScope: () => runWithPluginMetadataSnapshot,
+  createDoctorPluginMetadataSnapshotScope: () => ({
+    run: runWithPluginMetadataSnapshot,
+    invalidate: vi.fn(),
+  }),
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
