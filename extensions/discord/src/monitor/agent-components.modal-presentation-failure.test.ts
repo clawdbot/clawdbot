@@ -1,6 +1,7 @@
-import { ChannelType } from "discord-api-types/v10";
+import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDiscordComponentCustomId } from "../component-custom-id.js";
 import {
   registerDiscordComponentEntries,
   resolveDiscordComponentEntryWithPersistence,
@@ -8,7 +9,12 @@ import {
 } from "../components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
-import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
+import { ButtonInteraction, createInteraction, type ComponentData } from "../internal/discord.js";
+import {
+  attachRestMock,
+  createInternalComponentInteractionPayload,
+  createInternalTestClient,
+} from "../internal/test-builders.test-support.js";
 import { resetDiscordComponentRuntimeMocks } from "../test-support/component-runtime.js";
 import { createDiscordComponentControls } from "./agent-components.js";
 
@@ -68,35 +74,55 @@ describe("Discord modal presentation failures", () => {
         discordConfig: { replyToMode: "first" },
         token: "token",
       });
-      const showModal = vi.fn().mockRejectedValue(new Error("Discord rejected the modal"));
-      const reply = replyRejects
-        ? vi.fn().mockRejectedValue(new Error("Discord rejected the recovery reply"))
-        : vi.fn().mockResolvedValue(undefined);
-      const interaction = {
-        rawData: { channel_id: "dm-channel", id: "interaction-1" },
-        customId: "occomp:cid=btn_1",
-        client: {
-          rest: {
-            get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
-            post: vi.fn().mockResolvedValue({}),
-            patch: vi.fn().mockResolvedValue({}),
-            delete: vi.fn().mockResolvedValue(undefined),
+      const post = vi.fn().mockRejectedValueOnce(new Error("Discord rejected the modal"));
+      if (replyRejects) {
+        post.mockRejectedValueOnce(new Error("Discord rejected the recovery reply"));
+      } else {
+        post.mockResolvedValueOnce(undefined);
+      }
+      const client = createInternalTestClient();
+      attachRestMock(client, { post });
+      const interaction = createInteraction(
+        client,
+        createInternalComponentInteractionPayload({
+          id: "interaction-1",
+          token: "interaction-token",
+          channel_id: "dm-channel",
+          user: {
+            id: "123456789",
+            username: "AgentUser",
+            discriminator: "0001",
+            global_name: null,
+            avatar: null,
           },
-        },
-        user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
-        message: { id: "msg-1" },
-        defer: vi.fn().mockResolvedValue(undefined),
-        showModal,
-        reply,
-      } as unknown as ButtonInteraction;
+          data: {
+            custom_id: buildDiscordComponentCustomId({ componentId: "btn_1", modalId: "mdl_1" }),
+          },
+        }),
+      );
+      if (!(interaction instanceof ButtonInteraction)) {
+        throw new Error("expected a Discord button interaction");
+      }
 
       await button.run(interaction, { cid: "btn_1", mid: "mdl_1" } as ComponentData);
 
-      expect(showModal).toHaveBeenCalledOnce();
-      expect(reply).toHaveBeenCalledOnce();
-      expect(reply).toHaveBeenCalledWith({
-        content: "Could not open this form. Request a new form and try again.",
-        ephemeral: true,
+      const callbackPath = "/interactions/interaction-1/interaction-token/callback";
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(post).toHaveBeenNthCalledWith(
+        1,
+        callbackPath,
+        expect.objectContaining({
+          body: expect.objectContaining({ type: InteractionResponseType.Modal }),
+        }),
+      );
+      expect(post).toHaveBeenNthCalledWith(2, callbackPath, {
+        body: {
+          type: InteractionResponseType.ChannelMessageWithSource,
+          data: {
+            content: "Could not open this form. Request a new form and try again.",
+            flags: MessageFlags.Ephemeral,
+          },
+        },
       });
       await expect(
         resolveDiscordComponentEntryWithPersistence({ id: "btn_1", consume: false }),
