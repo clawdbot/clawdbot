@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements suite launch behavior.
+// QA Lab plugin module implements suite launch behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -25,9 +25,9 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import {
-  resolveQaScenarioLaneChannel,
-  resolveQaScenarioLaneChannels,
+  expandQaScenarioExecutionCells,
   resolveQaScenarioRequiredProviderMode,
+  type QaScenarioExecutionCell,
 } from "./scenario-lane.js";
 import {
   mapQaSuiteWithConcurrency,
@@ -54,7 +54,10 @@ import {
   type QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
-export type QaSuiteRuntimeResult =
+export type QaSuiteRuntimeResult = {
+  expectedCells: QaScenarioExecutionCell[];
+  observedCells: QaScenarioExecutionCell[];
+} & (
   | {
       executionKind: "flow";
       result: QaSuiteResult;
@@ -62,7 +65,8 @@ export type QaSuiteRuntimeResult =
   | {
       executionKind: "suite";
       result: QaUnifiedSuiteResult;
-    };
+    }
+);
 
 type QaUnifiedSuiteResult = {
   evidencePath: string;
@@ -73,16 +77,19 @@ type QaUnifiedSuiteResult = {
   summaryPath: string;
 };
 
-type QaSuiteExecutionPlan =
+type QaSuiteExecutionPlan = {
+  expectedCells: QaScenarioExecutionCell[];
+  scenarios: QaSeedScenarioWithSource[];
+} & (
   | {
       kind: "flow";
     }
   | {
       kind: "unified";
-      scenarios: QaSeedScenarioWithSource[];
-      flowScenarios: QaSeedScenarioWithSource[];
+      channelGroups: QaFlowChannelGroup[];
       testFileScenariosByKind: Map<QaTestFileExecutionKind, QaTestFileScenario[]>;
-    };
+    }
+);
 
 const MAX_SHARED_FLOW_PARTITIONS = 4;
 const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
@@ -108,6 +115,7 @@ type QaUnifiedPartitionResult = {
 };
 
 type QaUnifiedPartitionTask = {
+  channel?: string;
   exclusiveKey?: string;
   run: () => Promise<QaUnifiedPartitionResult>;
   scenarios: readonly QaSeedScenarioWithSource[];
@@ -121,6 +129,21 @@ type QaFlowChannelGroup = {
   isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
 };
+
+function groupQaScenariosByExecutionCell(
+  scenarios: readonly QaSeedScenarioWithSource[],
+  cells: readonly QaScenarioExecutionCell[],
+) {
+  const scenariosById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+  const groups = new Map<string | undefined, QaSeedScenarioWithSource[]>();
+  for (const cell of cells) {
+    const channel = cell.channel ?? undefined;
+    const group = groups.get(channel) ?? [];
+    group.push(scenariosById.get(cell.scenarioId)!);
+    groups.set(channel, group);
+  }
+  return groups;
+}
 
 function hasQaSuiteRetryableNetworkCode(error: unknown) {
   let current: unknown = error;
@@ -212,37 +235,19 @@ async function resolveQaFlowChannelGroups(
         )?.isolatesInstances === true
       );
     };
-    const explicitChannel = runParams.channelId?.trim().toLowerCase();
-    if (explicitChannel) {
-      return [
-        {
-          channel: explicitChannel,
-          channelId: explicitChannel,
-          channelDriverSelection: runParams.channelDriverSelection,
-          isolatesAdapterInstances: isolatesInstances(explicitChannel),
-          scenarios: [...scenarios],
-        },
-      ];
-    }
-    const groups = new Map<string | undefined, QaSeedScenarioWithSource[]>();
-    for (const scenario of scenarios) {
-      const channelParams = {
-        scenario,
+    const groups = groupQaScenariosByExecutionCell(
+      scenarios,
+      expandQaScenarioExecutionCells({
+        scenarios,
         channelDriver: runParams.channelDriver ?? "qa-channel",
+        channel: runParams.channelId,
         supportsChannel: (channelId) =>
           runParams.adapterFactories?.some((factory) =>
             factory.matches({ channelId, driver: "live" }),
           ) === true,
-      } satisfies Parameters<typeof resolveQaScenarioLaneChannel>[0];
-      const channels = runParams.expandScenarioChannels
-        ? resolveQaScenarioLaneChannels(channelParams)
-        : [resolveQaScenarioLaneChannel(channelParams)];
-      for (const channel of channels) {
-        const group = groups.get(channel) ?? [];
-        group.push(scenario);
-        groups.set(channel, group);
-      }
-    }
+        expandChannels: runParams.expandScenarioChannels === true,
+      }),
+    );
     return [...groups].map(([channel, groupedScenarios]) => ({
       channel,
       channelId: channel,
@@ -263,8 +268,32 @@ async function resolveQaFlowChannelGroups(
   }
   // Package-only live lanes mount the QA harness without its dev tree. Load
   // Crabline only for Crabline-owned runs so unrelated transports stay isolated.
-  const { OPENCLAW_CRABLINE_DEFAULT_CHANNEL, resolveOpenClawCrablineChannelDriverSelection } =
-    await import("@openclaw/crabline");
+  const {
+    isCrablineServerChannel,
+    OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+    resolveOpenClawCrablineChannelDriverSelection,
+  } = await import("@openclaw/crabline");
+  if (runParams.expandScenarioChannels) {
+    const groups = groupQaScenariosByExecutionCell(
+      scenarios,
+      expandQaScenarioExecutionCells({
+        scenarios,
+        channelDriver: "crabline",
+        channel: runParams.channelDriverSelection?.channel,
+        defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+        supportsChannel: isCrablineServerChannel,
+        expandChannels: true,
+      }),
+    );
+    return [...groups].map(([channel, groupedScenarios]) => ({
+      channel,
+      channelId: undefined,
+      channelDriverSelection: channel
+        ? resolveOpenClawCrablineChannelDriverSelection({ channel })
+        : undefined,
+      scenarios: groupedScenarios,
+    }));
+  }
   const channels = resolveQaSuiteScenarioChannels({
     defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
     explicitChannel: runParams.channelDriverSelection?.channel,
@@ -302,7 +331,7 @@ async function resolveSuiteExecutionPlan(
 ): Promise<QaSuiteExecutionPlan> {
   const scenarioIds = params?.scenarioIds ?? [];
   if (scenarioIds.length === 0) {
-    return { kind: "flow" };
+    return { kind: "flow", expectedCells: [], scenarios: [] };
   }
   const selectedScenarios = resolveRequestedScenarios({
     scenarioIds,
@@ -321,6 +350,21 @@ async function resolveSuiteExecutionPlan(
   const channelGroups = (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
     (group) => group.scenarios.length > 0,
   );
+  const expectedCells = [
+    ...channelGroups.flatMap((group) =>
+      expandQaScenarioExecutionCells({
+        scenarios: group.scenarios,
+        channelDriver: params?.channelDriver ?? "qa-channel",
+        channel: group.channel,
+        expandChannels: false,
+      }),
+    ),
+    ...expandQaScenarioExecutionCells({
+      scenarios: [...testFileScenariosByKind.values()].flat(),
+      channelDriver: params?.channelDriver ?? "qa-channel",
+      expandChannels: false,
+    }),
+  ];
   const requiresFlowPartitions =
     channelGroups.length > 1 ||
     channelGroups.some(
@@ -331,12 +375,13 @@ async function resolveSuiteExecutionPlan(
     ) ||
     (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
   if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
-    return { kind: "flow" };
+    return { kind: "flow", expectedCells, scenarios: selectedScenarios };
   }
   return {
     kind: "unified",
+    channelGroups,
+    expectedCells,
     scenarios: selectedScenarios,
-    flowScenarios,
     testFileScenariosByKind,
   };
 }
@@ -672,7 +717,7 @@ async function writeUnifiedQaSuiteArtifacts(params: {
 async function runUnifiedQaSuite(params: {
   plan: Extract<QaSuiteExecutionPlan, { kind: "unified" }>;
   runParams: QaSuiteRunParams | undefined;
-}): Promise<QaUnifiedSuiteResult> {
+}): Promise<QaUnifiedSuiteResult & { observedCells: QaScenarioExecutionCell[] }> {
   if (params.plan.testFileScenariosByKind.size > 0) {
     rejectFlowOnlySuiteOptionsForUnifiedRun(params.runParams);
   }
@@ -722,15 +767,27 @@ async function runUnifiedQaSuite(params: {
       );
   const evidenceSummaries: QaEvidenceSummaryJson[] = [];
   const scenarioResultsById = new Map<string, QaSuiteScenarioResult[]>();
+  const observedCellsByKey = new Map<string, QaScenarioExecutionCell>();
+  const recordObservedScenarios = (
+    scenarios: readonly QaSeedScenarioWithSource[],
+    channel?: string,
+  ) => {
+    for (const cell of expandQaScenarioExecutionCells({
+      scenarios,
+      channelDriver: params.runParams?.channelDriver ?? "qa-channel",
+      channel,
+      expandChannels: false,
+    })) {
+      observedCellsByKey.set(JSON.stringify(cell), cell);
+    }
+  };
   const sharedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   const unavailableChannelCredentialDetails = new Map<string, string>();
-  if (params.plan.flowScenarios.length > 0) {
-    const channelGroups = (
-      await resolveQaFlowChannelGroups(params.runParams, params.plan.flowScenarios)
-    ).filter((group) => group.scenarios.length > 0);
+  if (params.plan.channelGroups.length > 0) {
+    const channelGroups = params.plan.channelGroups;
     const runFlowSuite = await loadQaFlowSuiteRuntime();
     for (const channelGroup of channelGroups) {
       const sharedFlowScenarios = channelGroup.scenarios.filter(
@@ -863,6 +920,7 @@ async function runUnifiedQaSuite(params: {
           };
         };
         const task = {
+          channel: channelGroup.channel,
           // One channel's credential and Gateway state stay serial unless each adapter create()
           // owns an isolated runtime. Distinct channels may always run together.
           exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
@@ -871,6 +929,7 @@ async function runUnifiedQaSuite(params: {
           scenarios: partition.scenarios,
           weight: partition.concurrency,
           run: async () => {
+            recordObservedScenarios(partition.scenarios, channelGroup.channel);
             const unavailableDetails = channelGroup.channelId
               ? unavailableChannelCredentialDetails.get(channelGroup.channelId)
               : undefined;
@@ -965,9 +1024,10 @@ async function runUnifiedQaSuite(params: {
   }
   const createTestFilePartitionTask = (
     scenariosByKind: ReadonlyMap<QaTestFileExecutionKind, QaTestFileScenario[]>,
-  ) =>
-    ({
-      scenarios: [...scenariosByKind.values()].flat(),
+  ) => {
+    const taskScenarios = [...scenariosByKind.values()].flat();
+    return {
+      scenarios: taskScenarios,
       weight: 1,
       run: async () => {
         const testFileEvidenceSummaries: QaEvidenceSummaryJson[] = [];
@@ -1020,6 +1080,9 @@ async function runUnifiedQaSuite(params: {
             break;
           }
         }
+        recordObservedScenarios(
+          taskScenarios.filter((scenario) => testFileStartedScenarioIds.includes(scenario.id)),
+        );
         return {
           evidenceSummaries: testFileEvidenceSummaries,
           scenarioResults: testFileScenarioResults,
@@ -1029,7 +1092,8 @@ async function runUnifiedQaSuite(params: {
           ),
         };
       },
-    }) satisfies QaUnifiedPartitionTask;
+    } satisfies QaUnifiedPartitionTask;
+  };
   const concurrentTestFileScenariosByKind = new Map(
     [...params.plan.testFileScenariosByKind].filter(([kind]) => kind !== "script"),
   );
@@ -1149,6 +1213,7 @@ async function runUnifiedQaSuite(params: {
     error: unknown,
   ): QaUnifiedPartitionResult => {
     const scenarios = task.scenarios;
+    recordObservedScenarios(scenarios, task.channel);
     const details = `suite partition failed: ${formatErrorMessage(error)}`;
     const scenarioResults = scenarios.map((scenario) => ({
       scenarioId: scenario.id,
@@ -1302,25 +1367,40 @@ async function runUnifiedQaSuite(params: {
     markdown: unifiedResult.report,
     generatedAt: finishedAt.toISOString(),
   });
-  return unifiedResult;
+  return {
+    ...unifiedResult,
+    observedCells: [...observedCellsByKey.values()].toSorted((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right)),
+    ),
+  };
 }
 
 export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
   const runParams = args[0];
   const plan = await resolveSuiteExecutionPlan(runParams);
   if (plan.kind === "unified") {
-    const result = await runUnifiedQaSuite({
+    const { observedCells, ...result } = await runUnifiedQaSuite({
       runParams,
       plan,
     });
     return {
       executionKind: "suite",
+      expectedCells: plan.expectedCells,
+      observedCells,
       result,
     };
   }
+  const result = await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(...args));
+  if (plan.expectedCells.length > 0 && result.scenarios.length > plan.expectedCells.length) {
+    throw new Error(
+      `QA flow returned ${result.scenarios.length} results for ${plan.expectedCells.length} scheduled cells`,
+    );
+  }
   return {
     executionKind: "flow",
-    result: await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(...args)),
+    expectedCells: plan.expectedCells,
+    observedCells: plan.expectedCells.slice(0, result.scenarios.length),
+    result,
   };
 }
 

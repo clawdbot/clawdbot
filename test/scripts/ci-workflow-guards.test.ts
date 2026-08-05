@@ -5698,6 +5698,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
+    expect(validateManifestStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(validateManifestStep.run).toContain("profilePlanSha256");
+    expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
 
     expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
     const qaEvidenceStep = qaRunJob.steps.find(
@@ -5708,6 +5711,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(qaEvidenceStep.run).toContain("validateQaEvidenceSummaryJson");
+    expect(qaEvidenceStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(qaEvidenceStep.run).toContain("profilePlanSha256");
+    expect(qaEvidenceStep.run).toContain("rerun the QA Profile Evidence workflow");
     expect(qaEvidenceStep.env.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
     expect(qaEvidenceStep.run).toContain("qaExitCode: Number(process.env.QA_EXIT_CODE)");
     expect(qaEvidenceStep.run).toContain('qaPassed: process.env.QA_EXIT_CODE === "0"');

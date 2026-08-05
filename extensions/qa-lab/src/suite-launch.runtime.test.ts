@@ -439,6 +439,15 @@ describe("qa suite runtime launcher", () => {
     expect(
       result.result.scenarios.find((scenario) => scenario.name === "thread-isolation [matrix]"),
     ).toMatchObject({ status: "fail" });
+    expect(result.observedCells).toEqual(
+      expect.arrayContaining([
+        { scenarioId: "channel-chat-baseline", executionKind: "flow", channel: null },
+        { scenarioId: "telegram-help-command", executionKind: "flow", channel: "telegram" },
+        { scenarioId: "matrix-restart-resume", executionKind: "flow", channel: "matrix" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "slack" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
+      ]),
+    );
   });
 
   it("uses one eligible channel outside profile execution", async () => {
@@ -688,6 +697,9 @@ describe("qa suite runtime launcher", () => {
     };
     expect(evidence.entries).toMatchObject([
       { test: { id: "whatsapp-status-command" }, result: { status: "fail" } },
+    ]);
+    expect(result.observedCells).toEqual([
+      { scenarioId: "whatsapp-status-command", executionKind: "flow", channel: "whatsapp" },
     ]);
     await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
   });
