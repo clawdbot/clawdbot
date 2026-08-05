@@ -356,6 +356,8 @@ describe("managed diagnostics-otel install runtime", () => {
       await runTurn(gateway, "OTEL-MANAGED-SAMPLED-OUT");
       await sleep(1_500);
       expect(configured.capturedRequests).toHaveLength(0);
+      const sampledOutRequestCursor = configured.capturedRequests.length;
+      const sampledOutSpanCursor = configured.capturedSpans.length;
       expect(envOnly.capturedRequests).toHaveLength(0);
 
       await restartWithOtelConfig({
@@ -363,22 +365,36 @@ describe("managed diagnostics-otel install runtime", () => {
         sampleRate: 1,
         traceEndpoint: configured.baseUrl,
       });
+      expect(configured.capturedRequests).toHaveLength(sampledOutRequestCursor);
+      expect(configured.capturedSpans).toHaveLength(sampledOutSpanCursor);
+      const sampledInRequestCursor = configured.capturedRequests.length;
+      const sampledInSpanCursor = configured.capturedSpans.length;
       await runTurn(gateway, "OTEL-MANAGED-INSTALL-OK");
-      const traceRequest = await waitFor(
-        () =>
-          configured.capturedRequests.find(
-            (request) => request.path === "/v1/traces" && request.spanCount > 0,
-          ),
-        15_000,
-      );
+      const sampledInExport = await waitFor(() => {
+        let spanOffset = sampledInSpanCursor;
+        for (const request of configured.capturedRequests.slice(sampledInRequestCursor)) {
+          const requestSpans = configured.capturedSpans.slice(
+            spanOffset,
+            spanOffset + request.spanCount,
+          );
+          spanOffset += request.spanCount;
+          if (
+            request.path === "/v1/traces" &&
+            requestSpans.some((span) => span.name === "openclaw.run")
+          ) {
+            return { request, spans: requestSpans };
+          }
+        }
+        return undefined;
+      }, 15_000);
       // BatchSpanProcessor starts its timer on the first ended span. The first
       // export's earliest end timestamp is the boundary that must observe the clamp.
-      const firstRequestEndTimes = configured.capturedSpans
-        .slice(0, traceRequest.spanCount)
-        .flatMap((span) => (span.endTimeMs === undefined ? [] : [span.endTimeMs]));
+      const firstRequestEndTimes = sampledInExport.spans.flatMap((span) =>
+        span.endTimeMs === undefined ? [] : [span.endTimeMs],
+      );
       expect(firstRequestEndTimes.length).toBeGreaterThan(0);
       const firstSpanEndAt = Math.min(...firstRequestEndTimes);
-      const exportDelayMs = (traceRequest.receivedAtMs ?? 0) - firstSpanEndAt;
+      const exportDelayMs = (sampledInExport.request.receivedAtMs ?? 0) - firstSpanEndAt;
       expect(exportDelayMs).toBeGreaterThanOrEqual(1_000);
       expect(exportDelayMs).toBeLessThan(4_500);
       expect(envOnly.capturedRequests).toHaveLength(0);
