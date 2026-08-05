@@ -9,9 +9,11 @@ import {
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
+  onCronJobInactive,
 } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { deleteCronJobScratch } from "../scratch-store.js";
+import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
@@ -442,7 +444,10 @@ export async function remove(
   id: string,
   opts?: { systemOwned?: boolean },
 ) {
-  return await locked(state, async () => {
+  let sessionCleanup:
+    | { agentId: string; sessionStorePath: string; waitForActiveRun: boolean }
+    | undefined;
+  const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state, { skipRecompute: true });
     const before = state.store?.jobs.length ?? 0;
@@ -471,7 +476,20 @@ export async function remove(
       postPersistNotifications,
       suppressScheduledJobId: id,
     });
-    if (removed) {
+    if (removed && removedJob) {
+      const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
+      const sessionStorePath =
+        state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
+      if (
+        sessionStorePath &&
+        (removedJob.sessionTarget === "isolated" || removedJob.sessionTarget === "current")
+      ) {
+        sessionCleanup = {
+          agentId,
+          sessionStorePath,
+          waitForActiveRun: isCronJobActive(id),
+        };
+      }
       noteActiveCronJobRemoval(id);
       try {
         deleteCronJobScratch(state.deps.storePath, id);
@@ -487,6 +505,26 @@ export async function remove(
     }
     return { ok: true, removed } as const;
   });
+  if (!sessionCleanup) {
+    return result;
+  }
+  const { agentId, sessionStorePath, waitForActiveRun } = sessionCleanup;
+  const cleanup = async () => {
+    try {
+      await removeCronJobBaseSession({
+        agentId,
+        jobId: id,
+        sessionStorePath,
+      });
+    } catch (error) {
+      state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
+    }
+  };
+  await cleanup();
+  if (waitForActiveRun) {
+    onCronJobInactive(id, () => void cleanup());
+  }
+  return result;
 }
 
 /** Remove one agent's jobs while holding the cron lock across an external roster commit. */

@@ -18,6 +18,7 @@ export type CronActiveJobMarker = {
   triggerMutated?: true;
   jobRemoved?: true;
   preserveAcrossGenerationAdvance?: boolean;
+  onInactive?: Set<() => void>;
 };
 
 function getCronActiveJobState(): CronActiveJobState {
@@ -60,6 +61,12 @@ function notifyActiveCronJobWaitersIfEmpty(state: CronActiveJobState) {
   state.emptyWaiters.clear();
 }
 
+function notifyCronJobInactive(marker: CronActiveJobMarker) {
+  for (const callback of marker.onInactive ?? []) {
+    callback();
+  }
+}
+
 /** Marks a cron job id as currently executing for duplicate-run suppression. */
 export function markCronJobActive(
   jobId: string,
@@ -93,6 +100,7 @@ export function clearCronJobActive(jobId: string, marker?: CronActiveJobMarker) 
     (!marker || (marker.jobId === jobId && marker.token === activeMarker.token))
   ) {
     state.activeJobs.delete(jobId);
+    notifyCronJobInactive(activeMarker);
   }
   notifyActiveCronJobWaitersIfEmpty(state);
 }
@@ -148,6 +156,18 @@ export function isCronJobActive(jobId: string) {
   const state = getCronActiveJobState();
   const marker = state.activeJobs.get(jobId);
   return marker ? isMarkerActiveInGeneration(marker, state.generation) : false;
+}
+
+/** Runs a callback when the exact cron job no longer has an active in-process run. */
+export function onCronJobInactive(jobId: string, callback: () => void): void {
+  const state = getCronActiveJobState();
+  const marker = state.activeJobs.get(jobId);
+  if (!marker || !isMarkerActiveInGeneration(marker, state.generation)) {
+    callback();
+    return;
+  }
+  marker.onInactive ??= new Set<() => void>();
+  marker.onInactive.add(callback);
 }
 
 export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undefined) {
@@ -226,6 +246,7 @@ export function advanceCronActiveJobGeneration() {
     }
     if (marker.generation < state.generation - 1) {
       state.activeJobs.delete(jobId);
+      notifyCronJobInactive(marker);
     }
   }
   notifyActiveCronJobWaitersIfEmpty(state);
@@ -235,6 +256,9 @@ export function advanceCronActiveJobGeneration() {
 export function resetCronActiveJobs() {
   const state = getCronActiveJobState();
   state.generation += 1;
+  for (const marker of state.activeJobs.values()) {
+    notifyCronJobInactive(marker);
+  }
   state.activeJobs.clear();
   notifyActiveCronJobWaitersIfEmpty(state);
 }
