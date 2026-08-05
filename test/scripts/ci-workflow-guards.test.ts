@@ -1041,6 +1041,54 @@ NODE
     });
   });
 
+  it("runs the PR context and evidence gate only for relevant PR changes", () => {
+    const workflow = readRealBehaviorProofWorkflow();
+
+    expect(workflow.name).toBe("PR context and evidence");
+    expect(workflow.jobs["real-behavior-proof"].name).toBe("PR context and evidence");
+    expect(workflow.on.pull_request_target.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+    ]);
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.pull_request.number }}",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event.action == 'synchronize' }}",
+    );
+  });
+
+  it("isolates auto-response per item and ignores ClawSweeper PR label feedback", () => {
+    const workflow = readWorkflow(".github/workflows/auto-response.yml");
+    const guard = workflow.jobs["auto-response"].if;
+
+    expect(workflow.on.issues.types).toEqual(["opened", "edited", "labeled"]);
+    expect(workflow.on.issue_comment.types).toEqual(["created"]);
+    expect(workflow.on.pull_request_target.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "labeled",
+      "unlabeled",
+    ]);
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}",
+    );
+    expect(guard).toContain("github.event_name != 'pull_request_target'");
+    expect(guard).toContain("github.event.action != 'labeled'");
+    expect(guard).toContain("github.event.action != 'unlabeled'");
+    expect(guard).toContain("github.actor != 'clawsweeper[bot]'");
+    expect(guard).toContain("github.actor != 'openclaw-clawsweeper[bot]'");
+    expect(guard).not.toContain("openclaw-barnacle[bot]");
+  });
+
   it("routes stale bug issues through ClawSweeper instead of Barnacle closure", () => {
     const staleWorkflow = readWorkflow(".github/workflows/stale.yml");
     const staleSteps = staleWorkflow.jobs.stale.steps as WorkflowStep[];

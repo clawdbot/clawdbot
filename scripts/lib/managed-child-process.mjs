@@ -144,7 +144,6 @@ export async function runManagedCommand({
   let timeoutTimer = null;
   let signalTimeout;
   let timedOut = false;
-  let childResult;
   let timeoutTermination;
   const timeoutTriggered = new Promise((resolve) => {
     signalTimeout = resolve;
@@ -222,14 +221,10 @@ export async function runManagedCommand({
       }
       throw outcome.error;
     }
-    childResult = outcome.status;
     if (requireProcessTreeExit) {
-      await ensureManagedProcessTreeExit(child, platform, {
-        rejectIfLive: true,
-        terminateIfLive: true,
-      });
+      await ensureManagedProcessTreeExit(child, platform, { terminateIfLive: true });
     }
-    return childResult;
+    return outcome.status;
   } finally {
     if (timeoutTimer) {
       clearTimeout(timeoutTimer);
@@ -276,7 +271,7 @@ function processGroupStatus(pid) {
 async function ensureManagedProcessTreeExit(
   child,
   platform,
-  { rejectIfLive = false, terminateIfLive = false, windowsTermination } = {},
+  { terminateIfLive = false, windowsTermination } = {},
 ) {
   if (platform === "win32") {
     if (windowsTermination?.processTreeState === "indeterminate") {
@@ -294,10 +289,10 @@ async function ensureManagedProcessTreeExit(
     return;
   }
   let status = initialStatus;
-  let sawLive = initialStatus === "live";
-  if (terminateIfLive) {
-    terminateManagedChild(child, "SIGKILL", { platform });
-  }
+  // A missing group at signal time supersedes the earlier racy liveness probe.
+  const termination = terminateIfLive
+    ? terminateManagedChild(child, "SIGKILL", { platform })
+    : undefined;
   const deadline = Date.now() + PROCESS_GROUP_DRAIN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => {
@@ -305,7 +300,7 @@ async function ensureManagedProcessTreeExit(
     });
     status = processGroupStatus(child.pid);
     if (status === "dead") {
-      if (rejectIfLive && sawLive) {
+      if (terminateIfLive && termination?.processTreeState !== "terminated") {
         throw createManagedCommandCleanupError(
           "Managed command exited while its process group remained active",
           child,
@@ -314,9 +309,6 @@ async function ensureManagedProcessTreeExit(
         );
       }
       return;
-    }
-    if (status === "live") {
-      sawLive = true;
     }
   }
   const processTreeState = status === "indeterminate" ? "indeterminate" : "live";
