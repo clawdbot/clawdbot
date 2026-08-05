@@ -346,21 +346,27 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
     windowCache: MODEL_CONTEXT_WINDOW_CACHE,
     modelsConfig: cfg.models as ModelsConfig | undefined,
   });
-  CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
-  CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
-  CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
+  rememberConfiguredContextWindowsConfig(cfg);
   return cfg;
 }
 
-function primeConfiguredContextWindows(): OpenClawConfig | undefined {
+function rememberConfiguredContextWindowsConfig(cfg: OpenClawConfig): void {
+  CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
+  CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
+  CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
+}
+
+function loadConfiguredContextWindowsConfig(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
-    return primeConfiguredContextWindowsFromConfig(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig);
+    return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
   if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
     return undefined;
   }
   try {
-    return primeConfiguredContextWindowsFromConfig(getRuntimeConfig());
+    const cfg = getRuntimeConfig();
+    rememberConfiguredContextWindowsConfig(cfg);
+    return cfg;
   } catch {
     CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures += 1;
     const backoffMs = computeBackoff(
@@ -373,6 +379,35 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
+function primeConfiguredContextWindows(): OpenClawConfig | undefined {
+  if (
+    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
+    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration === CONTEXT_WINDOW_RUNTIME_STATE.generation
+  ) {
+    return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
+  }
+  const cfg = loadConfiguredContextWindowsConfig();
+  return cfg ? primeConfiguredContextWindowsFromConfig(cfg) : undefined;
+}
+
+function requiresCooperativeConfiguredProjection(modelsConfig: ModelsConfig | undefined): boolean {
+  const providers = modelsConfig?.providers;
+  if (!providers || typeof providers !== "object") {
+    return false;
+  }
+  let modelCount = 0;
+  for (const provider of Object.values(providers)) {
+    if (!Array.isArray(provider?.models)) {
+      continue;
+    }
+    modelCount += provider.models.length;
+    if (modelCount > CONTEXT_CACHE_PREWARM_BATCH_SIZE) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
   const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
   if (
@@ -382,17 +417,36 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
-  const cfg = cfgOverride
-    ? primeConfiguredContextWindowsFromConfig(cfgOverride)
-    : primeConfiguredContextWindows();
+  const cfg = cfgOverride ?? loadConfiguredContextWindowsConfig();
   if (!cfg) {
     return Promise.resolve();
   }
-  const stagedTokenCache = new Map<string, number>();
+  const modelsConfig = cfg.models as ModelsConfig | undefined;
+  const cooperativeConfiguredProjection = requiresCooperativeConfiguredProjection(modelsConfig);
+  if (cooperativeConfiguredProjection) {
+    rememberConfiguredContextWindowsConfig(cfg);
+  } else {
+    primeConfiguredContextWindowsFromConfig(cfg);
+  }
+  const stagedConfiguredTokenCache = new Map<string, number>();
+  const stagedContextWindowCache = new Map<string, number>();
+  const stagedDiscoveredTokenCache = new Map<string, number>();
+  const shouldStop = () => CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation;
 
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
     .then(async () => {
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+      if (shouldStop()) {
+        return;
+      }
+      if (
+        cooperativeConfiguredProjection &&
+        !(await applyConfiguredContextWindowsCooperatively({
+          cache: stagedConfiguredTokenCache,
+          windowCache: stagedContextWindowCache,
+          modelsConfig,
+          shouldStop,
+        }))
+      ) {
         return;
       }
       try {
@@ -407,16 +461,16 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
           (value) => ({ status: "fulfilled" as const, value }),
           (reason: unknown) => ({ status: "rejected" as const, reason }),
         );
-        if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+        if (shouldStop()) {
           return;
         }
         const modelCatalog =
           catalogResult.status === "fulfilled" ? catalogResult.value.modelCatalog : undefined;
         if (
           !(await applyDiscoveredContextWindowsCooperatively({
-            cache: stagedTokenCache,
+            cache: stagedDiscoveredTokenCache,
             modelGroups: [modelCatalog?.entries ?? [], modelCatalog?.staticEntries ?? []],
-            shouldStop: () => CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation,
+            shouldStop,
           }))
         ) {
           return;
@@ -426,10 +480,18 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
         // config overrides only instead of mixing in independently rediscovered static metadata.
       }
 
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+      if (shouldStop()) {
         return;
       }
-      replaceDiscoveredContextTokenCache(stagedTokenCache);
+      if (cooperativeConfiguredProjection) {
+        replaceContextWindowCaches({
+          configuredTokenCache: stagedConfiguredTokenCache,
+          contextWindowCache: stagedContextWindowCache,
+          discoveredTokenCache: stagedDiscoveredTokenCache,
+        });
+      } else {
+        replaceDiscoveredContextTokenCache(stagedDiscoveredTokenCache);
+      }
     })
     .catch(() => {
       // Keep lookup best-effort.
@@ -475,8 +537,7 @@ export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<vo
   beginContextWindowCacheRefresh();
   MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE.clear();
   MODEL_CONTEXT_WINDOW_CACHE.clear();
-  primeConfiguredContextWindowsFromConfig(cfg);
-  await ensureContextWindowCacheLoaded();
+  await ensureContextWindowCacheLoaded(cfg);
 }
 
 function prepareContextWindowCache(options?: {
