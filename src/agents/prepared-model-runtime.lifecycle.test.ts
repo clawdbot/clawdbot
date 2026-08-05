@@ -89,6 +89,26 @@ describe("prepared model runtime snapshots", () => {
     expect(events).toEqual(["invalidated"]);
   });
 
+  it("terminates direct invalidation when no replacement owns it", async () => {
+    mocks.configuredAgentIds = ["default"];
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const events: Array<{ phase: string; error?: Error }> = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event);
+    });
+
+    markPreparedModelRuntimeSnapshotsStale("direct invalidation has no replacement");
+    unregister();
+
+    expect(events).toEqual([
+      { phase: "invalidated" },
+      {
+        phase: "failed",
+        error: expect.objectContaining({ message: "direct invalidation has no replacement" }),
+      },
+    ]);
+  });
+
   it("announces a failed replacement so lifecycle readers do not wait indefinitely", async () => {
     mocks.configuredAgentIds = ["default"];
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });

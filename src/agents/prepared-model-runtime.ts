@@ -492,6 +492,9 @@ export function markPreparedModelRuntimeSnapshotsStale(
     owner.refreshError = staleError;
   }
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+  if (!pendingModelRuntimeReplacement) {
+    notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
+  }
   return pendingModelRuntimeReplacement?.gateId;
 }
 
