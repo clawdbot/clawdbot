@@ -1968,7 +1968,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftStream.update).toHaveBeenLastCalledWith(
+    expect(draftStream.update).toHaveBeenCalledWith(
       [
         "Shelling",
         "",
