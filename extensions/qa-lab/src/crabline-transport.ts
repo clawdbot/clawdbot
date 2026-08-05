@@ -273,19 +273,18 @@ function createCrablineState(params: {
         adapter: params.adapter,
         providerInbound,
       });
-      const message = baseState.addInboundMessage({
-        ...input,
-        conversation: resolveCrablineStateConversation({
-          adapter: params.adapter,
-          input,
-          providerInbound,
-        }),
-        ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
-      });
-      if (providerMessageId) {
-        message.id = providerMessageId;
-      }
-      return message;
+      return baseState.addInboundMessage(
+        {
+          ...input,
+          conversation: resolveCrablineStateConversation({
+            adapter: params.adapter,
+            input,
+            providerInbound,
+          }),
+          ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
+        },
+        providerMessageId,
+      );
     },
     rememberProviderTarget(providerTargetKey, qaTarget) {
       targetByProviderTarget.set(providerTargetKey, qaTarget);
@@ -334,7 +333,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
         await this.sendInbound({
           ...message,
           text: `/${command}`,
-          nativeCommand: { name: command },
+          nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
         });
       };
       this.waitForOutboundSequence = async (input) =>
