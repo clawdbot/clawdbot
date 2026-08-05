@@ -217,6 +217,26 @@ describe("tools commands cli", () => {
     expect(parsed.cli.nodeCommands[0]?.nodeId).toBe("node-1");
   });
 
+  it("fails without JSON output when --node is blank", async () => {
+    const output = await captureStdout(async () => {
+      await expect(
+        createProgram().parseAsync([
+          "node",
+          "openclaw",
+          "tools",
+          "commands",
+          "list",
+          "--json",
+          "--node",
+          " ",
+        ]),
+      ).rejects.toThrow("--node must be a non-empty node id");
+    });
+
+    expect(callNodeDiagnosticsGatewayCliMock).not.toHaveBeenCalled();
+    expect(output).toBe("");
+  });
+
   it("preserves Gateway-valid command strings from a paired node", async () => {
     callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
       nodeId: "node-1",

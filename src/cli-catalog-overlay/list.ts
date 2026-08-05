@@ -15,6 +15,10 @@ function markdownTableCell(value: string): string {
   return value.replace(/\r\n?|\n/g, " ").replace(/\|/g, "\\|");
 }
 
+function markdownSafeSingleLineText(value: string): string {
+  return sanitizeTerminalText(value.replace(/\r\n?|\n|\t/g, " "));
+}
+
 function markdownCodeCell(value: string): string {
   const cell = markdownTableCell(value);
   const longestFence = Math.max(0, ...Array.from(cell.matchAll(/`+/g), (match) => match[0].length));
@@ -318,12 +322,12 @@ export function renderCatalogListMarkdown(
       "| --- | --- | --- | --- | --- | --- | --- |",
     );
     for (const command of list.cli.nodeCommands) {
-      const commandCell = markdownCodeCell(sanitizeTerminalText(command.command));
-      const nodeLabel = sanitizeTerminalText(
-        markdownTableCell(command.nodeName ?? command.nodeId ?? "Any"),
+      const commandCell = markdownCodeCell(markdownSafeSingleLineText(command.command));
+      const nodeLabel = markdownTableCell(
+        markdownSafeSingleLineText(command.nodeName ?? command.nodeId ?? "Any"),
       );
       const invocationHint = command.invocationHint
-        ? markdownCodeCell(sanitizeTerminalText(command.invocationHint))
+        ? markdownCodeCell(markdownSafeSingleLineText(command.invocationHint))
         : "None";
       lines.push(
         `| ${commandCell} | ${nodeLabel} | ${markdownCodeCell(command.availability ?? "unknown")} | ${markdownCodeCell(command.approvalKind ?? "unknown")} | ${markdownCodeCell(command.risk ?? "unknown")} | ${markdownCodeCell(command.effectMode ?? "unknown")} | ${invocationHint} |`,

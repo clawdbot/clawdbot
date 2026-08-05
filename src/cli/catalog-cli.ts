@@ -30,7 +30,7 @@ function addNodeInventoryOptions(command: Command): Command {
 }
 
 async function loadNodeCommandObservation(opts: NodeInventoryOpts) {
-  if (!opts.node) {
+  if (opts.node === undefined) {
     return undefined;
   }
   const nodeId = normalizeOptionalString(opts.node);
