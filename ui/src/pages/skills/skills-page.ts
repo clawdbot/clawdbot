@@ -18,6 +18,7 @@ import {
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -215,6 +216,12 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
+    if (data.report) {
+      // Route-loaded reports skip loadSkills(), which is the only other path
+      // that fetches ClawHub security verdicts; hydrate them here so the
+      // first navigation shows the real badge instead of "Unavailable".
+      void loadClawHubSecurityVerdicts(this, data.report);
+    }
   }
 
   private ensureInitialData() {
