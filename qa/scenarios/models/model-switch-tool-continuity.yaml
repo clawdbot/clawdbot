@@ -71,13 +71,14 @@ flow:
                 expr: alternate?.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
-        - call: readSessionTranscriptSummary
+        - call: waitForCondition
           saveAs: afterSwitchTranscript
           args:
-            - ref: env
-            - agent:qa:model-switch-tools
-            - afterEventCursor:
-                expr: beforeSwitchTranscript.eventCursor
+            - lambda:
+                async: true
+                expr: "readSessionTranscriptSummary(env, 'agent:qa:model-switch-tools', { afterEventCursor: beforeSwitchTranscript.eventCursor, allowEmpty: true }).then((summary) => (summary.successfulToolCallCounts.read ?? 0) >= 1 ? summary : undefined)"
+            - 5000
+            - 50
         - assert:
             expr: "(afterSwitchTranscript.successfulToolCallCounts.read ?? 0) >= 1"
             message:

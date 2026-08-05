@@ -17,7 +17,7 @@ const newCallId = "read-after-switch";
 afterEach(cleanup);
 
 type ProviderMode = "mock-openai" | "live-frontier";
-type ToolEvidence = "successful" | "failed" | "planned-only" | "old-only";
+type ToolEvidence = "successful" | "delayed-success" | "failed" | "planned-only" | "old-only";
 
 async function runModelSwitchToolContinuityFlow(params: {
   providerMode: ProviderMode;
@@ -39,7 +39,6 @@ async function runModelSwitchToolContinuityFlow(params: {
     plannedToolCallId: string;
     plannedToolName: string;
   }> = [];
-  const readTranscriptSummary = vi.fn(readSessionTranscriptSummary);
   const env = {
     providerMode: params.providerMode,
     primaryModel: "openai/primary-model",
@@ -69,6 +68,28 @@ async function runModelSwitchToolContinuityFlow(params: {
       timestamp: Date.now(),
       content: [{ type: "text", text: isError ? "read failed" : "QA scenario pack mission" }],
     });
+  const scopedSuccessfulReadCounts: number[] = [];
+  let delayedReadPersisted = false;
+  const readTranscriptSummary = vi.fn(
+    async (
+      summaryEnv: Parameters<typeof readSessionTranscriptSummary>[0],
+      requestedSessionKey: string,
+      options?: Parameters<typeof readSessionTranscriptSummary>[2],
+    ) => {
+      const summary = await readSessionTranscriptSummary(summaryEnv, requestedSessionKey, options);
+      if (options?.afterEventCursor !== undefined) {
+        scopedSuccessfulReadCounts.push(summary.successfulToolCallCounts.read ?? 0);
+        if (params.evidence === "delayed-success" && !delayedReadPersisted) {
+          const wholeSession = await readSessionTranscriptSummary(summaryEnv, requestedSessionKey);
+          expect(wholeSession.successfulToolCallCounts.read).toBe(1);
+          expect(summary.successfulToolCallCounts.read ?? 0).toBe(0);
+          delayedReadPersisted = true;
+          await appendToolResult(newCallId);
+        }
+      }
+      return summary;
+    },
+  );
 
   const result = await runLoadedScenarioFlow("model-switch-tool-continuity", {
     state,
@@ -117,7 +138,7 @@ async function runModelSwitchToolContinuityFlow(params: {
     },
   });
 
-  return { result, readTranscriptSummary };
+  return { result, readTranscriptSummary, scopedSuccessfulReadCounts };
 }
 
 describe("model-switch tool continuity scenario persisted evidence", () => {
@@ -140,11 +161,24 @@ describe("model-switch tool continuity scenario persisted evidence", () => {
   );
 
   it.each(["mock-openai", "live-frontier"] as const)(
+    "waits for the new correlated read when its SQLite result persists after agent completion (%s)",
+    async (providerMode) => {
+      const { result, scopedSuccessfulReadCounts } = await runModelSwitchToolContinuityFlow({
+        providerMode,
+        evidence: "delayed-success",
+      });
+
+      expect(result.status).toBe("pass");
+      expect(scopedSuccessfulReadCounts).toEqual([0, 1]);
+    },
+  );
+
+  it.each(["mock-openai", "live-frontier"] as const)(
     "rejects a fabricated handoff when only the prior turn successfully read (%s)",
     async (providerMode) => {
       await expect(
         runModelSwitchToolContinuityFlow({ providerMode, evidence: "old-only" }),
-      ).rejects.toThrow(/read.*switch|switch.*read/i);
+      ).rejects.toThrow(/read.*switch|switch.*read|test condition was not met/i);
     },
   );
 
@@ -153,7 +187,7 @@ describe("model-switch tool continuity scenario persisted evidence", () => {
     async (providerMode) => {
       await expect(
         runModelSwitchToolContinuityFlow({ providerMode, evidence: "failed" }),
-      ).rejects.toThrow(/read.*switch|switch.*read/i);
+      ).rejects.toThrow(/read.*switch|switch.*read|test condition was not met/i);
     },
   );
 
@@ -162,7 +196,7 @@ describe("model-switch tool continuity scenario persisted evidence", () => {
     async (providerMode) => {
       await expect(
         runModelSwitchToolContinuityFlow({ providerMode, evidence: "planned-only" }),
-      ).rejects.toThrow(/read.*switch|switch.*read/i);
+      ).rejects.toThrow(/read.*switch|switch.*read|test condition was not met/i);
     },
   );
 });
