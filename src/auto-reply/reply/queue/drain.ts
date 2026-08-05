@@ -574,7 +574,6 @@ function collectRuntimeMetadata(
 
 type FollowupQueueSummaryState = {
   cap: number;
-  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
@@ -611,7 +610,6 @@ function createQueueSummaryDelivery(params: {
     : [...params.queue.summaryLines];
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },
@@ -1028,7 +1026,6 @@ async function drainElidedOverflowSummary(params: {
   const summaryLines = params.queue.summaryLines.slice(0, retainedSources.length);
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },

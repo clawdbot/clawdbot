@@ -8,20 +8,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
-/** Mutable summary state for a capped queue. */
+/** Pending overflow summary state produced by the summarize drop policy. */
 type QueueSummaryState = {
-  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
 };
 
-/** Queue overflow strategy. */
-type QueueDropPolicy = QueueSummaryState["dropPolicy"];
+/** Queue overflow strategy for future admissions. */
+type QueueDropPolicy = "summarize" | "old" | "new";
 
 /** Generic capped queue state with shared overflow summary fields. */
 type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
+  dropPolicy: QueueDropPolicy;
 };
 
 /** Build a summary prompt preview without mutating the source queue state. */
@@ -307,7 +307,7 @@ function buildQueueSummaryPrompt(params: {
   noun: string;
   title?: string;
 }): string | undefined {
-  if (params.state.dropPolicy !== "summarize" || params.state.droppedCount <= 0) {
+  if (params.state.droppedCount <= 0) {
     return undefined;
   }
   const noun = params.noun;
