@@ -10,6 +10,7 @@ import { createNodePluginTools } from "../agents/node-plugin-tools.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
 import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { replaceConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
@@ -126,6 +127,9 @@ describe("plain node plugin tool invocation deadline", () => {
         callerScopes: ["operator.admin", "operator.write"],
       });
       const node = await connectNode();
+      // The shared Gateway fixture snapshots no such key, so leaving it set would
+      // point later tests in this worker at this stopped ephemeral server.
+      const gatewayUrlEnv = captureEnv(["OPENCLAW_GATEWAY_URL"]);
 
       try {
         const nodeId = (await findNodeId()) ?? provisionalNodeId;
@@ -145,7 +149,7 @@ describe("plain node plugin tool invocation deadline", () => {
             },
           ],
         });
-        process.env.OPENCLAW_GATEWAY_URL = `ws://127.0.0.1:${port}`;
+        setTestEnvValue("OPENCLAW_GATEWAY_URL", `ws://127.0.0.1:${port}`);
 
         const tool = createNodePluginTools({})[0];
         if (!tool) {
@@ -169,6 +173,7 @@ describe("plain node plugin tool invocation deadline", () => {
           (failure as { details?: { nodeCommandDispatched?: boolean } }).details,
         ).toMatchObject({ nodeCommandDispatched: true });
       } finally {
+        gatewayUrlEnv.restore();
         await node.stopAndWait();
       }
     },
