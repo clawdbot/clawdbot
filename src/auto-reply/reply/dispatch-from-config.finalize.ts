@@ -14,6 +14,7 @@ import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
   NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  QUEUE_CAP_REJECTION_TEXT,
 } from "./dispatch-from-config.payloads.js";
 import {
   clearPendingFinalDeliveryAfterSuccess,
@@ -266,7 +267,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   // ledger intentionally does not own. Directedness gates both the fallback and
   // eligibility: only a turn that positively addressed the bot may surface a
   // visible failure notice.
-  const replyAcceptedByActiveRun = state.replyOperationRunState.admission?.status === "accepted";
+  const replyAdmission = state.replyOperationRunState.admission;
+  const replyAcceptedByActiveRun = replyAdmission?.status === "accepted";
+  const queueCapRejected =
+    replyAdmission?.status === "skipped" && replyAdmission.reason === "queue-cap";
   const noVisibleReplyFallbackAllowed = () =>
     noVisibleReplyFallbackDirected &&
     !suppressDelivery &&
@@ -297,7 +301,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
     try {
       throwIfDispatchOperationAborted();
-      const fallbackPayload: ReplyPayload = { text: NO_VISIBLE_REPLY_FALLBACK_TEXT };
+      const fallbackPayload: ReplyPayload = {
+        text: queueCapRejected ? QUEUE_CAP_REJECTION_TEXT : NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      };
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),
         kind: "final",
@@ -347,14 +353,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   counts.final += routedFinalCount;
   state.commitInboundDedupeIfClaimed();
-  state.recordAgentDispatchCompleted("completed");
-  state.recordProcessed(
-    "completed",
-    state.bindingState.pluginFallbackReason
-      ? { reason: state.bindingState.pluginFallbackReason }
-      : undefined,
+  const dispatchOutcome = queueCapRejected ? "skipped" : "completed";
+  const dispatchReason = queueCapRejected ? "queue-cap" : state.bindingState.pluginFallbackReason;
+  state.recordAgentDispatchCompleted(
+    dispatchOutcome,
+    dispatchReason ? { reason: dispatchReason } : undefined,
   );
-  state.markIdle("message_completed");
+  state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
+  state.markIdle(queueCapRejected ? "message_queue_cap_rejected" : "message_completed");
   state.completeDispatchReplyOperation();
   return {
     status: "complete" as const,

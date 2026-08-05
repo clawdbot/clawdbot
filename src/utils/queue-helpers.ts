@@ -110,6 +110,7 @@ export function applyQueueDropPolicy<T>(params: {
   summarize: (item: T) => string;
   summaryLimit?: number;
   onDrop?: (items: T[]) => void;
+  onSummaryElide?: (lines: string[]) => void;
   inFlight?: ReadonlySet<T>;
   isProtected?: (item: T) => boolean;
 }): boolean {
@@ -153,8 +154,15 @@ export function applyQueueDropPolicy<T>(params: {
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const limit = Math.max(0, params.summaryLimit ?? cap);
+    const elidedLines: string[] = [];
     while (params.queue.summaryLines.length > limit) {
-      params.queue.summaryLines.shift();
+      const line = params.queue.summaryLines.shift();
+      if (line !== undefined) {
+        elidedLines.push(line);
+      }
+    }
+    if (elidedLines.length > 0) {
+      params.onSummaryElide?.(elidedLines);
     }
   }
   return true;

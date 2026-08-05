@@ -578,9 +578,11 @@ describe("followup queue drain restart after idle window", () => {
         dropPolicy: "summarize",
       };
       const nonOutcomeAbandoned = vi.fn();
+      const nonOutcomeDisposition = vi.fn();
       const nonOutcomeSettled = vi.fn();
       const createRecordedNonOutcome = (prompt: string) => {
         const run = createRun({ prompt });
+        run.onQueueDisposition = nonOutcomeDisposition;
         run.turnAdoptionLifecycle = {
           admission: "cancel-only",
           onAdopted: vi.fn(),
@@ -658,7 +660,8 @@ describe("followup queue drain restart after idle window", () => {
         expect(deliveredPrompts[1]).toBe(
           dropPolicy === "old" ? "third queued message" : "second queued message",
         );
-        expect(nonOutcomeAbandoned).toHaveBeenCalledTimes(1);
+        expect(nonOutcomeDisposition).toHaveBeenCalledWith(`queue-cap-${dropPolicy}`);
+        expect(nonOutcomeAbandoned).toHaveBeenCalledOnce();
         expect(nonOutcomeSettled).toHaveBeenCalledTimes(1);
         expect(getExistingFollowupQueue(key)).toBeUndefined();
       } finally {

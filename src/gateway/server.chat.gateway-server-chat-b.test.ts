@@ -3974,10 +3974,12 @@ describe("gateway server chat", () => {
         getRuntimeConfig: () => ({}),
       });
       let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
+      let onQueueDisposition: InternalGetReplyOptions["onFollowupQueueDisposition"];
       const dispatchRelease = createDeferred();
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        turnAdoptionLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.turnAdoptionLifecycle;
+        const replyOptions = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+        turnAdoptionLifecycle = replyOptions?.turnAdoptionLifecycle;
+        onQueueDisposition = replyOptions?.onFollowupQueueDisposition;
         turnAdoptionLifecycle?.onDeferred?.();
         await dispatchRelease.promise;
         return {};
@@ -4032,6 +4034,17 @@ describe("gateway server chat", () => {
       );
       expect(finalEvents).toHaveLength(1);
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
+
+      onQueueDisposition?.("queue-cap-old");
+      expect(context.logGateway.info).toHaveBeenCalledWith(
+        "chat queue turn intentionally skipped",
+        {
+          runId: "idem-queued-followup",
+          sessionKey: "agent:main:main",
+          outcome: "skipped",
+          reason: "queue-cap-old",
+        },
+      );
 
       context.dedupe.delete("chat:idem-queued-followup");
       const replayRespond = vi.fn() as RespondFn;
