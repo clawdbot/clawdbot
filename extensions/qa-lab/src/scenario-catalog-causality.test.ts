@@ -296,6 +296,19 @@ describe("qa scenario catalog causality", () => {
       state.deleteMessage({ accountId, messageId: preview.id });
       state.addOutboundMessage({ accountId, to: target, text: marker });
     }
+    const foreignKind = fixture.targetPrefix === "dm" ? "channel" : "dm";
+    const foreignKindTarget = `${foreignKind}:${conversationId}`;
+    const foreignKindPreview = state.addOutboundMessage({
+      accountId: "qa-channel",
+      to: foreignKindTarget,
+      text: marker,
+    });
+    state.deleteMessage({ accountId: "qa-channel", messageId: foreignKindPreview.id });
+    state.addOutboundMessage({
+      accountId: "qa-channel",
+      to: foreignKindTarget,
+      text: marker,
+    });
 
     await expect(
       runLoadedScenarioFlow(fixture.scenarioId, {
