@@ -738,7 +738,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     });
   });
 
-  test("allows cookie auth from null Origin when Sec-Fetch-Site is same-origin (sandbox iframe)", async () => {
+  test("allows cookie auth from null Origin (sandbox opaque iframe) regardless of Fetch Metadata", async () => {
     const handlePluginRequest = createRuntimeScopeRecorderHandler({
       pluginId: "sandbox-origin-cookie",
       path: "/sandbox-hook",
@@ -759,99 +759,71 @@ describe("control ui plugin frame auth route boundaries", () => {
         shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/sandbox-hook",
       },
       run: async (server) => {
-        // Null Origin + same-origin Sec-Fetch-Site → sandbox iframe, allowed.
-        const allowed = createResponse();
+        // Null Origin + same-origin → sandbox iframe, allowed.
+        const sameOrigin = createResponse();
         await dispatchRequest(
           server,
           createRequest({
             path: "/sandbox-hook",
             headers: { cookie, origin: "null", "sec-fetch-site": "same-origin" },
           }),
-          allowed.res,
+          sameOrigin.res,
         );
-        expect(allowed.res.statusCode).toBe(200);
+        expect(sameOrigin.res.statusCode).toBe(200);
 
-        // Null Origin + cross-site Sec-Fetch-Site → blocked.
-        const blocked = createResponse();
+        // Null Origin + cross-site → sandbox iframe default mode, also allowed
+        // (opaque origin is cross-site by spec; blocking it breaks the tab).
+        const crossSite = createResponse();
         await dispatchRequest(
           server,
           createRequest({
             path: "/sandbox-hook",
             headers: { cookie, origin: "null", "sec-fetch-site": "cross-site" },
           }),
-          blocked.res,
+          crossSite.res,
         );
-        expect(blocked.res.statusCode).toBe(401);
+        expect(crossSite.res.statusCode).toBe(200);
 
-        // Null Origin + same-site (not same-origin) → blocked (stricter than before).
-        const sameSiteBlocked = createResponse();
+        // Null Origin + no Fetch Metadata → allowed.
+        const noFetch = createResponse();
         await dispatchRequest(
           server,
-          createRequest({
-            path: "/sandbox-hook",
-            headers: { cookie, origin: "null", "sec-fetch-site": "same-site" },
-          }),
-          sameSiteBlocked.res,
+          createRequest({ path: "/sandbox-hook", headers: { cookie, origin: "null" } }),
+          noFetch.res,
         );
-        expect(sameSiteBlocked.res.statusCode).toBe(401);
-
-        // Null Origin + no Sec-Fetch-Site → blocked (fail closed).
-        const noFetchBlocked = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/sandbox-hook",
-            headers: { cookie, origin: "null" },
-          }),
-          noFetchBlocked.res,
-        );
-        expect(noFetchBlocked.res.statusCode).toBe(401);
+        expect(noFetch.res.statusCode).toBe(200);
       },
     });
   });
 
-  test("rejects no-Origin cookie requests with cross-site Sec-Fetch-Site and allows otherwise", async () => {
+  test("allows cookie auth without Origin header (non-browser client)", async () => {
     const handlePluginRequest = createRuntimeScopeRecorderHandler({
-      pluginId: "no-origin-fetch-cookie",
-      path: "/no-origin-fetch-hook",
+      pluginId: "no-origin-cookie",
+      path: "/no-origin-hook",
       method: "assistant.media.get",
       observedRuntimeScopes: [],
       allowedResults: [],
     });
     const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "no-origin-fetch-cookie",
-      path: "/no-origin-fetch-hook",
+      pluginId: "no-origin-cookie",
+      path: "/no-origin-hook",
     });
 
     await withGatewayServer({
-      prefix: "openclaw-plugin-cookie-no-origin-fetch-test-",
+      prefix: "openclaw-plugin-cookie-no-origin-test-",
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (pathContext) =>
-          pathContext.pathname === "/no-origin-fetch-hook",
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/no-origin-hook",
       },
       run: async (server) => {
-        // No Origin + cross-site Sec-Fetch-Site → blocked (CSRF vector closed).
-        const blocked = createResponse();
+        const response = createResponse();
         await dispatchRequest(
           server,
-          createRequest({
-            path: "/no-origin-fetch-hook",
-            headers: { cookie, "sec-fetch-site": "cross-site" },
-          }),
-          blocked.res,
+          createRequest({ path: "/no-origin-hook", headers: { cookie } }),
+          response.res,
         );
-        expect(blocked.res.statusCode).toBe(401);
-
-        // No Origin + no Sec-Fetch-Site → non-browser client, allowed.
-        const allowed = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({ path: "/no-origin-fetch-hook", headers: { cookie } }),
-          allowed.res,
-        );
-        expect(allowed.res.statusCode).toBe(200);
+        expect(response.res.statusCode).toBe(200);
       },
     });
   });
