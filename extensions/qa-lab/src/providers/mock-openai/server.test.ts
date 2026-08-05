@@ -64,11 +64,24 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
 const QA_COMPACTION_RETRY_PROMPT =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
 const QA_COMPACTION_RETRY_OVERFLOW_PADDING = "x".repeat(300_000);
+const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
 const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
 const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
+const QA_COMPACTION_SUMMARY_HEADINGS = [
+  "## Decisions",
+  "## Open TODOs",
+  "## Constraints/Rules",
+  "## Pending user asks",
+  "## Exact identifiers",
+] as const;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
+
+function expectCurrentCompactionSummaryHeadings(summary: string) {
+  expect(summary.match(/^## .+$/gmu)).toEqual(QA_COMPACTION_SUMMARY_HEADINGS);
+  expect(summary).not.toContain("## Goal");
+}
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -2395,7 +2408,7 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     const summary = outputText(await response.json());
-    expect(summary).toContain("## Goal");
+    expectCurrentCompactionSummaryHeadings(summary);
     expect(summary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
     expect(summary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
     const requests = requireArray(
@@ -2570,9 +2583,16 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     const body = requireRecord(await response.json(), "Anthropic summary response");
-    expect(requireArray(body.content, "content")).toContainEqual(
-      expect.objectContaining({ type: "text", text: expect.stringContaining("## Goal") }),
+    const content = requireArray(body.content, "content");
+    expect(content).toContainEqual(
+      expect.objectContaining({ type: "text", text: expect.stringContaining("## Decisions") }),
     );
+    const summaryText = requireRecord(content[0], "summary content").text;
+    expect(typeof summaryText).toBe("string");
+    if (typeof summaryText !== "string") {
+      throw new TypeError("Anthropic summary content text must be a string");
+    }
+    expectCurrentCompactionSummaryHeadings(summaryText);
     expect(await getJson(server, "/debug/last-request")).toMatchObject({
       requestKind: "compaction-summary",
       outcome: "success",
@@ -2588,19 +2608,42 @@ describe("qa mock openai server", () => {
         "<conversation>\n[Chunk 1 - oldest messages]\nunrelated historical context\n</conversation>\n\nAdditional focus: preserve exact identifiers.",
     });
     const genericChunkSummary = outputText(genericChunkPayload);
-    expect(genericChunkSummary).toContain("## Goal");
+    expectCurrentCompactionSummaryHeadings(genericChunkSummary);
     expect(genericChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const scenarioChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
-      input:
-        "<conversation>\n[Chunk 2 - most recent messages]\nQA-COMPACTION-BULKY-HISTORICAL-MARKER\n</conversation>\n\nAdditional focus: preserve exact identifiers.",
+      input: `<conversation>
+[Chunk 2 - most recent messages]
+QA-COMPACTION-BULKY-HISTORICAL-MARKER ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} 10
+</conversation>
+
+Additional focus: preserve exact identifiers.`,
     });
     const scenarioChunkSummary = outputText(scenarioChunkPayload);
-    expect(scenarioChunkSummary).toContain("## Goal");
+    expectCurrentCompactionSummaryHeadings(scenarioChunkSummary);
+    expect(scenarioChunkSummary).toContain(QA_COMPACTION_RETRY_HISTORICAL_PHRASE);
     expect(scenarioChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
     expect(scenarioChunkSummary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
+
+    const historyMergePayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: `<conversation>
+[Chunk 1 - oldest messages]
+${genericChunkSummary}
+[Chunk 2 - most recent messages]
+${scenarioChunkSummary}
+</conversation>
+
+Update and merge these partial structured summaries.`,
+    });
+    const historyMergedSummary = outputText(historyMergePayload);
+    expectCurrentCompactionSummaryHeadings(historyMergedSummary);
+    expect(historyMergedSummary).toContain(QA_COMPACTION_RETRY_HISTORICAL_PHRASE);
+    expect(historyMergedSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+    expect(historyMergedSummary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
 
     const durableChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
@@ -2612,6 +2655,7 @@ Retain QA-COMPACTION-DURABLE-MARKER for the active task.
 Additional focus: preserve QA-COMPACTION-DURABLE-MARKER.`,
     });
     const durableChunkSummary = outputText(durableChunkPayload);
+    expectCurrentCompactionSummaryHeadings(durableChunkSummary);
     expect(durableChunkSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const promptOnlyChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -2624,6 +2668,7 @@ Compaction retry mutating tool check. Create compaction-retry-summary.txt.
 Additional focus: preserve current work.`,
     });
     const promptOnlyChunkSummary = outputText(promptOnlyChunkPayload);
+    expectCurrentCompactionSummaryHeadings(promptOnlyChunkSummary);
     expect(promptOnlyChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const currentChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -2637,6 +2682,7 @@ Create compaction-retry-summary.txt.
 Additional focus: preserve current work.`,
     });
     const currentChunkSummary = outputText(currentChunkPayload);
+    expectCurrentCompactionSummaryHeadings(currentChunkSummary);
     expect(currentChunkSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const mergePayload = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -2657,7 +2703,9 @@ ${durableChunkSummary}
 
 Update and merge these partial structured summaries.`,
     });
-    expect(outputText(mergePayload)).toContain("QA-COMPACTION-DURABLE-MARKER");
+    const mergedSummary = outputText(mergePayload);
+    expectCurrentCompactionSummaryHeadings(mergedSummary);
+    expect(mergedSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const unrelatedPayload = await expectOpenAiNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
@@ -2665,14 +2713,15 @@ Update and merge these partial structured summaries.`,
       input:
         "<conversation>\na later unrelated scenario\n</conversation>\n\nCreate a structured summary.",
     });
-    expect(outputText(unrelatedPayload)).toContain("## Goal");
-    expect(outputText(unrelatedPayload)).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+    const unrelatedSummary = outputText(unrelatedPayload);
+    expectCurrentCompactionSummaryHeadings(unrelatedSummary);
+    expect(unrelatedSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const requests = requireArray(
       await getJson(server, "/debug/requests"),
       "compaction requests",
     ).map((request) => requireRecord(request, "compaction request"));
-    expect(requests).toHaveLength(7);
+    expect(requests).toHaveLength(8);
     expect(
       requests.every(
         (request) =>
@@ -2705,6 +2754,7 @@ Update and merge these partial structured summaries.`,
       ],
     });
     const compactedSummary = outputText(summaryPayload);
+    expectCurrentCompactionSummaryHeadings(compactedSummary);
     expect(compactedSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const writePlan = await expectOpenAiStreamingResponsesText(server, {

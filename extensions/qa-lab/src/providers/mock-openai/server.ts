@@ -186,61 +186,59 @@ const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
 const QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES = 96 * 1024;
 const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
 const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
+const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
 const QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE =
   /\bQA-COMPACTION-EMPTY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
 const QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE =
   /\bQA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
 const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
 const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
-const QA_COMPACTION_RETRY_SUMMARY = `## Goal
-Complete the compaction retry mutating tool check.
+const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
+- Continue the compaction retry from durable context without replaying a completed mutation.
 
-## Constraints & Preferences
+## Open TODOs
+- Write compaction-retry-summary.txt exactly once.
+- Return the final replay-safety marker.
+
+## Constraints/Rules
 - Preserve ${QA_COMPACTION_RETRY_DURABLE_MARKER}.
+- Write exactly: Replay safety: unsafe after write.
 
-## Progress
-### Done
-- [x] Historical context compacted after overflow.
+## Pending user asks
+- Create compaction-retry-summary.txt, then reply exactly: Protocol note: replay unsafe after write.
 
-### In Progress
-- [ ] Write compaction-retry-summary.txt exactly once.
+## Exact identifiers
+- ${QA_COMPACTION_RETRY_DURABLE_MARKER}
+- compaction-retry-summary.txt`;
+const QA_COMPACTION_RETRY_HISTORICAL_SUMMARY = `## Decisions
+- Preserve the latest ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} context through staged compaction.
 
-### Blocked
-- (none)
+## Open TODOs
+- Continue summarizing the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} sequence.
 
-## Key Decisions
-- **Retry once**: Continue from compacted context without replaying a completed mutation.
+## Constraints/Rules
+- Keep historical content distinct from live task state.
+- Do not invent durable context absent from the summarized history.
 
-## Next Steps
-1. Write the required file.
-2. Return the final replay-safety marker.
+## Pending user asks
+- Retain the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} details.
 
-## Critical Context
-- ${QA_COMPACTION_RETRY_DURABLE_MARKER}`;
-const QA_GENERIC_COMPACTION_SUMMARY = `## Goal
-Preserve the active conversation context.
+## Exact identifiers
+- None captured.`;
+const QA_GENERIC_COMPACTION_SUMMARY = `## Decisions
+- Continue from the summary without restarting completed work.
 
-## Constraints & Preferences
+## Open TODOs
+- Continue the active task.
+
+## Constraints/Rules
 - Keep current requirements and identifiers.
 
-## Progress
-### Done
-- [x] Historical context summarized.
+## Pending user asks
+- Continue the active task from the retained context.
 
-### In Progress
-- [ ] Continue the active task.
-
-### Blocked
-- (none)
-
-## Key Decisions
-- **Continue from summary**: Do not restart completed work.
-
-## Next Steps
-1. Continue the active task from the retained context.
-
-## Critical Context
-- Refer to the retained recent turns for current task details.`;
+## Exact identifiers
+- None captured.`;
 const QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY = `## Decisions
 - Retry the typed compaction-summary fault at the compaction owner.
 
@@ -834,7 +832,10 @@ async function buildResponsesPayload(
     return buildAssistantEvents(
       hasCompactionRetryDurableContext
         ? QA_COMPACTION_RETRY_SUMMARY
-        : resolveCompactionRecoverySummary(allInputText),
+        : allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER) ||
+            allInputText.includes(QA_COMPACTION_RETRY_HISTORICAL_PHRASE)
+          ? QA_COMPACTION_RETRY_HISTORICAL_SUMMARY
+          : resolveCompactionRecoverySummary(allInputText),
     );
   }
   if (
