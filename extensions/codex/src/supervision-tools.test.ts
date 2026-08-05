@@ -1033,4 +1033,46 @@ describe("Codex supervision compatibility tools", () => {
       }),
     ).resolves.toMatchObject({ details: { summary: "codex steer: turn-1" } });
   });
+
+  it("redacts broad credential classes, sensitive keys fully, and nested values", async () => {
+    const googleApiKey = "AIzaSyDaBcDeFgHiJkLmNoPqRsTuVwXyZ0123456";
+    const finegrainedPat = "github_pat_11ABCDEFGH0abcdefghijklmnopqrstuvwxyz1234567890ABCDEF";
+    const awsKey = "AKIAIOSFODNN7EXAMPLE";
+    const longSecret = "sk-abcdef1234567890abcdef1234567890abcdef1234567890";
+    const { request } = createRequest({
+      id: "thread-1",
+      status: { type: "idle" },
+      description: `contact ${googleApiKey}`,
+      notes: `repo ${finegrainedPat} aws ${awsKey}`,
+      token: longSecret,
+      password: longSecret,
+      apiKey: longSecret,
+      authorization: `Bearer ${longSecret}`,
+      turns: [
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "message", text: `key=${googleApiKey}` }],
+        },
+      ],
+    });
+    const tools = createTools(request);
+
+    const result = await toolByName(tools, "codex_session_read").execute("read", {
+      endpoint_id: "local",
+      thread_id: "thread-1",
+    });
+    const serialized = JSON.stringify(result);
+    // Ordinary fields: credential patterns from core policy are now applied.
+    expect(serialized).not.toContain(googleApiKey);
+    expect(serialized).not.toContain(finegrainedPat);
+    expect(serialized).not.toContain(awsKey);
+    // Sensitive keys: full [redacted], no prefix/suffix disclosure.
+    expect(serialized).not.toContain(longSecret);
+    expect(serialized).toContain('"[redacted]"');
+    expect(serialized).not.toContain("sk-abc");
+    expect(serialized).not.toContain("7890");
+    // Nested values inside arrays/child objects are also redacted.
+    expect(serialized).not.toContain(googleApiKey);
+  });
 });

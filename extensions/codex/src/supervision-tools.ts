@@ -10,6 +10,7 @@ import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
@@ -797,19 +798,25 @@ async function resolveInProgressTurnId(params: {
   }
 }
 
-function redactString(value: string): string {
-  return value
-    .replace(/\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b/g, "[redacted]")
-    .replace(/\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b/g, "[redacted]")
-    .replace(/\bBearer\s+[-._~+/a-zA-Z0-9]+=*/g, "Bearer [redacted]");
-}
+// Sensitive field names that receive full [redacted] replacement. The core
+// SDK has a broader isSensitiveFieldKey set, but it is not exported; this
+// local set preserves the existing supervision contract and can be aligned
+// with core if the security owner decides to export that boundary.
+const SUPERVISION_SENSITIVE_KEY_RE = /authorization|password|secret|token|api[-_]?key/i;
 
-/** Redacts secret-bearing fields before legacy tool results leave the plugin. */
+/**
+ * Redacts secret-bearing fields before legacy tool results leave the plugin.
+ *
+ * Sensitive field names (authorization/password/secret/token/api[-_]?key) are
+ * fully replaced with "[redacted]" to avoid any prefix/suffix disclosure.
+ * Ordinary free-text values are passed through the shared core redaction
+ * policy (redactToolPayloadText) so the supervision boundary inherits the full
+ * credential-pattern set (AIza, github_pat_, AKIA, eyJ, ya29., …) plus any
+ * exact-registered secret values, instead of the narrow local regex copy.
+ */
 function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
-    return /authorization|password|secret|token|api[-_]?key/i.test(key)
-      ? "[redacted]"
-      : redactString(value);
+    return SUPERVISION_SENSITIVE_KEY_RE.test(key) ? "[redacted]" : redactToolPayloadText(value);
   }
   if (Array.isArray(value)) {
     return value.map((entry) => redactCodexSupervisionValue(entry));
