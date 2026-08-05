@@ -334,9 +334,8 @@ export function startGatewayMaintenanceTimers(params: {
         // database-aware reaper owns it, so run it on the same cadence or
         // transient records and unindexed originals would have no cleanup
         // path in sessions that never read chat history.
-        const { cleanupManagedOutgoingMediaRecords } = await import(
-          "./managed-image-attachments.js"
-        );
+        const { cleanupManagedOutgoingMediaRecords } =
+          await import("./managed-image-attachments.js");
         await cleanupManagedOutgoingMediaRecords();
       })
       .catch((err: unknown) => {
