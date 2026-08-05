@@ -106,7 +106,14 @@ export async function runQaRuntimeParitySuite(params: {
 
   let runFailed = false;
   let runError: unknown;
+  let parentTransportCleaned = false;
   try {
+    if (params.channelDriver === "live") {
+      // The parent only contributes aggregate metadata; release its exclusive
+      // live credential before runtime cells acquire the same transport lease.
+      await transportFactoryResult.cleanupWithoutGateway();
+      parentTransportCleaned = true;
+    }
     const scenarios = await mapQaSuiteWithConcurrency(
       params.selectedScenarios,
       params.concurrency,
@@ -293,7 +300,7 @@ export async function runQaRuntimeParitySuite(params: {
     throw error;
   } finally {
     const cleanupErrors = await runQaSuiteCleanupSteps([
-      () => transportFactoryResult.cleanupWithoutGateway(),
+      ...(!parentTransportCleaned ? [() => transportFactoryResult.cleanupWithoutGateway()] : []),
       ...(ownsLab ? [() => lab.stop()] : []),
     ]);
     throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });

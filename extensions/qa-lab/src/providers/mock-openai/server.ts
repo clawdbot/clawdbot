@@ -171,7 +171,9 @@ import {
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
+  toolSearchOutputHasCandidate,
   buildQaToolSearchArgs,
+  QA_TOOL_SEARCH_SECONDARY_TARGET,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
   extractSnackPreference,
@@ -184,61 +186,59 @@ const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
 const QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES = 96 * 1024;
 const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
 const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
+const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
 const QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE =
   /\bQA-COMPACTION-EMPTY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
 const QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE =
   /\bQA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
 const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
 const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
-const QA_COMPACTION_RETRY_SUMMARY = `## Goal
-Complete the compaction retry mutating tool check.
+const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
+- Continue the compaction retry from durable context without replaying a completed mutation.
 
-## Constraints & Preferences
+## Open TODOs
+- Write compaction-retry-summary.txt exactly once.
+- Return the final replay-safety marker.
+
+## Constraints/Rules
 - Preserve ${QA_COMPACTION_RETRY_DURABLE_MARKER}.
+- Write exactly: Replay safety: unsafe after write.
 
-## Progress
-### Done
-- [x] Historical context compacted after overflow.
+## Pending user asks
+- Create compaction-retry-summary.txt, then reply exactly: Protocol note: replay unsafe after write.
 
-### In Progress
-- [ ] Write compaction-retry-summary.txt exactly once.
+## Exact identifiers
+- ${QA_COMPACTION_RETRY_DURABLE_MARKER}
+- compaction-retry-summary.txt`;
+const QA_COMPACTION_RETRY_HISTORICAL_SUMMARY = `## Decisions
+- Preserve the latest ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} context through staged compaction.
 
-### Blocked
-- (none)
+## Open TODOs
+- Continue summarizing the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} sequence.
 
-## Key Decisions
-- **Retry once**: Continue from compacted context without replaying a completed mutation.
+## Constraints/Rules
+- Keep historical content distinct from live task state.
+- Do not invent durable context absent from the summarized history.
 
-## Next Steps
-1. Write the required file.
-2. Return the final replay-safety marker.
+## Pending user asks
+- Retain the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} details.
 
-## Critical Context
-- ${QA_COMPACTION_RETRY_DURABLE_MARKER}`;
-const QA_GENERIC_COMPACTION_SUMMARY = `## Goal
-Preserve the active conversation context.
+## Exact identifiers
+- None captured.`;
+const QA_GENERIC_COMPACTION_SUMMARY = `## Decisions
+- Continue from the summary without restarting completed work.
 
-## Constraints & Preferences
+## Open TODOs
+- Continue the active task.
+
+## Constraints/Rules
 - Keep current requirements and identifiers.
 
-## Progress
-### Done
-- [x] Historical context summarized.
+## Pending user asks
+- Continue the active task from the retained context.
 
-### In Progress
-- [ ] Continue the active task.
-
-### Blocked
-- (none)
-
-## Key Decisions
-- **Continue from summary**: Do not restart completed work.
-
-## Next Steps
-1. Continue the active task from the retained context.
-
-## Critical Context
-- Refer to the retained recent turns for current task details.`;
+## Exact identifiers
+- None captured.`;
 const QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY = `## Decisions
 - Retry the typed compaction-summary fault at the compaction owner.
 
@@ -832,7 +832,10 @@ async function buildResponsesPayload(
     return buildAssistantEvents(
       hasCompactionRetryDurableContext
         ? QA_COMPACTION_RETRY_SUMMARY
-        : resolveCompactionRecoverySummary(allInputText),
+        : allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER) ||
+            allInputText.includes(QA_COMPACTION_RETRY_HISTORICAL_PHRASE)
+          ? QA_COMPACTION_RETRY_HISTORICAL_SUMMARY
+          : resolveCompactionRecoverySummary(allInputText),
     );
   }
   if (
@@ -963,9 +966,8 @@ async function buildResponsesPayload(
     return buildToolCallEventsWithArgs("read", { path: "LOOP_STEADY.txt" });
   }
   if (
-    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)) &&
-    !hasCompletedToolOutput
+    QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+    QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     const plannedArgs = targetTool
@@ -973,12 +975,23 @@ async function buildResponsesPayload(
       : {};
     if (
       targetTool &&
+      hasCompletedToolOutput &&
+      completedToolName === "tool_search" &&
+      !toolOutput.includes("FAKE_PLUGIN_OK") &&
+      toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
+      hasDeclaredTool(body, "tool_call")
+    ) {
+      return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
+    }
+    if (
+      !hasCompletedToolOutput &&
+      targetTool &&
       findNamedToolDefinition(toolDeclarationBody, targetTool)?.type === "custom" &&
       typeof plannedArgs.input === "string"
     ) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
-    if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
+    if (!hasCompletedToolOutput && targetTool && hasDeclaredTool(body, "tool_search_code")) {
       return buildToolCallEventsWithArgs("tool_search_code", {
         code: [
           `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
@@ -988,7 +1001,24 @@ async function buildResponsesPayload(
         ].join("\n"),
       });
     }
-    if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
+    if (
+      !hasCompletedToolOutput &&
+      targetTool &&
+      !hasDeclaredTool(body, targetTool) &&
+      hasDeclaredTool(body, "tool_search")
+    ) {
+      return buildToolCallEventsWithArgs("tool_search", {
+        queries: [
+          { query: targetTool, limit: 1 },
+          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
+        ],
+      });
+    }
+    if (
+      !hasCompletedToolOutput &&
+      targetTool &&
+      (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))
+    ) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
@@ -1917,9 +1947,8 @@ async function buildResponsesPayload(
   if (/session memory ranking check/i.test(prompt)) {
     if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
-        query: "current Project Nebula codename ORBIT-10",
-        maxResults: 3,
-        corpus: "sessions",
+        query: "current Project Nebula codename",
+        maxResults: 6,
       });
     }
     if (memoryToolUnavailable) {

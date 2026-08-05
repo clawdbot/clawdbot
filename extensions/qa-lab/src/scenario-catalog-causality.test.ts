@@ -333,4 +333,62 @@ describe("qa scenario catalog causality", () => {
       }),
     ).resolves.toMatchObject({ status: "pass" });
   });
+
+  it("isolates Active Memory request traces from interleaved heartbeats", async () => {
+    const scenario = requireFlowScenario(readQaScenarioById("active-memory-preprompt-recall"));
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+    const baselineTrace = actions.find(
+      (action) => (action as { set?: string }).set === "baselineMockRequests",
+    );
+    const activeTrace = actions.find(
+      (action) => (action as { set?: string }).set === "activeRequests",
+    );
+    expect(baselineTrace).toBeDefined();
+    expect(activeTrace).toBeDefined();
+    if (!baselineTrace || !activeTrace) {
+      throw new Error("active-memory-preprompt-recall request trace actions are missing");
+    }
+
+    const marker = String(scenario.execution.config?.turnMarker);
+    const heartbeat = { allInputText: "[OpenClaw heartbeat poll]" };
+    const scenarioRequest = (suffix: string) => ({ allInputText: `${marker} ${suffix}` });
+    const traces = new Map<string, unknown[]>([
+      ["10", [heartbeat, scenarioRequest("baseline main")]],
+      [
+        "20",
+        [
+          heartbeat,
+          scenarioRequest("You are a memory search agent. search plan"),
+          scenarioRequest("You are a memory search agent. search result"),
+          scenarioRequest("You are a memory search agent. memory get result"),
+          scenarioRequest("active main"),
+        ],
+      ],
+    ]);
+
+    await expect(
+      runLoadedScenarioFlow("active-memory-preprompt-recall", {
+        flow: {
+          steps: [
+            {
+              name: "filters provider-global traces before exact counts",
+              actions: [
+                { set: "requestCursorBeforeBaseline", value: { expr: "10" } },
+                baselineTrace,
+                { assert: "baselineMockRequests.length === 1" },
+                { set: "requestCursorBeforeActive", value: { expr: "20" } },
+                activeTrace,
+                { assert: "activeRequests.length === 4" },
+              ],
+            },
+          ],
+        },
+        api: {
+          env: { mock: { baseUrl: "http://mock.invalid" } },
+          fetchJson: async (url: string) =>
+            traces.get(new URL(url).searchParams.get("after") ?? "") ?? [],
+        },
+      }),
+    ).resolves.toMatchObject({ status: "pass" });
+  });
 });

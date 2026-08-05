@@ -750,6 +750,8 @@ export async function handleTelegramAction(
       messageId: result.messageId,
       chatId: result.chatId,
       pollId: result.pollId,
+      ...(result.pollAnswerRouting ? { pollAnswerRouting: result.pollAnswerRouting } : {}),
+      ...(result.warning ? { warning: result.warning } : {}),
     });
   }
 

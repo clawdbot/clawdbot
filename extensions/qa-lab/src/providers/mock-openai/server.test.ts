@@ -5,7 +5,7 @@ import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
-import { readTargetFromPrompt } from "./mock-openai-tooling.js";
+import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 type MockServer = { baseUrl: string };
@@ -64,11 +64,24 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
 const QA_COMPACTION_RETRY_PROMPT =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
 const QA_COMPACTION_RETRY_OVERFLOW_PADDING = "x".repeat(300_000);
+const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
 const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
 const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
+const QA_COMPACTION_SUMMARY_HEADINGS = [
+  "## Decisions",
+  "## Open TODOs",
+  "## Constraints/Rules",
+  "## Pending user asks",
+  "## Exact identifiers",
+] as const;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
+
+function expectCurrentCompactionSummaryHeadings(summary: string) {
+  expect(summary.match(/^## .+$/gmu)).toEqual(QA_COMPACTION_SUMMARY_HEADINGS);
+  expect(summary).not.toContain("## Goal");
+}
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -2395,7 +2408,7 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     const summary = outputText(await response.json());
-    expect(summary).toContain("## Goal");
+    expectCurrentCompactionSummaryHeadings(summary);
     expect(summary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
     expect(summary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
     const requests = requireArray(
@@ -2570,9 +2583,16 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     const body = requireRecord(await response.json(), "Anthropic summary response");
-    expect(requireArray(body.content, "content")).toContainEqual(
-      expect.objectContaining({ type: "text", text: expect.stringContaining("## Goal") }),
+    const content = requireArray(body.content, "content");
+    expect(content).toContainEqual(
+      expect.objectContaining({ type: "text", text: expect.stringContaining("## Decisions") }),
     );
+    const summaryText = requireRecord(content[0], "summary content").text;
+    expect(typeof summaryText).toBe("string");
+    if (typeof summaryText !== "string") {
+      throw new TypeError("Anthropic summary content text must be a string");
+    }
+    expectCurrentCompactionSummaryHeadings(summaryText);
     expect(await getJson(server, "/debug/last-request")).toMatchObject({
       requestKind: "compaction-summary",
       outcome: "success",
@@ -2588,19 +2608,42 @@ describe("qa mock openai server", () => {
         "<conversation>\n[Chunk 1 - oldest messages]\nunrelated historical context\n</conversation>\n\nAdditional focus: preserve exact identifiers.",
     });
     const genericChunkSummary = outputText(genericChunkPayload);
-    expect(genericChunkSummary).toContain("## Goal");
+    expectCurrentCompactionSummaryHeadings(genericChunkSummary);
     expect(genericChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const scenarioChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
-      input:
-        "<conversation>\n[Chunk 2 - most recent messages]\nQA-COMPACTION-BULKY-HISTORICAL-MARKER\n</conversation>\n\nAdditional focus: preserve exact identifiers.",
+      input: `<conversation>
+[Chunk 2 - most recent messages]
+QA-COMPACTION-BULKY-HISTORICAL-MARKER ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} 10
+</conversation>
+
+Additional focus: preserve exact identifiers.`,
     });
     const scenarioChunkSummary = outputText(scenarioChunkPayload);
-    expect(scenarioChunkSummary).toContain("## Goal");
+    expectCurrentCompactionSummaryHeadings(scenarioChunkSummary);
+    expect(scenarioChunkSummary).toContain(QA_COMPACTION_RETRY_HISTORICAL_PHRASE);
     expect(scenarioChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
     expect(scenarioChunkSummary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
+
+    const historyMergePayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: `<conversation>
+[Chunk 1 - oldest messages]
+${genericChunkSummary}
+[Chunk 2 - most recent messages]
+${scenarioChunkSummary}
+</conversation>
+
+Update and merge these partial structured summaries.`,
+    });
+    const historyMergedSummary = outputText(historyMergePayload);
+    expectCurrentCompactionSummaryHeadings(historyMergedSummary);
+    expect(historyMergedSummary).toContain(QA_COMPACTION_RETRY_HISTORICAL_PHRASE);
+    expect(historyMergedSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+    expect(historyMergedSummary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
 
     const durableChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
@@ -2612,6 +2655,7 @@ Retain QA-COMPACTION-DURABLE-MARKER for the active task.
 Additional focus: preserve QA-COMPACTION-DURABLE-MARKER.`,
     });
     const durableChunkSummary = outputText(durableChunkPayload);
+    expectCurrentCompactionSummaryHeadings(durableChunkSummary);
     expect(durableChunkSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const promptOnlyChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -2624,6 +2668,7 @@ Compaction retry mutating tool check. Create compaction-retry-summary.txt.
 Additional focus: preserve current work.`,
     });
     const promptOnlyChunkSummary = outputText(promptOnlyChunkPayload);
+    expectCurrentCompactionSummaryHeadings(promptOnlyChunkSummary);
     expect(promptOnlyChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const currentChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -2637,6 +2682,7 @@ Create compaction-retry-summary.txt.
 Additional focus: preserve current work.`,
     });
     const currentChunkSummary = outputText(currentChunkPayload);
+    expectCurrentCompactionSummaryHeadings(currentChunkSummary);
     expect(currentChunkSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const mergePayload = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -2657,7 +2703,9 @@ ${durableChunkSummary}
 
 Update and merge these partial structured summaries.`,
     });
-    expect(outputText(mergePayload)).toContain("QA-COMPACTION-DURABLE-MARKER");
+    const mergedSummary = outputText(mergePayload);
+    expectCurrentCompactionSummaryHeadings(mergedSummary);
+    expect(mergedSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const unrelatedPayload = await expectOpenAiNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
@@ -2665,14 +2713,15 @@ Update and merge these partial structured summaries.`,
       input:
         "<conversation>\na later unrelated scenario\n</conversation>\n\nCreate a structured summary.",
     });
-    expect(outputText(unrelatedPayload)).toContain("## Goal");
-    expect(outputText(unrelatedPayload)).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+    const unrelatedSummary = outputText(unrelatedPayload);
+    expectCurrentCompactionSummaryHeadings(unrelatedSummary);
+    expect(unrelatedSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const requests = requireArray(
       await getJson(server, "/debug/requests"),
       "compaction requests",
     ).map((request) => requireRecord(request, "compaction request"));
-    expect(requests).toHaveLength(7);
+    expect(requests).toHaveLength(8);
     expect(
       requests.every(
         (request) =>
@@ -2705,6 +2754,7 @@ Update and merge these partial structured summaries.`,
       ],
     });
     const compactedSummary = outputText(summaryPayload);
+    expectCurrentCompactionSummaryHeadings(compactedSummary);
     expect(compactedSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
 
     const writePlan = await expectOpenAiStreamingResponsesText(server, {
@@ -3752,7 +3802,7 @@ Update and merge these partial structured summaries.`,
       ],
     });
     expect(memoryText).toContain('"name":"memory_search"');
-    expect(memoryText).toContain('\\"corpus\\":\\"sessions\\"');
+    expect(memoryText).not.toContain('\\"corpus\\"');
 
     const threadMemorySearchText = await expectStreamingResponsesText(server, {
       instructions:
@@ -5260,6 +5310,151 @@ Update and merge these partial structured summaries.`,
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("session_status");
     expect(String(toolPlanOutput.arguments)).toContain("current");
+  });
+
+  it("plans one structured batch search for the Tool Search gateway fixture", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [{ type: "function", name: "tool_search" }],
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+      ],
+    });
+
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("tool_search");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
+      queries: [
+        { query: targetTool, limit: 1 },
+        { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
+      ],
+    });
+  });
+
+  it("prefers a directly declared target over structured catalog search", async () => {
+    const server = await startMockServer();
+    const targetTool = "web_fetch";
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [
+        { type: "function", name: "tool_search" },
+        { type: "function", name: targetTool },
+      ],
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+      ],
+    });
+
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.name).toBe(targetTool);
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
+      url: "https://example.com/",
+      maxChars: 500,
+    });
+  });
+
+  it("calls the selected catalog tool after a structured batch search", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [
+        { type: "function", name: "tool_search" },
+        { type: "function", name: "tool_call" },
+      ],
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call",
+          call_id: "call_tool_search_1",
+          name: "tool_search",
+          arguments: JSON.stringify({
+            queries: [
+              { query: targetTool, limit: 1 },
+              { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
+            ],
+          }),
+        },
+        makeToolOutputWithCallId(
+          "call_tool_search_1",
+          JSON.stringify({
+            results: [
+              { query: targetTool, candidates: [{ name: targetTool }] },
+              {
+                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+              },
+            ],
+          }),
+        ),
+      ],
+    });
+
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("tool_call");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toMatchObject({ id: targetTool });
+  });
+
+  it("does not call a catalog tool when structured search returns no matching candidate", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [
+        { type: "function", name: "tool_search" },
+        { type: "function", name: "tool_call" },
+      ],
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call",
+          call_id: "call_tool_search_1",
+          name: "tool_search",
+          arguments: JSON.stringify({ queries: [{ query: targetTool, limit: 1 }] }),
+        },
+        makeToolOutputWithCallId(
+          "call_tool_search_1",
+          JSON.stringify({ results: [{ query: targetTool, candidates: [] }] }),
+        ),
+      ],
+    });
+
+    expect(outputItem(await response.json()).name).not.toBe("tool_call");
+  });
+
+  it("does not repeat a catalog call after its result mentions the target", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [{ type: "function", name: "tool_call" }],
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call",
+          call_id: "call_target_1",
+          name: "tool_call",
+          arguments: JSON.stringify({ id: targetTool, args: {} }),
+        },
+        makeToolOutputWithCallId("call_target_1", `failed to call ${targetTool}`),
+      ],
+    });
+
+    expect(outputItem(await response.json()).name).not.toBe("tool_call");
   });
 
   it("plans the explicit web_fetch fixture prompt as the canonical direct call", async () => {

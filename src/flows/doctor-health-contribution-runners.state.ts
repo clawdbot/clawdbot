@@ -8,21 +8,28 @@ const loadDoctorStateIntegrityModule = async () =>
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
-  await maybeRepairLegacyPluginManifestContracts({
+  const pluginInventoryChanged = await maybeRepairLegacyPluginManifestContracts({
     config: ctx.cfg,
     env: process.env,
     runtime: ctx.runtime,
     prompter: ctx.prompter,
   });
+  if (pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
 }
 
 export async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
-  ctx.cfg = await maybeRepairPluginRegistryState({
+  const result = await maybeRepairPluginRegistryState({
     config: ctx.cfg,
     env: process.env,
     prompter: ctx.prompter,
   });
+  ctx.cfg = result.config;
+  if (result.pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -40,6 +47,9 @@ export async function runReleaseConfiguredPluginInstallsHealth(
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
   });
+  if (result.pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
   if (result.postInstallDoctorResult) {
     ctx.postInstallDoctorResult = result.postInstallDoctorResult;
   }

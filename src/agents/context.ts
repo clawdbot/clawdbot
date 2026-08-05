@@ -44,6 +44,13 @@ type ModelEntry = {
   contextWindow?: number;
   contextTokens?: number;
 };
+type ContextWindowCatalogOwner = {
+  config: OpenClawConfig;
+  modelCatalog: {
+    entries: ModelEntry[];
+    staticEntries?: ModelEntry[];
+  };
+};
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -186,7 +193,10 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
-export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
+function ensureContextWindowCacheLoadedFromOwner(params: {
+  cfgOverride?: OpenClawConfig;
+  catalogOwner?: ContextWindowCatalogOwner;
+}): Promise<void> {
   const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
   if (
     CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
@@ -195,9 +205,11 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
-  const cfg = cfgOverride
-    ? primeConfiguredContextWindowsFromConfig(cfgOverride)
-    : primeConfiguredContextWindows();
+  const cfg = params.catalogOwner
+    ? primeConfiguredContextWindowsFromConfig(params.catalogOwner.config)
+    : params.cfgOverride
+      ? primeConfiguredContextWindowsFromConfig(params.cfgOverride)
+      : primeConfiguredContextWindows();
   if (!cfg) {
     return Promise.resolve();
   }
@@ -209,17 +221,22 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
         return;
       }
       try {
-        const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
-        const defaultAgentId = resolveDefaultAgentId(cfg);
-        const catalogResult = await loadPreparedModelCatalogOwnerSnapshot({
-          config: cfg,
-          agentId: defaultAgentId,
-          agentDir: resolveAgentDir(cfg, defaultAgentId),
-          readOnly: true,
-        }).then(
-          (value) => ({ status: "fulfilled" as const, value }),
-          (reason: unknown) => ({ status: "rejected" as const, reason }),
-        );
+        const catalogResult = params.catalogOwner
+          ? ({ status: "fulfilled" as const, value: params.catalogOwner } as const)
+          : await (async () => {
+              const { loadPreparedModelCatalogOwnerSnapshot } =
+                await loadPreparedModelCatalogRuntime();
+              const defaultAgentId = resolveDefaultAgentId(cfg);
+              return await loadPreparedModelCatalogOwnerSnapshot({
+                config: cfg,
+                agentId: defaultAgentId,
+                agentDir: resolveAgentDir(cfg, defaultAgentId),
+                readOnly: true,
+              }).then(
+                (value) => ({ status: "fulfilled" as const, value }),
+                (reason: unknown) => ({ status: "rejected" as const, reason }),
+              );
+            })();
         if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
           return;
         }
@@ -251,6 +268,53 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
     });
   CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
   return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+}
+
+export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
+  return ensureContextWindowCacheLoadedFromOwner({ cfgOverride });
+}
+
+/**
+ * Reuse the Gateway's published catalog generation. Omitting the Gateway binding
+ * falls through to a read-only owner whose key hashes the full model config.
+ */
+export async function prewarmContextWindowCacheAfterReady(params: {
+  config: OpenClawConfig;
+  isCancelled?: () => boolean;
+}): Promise<void> {
+  const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
+  if (
+    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
+    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration === generation
+  ) {
+    return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+  }
+  const shouldStop = () =>
+    CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation || params.isCancelled?.() === true;
+  if (shouldStop()) {
+    return;
+  }
+  try {
+    const { loadPublishedPreparedModelCatalogOwnerSnapshot } =
+      await loadPreparedModelCatalogRuntime();
+    if (shouldStop()) {
+      return;
+    }
+    const defaultAgentId = resolveDefaultAgentId(params.config);
+    const owner = await loadPublishedPreparedModelCatalogOwnerSnapshot({
+      config: params.config,
+      agentId: defaultAgentId,
+      agentDir: resolveAgentDir(params.config, defaultAgentId),
+      allowGatewaySubagentBinding: true,
+      readOnly: true,
+    });
+    if (shouldStop()) {
+      return;
+    }
+    await ensureContextWindowCacheLoadedFromOwner({ catalogOwner: owner });
+  } catch {
+    // Optional Gateway warmup is best-effort; request-time loading remains exact.
+  }
 }
 
 export async function waitForContextWindowCacheLoad(options?: {

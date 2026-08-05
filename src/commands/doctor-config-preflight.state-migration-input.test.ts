@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LegacyConfigIssue } from "../config/types.js";
+import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { StateMigrationResult } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
@@ -63,7 +63,20 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     issues: [] as Array<{ path: string; message: string }>,
   })),
 );
-const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
+const findDoctorLegacyConfigIssues = vi.hoisted(() =>
+  vi.fn((_raw: unknown, _sourceRaw?: unknown): LegacyConfigIssue[] => []),
+);
+const addDoctorLegacyIssues = vi.hoisted(() =>
+  vi.fn((snapshot: ConfigFileSnapshot): ConfigFileSnapshot => {
+    if (!snapshot.exists) {
+      return snapshot;
+    }
+    const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
+    const sourceRaw = snapshot.parsed ?? resolvedRaw;
+    const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+    return legacyIssues.length === 0 ? snapshot : { ...snapshot, legacyIssues };
+  }),
+);
 const note = vi.hoisted(() => vi.fn());
 
 vi.mock("./doctor-state-migrations.js", () => ({
@@ -87,6 +100,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
+  addDoctorLegacyIssues,
   findDoctorLegacyConfigIssues,
 }));
 

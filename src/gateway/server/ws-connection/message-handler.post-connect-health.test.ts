@@ -30,7 +30,9 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  adoptTailscaleProfileAvatarMock,
   ensureProfileForEmailMock,
+  resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   buildGatewaySnapshotMock: vi.fn(() => ({
@@ -56,14 +58,27 @@ const {
       },
     },
   })),
+  adoptTailscaleProfileAvatarMock: vi.fn(),
   ensureProfileForEmailMock: vi.fn(),
+  resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
 vi.mock("../../../state/user-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../state/user-profiles.js")>();
+  adoptTailscaleProfileAvatarMock.mockImplementation(actual.adoptTailscaleProfileAvatar);
   ensureProfileForEmailMock.mockImplementation(actual.ensureProfileForEmail);
-  return { ...actual, ensureProfileForEmail: ensureProfileForEmailMock };
+  return {
+    ...actual,
+    adoptTailscaleProfileAvatar: adoptTailscaleProfileAvatarMock,
+    ensureProfileForEmail: ensureProfileForEmailMock,
+  };
+});
+
+vi.mock("./auth-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auth-context.js")>();
+  resolveConnectAuthStateMock.mockImplementation(actual.resolveConnectAuthState);
+  return { ...actual, resolveConnectAuthState: resolveConnectAuthStateMock };
 });
 
 vi.mock("../../../config/config.js", () => ({
@@ -708,6 +723,89 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
         "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
       );
+    });
+  });
+
+  it("registers a verified profile before detached Tailscale avatar adoption completes", async () => {
+    await withOpenClawTestState({ label: "gateway-tailscale-avatar-detached" }, async () => {
+      let resolveAvatar:
+        | ((profile: {
+            id: string;
+            displayName: string | null;
+            avatarMime: "image/png" | "image/jpeg" | "image/webp" | null;
+            mergedInto: string | null;
+            createdAt: number;
+            updatedAt: number;
+          }) => void)
+        | undefined;
+      adoptTailscaleProfileAvatarMock.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            resolveAvatar = resolve;
+          }),
+      );
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: {
+            login: "ada@github",
+            name: "Ada Lovelace",
+            profilePic: "https://avatars.example.test/ada.png",
+          },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+        sharedAuthProvided: false,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-tailscale-avatar-detached",
+        connectNonce: "nonce-tailscale-avatar-detached",
+      });
+
+      harness.sendConnect("connect-tailscale-avatar-detached", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserId: "ada@github",
+          authenticatedUserIsTailscaleProvider: true,
+          authenticatedUserProfile: { displayName: "Ada Lovelace", hasAvatar: false },
+        });
+        expect(adoptTailscaleProfileAvatarMock).toHaveBeenCalledOnce();
+      });
+      expect(harness.socketSend).toHaveBeenCalled();
+
+      const profile = (
+        harness.client as {
+          authenticatedUserProfile: { profileId: string; displayName: string; updatedAt: number };
+        }
+      ).authenticatedUserProfile;
+      resolveAvatar?.({
+        id: profile.profileId,
+        displayName: profile.displayName,
+        avatarMime: "image/png",
+        mergedInto: null,
+        createdAt: profile.updatedAt,
+        updatedAt: profile.updatedAt + 1,
+      });
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserProfile: { hasAvatar: true, updatedAt: profile.updatedAt + 1 },
+        });
+      });
     });
   });
 
