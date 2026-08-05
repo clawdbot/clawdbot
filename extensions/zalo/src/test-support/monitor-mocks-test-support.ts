@@ -140,7 +140,7 @@ export async function resetLifecycleTestState() {
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 
-async function installLifecycleWebhookIngressState(): Promise<void> {
+export async function installLifecycleIngressState(): Promise<void> {
   const runtime = getZaloRuntimeMock() as PluginRuntime;
   const createdDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-lifecycle-"),
@@ -197,7 +197,7 @@ export async function startWebhookLifecycleMonitor(params: {
   webhookSecret?: string;
   cacheKey?: string;
 }) {
-  await installLifecycleWebhookIngressState();
+  await installLifecycleIngressState();
   const registry = createEmptyPluginRegistry();
   setActivePluginRegistry(registry);
   const abort = new AbortController();

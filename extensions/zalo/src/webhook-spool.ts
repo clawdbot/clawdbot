@@ -217,6 +217,9 @@ function createZaloWebhookIngress(options: {
   runtime: Pick<ZaloRuntimeEnv, "error" | "log">;
   deliver: (update: ZaloUpdate, lifecycle: ZaloWebhookIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<ZaloWebhookSpoolPayload>;
+  // Webhook keeps the 8-delivery fan-out; polling passes 1 so drain order and
+  // one-at-a-time delivery match the pre-journal serial dispatch loop.
+  maxConcurrentDeliveries?: number;
 }): ZaloWebhookIngress {
   const queue =
     options.queue ??
@@ -253,9 +256,10 @@ function createZaloWebhookIngress(options: {
     waitForDeliveryIdleBeforeRepump: false,
     runPumpTask: runDetachedWebhookWork,
     deferredClaims: "wait-on-stop",
+    admissionMode: "durable-after-stop",
     drain: {
       adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
-      startLimit: ZALO_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
+      startLimit: options.maxConcurrentDeliveries ?? ZALO_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
         deadLetterMinAgeMs: 0,

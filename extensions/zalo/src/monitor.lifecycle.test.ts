@@ -80,6 +80,9 @@ async function startLifecycleMonitor(
 
 describe("monitorZaloProvider lifecycle", () => {
   beforeEach(async () => {
+    // Warm the lazy ingress module so polling startup settles within the
+    // lifecycle settle helpers (and within fake-timer advancement).
+    await import("./webhook-spool.js");
     const createdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zalo-monitor-"));
     testStateDir = await fs.realpath(createdDir);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -181,11 +184,16 @@ describe("monitorZaloProvider lifecycle", () => {
         lastError: expect.stringContaining("zalo poll transport failed"),
       });
       expect(getUpdatesMock).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(1);
+      // Backoff sleep plus the durable-ingress drain pump; the exact count is an
+      // implementation detail, while the post-abort zero below is the contract.
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
 
       abort.abort();
       await run;
 
+      // The ingress queue opened the shared state DB; its WAL maintenance
+      // interval is process-level and clears when the DB handle closes.
+      closeOpenClawStateDatabaseForTest();
       expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(getUpdatesMock).toHaveBeenCalledTimes(1);
