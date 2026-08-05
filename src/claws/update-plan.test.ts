@@ -728,6 +728,7 @@ describe("buildClawUpdatePlan", () => {
             ok: true as const,
             plan: {
               workspaceDir: current.addPlan.agent.workspace,
+              requestedRef: "triage",
               slug: "triage",
               version: "1.0.0",
               installedAt: 0,
