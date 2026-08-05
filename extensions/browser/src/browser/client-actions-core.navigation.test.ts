@@ -45,6 +45,29 @@ describe("browser navigation client actions", () => {
     });
   });
 
+  it.each([
+    { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
+    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
+  ])(
+    "normalizes navigation timeout $requestedTimeoutMs before arming its transport watchdog",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      await browserNavigate(undefined, {
+        url: "https://example.com/slow",
+        targetId: "tab-1",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      const request = lastNavigationRequest();
+      expect(request.options.timeoutMs).toBe(expectedTimeoutMs + 5_000);
+      expect(JSON.parse(request.options.body ?? "{}")).toEqual({
+        url: "https://example.com/slow",
+        targetId: "tab-1",
+        timeoutMs: expectedTimeoutMs,
+      });
+    },
+  );
+
   it("preserves the existing navigation watchdog when no timeout is requested", async () => {
     await browserNavigate(undefined, { url: "https://example.com" });
 

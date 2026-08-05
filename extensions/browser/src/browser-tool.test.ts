@@ -2486,6 +2486,28 @@ describe("browser tool url alias support", () => {
     });
   });
 
+  it.each([
+    { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
+    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
+  ])(
+    "normalizes host navigation timeout $requestedTimeoutMs before browser dispatch",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      await createBrowserTool().execute?.("call-1", {
+        action: "navigate",
+        target: "host",
+        url: "https://example.com/slow",
+        targetId: "tab-1",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ timeoutMs: expectedTimeoutMs }),
+      );
+    },
+  );
+
   it("preserves an explicit navigation timeout across node and Gateway watchdogs", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool
@@ -2527,6 +2549,54 @@ describe("browser tool url alias support", () => {
       timeoutMs: 45_000,
     });
   });
+
+  it.each([
+    { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
+    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
+  ])(
+    "keeps normalized node navigation timeout $requestedTimeoutMs inside nested watchdogs",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      mockSingleBrowserProxyNode();
+      gatewayMocks.callGatewayTool
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: {
+            result: { ok: true, targetId: "tab-1", url: "https://example.com/slow" },
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: {
+            result: {
+              ok: true,
+              format: "ai",
+              targetId: "tab-1",
+              url: "https://example.com/slow",
+              snapshot: "slow page",
+            },
+          },
+        });
+
+      await createBrowserTool().execute?.("call-1", {
+        action: "navigate",
+        target: "node",
+        url: "https://example.com/slow",
+        targetId: "tab-1",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      const { options, request } = nodeInvokeCall(0);
+      expect(options.timeoutMs).toBe(expectedTimeoutMs + 10_000);
+      expect(request.timeoutMs).toBe(expectedTimeoutMs + 5_000);
+      expect(request.params?.timeoutMs).toBe(expectedTimeoutMs);
+      expect(request.params?.body).toEqual({
+        url: "https://example.com/slow",
+        targetId: "tab-1",
+        timeoutMs: expectedTimeoutMs,
+      });
+    },
+  );
 
   it("returns inline page state after navigate", async () => {
     browserActionsMocks.browserNavigate.mockResolvedValueOnce({

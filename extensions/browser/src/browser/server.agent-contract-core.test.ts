@@ -30,8 +30,10 @@ import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 const NAVIGATION_TIMEOUT_CASES = [
+  { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
   { requestedTimeoutMs: 45_000, expectedTimeoutMs: 45_000 },
-  { requestedTimeoutMs: 3_000_000_000, expectedTimeoutMs: 2_147_483_647 },
+  { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+  { requestedTimeoutMs: 3_000_000_000, expectedTimeoutMs: 120_000 },
 ] as const;
 
 type ActErrorResponse = {

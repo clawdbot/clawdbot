@@ -8,6 +8,7 @@ import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getImageMetadata } from "../../media/media-services.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
+import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import {
   captureScreenshot,
   getMainFrameDocumentIdentityViaCdp,
@@ -331,7 +332,11 @@ export function registerBrowserAgentSnapshotRoutes(
     }
     let timeoutMs: number | undefined;
     try {
-      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      const requestedTimeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      timeoutMs =
+        requestedTimeoutMs === undefined
+          ? undefined
+          : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
     } catch (err) {
       return jsonError(res, 400, String(err instanceof Error ? err.message : err));
     }

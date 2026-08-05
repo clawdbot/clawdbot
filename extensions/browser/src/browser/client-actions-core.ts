@@ -12,6 +12,7 @@ import {
 import {
   BROWSER_ACTION_TRANSPORT_SLACK_MS,
   resolveBrowserActRequestTimeoutMs,
+  resolveBrowserNavigationTimeoutMs,
 } from "./act-policy.js";
 import type {
   BrowserActionOk,
@@ -84,14 +85,14 @@ export async function browserNavigate(
   },
 ): Promise<BrowserActionTabResult> {
   const q = buildProfileQuery(opts.profile);
+  const timeoutMs =
+    opts.timeoutMs === undefined ? undefined : resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await fetchBrowserJson<BrowserActionTabResult>(withBaseUrl(baseUrl, `/navigate${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: opts.url, targetId: opts.targetId, timeoutMs: opts.timeoutMs }),
+    body: JSON.stringify({ url: opts.url, targetId: opts.targetId, timeoutMs }),
     timeoutMs:
-      opts.timeoutMs === undefined
-        ? 20_000
-        : resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
+      timeoutMs === undefined ? 20_000 : resolveBrowserOperationRequestTimeoutMs(timeoutMs),
   });
 }
 
