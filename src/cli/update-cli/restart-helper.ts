@@ -18,8 +18,8 @@ import {
   resolveGatewayRestartLogPath,
   shellEscapeRestartLogValue,
 } from "../../daemon/restart-logs.js";
-import { normalizeNewWindowsBatchContent } from "../../infra/windows-batch.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+import { writeRestartScriptFile } from "./restart-script-file.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -754,16 +754,7 @@ exit $status
       return null;
     }
 
-    scriptContent = normalizeNewWindowsBatchContent(filename, scriptContent);
-    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-"));
-    const scriptPath = path.join(scriptDir, filename);
-    try {
-      await fs.writeFile(scriptPath, scriptContent, { mode: 0o755, flag: "wx" });
-    } catch (error) {
-      await fs.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
-      throw error;
-    }
-    return scriptPath;
+    return await writeRestartScriptFile(filename, scriptContent);
   } catch {
     // If we can't write the script, we'll fall back to the standard restart method
     return null;
