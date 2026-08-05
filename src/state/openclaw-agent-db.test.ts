@@ -171,7 +171,7 @@ function ensureV13WorkerAgentDatabaseTemplate(): string {
   }
   // Legacy migration cases mutate independent clones; keep one closed, verified v13
   // baseline so the test-only reverse migration is not repeated for every case.
-  const stateDir = makeTempDir(agentDbTempDirs, "openclaw-agent-db-v13-worker-");
+  const stateDir = createTempStateDir();
   const databasePath = resolveOpenClawAgentSqlitePath({
     agentId: "worker-1",
     env: { OPENCLAW_STATE_DIR: stateDir },
