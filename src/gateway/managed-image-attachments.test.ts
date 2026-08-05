@@ -2001,6 +2001,29 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
+  it("retains history records when the session row is unreadable", async () => {
+    const fixture = await createFixture(stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    opened.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
+      )
+      .run("agent:main:main", "broken-session", "{invalid", Date.now());
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    loadSessionEntryMock.mockReturnValue({ storePath: databasePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
   it("retains history records when a per-agent session database is missing", async () => {
     const fixture = await createFixture(stateDir);
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");

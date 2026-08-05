@@ -36,6 +36,7 @@ import {
   collectSessionEntryLookupKeys,
   createSqliteSessionIdentitySnapshot,
   deleteLegacySessionEntryRows,
+  hasExactSessionEntryRow,
   readExactSessionEntryRowValidated,
   readSessionEntryRow,
   readSqliteLifecycleTargetSnapshot,
@@ -207,30 +208,50 @@ export function loadExactSqliteSessionEntryReadOnly(
   return result.found ? result.value : undefined;
 }
 
-/** Exact persisted-key probe that preserves read-only database availability. */
+type ExactSessionEntryReadOnlyResult =
+  | OpenClawAgentDatabaseReadOnlyResult<ExactSessionEntry | undefined>
+  | { found: false; reason: "row-invalid" };
+
+/** Exact persisted-key probe that preserves database and row availability. */
 export function loadExactSqliteSessionEntryReadOnlyResult(
   scope: SessionAccessScope,
-): OpenClawAgentDatabaseReadOnlyResult<ExactSessionEntry | undefined> {
+): ExactSessionEntryReadOnlyResult {
   const sessionKey = scope.sessionKey.trim();
   if (!sessionKey) {
     return { found: true, value: undefined };
   }
   const resolved = resolveSqliteScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
-    toDatabaseOptions(resolved),
-  );
+  let result: OpenClawAgentDatabaseReadOnlyResult<{
+    entry: SessionEntry | undefined;
+    rowExists: boolean;
+  }>;
+  try {
+    result = withOpenClawAgentDatabaseReadOnly((database) => {
+      const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
+      return { entry, rowExists: entry ? true : hasExactSessionEntryRow(database, sessionKey) };
+    }, toDatabaseOptions(resolved));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error as { code?: unknown }).code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED"
+    ) {
+      return { found: false, reason: "row-invalid" };
+    }
+    throw error;
+  }
   if (!result.found) {
     return result;
   }
-  if (!result.value) {
-    return { found: true, value: undefined };
+  if (!result.value.entry) {
+    return result.value.rowExists
+      ? { found: false, reason: "row-invalid" }
+      : { found: true, value: undefined };
   }
   return {
     found: true,
     value: {
       sessionKey,
-      entry: scope.clone === false ? result.value : cloneSessionEntry(result.value),
+      entry: scope.clone === false ? result.value.entry : cloneSessionEntry(result.value.entry),
     },
   };
 }

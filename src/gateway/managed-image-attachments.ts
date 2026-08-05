@@ -119,7 +119,12 @@ type SessionManagedOutgoingAttachmentIndexRead =
   | { kind: "available"; index: SessionManagedOutgoingAttachmentIndex | null }
   | {
       kind: "unavailable";
-      reason: "database-missing" | "schema-missing" | "table-missing" | "read-failed";
+      reason:
+        | "database-missing"
+        | "schema-missing"
+        | "table-missing"
+        | "row-invalid"
+        | "read-failed";
     };
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 type SessionStoreAvailabilityRead = ReturnType<
