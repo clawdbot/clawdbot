@@ -105,6 +105,8 @@ async function main() {
     const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write("doctor target mismatch: got=" + target + "\n"); process.exit(64); }
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write("doctor windows mode mismatch: got=" + windowsMode + "\n"); process.exit(64); }
+    const unauthorized = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS || "").split(",").filter(Boolean));
+    if (unauthorized.has(provider)) { process.stdout.write(JSON.stringify({ ok: false, provider, checks: [{ status: "failed", check: "broker", message: "class=broker_auth hint=crabbox_login unauthorized", details: { class: "broker_auth", hint: "crabbox_login" } }] }) + "\n"); process.exit(1); }
     const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || "").split(",").filter(Boolean));
     const ready = !unready.has(provider); process[ready ? "stdout" : "stderr"].write(JSON.stringify({ ok: ready, provider }) + "\n");
     process.exit(ready ? 0 : 1);
@@ -118,6 +120,7 @@ async function main() {
     return;
   }
   if (args[0] === "whoami") {
+    await wait(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_WHOAMI_DELAY_MS || "0", 10));
     const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS || "0", 10);
     if (status !== 0) { process.stderr.write('coordinator GET /v1/whoami: http 401: {"error":"unauthorized"}\n'); process.exit(status); }
     process.stdout.write("fake-crabbox-user\n"); return;
@@ -942,6 +945,33 @@ describe("scripts/crabbox-wrapper", () => {
     );
     expect(output.args).toContain("aws");
     expect(result.stderr).toContain("chain=aws");
+  });
+
+  it("uses doctor readiness when the standalone whoami probe is slow", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "desktop", "--", "echo ok"],
+      {
+        configJson: managedBrokerConfig("azure", {
+          target: "linux",
+          windowsMode: "normal",
+        }),
+        env: { OPENCLAW_FAKE_CRABBOX_WHOAMI_DELAY_MS: "5500" },
+      },
+    );
+
+    expect(output.args).toContain("azure");
+    expect(result.stderr).not.toContain("managed Crabbox broker auth unavailable");
+  });
+
+  it("falls through a doctor-reported auth failure to the next provider", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "desktop", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS: "azure" } },
+    );
+
+    expect(output.args).toContain("aws");
+    expect(result.stderr).toContain("selected=aws chain=azure,aws");
+    expect(result.stderr).toContain("azure:doctor exited 1");
   });
 
   it("probes native Windows readiness with the requested target context", () => {
@@ -1890,12 +1920,15 @@ describe("scripts/crabbox-wrapper", () => {
   it("fails closed for AWS proof when broker auth is stale", () => {
     const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       configJson: { coordinator: "https://crabbox.openclaw.ai", brokerAuth: "configured" },
-      env: { OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1" },
+      env: { OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS: "aws" },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
+    expect(result.stderr).toContain("doctor exited 1");
+    expect(result.stderr).toContain("class=broker_auth hint=crabbox_login unauthorized");
+    expect(result.stderr).toMatch(/recovery: run `\S+crabbox doctor --provider aws --json`/u);
+    expect(result.stderr).not.toContain("managed Crabbox broker auth unavailable");
   });
 
   it("ignores the legacy direct AWS override", () => {
