@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaSuiteScenarioResult } from "./suite.js";
+import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type {
   QaTestFileScenario,
   QaTestFileScenarioRunResult,
@@ -31,7 +32,7 @@ vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
   runQaTestFileScenarios,
 }));
 
-import { runQaSuite } from "./suite-launch.runtime.js";
+import { runQaSuite, runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
 
 const tempRoots: string[] = [];
 
@@ -246,6 +247,34 @@ describe("qa suite runtime launcher", () => {
       expect(stderrWrite.mock.calls.flat().join("")).toContain(
         "[qa-suite] infra retry 1/1: agent.wait failed",
       );
+    } finally {
+      stderrWrite.mockRestore();
+    }
+  });
+
+  it("retries a cleanup-only ECONNRESET through its preserved cause", async () => {
+    const cleanupError = Object.assign(new Error("cleanup socket reset"), {
+      code: "ECONNRESET",
+    });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let attempts = 0;
+
+    try {
+      const result = await runQaSuiteWithInfraRetry(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throwQaSuiteCleanupErrors({
+            cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
+            runFailed: false,
+            runError: undefined,
+          });
+        }
+        return "retried";
+      }, 1);
+
+      expect(result).toBe("retried");
+      expect(attempts).toBe(2);
+      expect(stderrWrite.mock.calls.flat().join("")).toContain("[qa-suite] infra retry 1/1:");
     } finally {
       stderrWrite.mockRestore();
     }

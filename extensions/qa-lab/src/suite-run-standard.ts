@@ -39,6 +39,7 @@ import {
   createQaSuiteTransportAdapter,
   buildQaSuiteRuntimeMetrics,
   captureGatewayHeapSnapshotCheckpoint,
+  isQaSuiteNestedRun,
   requireQaSuiteStartLab,
   resolveQaSuiteTransportReadyTimeoutMs,
   runQaFlowSuiteCleanupPlan,
@@ -107,6 +108,9 @@ export async function runQaFlowSuiteStandard(
   let preserveGatewayRuntimeDir: string | undefined;
   let runFailed = false;
   let runError: unknown;
+  let result: QaSuiteResult | undefined;
+  let completionProgress: string | undefined;
+  let evidenceWritten = false;
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
     const activeMock = await startQaProviderServer(providerMode, {
@@ -407,12 +411,9 @@ export async function runQaFlowSuiteStandard(
       generatedAt: finishedAt.toISOString(),
     } satisfies QaLabLatestReport;
     lab.setLatestReport(latestReport);
-    writeQaSuiteProgress(
-      progressEnabled,
-      `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`,
-    );
-
-    return {
+    completionProgress = `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`;
+    evidenceWritten = evidence !== undefined && (params?.writeEvidenceFile ?? true);
+    result = {
       outputDir,
       evidence,
       evidencePath,
@@ -433,7 +434,7 @@ export async function runQaFlowSuiteStandard(
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     const activeGateway = gateway;
     const activeMock = mock;
-    const cleanupErrors = await runQaFlowSuiteCleanupPlan({
+    const cleanupFailures = await runQaFlowSuiteCleanupPlan({
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
@@ -457,6 +458,13 @@ export async function runQaFlowSuiteStandard(
             }
           },
     });
-    throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
   }
+  if (!result || !completionProgress) {
+    throw new Error("QA suite completed without terminal result metadata");
+  }
+  if (!params?.captureRuntimeParityCell && !isQaSuiteNestedRun(params)) {
+    writeQaSuiteProgress(progressEnabled, completionProgress);
+  }
+  return result;
 }
