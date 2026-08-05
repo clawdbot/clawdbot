@@ -109,7 +109,7 @@ function isEnvOnlyAuthProfileRuntime(): boolean {
   return authProfileRuntimeMode.getStore()?.kind === "env-only";
 }
 
-function resolveRuntimeAuthProfileAgentDir(agentDir?: string): string | undefined {
+export function resolveRuntimeAuthProfileAgentDir(agentDir?: string): string | undefined {
   const mode = authProfileRuntimeMode.getStore();
   return mode?.kind === "agent-dir" ? mode.agentDir : agentDir;
 }

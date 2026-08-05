@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
 type TelegramPollingLivenessTrackerOptions = {
   now?: () => number;
+  monotonicNow?: () => number;
   onPollSuccess?: (finishedAt: number) => void;
 };
 
@@ -12,20 +13,22 @@ type TelegramPollingStall = {
 };
 
 export class TelegramPollingLivenessTracker {
-  #lastGetUpdatesAt: number;
-  #lastGetUpdatesActivityAt: number;
+  #lastGetUpdatesActivityMonotonicAt: number;
   #lastGetUpdatesStartedAt: number | null = null;
+  #lastGetUpdatesStartedMonotonicAt: number | null = null;
   #lastGetUpdatesFinishedAt: number | null = null;
   #lastGetUpdatesDurationMs: number | null = null;
   #lastGetUpdatesOutcome = "not-started";
   #lastGetUpdatesError: string | null = null;
   #lastGetUpdatesOffset: number | null = null;
   #inFlightGetUpdates = 0;
-  #stallDiagLoggedAt = 0;
+  #stallDiagLoggedMonotonicAt = 0;
+  #lastStallCheckMonotonicAt: number;
 
   constructor(private readonly options: TelegramPollingLivenessTrackerOptions = {}) {
-    this.#lastGetUpdatesAt = this.#now();
-    this.#lastGetUpdatesActivityAt = this.#lastGetUpdatesAt;
+    const monotonicNow = this.#monotonicNow();
+    this.#lastGetUpdatesActivityMonotonicAt = monotonicNow;
+    this.#lastStallCheckMonotonicAt = monotonicNow;
   }
 
   get inFlightGetUpdates() {
@@ -33,9 +36,12 @@ export class TelegramPollingLivenessTracker {
   }
 
   noteGetUpdatesStarted(payload: unknown, at = this.#now()) {
-    this.#lastGetUpdatesAt = at;
-    this.#lastGetUpdatesActivityAt = at;
+    const startedMonotonicAt = this.#monotonicNow();
+    this.#lastGetUpdatesActivityMonotonicAt = startedMonotonicAt;
     this.#lastGetUpdatesStartedAt = at;
+    this.#lastGetUpdatesStartedMonotonicAt = startedMonotonicAt;
+    this.#lastGetUpdatesFinishedAt = null;
+    this.#lastGetUpdatesDurationMs = null;
     this.#lastGetUpdatesOffset = resolveGetUpdatesOffset(payload);
     this.#inFlightGetUpdates += 1;
     this.#lastGetUpdatesOutcome = "started";
@@ -43,29 +49,20 @@ export class TelegramPollingLivenessTracker {
   }
 
   noteGetUpdatesSuccess(result: unknown, at = this.#now()) {
-    this.#lastGetUpdatesActivityAt = at;
-    this.#lastGetUpdatesFinishedAt = at;
-    this.#lastGetUpdatesDurationMs =
-      this.#lastGetUpdatesStartedAt == null ? null : at - this.#lastGetUpdatesStartedAt;
+    this.#noteGetUpdatesCompleted(at);
     this.#lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
     this.options.onPollSuccess?.(at);
   }
 
   noteGetUpdatesSuccessCount(count: number, at = this.#now()) {
-    this.#lastGetUpdatesActivityAt = at;
-    this.#lastGetUpdatesFinishedAt = at;
-    this.#lastGetUpdatesDurationMs =
-      this.#lastGetUpdatesStartedAt == null ? null : at - this.#lastGetUpdatesStartedAt;
+    this.#noteGetUpdatesCompleted(at);
     const normalizedCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
     this.#lastGetUpdatesOutcome = `ok:${normalizedCount}`;
     this.options.onPollSuccess?.(at);
   }
 
   noteGetUpdatesError(err: unknown, at = this.#now()) {
-    this.#lastGetUpdatesActivityAt = at;
-    this.#lastGetUpdatesFinishedAt = at;
-    this.#lastGetUpdatesDurationMs =
-      this.#lastGetUpdatesStartedAt == null ? null : at - this.#lastGetUpdatesStartedAt;
+    this.#noteGetUpdatesCompleted(at);
     this.#lastGetUpdatesOutcome = "error";
     this.#lastGetUpdatesError = formatErrorMessage(err);
   }
@@ -74,28 +71,31 @@ export class TelegramPollingLivenessTracker {
     this.#inFlightGetUpdates = Math.max(0, this.#inFlightGetUpdates - 1);
   }
 
-  noteGetUpdatesActivity(at = this.#now()) {
-    this.#lastGetUpdatesActivityAt = at;
+  noteGetUpdatesActivity() {
+    this.#lastGetUpdatesActivityMonotonicAt = this.#monotonicNow();
   }
 
-  detectStall(params: { thresholdMs: number; now?: number }): TelegramPollingStall | null {
-    const now = params.now ?? this.#now();
-    const activeElapsed =
-      this.#inFlightGetUpdates > 0 && this.#lastGetUpdatesStartedAt != null
-        ? now - this.#lastGetUpdatesActivityAt
-        : 0;
-    const idleElapsed =
-      this.#inFlightGetUpdates > 0
-        ? 0
-        : now - (this.#lastGetUpdatesFinishedAt ?? this.#lastGetUpdatesAt);
-    const elapsed = this.#inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
+  detectStall(params: { thresholdMs: number }): TelegramPollingStall | null {
+    const monotonicNow = this.#monotonicNow();
+    const checkGap = monotonicNow - this.#lastStallCheckMonotonicAt;
+    this.#lastStallCheckMonotonicAt = monotonicNow;
+    // The watchdog cannot distinguish a stalled poll from delayed callbacks after
+    // missing two full detection windows. Rebase once, then observe normally.
+    if (checkGap > params.thresholdMs * 2) {
+      this.#lastGetUpdatesActivityMonotonicAt = monotonicNow;
+      return null;
+    }
+    const elapsed = monotonicNow - this.#lastGetUpdatesActivityMonotonicAt;
     if (elapsed <= params.thresholdMs) {
       return null;
     }
-    if (this.#stallDiagLoggedAt && now - this.#stallDiagLoggedAt < params.thresholdMs / 2) {
+    if (
+      this.#stallDiagLoggedMonotonicAt &&
+      monotonicNow - this.#stallDiagLoggedMonotonicAt < params.thresholdMs / 2
+    ) {
       return null;
     }
-    this.#stallDiagLoggedAt = now;
+    this.#stallDiagLoggedMonotonicAt = monotonicNow;
 
     const elapsedLabel =
       this.#inFlightGetUpdates > 0
@@ -114,6 +114,20 @@ export class TelegramPollingLivenessTracker {
 
   #now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  #monotonicNow(): number {
+    return this.options.monotonicNow?.() ?? performance.now();
+  }
+
+  #noteGetUpdatesCompleted(finishedAt: number): void {
+    const finishedMonotonicAt = this.#monotonicNow();
+    this.#lastGetUpdatesActivityMonotonicAt = finishedMonotonicAt;
+    this.#lastGetUpdatesFinishedAt = finishedAt;
+    this.#lastGetUpdatesDurationMs =
+      this.#lastGetUpdatesStartedMonotonicAt == null
+        ? null
+        : finishedMonotonicAt - this.#lastGetUpdatesStartedMonotonicAt;
   }
 }
 

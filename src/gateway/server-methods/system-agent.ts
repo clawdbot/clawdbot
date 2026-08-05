@@ -445,6 +445,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
               migrationBaseConfig: baseConfig,
             });
+            if (applied.agentModelOverride) {
+              session.setPreparedModelRef(applied.agentModelOverride);
+            }
           }),
         );
       },

@@ -531,6 +531,7 @@ describe("ollama setup", () => {
     );
 
     expect(model?.contextWindow).toBe(65536);
+    expect(result.defaultModel).toBe("ollama/llama3:8b");
   });
 
   it("offers and streams a recommended pull when no installed model supports tools", async () => {
@@ -581,6 +582,7 @@ describe("ollama setup", () => {
       contextWindow: 131072,
       compat: { supportsTools: true },
     });
+    expect(result.defaultModel).toBe("ollama/gemma4:e4b");
   });
 
   it("does not offer a pull when an installed Ollama model supports tools", async () => {

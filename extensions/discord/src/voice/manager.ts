@@ -746,6 +746,7 @@ export class DiscordVoiceManager {
       receiveRecovery: createVoiceReceiveRecoveryState(),
       isStopped: () => stopped,
       stop: () => {
+        clearSessionIfCurrent();
         stopEntry(entry, {
           destroyConnection: true,
           reason: `stop guild ${guildId} channel ${channelId}`,
@@ -884,6 +885,12 @@ export class DiscordVoiceManager {
       entry,
       getHumanParticipantCount: () => this.membership.countHumanParticipants(entry, this.botUserId),
       mode: voiceMode,
+      onTerminalError: (error) => {
+        logger.error(
+          `discord voice: realtime session failed terminally guild=${entry.guildId} channel=${entry.channelId}: ${formatErrorMessage(error)}`,
+        );
+        entry.stop();
+      },
       runAgentTurn: ({ context, message, toolsAllow, userId }) =>
         this.runDiscordRealtimeAgentTurn({ context, entry, message, toolsAllow, userId }),
     });

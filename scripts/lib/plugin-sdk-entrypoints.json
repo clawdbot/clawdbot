@@ -232,6 +232,7 @@
   "reply-history",
   "realtime-transcription",
   "realtime-bootstrap-context",
+  "realtime-voice-audio-queue",
   "realtime-voice",
   "meeting-runtime",
   "transcripts",

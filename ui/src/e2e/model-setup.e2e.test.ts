@@ -362,7 +362,11 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
                 initialValue: true,
               },
             },
-            { done: true, status: "done" },
+            {
+              done: true,
+              status: "done",
+              preparedModelRef: "ollama/qwen3:0.6b",
+            },
           ],
         },
       },
@@ -432,21 +436,6 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Continue" }).click();
       await page.getByText("Retry this Ollama address now?").waitFor();
 
-      await gateway.setMethodResponse("openclaw.setup.detect", {
-        ...initialDetection,
-        candidates: [
-          {
-            kind: "provider-auto:ollama",
-            brandId: "ollama",
-            label: "Ollama",
-            detail: "qwen3:0.6b at http://127.0.0.1:11434",
-            modelRef: "ollama/qwen3:0.6b",
-            recommended: true,
-            credentials: true,
-          },
-        ],
-        recommendedInstalls: [],
-      });
       await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("heading", { name: "Connection verified" }).waitFor();
       await expect

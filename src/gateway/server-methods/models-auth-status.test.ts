@@ -2,7 +2,7 @@
 // credential cleanup, secret refresh, and provider run abort side effects.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
@@ -233,6 +233,7 @@ async function readAuthStatus(params: Record<string, unknown> = {}) {
 }
 
 function resetAuthStatusMocks(): void {
+  vi.stubEnv("OPENAI_API_KEY", "");
   vi.clearAllMocks();
   invalidateModelAuthStatusCache();
   mocks.getRuntimeConfig.mockReturnValue({});
@@ -261,6 +262,10 @@ function resetAuthStatusMocks(): void {
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function firstExternalCliAuthOption() {
   expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);

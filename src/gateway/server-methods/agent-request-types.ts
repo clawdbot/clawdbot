@@ -37,6 +37,7 @@ export type AgentRunRequest = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   acpTurnSource?: "manual_spawn";
   internalRuntimeHandoffId?: string;
+  internalExecutionIdentityRetry?: boolean;
   execApprovalFollowupExpectedSessionId?: string;
   internalEvents?: AgentInternalEvent[];
   suppressPromptPersistence?: boolean;

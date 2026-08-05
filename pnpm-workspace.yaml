@@ -9,7 +9,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.11"
-  - "@openclaw/fs-safe@0.5.0"
+  - "@openclaw/fs-safe@0.5.2"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.4"
   - "@openclaw/uirouter@0.1.0"
@@ -128,6 +128,7 @@ overrides:
   "@hono/node-server": 2.0.12
   axios: 1.18.1
   fast-uri: 4.1.2
+  "undici@7": 7.29.0
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.10.1

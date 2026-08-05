@@ -2,7 +2,6 @@ import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
@@ -226,25 +225,6 @@ export function toXaiRealtimeWsUrl(
     url.searchParams.set("conversation_id", conversationId);
   }
   return url.toString();
-}
-
-export async function resolveXaiRealtimeApiKey(
-  configApiKey: string | undefined,
-  cfg: OpenClawConfig | undefined,
-): Promise<string> {
-  const direct =
-    normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
-  if (direct) {
-    return direct;
-  }
-  const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
-  const oauthKey = normalizeOptionalString(auth?.apiKey);
-  if (oauthKey) {
-    return oauthKey;
-  }
-  throw new Error(
-    "xAI credentials missing for realtime voice. Sign in with `openclaw onboard --auth-choice xai-oauth`, run `openclaw onboard --auth-choice xai-api-key`, or set XAI_API_KEY.",
-  );
 }
 
 export function hasXaiRealtimeApiKeyInput(

@@ -147,6 +147,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 });
 
 type RunMessageActionInput = {
+  actionOrigin?: "message-tool";
   agentId?: string;
   broadcastAccountPlan?: {
     accountId: string;
@@ -491,6 +492,38 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
+  it("reports model-authored send normalization without inviting a retry", async () => {
+    const notice =
+      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: { ok: true },
+      normalization: { locationOmitted: true, notice },
+      toolResult: {
+        content: [{ type: "text", text: "sent" }],
+        details: { ok: true },
+      },
+      dryRun: false,
+    } satisfies MessageActionRunResult);
+
+    const { call, result } = await executeSendWithResult({
+      action: { channel: "telegram", target: "telegram:123", message: "hello" },
+    });
+
+    expect(call?.actionOrigin).toBe("message-tool");
+    expect(result).toEqual({
+      content: [
+        { type: "text", text: "sent" },
+        { type: "text", text: notice },
+      ],
+      details: { ok: true },
+    });
+  });
+
   it("does not advertise the Codex-only final delivery control", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
   });

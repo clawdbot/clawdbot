@@ -1,6 +1,5 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createAgent } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -407,8 +406,10 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
+          const createAgentForOperation =
+            ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
           const result = await ctx.commit(async () => {
-            return await (ctx.deps?.createAgent ?? createAgent)({
+            return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
             });

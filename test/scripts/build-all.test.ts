@@ -540,7 +540,7 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
-  it("uses a source performance profile with QA assets and startup metadata", () => {
+  it("uses a source performance profile with QA assets and immutable build provenance", () => {
     expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
@@ -549,6 +549,7 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+      "write-build-info",
       "write-cli-startup-metadata",
     ]);
   });

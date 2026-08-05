@@ -325,6 +325,11 @@ export type AuditConfig = {
    */
   enabled?: boolean;
   /**
+   * Retain bounded execution-identity attribution for exact-run inspection.
+   * Default: false. Requires the audit ledger and takes effect after Gateway restart.
+   */
+  executionIdentity?: boolean;
+  /**
    * Record content-free message lifecycle metadata. `direct` records only
    * known direct conversations; `all` also records group, channel, and
    * unknown conversation kinds. Default: `off`.

@@ -140,7 +140,7 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
-    plugins: index.plugins,
+    plugins: index.plugins.map(({ doctorContractFile: _doctorContractFile, ...plugin }) => plugin),
   });
   if (isDeepFrozenJsonLike(index)) {
     installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);

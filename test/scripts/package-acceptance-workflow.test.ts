@@ -99,6 +99,7 @@ const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
+const RELEASE_CHECK_ARTIFACT_RESOLVER = "scripts/github/resolve-release-check-artifacts.sh";
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -590,11 +591,168 @@ function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
   });
 }
 
+type ReleaseCheckArtifact = {
+  expired: boolean;
+  id: number;
+  name: string;
+  workflow_run: { id: number };
+};
+
+type ReleaseCheckArtifactPair = {
+  job: string;
+  payloadBase: string;
+  statusBase: string;
+  variant?: string;
+};
+
+type ResolvedReleaseCheckArtifact = {
+  job: string;
+  payload_id: number;
+  payload_name: string;
+  producer_attempt: number;
+  run_id: string;
+  status_id: number;
+  status_name: string;
+  target_sha: string;
+  variant: string;
+};
+
+function releaseCheckArtifact(params: {
+  expired?: boolean;
+  id: number;
+  name: string;
+  runId?: string;
+}): ReleaseCheckArtifact {
+  return {
+    expired: params.expired ?? false,
+    id: params.id,
+    name: params.name,
+    workflow_run: { id: Number(params.runId ?? "123456") },
+  };
+}
+
+function runReleaseCheckArtifactResolve(params: {
+  artifacts: ReleaseCheckArtifact[];
+  consumerAttempt: string;
+  pairs: ReleaseCheckArtifactPair[];
+  runId?: string;
+  targetSha?: string;
+}) {
+  const workdir = tempDirs.make("release-check-artifact-resolver-");
+  const binDir = resolve(workdir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const ghPath = resolve(binDir, "gh");
+  writeFileSync(ghPath, "#!/bin/sh\nprintf '%s\\n' \"$MOCK_ARTIFACT_RESPONSE\"\n");
+  chmodSync(ghPath, 0o755);
+  const runId = params.runId ?? "123456";
+  const targetSha = params.targetSha ?? "a".repeat(40);
+  const selectionFile = resolve(workdir, "selection.json");
+  const githubOutput = resolve(workdir, "github-output");
+  const args = [
+    resolve(REPO_ROOT, RELEASE_CHECK_ARTIFACT_RESOLVER),
+    "resolve",
+    "--repository",
+    "openclaw/openclaw",
+    "--run-id",
+    runId,
+    "--consumer-attempt",
+    params.consumerAttempt,
+    "--target-sha",
+    targetSha,
+  ];
+  for (const pair of params.pairs) {
+    args.push(
+      "--pair",
+      [pair.job, pair.variant ?? "", pair.statusBase, pair.payloadBase].join("|"),
+    );
+  }
+  args.push("--selection-file", selectionFile, "--github-output", githubOutput);
+  const result = spawnSync("bash", args, {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      MOCK_ARTIFACT_RESPONSE: JSON.stringify({ artifacts: params.artifacts }),
+      PATH: `${binDir}:${process.env.PATH}`,
+    },
+  });
+  const selection =
+    result.status === 0
+      ? (JSON.parse(readFileSync(selectionFile, "utf8")) as ResolvedReleaseCheckArtifact[])
+      : [];
+  return { result, selection, selectionFile, targetSha, workdir };
+}
+
+function releaseCheckStatusText(
+  selection: ResolvedReleaseCheckArtifact,
+  status: "cancelled" | "failure" | "skipped" | "success" = "success",
+): string {
+  return [
+    `run_id=${selection.run_id}`,
+    `run_attempt=${selection.producer_attempt}`,
+    `target_sha=${selection.target_sha}`,
+    `job=${selection.job}`,
+    `variant=${selection.variant}`,
+    `status=${status}`,
+    "job_status=success",
+    "step_outcomes=success",
+    "",
+  ].join("\n");
+}
+
+function runReleaseCheckArtifactValidation(params: {
+  selection: ResolvedReleaseCheckArtifact[];
+  statusText?: (selection: ResolvedReleaseCheckArtifact) => string;
+}) {
+  const workdir = tempDirs.make("release-check-artifact-validation-");
+  const selectionFile = resolve(workdir, "selection.json");
+  const statusDir = resolve(workdir, "statuses");
+  const validatedFile = resolve(workdir, "validated.json");
+  mkdirSync(statusDir, { recursive: true });
+  writeFileSync(selectionFile, JSON.stringify(params.selection));
+  for (const selection of params.selection) {
+    const variant = selection.variant ? `-${selection.variant}` : "";
+    writeFileSync(
+      resolve(
+        statusDir,
+        `${selection.job}${variant}-${selection.run_id}-${selection.producer_attempt}.env`,
+      ),
+      params.statusText?.(selection) ?? releaseCheckStatusText(selection),
+    );
+  }
+  const result = spawnSync(
+    "bash",
+    [
+      resolve(REPO_ROOT, RELEASE_CHECK_ARTIFACT_RESOLVER),
+      "validate",
+      "--selection-file",
+      selectionFile,
+      "--status-dir",
+      statusDir,
+      "--validated-file",
+      validatedFile,
+    ],
+    {
+      cwd: workdir,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH },
+    },
+  );
+  const validated =
+    result.status === 0
+      ? (JSON.parse(readFileSync(validatedFile, "utf8")) as Array<
+          ResolvedReleaseCheckArtifact & { status: string }
+        >)
+      : [];
+  return { result, validated };
+}
+
 function runReleaseChecksSummary(params: {
   currentAttempt: string;
   currentResult: "cancelled" | "failure" | "skipped" | "success";
+  discordResult?: "failure" | "skipped" | "success";
   resolveResult?: "failure" | "success";
   telegramSelected?: boolean;
+  validatedStatuses?: Array<{ job: string; status: string; variant: string }>;
   workflowRef?: string;
 }) {
   const summary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
@@ -605,6 +763,12 @@ function runReleaseChecksSummary(params: {
   const runId = "123456";
   const targetSha = "a".repeat(40);
   const workdir = tempDirs.make("openclaw-release-check-status-");
+  const selectionDir = resolve(workdir, ".artifacts/release-check-selection");
+  mkdirSync(selectionDir, { recursive: true });
+  writeFileSync(
+    resolve(selectionDir, "advisory-evidence-validated.json"),
+    JSON.stringify(params.validatedStatuses ?? []),
+  );
   return spawnSync("bash", ["-c", script], {
     cwd: workdir,
     encoding: "utf8",
@@ -623,7 +787,7 @@ function runReleaseChecksSummary(params: {
       QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: "skipped",
       QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: "skipped",
-      QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: params.discordResult ?? "skipped",
       QA_LIVE_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: params.currentResult,
@@ -632,8 +796,10 @@ function runReleaseChecksSummary(params: {
       RELEASE_CHECK_RUN_ATTEMPT: params.currentAttempt,
       RELEASE_CHECK_RUN_ID: runId,
       RELEASE_CHECK_TARGET_SHA: targetSha,
+      RESOLVE_ADVISORY_EVIDENCE_OUTCOME: "success",
       RESOLVE_TARGET_RESULT: params.resolveResult ?? "success",
       RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: "skipped",
+      VALIDATE_ADVISORY_STATUSES_OUTCOME: "success",
       WORKFLOW_REF: params.workflowRef ?? "refs/heads/release/2026.7.1",
     },
   });
@@ -3149,7 +3315,7 @@ describe("package artifact reuse", () => {
       "inputs.expected_sha == '' || inputs.run_mock_parity",
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      "github.event_name != 'workflow_call' || inputs.run_matrix",
+      "inputs.expected_sha == '' || inputs.run_matrix",
     );
     for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
@@ -3174,6 +3340,7 @@ describe("package artifact reuse", () => {
     expect(qaWorkflow).not.toContain('"${{ inputs.expected_sha }}" !== ""');
     expect(qaWorkflow).toContain('if [[ -n "${EXPECTED_SHA}" ]]; then');
     const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
+    expect(matrixJob["timeout-minutes"]).toBe(90);
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
       "--provider-mode mock-openai",
     );
@@ -3409,15 +3576,27 @@ describe("package artifact reuse", () => {
       "qa_lab_runtime_pair_lane_release_checks",
     ]);
     expect(collectorJob.name).toBe("Verify QA Lab runtime-pair lanes");
+    expect(workflowStep(collectorJob, "Resolve runtime-pair lane artifacts").run).toContain(
+      "qa_lab_runtime_pair_lane_release_checks|core",
+    );
+    expect(workflowStep(collectorJob, "Resolve runtime-pair lane artifacts").run).toContain(
+      "qa_lab_runtime_pair_lane_release_checks|soak",
+    );
     expect(workflowStep(collectorJob, "Download runtime-pair lane artifacts").with).toMatchObject({
-      pattern: "release-qa-runtime-pair-lane-*-${{ needs.resolve_target.outputs.revision }}",
+      "artifact-ids": "${{ steps.resolve_runtime_pair_artifacts.outputs.payload_ids }}",
       "merge-multiple": true,
     });
+    expect(workflowStep(collectorJob, "Download runtime-pair lane artifacts").if).toBe(
+      "always() && steps.resolve_runtime_pair_artifacts.outcome == 'success'",
+    );
+    expect(workflowStep(collectorJob, "Download runtime-pair lane statuses").if).toBe(
+      "always() && steps.resolve_runtime_pair_artifacts.outcome == 'success'",
+    );
     expect(workflowStep(collectorJob, "Verify runtime-pair lane statuses").run).toContain(
-      "lanes=(core)",
+      "resolve-release-check-artifacts.sh validate",
     );
     expect(workflowStep(collectorJob, "Upload runtime parity artifacts").with?.name).toBe(
-      "release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}",
+      "release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
   });
 
@@ -3990,6 +4169,287 @@ describe("package artifact reuse", () => {
     ]);
   });
 
+  describe("release check artifact resolver", () => {
+    const runId = "123456";
+    const targetSha = "a".repeat(40);
+    const pair = (job: string, variant: string, slug: string): ReleaseCheckArtifactPair => ({
+      job,
+      payloadBase: `release-payload-${slug}-${targetSha}-${runId}`,
+      statusBase: `release-status-${slug}-${targetSha}-${runId}`,
+      variant,
+    });
+    const artifactsFor = (
+      artifactPair: ReleaseCheckArtifactPair,
+      attempt: number,
+      firstId: number,
+      options: { expiredPayload?: boolean; expiredStatus?: boolean } = {},
+    ): ReleaseCheckArtifact[] => [
+      releaseCheckArtifact({
+        expired: options.expiredStatus,
+        id: firstId,
+        name: `${artifactPair.statusBase}-${attempt}`,
+        runId,
+      }),
+      releaseCheckArtifact({
+        expired: options.expiredPayload,
+        id: firstId + 1,
+        name: `${artifactPair.payloadBase}-${attempt}`,
+        runId,
+      }),
+    ];
+
+    it.each([
+      {
+        artifacts: [1, 2].flatMap((attempt, index) =>
+          artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
+        ),
+        consumerAttempt: "2",
+        expectedAttempt: 2,
+        name: "selects the current producer attempt",
+      },
+      {
+        artifacts: artifactsFor(pair("qa_job", "candidate", "candidate"), 1, 1),
+        consumerAttempt: "2",
+        expectedAttempt: 1,
+        name: "carries attempt 1 into consumer attempt 2",
+      },
+      {
+        artifacts: [2, 10].flatMap((attempt, index) =>
+          artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
+        ),
+        consumerAttempt: "10",
+        expectedAttempt: 10,
+        name: "orders producer attempts numerically",
+      },
+      {
+        artifacts: [2, 3].flatMap((attempt, index) =>
+          artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
+        ),
+        consumerAttempt: "2",
+        expectedAttempt: 2,
+        name: "excludes future producer attempts",
+      },
+    ])("$name", ({ artifacts, consumerAttempt, expectedAttempt }) => {
+      const result = runReleaseCheckArtifactResolve({
+        artifacts,
+        consumerAttempt,
+        pairs: [pair("qa_job", "candidate", "candidate")],
+        runId,
+        targetSha,
+      });
+
+      expect(result.result.status, result.result.stderr).toBe(0);
+      expect(result.selection).toHaveLength(1);
+      expect(result.selection[0]?.producer_attempt).toBe(expectedAttempt);
+    });
+
+    it("selects candidate and baseline attempts independently", () => {
+      const candidate = pair("qa_lab_parity_lane_release_checks", "candidate", "candidate");
+      const baseline = pair("qa_lab_parity_lane_release_checks", "baseline", "baseline");
+      const result = runReleaseCheckArtifactResolve({
+        artifacts: [...artifactsFor(candidate, 1, 1), ...artifactsFor(baseline, 2, 11)],
+        consumerAttempt: "2",
+        pairs: [candidate, baseline],
+        runId,
+        targetSha,
+      });
+
+      expect(result.result.status, result.result.stderr).toBe(0);
+      expect(
+        Object.fromEntries(
+          result.selection.map((selection) => [selection.variant, selection.producer_attempt]),
+        ),
+      ).toEqual({ baseline: 2, candidate: 1 });
+    });
+
+    it("selects core and soak attempts independently", () => {
+      const core = pair("qa_lab_runtime_pair_lane_release_checks", "core", "core");
+      const soak = pair("qa_lab_runtime_pair_lane_release_checks", "soak", "soak");
+      const result = runReleaseCheckArtifactResolve({
+        artifacts: [...artifactsFor(core, 2, 1), ...artifactsFor(soak, 1, 11)],
+        consumerAttempt: "2",
+        pairs: [core, soak],
+        runId,
+        targetSha,
+      });
+
+      expect(result.result.status, result.result.stderr).toBe(0);
+      expect(
+        Object.fromEntries(
+          result.selection.map((selection) => [selection.variant, selection.producer_attempt]),
+        ),
+      ).toEqual({ core: 2, soak: 1 });
+    });
+
+    it("fails when the latest producer attempt has no complete pair", () => {
+      const candidate = pair("qa_job", "candidate", "candidate");
+      const result = runReleaseCheckArtifactResolve({
+        artifacts: [
+          ...artifactsFor(candidate, 1, 1),
+          releaseCheckArtifact({
+            id: 11,
+            name: `${candidate.statusBase}-2`,
+            runId,
+          }),
+        ],
+        consumerAttempt: "2",
+        pairs: [candidate],
+        runId,
+        targetSha,
+      });
+
+      expect(result.result.status).toBe(1);
+      expect(result.result.stderr).toContain(
+        `requires exactly one ${candidate.payloadBase}-2 artifact; found 0`,
+      );
+      expect(result.result.stderr.trimEnd()).toMatch(
+        /\[resolve-release-check-artifacts\] FAILED \(exit 1\)$/u,
+      );
+    });
+
+    it("fails on duplicate artifacts at the latest producer attempt", () => {
+      const candidate = pair("qa_job", "candidate", "candidate");
+      const artifacts = artifactsFor(candidate, 2, 1);
+      artifacts.push(
+        releaseCheckArtifact({
+          id: 11,
+          name: `${candidate.statusBase}-2`,
+          runId,
+        }),
+      );
+      const result = runReleaseCheckArtifactResolve({
+        artifacts,
+        consumerAttempt: "2",
+        pairs: [candidate],
+        runId,
+        targetSha,
+      });
+
+      expect(result.result.status).toBe(1);
+      expect(result.result.stderr).toContain(
+        `requires exactly one ${candidate.statusBase}-2 artifact; found 2`,
+      );
+    });
+
+    it.each([
+      {
+        artifacts: (candidate: ReleaseCheckArtifactPair) => [
+          ...artifactsFor(candidate, 1, 1),
+          releaseCheckArtifact({
+            id: 11,
+            name: `${candidate.statusBase}-broken`,
+            runId,
+          }),
+        ],
+        expected: "has malformed producer attempt",
+        name: "malformed newer evidence",
+      },
+      {
+        artifacts: (candidate: ReleaseCheckArtifactPair) => [
+          ...artifactsFor(candidate, 1, 1),
+          ...artifactsFor(candidate, 2, 11, { expiredPayload: true }),
+        ],
+        expected: "is expired or has invalid expiry metadata",
+        name: "expired newer evidence",
+      },
+    ])("does not fall back past $name", ({ artifacts, expected }) => {
+      const candidate = pair("qa_job", "candidate", "candidate");
+      const result = runReleaseCheckArtifactResolve({
+        artifacts: artifacts(candidate),
+        consumerAttempt: "2",
+        pairs: [candidate],
+        runId,
+        targetSha,
+      });
+
+      expect(result.result.status).toBe(1);
+      expect(result.result.stderr).toContain(expected);
+    });
+
+    it.each([
+      {
+        mutate: (text: string) => text.replace("status=success", "status=success\nstatus=failure"),
+        name: "duplicate status fields",
+      },
+      {
+        mutate: (text: string) => text.replace("run_attempt=2", "run_attempt=bogus"),
+        name: "malformed status metadata",
+      },
+    ])("rejects $name", ({ mutate }) => {
+      const candidate = pair("qa_job", "candidate", "candidate");
+      const resolved = runReleaseCheckArtifactResolve({
+        artifacts: artifactsFor(candidate, 2, 1),
+        consumerAttempt: "2",
+        pairs: [candidate],
+        runId,
+        targetSha,
+      });
+      expect(resolved.result.status, resolved.result.stderr).toBe(0);
+
+      const validated = runReleaseCheckArtifactValidation({
+        selection: resolved.selection,
+        statusText: (selection) => mutate(releaseCheckStatusText(selection)),
+      });
+      expect(validated.result.status).toBe(1);
+    });
+
+    it("sets runtime parity ready=false for validated non-success evidence", () => {
+      const runtimePair = pair("qa_lab_runtime_parity_release_checks", "", "runtime-parity");
+      const resolved = runReleaseCheckArtifactResolve({
+        artifacts: artifactsFor(runtimePair, 2, 1),
+        consumerAttempt: "2",
+        pairs: [runtimePair],
+        runId,
+        targetSha,
+      });
+      expect(resolved.result.status, resolved.result.stderr).toBe(0);
+
+      const workdir = tempDirs.make("runtime-parity-ready-");
+      const trustedScript = resolve(
+        workdir,
+        "trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh",
+      );
+      mkdirSync(resolve(trustedScript, ".."), { recursive: true });
+      symlinkSync(resolve(REPO_ROOT, RELEASE_CHECK_ARTIFACT_RESOLVER), trustedScript);
+      const selectionFile = resolve(workdir, "selection.json");
+      writeFileSync(selectionFile, JSON.stringify(resolved.selection));
+      const statusDir = resolve(workdir, ".artifacts/release-check-status");
+      mkdirSync(statusDir, { recursive: true });
+      const selection = resolved.selection[0]!;
+      writeFileSync(
+        resolve(
+          statusDir,
+          `${selection.job}-${selection.run_id}-${selection.producer_attempt}.env`,
+        ),
+        releaseCheckStatusText(selection, "failure"),
+      );
+      const outputFile = resolve(workdir, "github-output");
+      const runtimeCoverage = workflowJob(
+        RELEASE_CHECKS_WORKFLOW,
+        "runtime_tool_coverage_release_checks",
+      );
+      const script = workflowStep(
+        runtimeCoverage,
+        "Verify runtime parity producer status",
+      ).run?.replace(
+        "${{ steps.resolve_runtime_parity_artifacts.outputs.selection_file }}",
+        selectionFile,
+      );
+      expect(script).toBeTruthy();
+      const result = spawnSync("bash", ["-c", script!], {
+        cwd: workdir,
+        encoding: "utf8",
+        env: {
+          GITHUB_OUTPUT: outputFile,
+          PATH: process.env.PATH,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(outputFile, "utf8")).toContain("ready=false");
+    });
+  });
+
   it("keeps release QA status artifacts blocking in the verifier", () => {
     const advisoryJobNames = [
       "qa_lab_parity_lane_release_checks",
@@ -4028,6 +4488,39 @@ describe("package artifact reuse", () => {
         /^\.artifacts\/release-check-status\/.+\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}\.env$/u,
       );
       expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+
+    for (const [jobName, stepName] of [
+      ["qa_lab_parity_lane_release_checks", "Upload parity lane artifacts"],
+      ["qa_lab_parity_report_release_checks", "Upload parity artifacts"],
+      ["qa_lab_runtime_pair_lane_release_checks", "Upload runtime-pair lane artifacts"],
+      ["qa_lab_runtime_parity_release_checks", "Upload runtime parity artifacts"],
+      ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
+      ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
+      ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
+    ] as const) {
+      const upload = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, jobName), stepName);
+      expect(upload.with?.name, `${jobName}/${stepName}`).toContain(
+        "${{ github.run_id }}-${{ github.run_attempt }}",
+      );
+    }
+
+    for (const jobName of [
+      "qa_lab_parity_report_release_checks",
+      "qa_lab_runtime_parity_release_checks",
+      "runtime_tool_coverage_release_checks",
+      "summary",
+    ]) {
+      const checkout = workflowStep(
+        workflowJob(RELEASE_CHECKS_WORKFLOW, jobName),
+        "Checkout trusted release artifact resolver",
+      );
+      expect(checkout.with).toMatchObject({
+        path: "trusted-release-check-artifacts",
+        ref: "${{ github.sha }}",
+        "sparse-checkout": RELEASE_CHECK_ARTIFACT_RESOLVER,
+        "sparse-checkout-cone-mode": false,
+      });
     }
 
     const telegramCaller = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks");
@@ -4070,13 +4563,23 @@ describe("package artifact reuse", () => {
     const summary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
     expect(summary.needs).toContain("resolve_target");
     expect(summary.permissions?.actions).toBe("read");
+    expect(summary.permissions?.contents).toBe("read");
+    const resolveStep = workflowStep(summary, "Resolve advisory evidence artifacts");
+    expect(resolveStep["continue-on-error"]).toBe(true);
+    expect(resolveStep.run).toContain(
+      "trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh",
+    );
+    expect(resolveStep.run).toContain('--consumer-attempt "$GITHUB_RUN_ATTEMPT"');
+    expect(resolveStep.run).toContain("qa_lab_parity_lane_release_checks|candidate");
+    expect(resolveStep.run).toContain("qa_lab_parity_lane_release_checks|baseline");
     const downloadStep = workflowStep(summary, "Download advisory status artifacts");
     expect(downloadStep["continue-on-error"]).toBe(true);
     expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
-    expect(downloadStep.with?.pattern).toBe(
-      "release-check-status-*-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}",
+    expect(downloadStep.with?.["artifact-ids"]).toBe(
+      "${{ steps.resolve_advisory_evidence.outputs.status_ids }}",
     );
     expect(downloadStep.with?.["merge-multiple"]).toBe(true);
+    expect(downloadStep.with?.pattern).toBeUndefined();
 
     const verifyStep = workflowStep(summary, "Verify release check results");
     expect(verifyStep.env).toMatchObject({
@@ -4085,18 +4588,15 @@ describe("package artifact reuse", () => {
       RELEASE_CHECK_RUN_ATTEMPT: "${{ github.run_attempt }}",
       RELEASE_CHECK_RUN_ID: "${{ github.run_id }}",
       RELEASE_CHECK_TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",
+      RESOLVE_ADVISORY_EVIDENCE_OUTCOME: "${{ steps.resolve_advisory_evidence.outcome }}",
+      VALIDATE_ADVISORY_STATUSES_OUTCOME: "${{ steps.validate_advisory_statuses.outcome }}",
     });
     expectTextToIncludeAll(verifyStep.run, [
       "release_check_result()",
-      "validate_status_file()",
-      "expected_status_artifact_count()",
-      'actual_run_id="$(status_field "$file" run_id)"',
-      'actual_run_attempt="$(status_field "$file" run_attempt)"',
-      'actual_target_sha="$(status_field "$file" target_sha)"',
-      'actual_job="$(status_field "$file" job)"',
-      'actual_variant="$(status_field "$file" variant)"',
-      "Expected ${expected_status_count} advisory status artifacts",
-      "::warning::${status_count_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
+      "validated_status()",
+      "advisory-evidence-validated.json",
+      "missing or duplicate validated status",
+      "Advisory evidence resolution or validation failed",
       'elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then',
       'elif [[ "$fallback" == "success" ]]; then',
       "advisory_status_override_allowed()",
@@ -4110,18 +4610,26 @@ describe("package artifact reuse", () => {
     expect(verifyStep.run).not.toContain(
       "QA release-check lanes are advisory and do not block release validation.",
     );
+    expect(verifyStep.run).not.toContain("expected_status_artifact_count");
+    expect(verifyStep.run).not.toContain("actual_status_count");
 
     const runtimeCoverage = workflowJob(
       RELEASE_CHECKS_WORKFLOW,
       "runtime_tool_coverage_release_checks",
     );
-    expect(workflowStep(runtimeCoverage, "Download runtime parity status").with?.name).toBe(
-      "release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}",
+    expect(workflowStep(runtimeCoverage, "Resolve runtime parity artifacts").run).toContain(
+      "trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh",
     );
+    expect(
+      workflowStep(runtimeCoverage, "Download runtime parity status").with?.["artifact-ids"],
+    ).toBe("${{ steps.resolve_runtime_parity_artifacts.outputs.status_ids }}");
     expectTextToIncludeAll(
       workflowStep(runtimeCoverage, "Verify runtime parity producer status").run,
-      ["run_id", "run_attempt", "target_sha", "job_name", "variant"],
+      ["resolve-release-check-artifacts.sh validate", "ready=false", "ready=true"],
     );
+    expect(
+      workflowStep(runtimeCoverage, "Download runtime parity artifacts").with?.["artifact-ids"],
+    ).toBe("${{ steps.resolve_runtime_parity_artifacts.outputs.payload_ids }}");
   });
 
   it.each([
@@ -4182,6 +4690,30 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it.each(["cancelled", "failure"] as const)(
+    "does not mask a later %s advisory status with an older successful job result",
+    (status) => {
+      const result = runReleaseChecksSummary({
+        currentAttempt: "2",
+        currentResult: "skipped",
+        discordResult: "success",
+        telegramSelected: false,
+        validatedStatuses: [
+          {
+            job: "qa_live_discord_release_checks",
+            status,
+            variant: "",
+          },
+        ],
+      });
+
+      expect(result.status).toBe(1);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        `::error::qa_live_discord_release_checks ended with ${status}`,
+      );
+    },
+  );
+
   it("summarizes start delay separately from execution time in full validation", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const parsedWorkflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
@@ -4214,7 +4746,7 @@ describe("package artifact reuse", () => {
       "Download full release validation manifest",
     );
     const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
-    const npmRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
     const npmManifest = workflowStep(npmPublishJob, "Download full release validation manifest");
 
     expect(releaseRun).toMatchObject({
@@ -4235,18 +4767,15 @@ describe("package artifact reuse", () => {
       "run-id": "${{ inputs.full_release_validation_run_id }}",
     });
 
-    expect(npmRun).toMatchObject({
-      id: "full_run",
-      env: {
-        FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
-        FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
-      },
+    expect(npmRun.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
     });
     expect(npmRun.run).toContain(
       "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
     );
     expect(npmManifest.with).toMatchObject({
-      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}",
       "run-id": "${{ inputs.full_release_validation_run_id }}",
     });
   });
@@ -4262,7 +4791,7 @@ describe("package artifact reuse", () => {
     const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
     const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
     const npmCheckout = workflowStep(npmPublishJob, "Checkout");
-    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
     const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
     const npmTarget = workflowStep(npmPublishJob, "Verify full release validation target");
 
@@ -4294,18 +4823,14 @@ describe("package artifact reuse", () => {
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
     expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
-    expect(npmFullRun.id).toBe("full_run");
     expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
     expect(npmDownload.with?.name).toBe(
-      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}",
     );
-    expect(npmTarget.env).toMatchObject({
-      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
-      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
-    });
-    expect(npmTarget.run).toContain(
+    expect(npmTarget.env?.FULL_RELEASE_VALIDATION_RUN_ID).toBeUndefined();
+    expect(npmTarget.run).not.toContain(
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
     );
     expect(npmCheckout.with?.["fetch-depth"]).toBe(

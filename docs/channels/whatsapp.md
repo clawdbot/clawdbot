@@ -666,10 +666,11 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 
 Use `debounceMs` inside `groups` or `direct` entries when one WhatsApp
 conversation needs a different inbound batching window from the channel default.
-This controls how long OpenClaw waits after a message arrives before it starts
-the agent turn for that conversation. A longer window gives contacts time to
-send several short messages before the agent sees the batch; `0` disables the
-wait for that conversation.
+This controls how long OpenClaw waits after an eligible text message arrives
+before it starts the agent turn for that conversation. Media messages are sent
+through immediately because batching attachments can detach their metadata. A
+longer window gives contacts time to send several short text messages before the
+agent sees the batch; `0` disables the wait for that conversation.
 
 ```ts
 export default {
@@ -689,10 +690,8 @@ export default {
         "*": { debounceMs: 180000 },
       },
       groups: {
-        // This group has its own batching window.
+        // This explicitly admitted group has its own batching window.
         "120363406415684625@g.us": { debounceMs: 30000 },
-        // Other groups fall back to one minute.
-        "*": { debounceMs: 60000 },
       },
       accounts: {
         work: {
@@ -716,7 +715,8 @@ Within the active `direct` or `groups` map, precedence is:
 
 Account-scoped `direct` and `groups` maps replace the matching root maps for
 that account. Root-specific and root-wildcard entries are only used when no
-account map replaces that conversation kind.
+account map replaces that conversation kind. In `groups`, a `"*"` entry also
+admits every group at that scope; do not add it only to configure debounce.
 
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |

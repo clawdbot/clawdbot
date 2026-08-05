@@ -14,11 +14,7 @@ import {
   withBundledPluginVitestCompat,
 } from "../../../../src/plugins/bundled-compat.js";
 import { prepareMediaCapabilityProviders } from "../../../../src/plugins/capability-provider-runtime.js";
-import {
-  captureCurrentPluginMetadataSnapshotState,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
-} from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginRegistryLoadCacheKey } from "../../../../src/plugins/loader.js";
 import type { PluginManifestRecord } from "../../../../src/plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
@@ -186,11 +182,13 @@ describe("music generation controls QA product proof", () => {
   it("lists capabilities, falls back in config order, normalizes controls, and persists audio", async () => {
     const fixture = createMusicFixture();
     const activeRegistry = captureActivePluginRegistrySnapshot();
-    const metadataSnapshot = captureCurrentPluginMetadataSnapshotState();
-    try {
-      setCurrentPluginMetadataSnapshot(fixture.pluginMetadataSnapshot, {
+    const metadataLease = installTemporaryCurrentPluginMetadataSnapshot(
+      fixture.pluginMetadataSnapshot,
+      {
         config: fixture.config,
-      });
+      },
+    );
+    try {
       const pluginIds = [PLUGIN_ID];
       const enabledConfig = withBundledPluginEnablementCompat({
         config: fixture.config,
@@ -230,7 +228,7 @@ describe("music generation controls QA product proof", () => {
         "capabilities: modes=generate, maxDurationSeconds=60, lyrics, instrumental, duration, format, supportedFormats=mp3/wav",
       );
     } finally {
-      restoreCurrentPluginMetadataSnapshotState(metadataSnapshot);
+      metadataLease.release();
       restoreActivePluginRegistrySnapshot(activeRegistry);
     }
 
