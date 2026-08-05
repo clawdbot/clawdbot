@@ -50,4 +50,13 @@ describe("web fetch benchmark script", () => {
     expect(result.stderr.trim()).toBe("--runs was provided more than once");
     expect(result.stderr).not.toContain("\n    at ");
   });
+
+  it("rejects non-decimal run counts instead of expanding the benchmark", () => {
+    const result = runBenchWebFetch("--runs", "1e3");
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--runs must be a positive integer");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
 });
