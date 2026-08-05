@@ -709,11 +709,16 @@ export function startGatewayConfigReloader(opts: {
     // deferred restart instead of re-arming it, and the baseline still
     // advances so the next edit diffs against the settled bytes. Config-space
     // only: plugin install record changes still need the restart even when
-    // the config bytes are identical to the running ones.
+    // the config bytes are identical to the running ones. Cancellation is
+    // limited to planner-derived deferred restart debt (plan.restartGateway):
+    // an explicit writer restart intent (afterWrite.mode === "restart",
+    // followUp.requiresRestart) is a hard lifecycle contract and must never be
+    // silently dropped, even when the settled bytes match the running config.
     const revertsToRunningConfig =
       changedPaths.length > 0 &&
       pluginInstallRecordChangedPaths.length === 0 &&
-      (plan.restartGateway || followUp.requiresRestart) &&
+      plan.restartGateway &&
+      !followUp.requiresRestart &&
       isDeepStrictEqual(nextCompareConfig, runtimeAppliedCompareConfig);
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
