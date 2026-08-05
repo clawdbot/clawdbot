@@ -8,7 +8,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitInternalSessionMaintenancePrunedEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
@@ -162,7 +162,7 @@ export async function sweepCronRunSessions(params: {
   }
 
   if (pruned > 0) {
-    emitTrustedDiagnosticEvent({
+    emitInternalSessionMaintenancePrunedEvent({
       type: "session.maintenance.pruned",
       pruned,
       retentionMs,

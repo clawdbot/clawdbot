@@ -190,6 +190,8 @@ import {
 import {
   emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEventForTest,
+  emitInternalDiagnosticEventWithPrivateData,
+  emitInternalSessionMaintenancePrunedEvent,
   emitTrustedSecurityEvent,
   logMessageDispatchStarted,
   logMessageProcessed,
@@ -4533,7 +4535,7 @@ describe("diagnostics-otel service", () => {
       status: "released",
       action: "abort-active-run",
     });
-    emitTrustedDiagnosticEvent({
+    emitInternalSessionMaintenancePrunedEvent({
       type: "session.maintenance.pruned",
       pruned: 3,
       retentionMs: 86_400_000,
@@ -4542,7 +4544,7 @@ describe("diagnostics-otel service", () => {
       type: "session.maintenance.pruned",
       pruned: 99,
       retentionMs: 86_400_000,
-    });
+    } as never);
     emitTrustedDiagnosticEvent({
       type: "talk.event",
       sessionId: "talk-session-should-not-export",

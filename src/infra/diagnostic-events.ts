@@ -855,6 +855,8 @@ type TrustedSkillUsedEventInput = Extract<DiagnosticEventInput, { type: "skill.u
 
 type DiagnosticDispatchInput = DiagnosticEventInput | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
 
+type InternalDiagnosticEventInput = Omit<DiagnosticSessionMaintenancePrunedEvent, "seq" | "ts">;
+
 export type DiagnosticEventMetadata = Readonly<{
   internal?: boolean;
   trustedTraceContext?: boolean;
@@ -1268,6 +1270,9 @@ function emitDiagnosticEventWithTrust(
   options: EmitDiagnosticEventOptions = {},
 ) {
   const state = getDiagnosticEventsState();
+  if (event.type === "session.maintenance.pruned" && options.internal !== true) {
+    return;
+  }
   if (trusted && isToolExecutionEventInput(event)) {
     dispatchTrustedToolExecutionEvent(state, event);
   }
@@ -1303,6 +1308,19 @@ function emitDiagnosticEventWithTrust(
   }
 
   dispatchDiagnosticEvent(state, enriched, metadata, privateData);
+}
+
+export function emitInternalSessionMaintenancePrunedEvent(
+  event: InternalDiagnosticEventInput,
+): void {
+  emitDiagnosticEventWithTrust(event, true, { internal: true });
+}
+
+export function emitInternalDiagnosticEventWithPrivateData(
+  event: DiagnosticDispatchInput,
+  privateData?: DiagnosticEventPrivateData,
+): void {
+  emitDiagnosticEventWithTrust(event, true, { internal: true, privateData });
 }
 
 function isToolExecutionEventInput(

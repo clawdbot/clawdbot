@@ -1,8 +1,17 @@
 // Diagnostics Prometheus API module exposes the plugin public contract.
-export type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload as PublicDiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
+
+type InternalDiagnosticEvent = {
+  seq: number;
+  ts: number;
+  type: "session.maintenance.pruned";
+  pruned: number;
+  retentionMs: number;
+};
+
+export type DiagnosticEventPayload = PublicDiagnosticEventPayload | InternalDiagnosticEvent;
+
+export type { DiagnosticEventMetadata } from "openclaw/plugin-sdk/diagnostic-runtime";
 export { isInternalDiagnosticEventMetadata } from "openclaw/plugin-sdk/diagnostic-runtime";
 export {
   emptyPluginConfigSchema,

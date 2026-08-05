@@ -3,7 +3,7 @@ import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
 import {
-  emitTrustedDiagnosticEventWithPrivateData,
+  emitInternalDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -57,7 +57,7 @@ function createServiceContext(params: {
     ...(grantsInternalDiagnostics
       ? {
           internalDiagnostics: {
-            emit: emitTrustedDiagnosticEventWithPrivateData,
+            emit: emitInternalDiagnosticEventWithPrivateData,
             onEvent: onTrustedInternalDiagnosticEvent,
           },
         }

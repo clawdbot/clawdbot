@@ -34,10 +34,17 @@ export function normalizeDiagnosticLane(value: string | undefined, fallback = "u
 export { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 export type {
   DiagnosticEventMetadata,
-  DiagnosticEventPayload,
+  DiagnosticEventPayload as AllDiagnosticEventPayload,
   DiagnosticEventPrivateData,
   DiagnosticModelCallContent,
 } from "../infra/diagnostic-events.js";
+
+type InternalDiagnosticEvent = Extract<
+  AllDiagnosticEventPayload,
+  { type: "session.maintenance.pruned" }
+>;
+
+export type DiagnosticEventPayload = Exclude<AllDiagnosticEventPayload, InternalDiagnosticEvent>;
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
   emitDiagnosticEvent,
