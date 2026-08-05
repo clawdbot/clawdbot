@@ -24,6 +24,7 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveDefaultAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { coerceToFailoverError } from "../failover-error.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -693,10 +694,24 @@ async function compactResolvedContextEngine(
           log.warn("context-engine compaction failed", {
             errorMessage: formatErrorMessage(compactErr),
           });
+          const failoverError = coerceToFailoverError(compactErr, {
+            provider: params.provider,
+            model: params.model,
+          });
           result = {
             ok: false,
             compacted: false,
             reason: formatErrorMessage(compactErr),
+            ...(failoverError
+              ? {
+                  failure: {
+                    reason: failoverError.reason,
+                    status: failoverError.status,
+                    code: failoverError.code,
+                    rawError: failoverError.rawError,
+                  },
+                }
+              : {}),
           };
         }
         const successor = await resolveContextEngineCompactionSuccessor({

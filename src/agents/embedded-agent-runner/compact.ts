@@ -99,15 +99,35 @@ function classifyCompactionFallbackResult(
     code: result.failure?.code,
   });
   const failoverError = coerceToFailoverError(failureError, { provider, model });
-  return failoverError ? { error: failoverError } : null;
+  return failoverError
+    ? {
+        message: failoverError.message,
+        reason: failoverError.reason,
+        status: failoverError.status,
+        code: failoverError.code,
+        rawError: failoverError.rawError,
+        preserveResultOnExhaustion: true,
+      }
+    : null;
 }
 
 function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactResult {
   const reason = isFallbackSummaryError(err) ? err.message : formatErrorMessage(err);
+  const failoverError = coerceToFailoverError(err);
   return {
     ok: false,
     compacted: false,
     reason,
+    ...(failoverError
+      ? {
+          failure: {
+            reason: failoverError.reason,
+            status: failoverError.status,
+            code: failoverError.code,
+            rawError: failoverError.rawError,
+          },
+        }
+      : {}),
   };
 }
 

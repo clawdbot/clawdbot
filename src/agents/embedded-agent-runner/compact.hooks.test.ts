@@ -4018,7 +4018,34 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toContain("timed out");
+    expect(result.failure).toMatchObject({ reason: "timeout", status: 408 });
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+  });
+
+  it("preserves transient failure metadata after all compaction fallbacks fail", async () => {
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("fallback compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+      modelFallbacksOverride: ["anthropic/claude-fallback"],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { reason: "rate_limit", status: 429, code: "rate_limit_exceeded" },
+    });
   });
 
   it("forces engine-owned compaction for preflight-required budget compaction", async () => {
