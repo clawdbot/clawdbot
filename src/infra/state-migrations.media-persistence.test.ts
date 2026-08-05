@@ -504,6 +504,91 @@ describe("legacy media persistence doctor migration", () => {
     }
   });
 
+  it("upgrades a genuine v14 database that lacks the v15 session additions", () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-v14-genuine-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = createLegacyDatabaseFixture({
+      env,
+      eventsBySession: {
+        legacy: [
+          createEvent({
+            id: "event-1",
+            parentId: null,
+            timestamp: 1000,
+            message: { role: "user", content: "legacy", MediaPath: "/media/a.png" },
+          }),
+        ],
+      },
+    });
+    // A genuine v14 database predates the v15 session additions: no entry_valid
+    // validity projection (column, triggers, pending index) and no
+    // session_key_contract table. Canonical-index repair must not run before
+    // these exist, or the migration dies with "no such column: entry_valid".
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = OFF;
+      DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_insert;
+      DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_entry_update;
+      DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_identity_update;
+      DROP INDEX IF EXISTS idx_agent_session_nodes_entry_valid_pending;
+      ALTER TABLE session_nodes DROP COLUMN entry_valid;
+      DROP TABLE IF EXISTS session_key_contract;
+      DROP TABLE session_suggestions;
+      PRAGMA user_version = 14;
+      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
+    `);
+    database.close();
+
+    const result = migrateLegacyMediaPersistence({ env });
+    expect(result.warnings).toEqual([]);
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      const nodeColumns = new Set(
+        (after.prepare("PRAGMA table_info(session_nodes)").all() as Array<{ name: string }>).map(
+          (column) => column.name,
+        ),
+      );
+      expect(nodeColumns.has("entry_valid")).toBe(true);
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'session_key_contract'",
+          )
+          .get(),
+      ).toEqual({ name: "session_key_contract" });
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'session_suggestions'",
+          )
+          .get(),
+      ).toEqual({ name: "session_suggestions" });
+      // The v14 session and its transcript survive the Doctor-route migration.
+      expect(
+        after
+          .prepare(
+            "SELECT current_session_id FROM session_nodes WHERE session_key = 'agent:main:legacy'",
+          )
+          .get(),
+      ).toEqual({ current_session_id: "legacy" });
+      const row = after
+        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
+        .get("legacy") as { event_json: string };
+      const message = (JSON.parse(row.event_json) as { message: Record<string, unknown> }).message;
+      expect(message).not.toHaveProperty("MediaPath");
+      expect(message["__openclaw"]).toMatchObject({
+        media: [expect.objectContaining({ path: "/media/a.png" })],
+      });
+    } finally {
+      after.close();
+    }
+  });
+
   it("upgrades an owned v0 database through the media prerequisite schema", () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-v0-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
