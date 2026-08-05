@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runMemorySearchWithDeadline } from "./search-deadline.js";
+import { isMemorySearchTimeoutError, runMemorySearchWithDeadline } from "./search-deadline.js";
 
 describe("runMemorySearchWithDeadline", () => {
   afterEach(() => {
@@ -38,7 +38,11 @@ describe("runMemorySearchWithDeadline", () => {
 
     await resultAssertion;
     expect(taskSignal?.aborted).toBe(true);
-    expect(taskSignal?.reason).toEqual(new Error("memory_search timed out after 15s"));
+    expect(taskSignal?.reason).toMatchObject({
+      name: "MemorySearchTimeoutError",
+      message: "memory_search timed out after 15s",
+    });
+    expect(isMemorySearchTimeoutError(taskSignal?.reason)).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -62,6 +66,7 @@ describe("runMemorySearchWithDeadline", () => {
 
     await resultAssertion;
     expect(taskSignal?.reason).toBe(reason);
+    expect(isMemorySearchTimeoutError(taskSignal?.reason)).toBe(false);
     expect(removeEventListener).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
