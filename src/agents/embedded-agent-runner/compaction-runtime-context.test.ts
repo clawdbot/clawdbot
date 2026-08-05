@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { addSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
@@ -777,7 +778,18 @@ describe("resolveCompactionContextTokenBudget", () => {
         agentId: "work",
         provider: "openai",
         modelId: "gpt-5.5",
-        model: { contextWindow: 272_000 },
+        model: {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://example.com",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 272_000,
+          maxTokens: 4096,
+        } satisfies ProviderRuntimeModel,
         requestedTokenBudget: 200_000,
       }),
     ).toBe(200_000);
