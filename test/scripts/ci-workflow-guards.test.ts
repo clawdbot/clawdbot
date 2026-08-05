@@ -17,6 +17,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 
@@ -2934,6 +2935,15 @@ describe("ci workflow guards", () => {
     expect(warmerSource).toContain('"agentic-agents-embedded"');
     expect(warmerSource).toContain('"agentic-gateway-methods"');
     expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
+    expect(warmerSource).toContain("const groups = shards.flatMap((shard) =>");
+    expect(warmerSource).toContain("configs: [config]");
+    expect(warmerSource).toContain("...(shard.env ? { env: shard.env } : {})");
+    expect(warmerSource).toContain(
+      "...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {})",
+    );
+    expect(warmerSource).toContain("`OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`");
+    expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-actions-cache": "true",
@@ -2949,6 +2959,108 @@ describe("ci workflow guards", () => {
     expect(warmStep.if).toBeUndefined();
     expect(maintainStoreStep).toBeUndefined();
     expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
+
+    const seedRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cache-seed-"));
+    try {
+      const envPath = path.join(seedRoot, "github-env");
+      const result = runWorkflowShellScript(seedStep.run, {
+        env: {
+          ...process.env,
+          GITHUB_ENV: envPath,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const seedEnv = Object.fromEntries(
+        readFileSync(envPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      const serializedGroups = seedEnv.OPENCLAW_NODE_TEST_GROUPS_JSON;
+      if (!serializedGroups) {
+        throw new Error("cache warmer did not export OPENCLAW_NODE_TEST_GROUPS_JSON");
+      }
+      const groups = JSON.parse(serializedGroups) as Array<{
+        configs: string[];
+        env?: Record<string, string>;
+        includePatterns?: string[];
+        shard_name: string;
+      }>;
+      const selectedShardNames = new Set([
+        "agentic-agents-embedded",
+        "agentic-gateway-methods",
+        "auto-reply-reply-commands-3",
+      ]);
+      const selectedShards = createNodeTestShards().filter(
+        (shard) =>
+          shard.shardName.startsWith("core-unit-fast") || selectedShardNames.has(shard.shardName),
+      );
+      const expectedGroups = selectedShards.flatMap((shard) =>
+        shard.configs.map((config) => ({
+          configs: [config],
+          ...(shard.env ? { env: shard.env } : {}),
+          ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+          shard_name: `cache-warm:${shard.shardName}:${config}`,
+        })),
+      );
+
+      expect(groups).toEqual(expectedGroups);
+      expect(groups).toHaveLength(10);
+      expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+      expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
+      expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty(
+        "size",
+        groups.length,
+      );
+
+      const coreStripeGroups = groups.filter(
+        (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
+      );
+      expect(coreStripeGroups).toHaveLength(2);
+      expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(
+        true,
+      );
+      const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
+      expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
+
+      const isolatedGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
+      );
+      expect(isolatedGroups).toHaveLength(2);
+      expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
+      expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
+
+      const embeddedGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
+      );
+      expect(embeddedGroups).toHaveLength(4);
+      expect(
+        embeddedGroups.every(
+          (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
+        ),
+      ).toBe(true);
+
+      const gatewayGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
+      );
+      expect(gatewayGroups).toHaveLength(1);
+      expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
+      expect(gatewayGroups[0]?.env).toBeUndefined();
+
+      const autoReplyGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
+      );
+      expect(autoReplyGroups).toHaveLength(1);
+      expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
+      expect(autoReplyGroups[0]?.env).toBeUndefined();
+      expect(seedEnv.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
+      expect(seedEnv).not.toHaveProperty("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    } finally {
+      rmSync(seedRoot, { force: true, recursive: true });
+    }
 
     const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
     try {
@@ -4778,7 +4890,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
-  it("parallelizes gateway watch only on the large self-hosted build runner", () => {
+  it("keeps the full built TUI PTY suite out of the artifact canary gate", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const builtArtifactChecks = buildArtifactSteps.find(
@@ -4798,8 +4910,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run).toContain(
       'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
+    const firstWait = run.indexOf("\nwait_checks\n");
+    const hostedGatewayWatch = run.indexOf(
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
+    );
+    const tuiPty = run.indexOf('if [ "$RUN_TUI_PTY" = "true" ]; then');
+    const hostedGatewayWait = run.indexOf("\n  wait_checks\n", hostedGatewayWatch);
+    const tuiPtyWait = run.indexOf("\n  wait_checks\n", tuiPty);
+    expect(firstWait).toBeGreaterThan(run.indexOf('start_check "core-support-boundary"'));
+    expect(hostedGatewayWatch).toBeGreaterThan(firstWait);
+    expect(hostedGatewayWait).toBeGreaterThan(hostedGatewayWatch);
+    expect(tuiPty).toBeGreaterThan(hostedGatewayWait);
+    expect(tuiPtyWait).toBeGreaterThan(tuiPty);
+    expect(run.slice(tuiPty, tuiPtyWait)).toContain("src/tui/tui-pty-local.e2e.test.ts");
+    expect(run.slice(tuiPty, tuiPtyWait)).toContain("--testNamePattern");
+    expect(run.slice(tuiPty, tuiPtyWait)).toContain(
+      "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
+    );
     expect(run).toContain("wait_checks()");
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(2);
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(3);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {

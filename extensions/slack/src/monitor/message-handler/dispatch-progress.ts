@@ -322,7 +322,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     mode: slackStreaming.mode,
     active: progressDraftActive,
     seed: progressSeed,
-    formatLine: escapeSlackMrkdwn,
+    formatLine: formatSlackProgressDraftLine,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     reasoningGate: previewToolProgressEnabled,
@@ -442,7 +442,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       entry: account.config,
       lines: [...progressDraft.getSnapshot().lines],
       seed: progressSeed,
-      formatLine: escapeSlackMrkdwn,
+      formatLine: formatSlackProgressDraftLine,
       narration: explanation,
       plan: steps,
     });
@@ -655,4 +655,8 @@ export function createSlackProgressRuntime(runtimeParams: {
     },
     shouldYieldDraftProgress: () => shouldYieldDraftProgress(),
   };
+}
+
+function formatSlackProgressDraftLine(line: string): string {
+  return /^(?:🧠|💬)\s/u.test(line) ? line : escapeSlackMrkdwn(line);
 }

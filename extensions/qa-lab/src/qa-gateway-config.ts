@@ -202,7 +202,7 @@ export function buildQaGatewayConfig(params: {
   const mockMemorySearch =
     provider.kind === "mock"
       ? {
-          provider: "openai",
+          provider: "openai-compatible",
           model: "text-embedding-3-small",
           remote: {
             // Memory embeddings bypass the model runtime, so bind them to the

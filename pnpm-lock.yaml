@@ -89,8 +89,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.5.0
-        version: 0.5.0
+        specifier: 0.5.2
+        version: 0.5.2
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
@@ -1478,8 +1478,8 @@ importers:
   extensions/onepassword:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.5.0
-        version: 0.5.0
+        specifier: 0.5.2
+        version: 0.5.2
       execa:
         specifier: 10.0.0
         version: 10.0.0
@@ -4119,8 +4119,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.5.0':
-    resolution: {integrity: sha512-TPpFG8PkAKlM/eP7glzHhCeZnDX3sSqyjXgeoc0jeyii0y957/zePB62BIwc75gOFmxaeKLWkd4iF41/Ghlgjg==}
+  '@openclaw/fs-safe@0.5.2':
+    resolution: {integrity: sha512-klidJFTE5FFAweNFpy/aVgschya3JYMWtXfdoSH3bTFN7+WAqlJtD+UQjOIFdkD42kJcWM7josNUpIIm7dnwXg==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -11412,7 +11412,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.5.0':
+  '@openclaw/fs-safe@0.5.2':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.22
