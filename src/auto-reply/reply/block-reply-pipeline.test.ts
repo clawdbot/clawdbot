@@ -1,6 +1,7 @@
 /** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EmbeddedBlockChunker } from "../../agents/embedded-agent-block-chunker.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
@@ -55,6 +56,36 @@ describe("createBlockReplyContentKey", () => {
 });
 
 describe("createBlockReplyPipeline dedup with threading", () => {
+  it("reconstructs paragraph separators that start at maxChars", async () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 10,
+      breakPreference: "paragraph",
+      flushOnParagraph: true,
+    });
+    chunker.append("abcdefghij\n\nRest");
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+
+    const delivered: string[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+      timeoutMs: 5000,
+      coalescing: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+    });
+
+    for (const chunk of chunks) {
+      pipeline.enqueue({ text: chunk });
+    }
+    await pipeline.flush({ force: true });
+
+    expect(chunks).toEqual(["abcdefghij", "\n\nRest"]);
+    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expect(delivered).toEqual(["abcdefghij\n\nRest"]);
+  });
+
   it("keeps an un-aborted delivery signal when timeouts are disabled", async () => {
     let deliverySignal: AbortSignal | undefined;
     const pipeline = createBlockReplyPipeline({

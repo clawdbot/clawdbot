@@ -156,8 +156,8 @@ describe("EmbeddedBlockChunker", () => {
     const chunks = drainChunks(chunker);
 
     expectChunksWithinLength(chunks, 10);
-    expect(chunks).toEqual(["abcdefghij"]);
-    expect(chunker.bufferedText).toBe("Rest");
+    expect(chunks).toEqual(["abcdefghij", "\n\nRest"]);
+    expect(chunker.bufferedText).toBe("");
   });
 
   it("ignores paragraph breaks inside fences when flushOnParagraph is set", () => {

@@ -174,6 +174,23 @@ export class EmbeddedBlockChunker {
         break;
       }
 
+      if (this.#chunking.flushOnParagraph) {
+        const leadingParagraphSeparator = findLeadingParagraphSeparator(source, start);
+        if (leadingParagraphSeparator) {
+          const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
+          const chunk = sliceUtf16Safe(source.slice(start), 0, paragraphLimit);
+          if (chunk.length === 0) {
+            break;
+          }
+          if (chunk.trim().length > 0) {
+            emit(`${reopenPrefix}${chunk}`);
+          }
+          start += chunk.length;
+          reopenFence = undefined;
+          continue;
+        }
+      }
+
       if (this.#chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
@@ -233,9 +250,12 @@ export class EmbeddedBlockChunker {
         break;
       }
     }
+    const remaining = source.slice(start);
     this.#buffer = reopenFence
-      ? `${reopenFence.openLine}\n${source.slice(start)}`
-      : stripLeadingNewlines(source.slice(start));
+      ? `${reopenFence.openLine}\n${remaining}`
+      : findLeadingParagraphSeparator(remaining)
+        ? remaining
+        : stripLeadingNewlines(remaining);
   }
 
   #emitBreakResult(params: {
@@ -271,11 +291,18 @@ export class EmbeddedBlockChunker {
       return { start: absoluteBreakIdx, reopenFence: fenceSplit.fence };
     }
 
-    const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
+    const preserveParagraphSeparator =
+      this.#chunking.flushOnParagraph &&
+      Boolean(findLeadingParagraphSeparator(source, absoluteBreakIdx));
+    const nextStart = preserveParagraphSeparator
+      ? absoluteBreakIdx
+      : absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
         ? absoluteBreakIdx + 1
         : absoluteBreakIdx;
-    return { start: skipLeadingNewlines(source, nextStart), reopenFence: undefined };
+    return {
+      start: preserveParagraphSeparator ? nextStart : skipLeadingNewlines(source, nextStart),
+      reopenFence: undefined,
+    };
   }
 
   #pickSoftBreakIndex(
@@ -433,6 +460,10 @@ function skipLeadingNewlines(value: string, start = 0): number {
 function stripLeadingNewlines(value: string): string {
   const start = skipLeadingNewlines(value);
   return start > 0 ? value.slice(start) : value;
+}
+
+function findLeadingParagraphSeparator(value: string, start = 0): string | null {
+  return value.slice(start).match(/^\n[\t ]*\n+/)?.[0] ?? null;
 }
 
 function findNextParagraphBreak(
