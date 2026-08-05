@@ -297,7 +297,7 @@ describe("install.sh", () => {
       node_dir="node-bin"
       cd "$tmp"
       mkdir -p "$repo/.git" "$repo/dist" "$node_dir"
-      touch "$repo/dist/entry.js"
+      touch "$repo/dist/entry.js" "$repo/openclaw-acp.mjs"
       cat > "$node_dir/node" <<'NODE'
 #!/usr/bin/env bash
 printf 'fake-node:%s\\n' "$*"
@@ -335,9 +335,12 @@ NODE
 
       install_openclaw_from_git "$repo"
       wrapper="$HOME/.local/bin/openclaw"
+      acp_wrapper="$HOME/.local/bin/openclaw-acp"
       grep -F "$tmp/$node_dir/node" "$wrapper"
+      grep -F "$tmp/$node_dir/node" "$acp_wrapper"
       cd /
       PATH="/usr/bin:/bin" "$wrapper" --version
+      PATH="/usr/bin:/bin" "$acp_wrapper" --version
     `);
 
     expect(result.status).toBe(0);
@@ -345,6 +348,7 @@ NODE
     expect(result.stdout).toContain("/node-bin/node");
     expect(result.stdout).toContain("fake-node:");
     expect(result.stdout).toContain("/repo/dist/entry.js --version");
+    expect(result.stdout).toContain("/repo/openclaw-acp.mjs --version");
   });
 
   it("rejects a git checkout without a commit without modifying it", () => {

@@ -195,6 +195,18 @@ describe("install smoke no-push root image transport", () => {
     expect(verify.run).not.toContain("PUSH_RESULT");
   });
 
+  it("proves the native ACP launcher in the root Docker image", () => {
+    const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
+    for (const jobName of ["install-smoke-fast", "root_dockerfile_smokes"]) {
+      const smoke = step(job(workflow, jobName), "Run root Dockerfile CLI smoke");
+      expect(smoke.run, jobName).toContain("which openclaw-acp");
+      expect(smoke.run, jobName).toContain("test -x /app/openclaw-acp.mjs");
+      expect(smoke.run, jobName).toContain(
+        'openclaw-acp --help | grep -F "Run OpenClaw as a self-contained ACP agent"',
+      );
+    }
+  });
+
   it("verifies and loads the immutable artifact in every consumer", () => {
     const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
     for (const jobName of [

@@ -2199,6 +2199,18 @@ ensure_openclaw_bin_link() {
         ln -sf "$npm_root/openclaw/dist/entry.js" "${npm_bin}/openclaw"
         ui_info "Created openclaw bin link at ${npm_bin}/openclaw"
     fi
+    if [[ -f "$npm_root/openclaw/openclaw-acp.mjs" ]]; then
+        if [[ ! -x "${npm_bin}/openclaw-acp" ]]; then
+            ln -sf "$npm_root/openclaw/openclaw-acp.mjs" "${npm_bin}/openclaw-acp"
+            ui_info "Created openclaw-acp bin link at ${npm_bin}/openclaw-acp"
+        fi
+    elif [[ -L "${npm_bin}/openclaw-acp" ]]; then
+        local acp_target=""
+        acp_target="$(readlink "${npm_bin}/openclaw-acp" 2>/dev/null || true)"
+        if [[ "$acp_target" == *"/node_modules/openclaw/"* ]]; then
+            rm -f "${npm_bin}/openclaw-acp"
+        fi
+    fi
     return 0
 }
 
@@ -2917,7 +2929,7 @@ install_openclaw_from_git() {
 
     ensure_user_local_bin_on_path
 
-    local node_bin="" node_bin_quoted="" entry_path_quoted=""
+    local node_bin="" node_bin_quoted="" entry_path_quoted="" acp_entry_path_quoted=""
     node_bin="$(type -P node 2>/dev/null || true)"
     if [[ -n "$node_bin" && "$node_bin" != /* ]]; then
         local node_dir=""
@@ -2932,6 +2944,7 @@ install_openclaw_from_git() {
     fi
     printf -v node_bin_quoted "%q" "$node_bin"
     printf -v entry_path_quoted "%q" "${repo_dir}/dist/entry.js"
+    printf -v acp_entry_path_quoted "%q" "${repo_dir}/openclaw-acp.mjs"
 
     cat > "$HOME/.local/bin/openclaw" <<EOF
 #!/usr/bin/env bash
@@ -2939,6 +2952,15 @@ set -euo pipefail
 exec ${node_bin_quoted} ${entry_path_quoted} "\$@"
 EOF
     chmod +x "$HOME/.local/bin/openclaw"
+    rm -f "$HOME/.local/bin/openclaw-acp"
+    if [[ -f "${repo_dir}/openclaw-acp.mjs" ]]; then
+        cat > "$HOME/.local/bin/openclaw-acp" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec ${node_bin_quoted} ${acp_entry_path_quoted} "\$@"
+EOF
+        chmod +x "$HOME/.local/bin/openclaw-acp"
+    fi
     ui_success "OpenClaw wrapper installed to \$HOME/.local/bin/openclaw"
     ui_info "This checkout uses pnpm — run pnpm install (or corepack pnpm install) for deps"
 }
@@ -3389,9 +3411,9 @@ main() {
         install_openclaw_from_git "$repo_dir"
     else
         # Clean up git wrapper if switching to npm
-        if [[ -x "$HOME/.local/bin/openclaw" ]]; then
+        if [[ -x "$HOME/.local/bin/openclaw" || -e "$HOME/.local/bin/openclaw-acp" ]]; then
             ui_info "Removing git wrapper (switching to npm)"
-            rm -f "$HOME/.local/bin/openclaw"
+            rm -f "$HOME/.local/bin/openclaw" "$HOME/.local/bin/openclaw-acp"
             ui_success "git wrapper removed"
         fi
 

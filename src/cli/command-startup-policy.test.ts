@@ -386,6 +386,24 @@ describe("command-startup-policy", () => {
     expect(resolvePolicy({ commandPath: ["acp"] }).suppressDoctorStdout).toBe(true);
   });
 
+  it("reserves stdout for the native acp protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["acp", "native"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(true);
+    expect(policy.pluginRegistry).toEqual({ scope: "all" });
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
+  it("keeps acp info independent from local configuration", () => {
+    const policy = resolvePolicy({ commandPath: ["acp", "info"], jsonOutputMode: true });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.skipConfigGuard).toBe(true);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
   it("keeps startup stdout for non-protocol commands", () => {
     expect(resolvePolicy({ commandPath: ["mcp", "list"] }).suppressDoctorStdout).toBe(false);
     expect(resolvePolicy({ commandPath: ["acp", "client"] }).suppressDoctorStdout).toBe(false);

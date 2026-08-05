@@ -117,6 +117,8 @@ const JSON_NOT_APPLICABLE = {
     reason: "long-running server, worker, or live stream does not terminate with one JSON document",
     commands: [
       "acp",
+      "acp native",
+      "acp gateway",
       "gateway",
       "gateway run",
       "mcp serve",
@@ -216,6 +218,9 @@ const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
 // Route-first parsing accepts JSON before Commander registration is reached.
 const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
 
+// These commands always emit one JSON document and do not need a mode flag.
+const JSON_OUTPUT_UNCONDITIONAL = new Set(["acp info"]);
+
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
   const ctx = createProgramContext();
@@ -252,7 +257,8 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   return (
     hasOwnJsonOption(command) ||
     (JSON_OUTPUT_INHERITED_FROM_PARENT.has(path) && hasAncestorJsonOption(command)) ||
-    JSON_OUTPUT_ROUTE_FIRST.has(path)
+    JSON_OUTPUT_ROUTE_FIRST.has(path) ||
+    JSON_OUTPUT_UNCONDITIONAL.has(path)
   );
 }
 
@@ -417,6 +423,15 @@ describe("root command descriptions", () => {
     expect(
       staleRouteFirstSupport,
       "route-first JSON entries must exist and remain absent from Commander options",
+    ).toEqual([]);
+
+    const staleUnconditionalSupport = [...JSON_OUTPUT_UNCONDITIONAL].filter((path) => {
+      const command = registered.get(path);
+      return !command || hasOwnJsonOption(command);
+    });
+    expect(
+      staleUnconditionalSupport,
+      "unconditional JSON entries must exist and remain absent from Commander options",
     ).toEqual([]);
   });
 });

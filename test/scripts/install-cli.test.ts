@@ -41,6 +41,35 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("installs dedicated-prefix launchers for the CLI and native ACP runtime", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      PREFIX="$tmp/prefix"
+      OPENCLAW_VERSION=2026.8.1
+      SET_NPM_PREFIX=0
+      node_dir() { printf '%s\n' "$tmp/node"; }
+      npm_bin() { printf '/usr/bin/true\n'; }
+      mkdir -p "$tmp/node/lib/node_modules/openclaw"
+      touch "$tmp/node/lib/node_modules/openclaw/openclaw-acp.mjs"
+
+      install_openclaw
+
+      test -x "$PREFIX/bin/openclaw"
+      test -x "$PREFIX/bin/openclaw-acp"
+      grep -Fq "$tmp/node/lib/node_modules/openclaw/dist/entry.js" "$PREFIX/bin/openclaw"
+      grep -Fq "$tmp/node/lib/node_modules/openclaw/openclaw-acp.mjs" "$PREFIX/bin/openclaw-acp"
+
+      rm "$tmp/node/lib/node_modules/openclaw/openclaw-acp.mjs"
+      install_openclaw
+      test ! -e "$PREFIX/bin/openclaw-acp"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(script).toContain('exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/openclaw-acp.mjs"');
+  });
+
   it("rejects a git checkout without a commit before updating it", () => {
     const result = runInstallCliShell(`
       set -euo pipefail

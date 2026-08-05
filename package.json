@@ -20,7 +20,8 @@
     "url": "git+https://github.com/openclaw/openclaw.git"
   },
   "bin": {
-    "openclaw": "openclaw.mjs"
+    "openclaw": "openclaw.mjs",
+    "openclaw-acp": "openclaw-acp.mjs"
   },
   "directories": {
     "doc": "docs",
@@ -29,6 +30,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "openclaw-acp.mjs",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",

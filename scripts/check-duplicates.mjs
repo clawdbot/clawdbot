@@ -22,6 +22,7 @@ const targets = [
   "skills",
   "config",
   "openclaw.mjs",
+  "openclaw-acp.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",

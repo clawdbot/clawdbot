@@ -3573,6 +3573,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       'test -r "$0"',
       'test -x "$0"',
       'grep -Fq "/tmp/openclaw-source/dist/entry.js" "$prefix_cli"',
+      'grep -Fq "/tmp/openclaw-source/openclaw-acp.mjs" "$prefix_acp"',
+      'test "$(command -v openclaw-acp)" = "$prefix_acp"',
       "openclaw update status --json",
       "expected git install kind",
     ]);

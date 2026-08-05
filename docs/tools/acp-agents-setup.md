@@ -44,7 +44,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `kiro`       | [Kiro CLI](https://kiro.dev)                                                                           |
 | `mux`        | [Mux](https://mux.coder.com)                                                                           |
 | `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
-| `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
+| `openclaw`   | OpenClaw Gateway bridge (`openclaw acp`)                                                               |
 | `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
 | `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
 | `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |

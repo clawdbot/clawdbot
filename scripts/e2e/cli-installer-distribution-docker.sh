@@ -46,16 +46,23 @@ bash /tmp/openclaw-source/scripts/install-cli.sh \
 
 prefix_node=/tmp/openclaw-prefix/tools/node/bin/node
 prefix_cli=/tmp/openclaw-prefix/bin/openclaw
+prefix_acp=/tmp/openclaw-prefix/bin/openclaw-acp
 test -x "$prefix_node"
 test -x "$prefix_cli"
+test -x "$prefix_acp"
 grep -Fq "exec \"$prefix_node\"" "$prefix_cli"
+grep -Fq "exec \"$prefix_node\"" "$prefix_acp"
 grep -Fq "/tmp/openclaw-source/dist/entry.js" "$prefix_cli"
+grep -Fq "/tmp/openclaw-source/openclaw-acp.mjs" "$prefix_acp"
 export PATH="/tmp/openclaw-prefix/bin:$PATH"
 test "$(command -v openclaw)" = "$prefix_cli"
+test "$(command -v openclaw-acp)" = "$prefix_acp"
 test "$(git -C /tmp/openclaw-source rev-parse HEAD)" = "$OPENCLAW_SOURCE_SHA"
 openclaw_version="$(openclaw --version)"
 openclaw --help >/tmp/openclaw-help
+openclaw-acp --help >/tmp/openclaw-acp-help
 test -s /tmp/openclaw-help
+grep -Fq "Run OpenClaw as a self-contained ACP agent" /tmp/openclaw-acp-help
 status_json="$(openclaw update status --json)"
 STATUS_JSON="$status_json" node -e "
   const status = JSON.parse(process.env.STATUS_JSON);
@@ -99,14 +106,19 @@ docker_e2e_docker_run_cmd run -d \
     source "$HOME/.bashrc"
     hash -r
     openclaw_path="$(command -v openclaw)"
+    openclaw_acp_path="$(command -v openclaw-acp)"
     test -n "$openclaw_path"
+    test -n "$openclaw_acp_path"
     node_path="$(command -v node)"
     node_version="$(node --version)"
     openclaw_version="$(openclaw --version)"
     openclaw --help >/tmp/openclaw-help
+    openclaw-acp --help >/tmp/openclaw-acp-help
     test -s /tmp/openclaw-help
+    grep -Fq "Run OpenClaw as a self-contained ACP agent" /tmp/openclaw-acp-help
     printf "hostedNode=%s@%s\n" "$node_path" "$node_version"
     printf "hostedOpenClaw=%s@%s\n" "$openclaw_path" "$openclaw_version"
+    printf "hostedOpenClawAcp=%s\n" "$openclaw_acp_path"
     printf "hostedOnboard=disabled\n"
     touch /tmp/openclaw-proof-ready
     exec sleep infinity

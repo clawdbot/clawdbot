@@ -2,13 +2,7 @@
 /** ACP stdio server that bridges Agent Client Protocol clients to the OpenClaw Gateway. */
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import {
-  AGENT_METHODS,
-  AgentSideConnection,
-  PROTOCOL_VERSION,
-  ndJsonStream,
-  type AnyMessage,
-} from "@agentclientprotocol/sdk";
+import { AgentSideConnection, ndJsonStream, type AnyMessage } from "@agentclientprotocol/sdk";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -24,11 +18,10 @@ import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
+import { normalizeAcpInitializeProtocolVersion } from "./protocol-version.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
-
-type JsonObject = Record<string, unknown>;
 
 const MAX_STARTUP_ACP_BUFFER_BYTES = 1024 * 1024;
 
@@ -262,38 +255,6 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   void connection.closed.then(shutdown, shutdown);
 
   return closed;
-}
-
-function normalizeAcpInitializeProtocolVersion(message: AnyMessage): AnyMessage {
-  if (!isJsonObject(message)) {
-    return message;
-  }
-  const messageObject: JsonObject = message;
-  if (messageObject.method !== AGENT_METHODS.initialize) {
-    return message;
-  }
-  const params = messageObject.params;
-  if (!isJsonObject(params) || isUint16Integer(params.protocolVersion)) {
-    return message;
-  }
-
-  // ACP SDK 0.22 validates this uint16 before the agent handler runs; some
-  // editors send MCP date strings here, so normalize only this handshake field.
-  return {
-    ...message,
-    params: {
-      ...params,
-      protocolVersion: PROTOCOL_VERSION,
-    },
-  } as AnyMessage;
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isUint16Integer(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffff;
 }
 
 function parseArgs(args: string[]): AcpServerOptions {

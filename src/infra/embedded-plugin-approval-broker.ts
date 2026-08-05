@@ -9,15 +9,19 @@ import type {
   PluginApprovalResolved,
 } from "./plugin-approvals.js";
 
+export type EmbeddedPluginApprovalRequest = PluginApprovalRequest & {
+  runId?: string;
+};
+
 type PendingApproval = {
-  record: PluginApprovalRequest;
+  record: EmbeddedPluginApprovalRequest;
   timer: ReturnType<typeof setTimeout>;
   resolve: (decision: ExecApprovalDecision | null) => void;
   reject: (error: unknown) => void;
 };
 
 type ApprovalEvent =
-  | { event: "plugin.approval.requested"; payload: PluginApprovalRequest }
+  | { event: "plugin.approval.requested"; payload: EmbeddedPluginApprovalRequest }
   | { event: "plugin.approval.resolved"; payload: PluginApprovalResolved }
   | { event: "plugin.approval.removed"; payload: { id: string } };
 
@@ -34,12 +38,13 @@ export class EmbeddedPluginApprovalBroker {
     };
   }
 
-  listPending(): PluginApprovalRequest[] {
+  listPending(): EmbeddedPluginApprovalRequest[] {
     return [...this.pending.values()].map((entry) => entry.record);
   }
 
   async request(params: {
     request: PluginApprovalRequestPayload;
+    runId?: string;
     timeoutMs: number;
     signal?: AbortSignal;
   }): Promise<{ id: string; decision: ExecApprovalDecision | null }> {
@@ -48,9 +53,10 @@ export class EmbeddedPluginApprovalBroker {
     }
     const id = `plugin:${randomUUID()}`;
     const createdAtMs = Date.now();
-    const record: PluginApprovalRequest = {
+    const record: EmbeddedPluginApprovalRequest = {
       id,
       request: params.request,
+      runId: params.runId,
       createdAtMs,
       expiresAtMs: createdAtMs + params.timeoutMs,
     };

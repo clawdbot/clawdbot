@@ -1,17 +1,16 @@
-// Commander registration for ACP bridge and interactive ACP client commands.
+// Commander registration for native ACP, the explicit Gateway bridge, and ACP clients.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { ACP_RUNTIME_INFO } from "../acp/runtime-info.js";
 import { normalizeAcpProvenanceMode } from "../acp/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 
-export function registerAcpCli(program: Command) {
-  const acp = program.command("acp").description("Run an ACP bridge backed by the Gateway");
-
-  acp
+function configureGatewayCommand(command: Command): Command {
+  return command
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--token-file <path>", "Read gateway token from file")
@@ -24,39 +23,87 @@ export function registerAcpCli(program: Command) {
     .option("--no-prefix-cwd", "Do not prefix prompts with the working directory")
     .option("--provenance <mode>", "ACP provenance mode: off, meta, or meta+receipt")
     .option("-v, --verbose", "Verbose logging to stderr", false)
-    .addHelpText(
-      "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.openclaw.ai/cli/acp")}\n`,
-    )
-    .action(async (opts) => {
+    .action(async (opts, actionCommand) => {
       try {
-        const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
-        const provenanceMode = normalizeAcpProvenanceMode(opts.provenance as string | undefined);
-        if (opts.provenance && !provenanceMode) {
+        const option = (name: string): unknown =>
+          inheritOptionFromParent(actionCommand, name) ?? opts[name];
+        const gatewayOptions = {
+          token: option("token") as string | undefined,
+          tokenFile: option("tokenFile") as string | undefined,
+          password: option("password") as string | undefined,
+          passwordFile: option("passwordFile") as string | undefined,
+        };
+        const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(gatewayOptions);
+        const provenance = option("provenance") as string | undefined;
+        const provenanceMode = normalizeAcpProvenanceMode(provenance);
+        if (provenance && !provenanceMode) {
           throw new Error('Invalid --provenance. Use "off", "meta", or "meta+receipt".');
         }
         const { serveAcpGateway } = await import("../acp/server.js");
         await serveAcpGateway({
-          gatewayUrl: opts.url as string | undefined,
+          gatewayUrl: option("url") as string | undefined,
           gatewayToken,
           gatewayPassword,
-          defaultSessionKey: opts.session as string | undefined,
-          defaultSessionLabel: opts.sessionLabel as string | undefined,
-          requireExistingSession: Boolean(opts.requireExisting),
-          resetSession: Boolean(opts.resetSession),
-          prefixCwd: opts.prefixCwd !== false,
+          defaultSessionKey: option("session") as string | undefined,
+          defaultSessionLabel: option("sessionLabel") as string | undefined,
+          requireExistingSession: Boolean(option("requireExisting")),
+          resetSession: Boolean(option("resetSession")),
+          prefixCwd: option("prefixCwd") !== false,
           provenanceMode,
-          verbose: Boolean(opts.verbose),
+          verbose: Boolean(option("verbose")),
         });
       } catch (err) {
-        defaultRuntime.error(`ACP bridge failed: ${formatErrorMessage(err)}`);
+        defaultRuntime.error(`ACP Gateway bridge failed: ${formatErrorMessage(err)}`);
         defaultRuntime.exit(1);
       }
     });
+}
+
+function configureNativeCommand(command: Command): Command {
+  return command
+    .option("--configure-model", "Configure model authentication and exit", false)
+    .action(async (opts) => {
+      try {
+        if (opts.configureModel) {
+          const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
+          await configureCommandFromSectionsArg(["model"], defaultRuntime);
+          return;
+        }
+        const { serveAcpNative } = await import("../acp/native-server.js");
+        await serveAcpNative();
+      } catch (err) {
+        defaultRuntime.error(`ACP native agent failed: ${formatErrorMessage(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
+}
+
+export function registerAcpCli(program: Command) {
+  const acp = configureGatewayCommand(
+    program.command("acp").description("Run OpenClaw ACP runtimes and Gateway bridge tools"),
+  ).addHelpText(
+    "after",
+    () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.openclaw.ai/cli/acp")}\n`,
+  );
+
+  configureNativeCommand(
+    acp.command("native").description("Run OpenClaw as a self-contained ACP agent"),
+  );
+
+  acp
+    .command("info")
+    .description("Print the ACP runtime compatibility contract")
+    .action(() => {
+      defaultRuntime.writeJson(ACP_RUNTIME_INFO, 0);
+    });
+
+  configureGatewayCommand(
+    acp.command("gateway").description("Alias for the existing Gateway-backed ACP bridge"),
+  );
 
   acp
     .command("client")
-    .description("Run an interactive ACP client against the local ACP bridge")
+    .description("Run an interactive ACP client against an ACP agent")
     .option("--cwd <dir>", "Working directory for the ACP session")
     .option("--server <command>", "ACP server command (default: openclaw)")
     .option("--server-args <args...>", "Extra arguments for the ACP server")

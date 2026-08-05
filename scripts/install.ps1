@@ -1593,6 +1593,13 @@ function Install-OpenClawFromGit {
     $cmdPath = Join-Path $binDir "openclaw.cmd"
     $cmdContents = "@echo off`r`nnode ""$entryPath"" %*`r`n"
     Set-Content -Path $cmdPath -Value $cmdContents -NoNewline
+    $acpCmdPath = Join-Path $binDir "openclaw-acp.cmd"
+    $acpEntryPath = Join-Path $RepoDir "openclaw-acp.mjs"
+    Remove-Item -Force $acpCmdPath -ErrorAction SilentlyContinue
+    if (Test-Path $acpEntryPath) {
+        $acpCmdContents = "@echo off`r`nnode ""$acpEntryPath"" %*`r`n"
+        Set-Content -Path $acpCmdPath -Value $acpCmdContents -NoNewline
+    }
 
     if (Add-ToUserPath $binDir) {
         Write-Host "[!] Added $binDir to user PATH (restart terminal if command not found)" -ForegroundColor Yellow
@@ -1736,9 +1743,11 @@ function Main {
             return (Fail-Install)
         }
     } else {
-        $gitWrapper = Join-Path (Join-Path $env:USERPROFILE ".local\\bin") "openclaw.cmd"
-        if (Test-Path $gitWrapper) {
-            Remove-Item -Force $gitWrapper
+        $gitBinDir = Join-Path $env:USERPROFILE ".local\\bin"
+        $gitWrapper = Join-Path $gitBinDir "openclaw.cmd"
+        $gitAcpWrapper = Join-Path $gitBinDir "openclaw-acp.cmd"
+        if ((Test-Path $gitWrapper) -or (Test-Path $gitAcpWrapper)) {
+            Remove-Item -Force $gitWrapper, $gitAcpWrapper -ErrorAction SilentlyContinue
             Write-Host "[OK] Removed git wrapper (switching to npm)" -ForegroundColor Green
         }
         $npmInstallResults = @(Install-OpenClaw)

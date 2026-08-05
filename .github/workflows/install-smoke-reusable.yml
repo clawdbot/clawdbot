@@ -152,7 +152,10 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
             which openclaw &&
+            which openclaw-acp &&
+            test -x /app/openclaw-acp.mjs &&
             openclaw --version &&
+            openclaw-acp --help | grep -F "Run OpenClaw as a self-contained ACP agent" &&
             node -e "
               const fs = require(\"node:fs\");
               const path = require(\"node:path\");
@@ -481,7 +484,10 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
+            which openclaw-acp &&
+            test -x /app/openclaw-acp.mjs &&
             openclaw --version &&
+            openclaw-acp --help | grep -F "Run OpenClaw as a self-contained ACP agent" &&
             node -e "
               const fs = require(\"node:fs\");
               const path = require(\"node:path\");

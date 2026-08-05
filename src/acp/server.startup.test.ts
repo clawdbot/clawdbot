@@ -750,7 +750,7 @@ describe("serveAcpGateway startup", () => {
     ]);
   });
 
-  it("coerces non-integer numeric initialize protocol versions", async () => {
+  it("passes malformed numeric initialize protocol versions through for SDK validation", async () => {
     const initializeRequest = {
       jsonrpc: "2.0",
       id: 1,
@@ -761,15 +761,8 @@ describe("serveAcpGateway startup", () => {
       },
     };
 
-    await expect(captureAcpMessagesAfterStartup([initializeRequest])).resolves.toEqual([
-      {
-        ...initializeRequest,
-        params: {
-          ...initializeRequest.params,
-          protocolVersion: mockState.acpProtocolVersion,
-        },
-      },
-    ]);
+    const [message] = await captureAcpMessagesAfterStartup([initializeRequest]);
+    expect(message).toBe(initializeRequest);
   });
 
   it("passes uint16 numeric initialize protocol versions through unchanged", async () => {

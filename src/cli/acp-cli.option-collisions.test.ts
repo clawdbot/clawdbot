@@ -17,6 +17,7 @@ type AcpGatewayOptions = {
 
 const mocks = vi.hoisted(() => ({
   runAcpClientInteractive: vi.fn(async (_opts: AcpClientOptions) => {}),
+  serveAcpNative: vi.fn(async () => {}),
   serveAcpGateway: vi.fn(async (_opts: AcpGatewayOptions) => {}),
   defaultRuntime: {
     log: vi.fn(),
@@ -27,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-const { runAcpClientInteractive, serveAcpGateway, defaultRuntime } = mocks;
+const { runAcpClientInteractive, serveAcpNative, serveAcpGateway, defaultRuntime } = mocks;
 
 const passwordKey = () => ["pass", "word"].join("");
 
@@ -37,6 +38,10 @@ vi.mock("../acp/client.js", () => ({
 
 vi.mock("../acp/server.js", () => ({
   serveAcpGateway: (opts: AcpGatewayOptions) => mocks.serveAcpGateway(opts),
+}));
+
+vi.mock("../acp/native-server.js", () => ({
+  serveAcpNative: () => mocks.serveAcpNative(),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -72,6 +77,7 @@ describe("acp cli option collisions", () => {
 
   beforeEach(() => {
     runAcpClientInteractive.mockClear();
+    serveAcpNative.mockClear();
     serveAcpGateway.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
@@ -91,24 +97,37 @@ describe("acp cli option collisions", () => {
     expect(clientOptions?.verbose).toBe(true);
   });
 
-  it("forwards --no-prefix-cwd to the ACP bridge", async () => {
-    await parseAcp(["--no-prefix-cwd"]);
+  it("preserves the Gateway-backed `openclaw acp` contract", async () => {
+    await parseAcp([]);
+
+    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
+    expect(serveAcpNative).not.toHaveBeenCalled();
+  });
+
+  it("runs the self-contained ACP agent through the native subcommand", async () => {
+    await parseAcp(["native"]);
+
+    expect(serveAcpNative).toHaveBeenCalledTimes(1);
+    expect(serveAcpGateway).not.toHaveBeenCalled();
+  });
+
+  it("describes both ACP runtimes without advertising a no-op native verbose flag", () => {
+    const program = createAcpProgram();
+    const acp = program.commands.find((command) => command.name() === "acp");
+    const native = acp?.commands.find((command) => command.name() === "native");
+
+    expect(acp?.description()).toBe("Run OpenClaw ACP runtimes and Gateway bridge tools");
+    expect(native?.options.map((option) => option.long)).not.toContain("--verbose");
+  });
+
+  it("forwards --no-prefix-cwd to the explicit Gateway bridge", async () => {
+    await parseAcp(["gateway", "--no-prefix-cwd"]);
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
     const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
       prefixCwd?: boolean;
     };
     expect(gatewayOptions?.prefixCwd).toBe(false);
-  });
-
-  it("defaults to prefixing the working directory", async () => {
-    await parseAcp([]);
-
-    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
-      prefixCwd?: boolean;
-    };
-    expect(gatewayOptions?.prefixCwd).toBe(true);
   });
 
   it("loads gateway token/password from files", async () => {

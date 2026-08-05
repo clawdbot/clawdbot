@@ -33,7 +33,8 @@ existing OpenClaw channel conversations, use
 | ----------------------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Bind or control Codex in the current conversation                                               | `/codex bind`, `/codex threads`       | Native Codex app-server path when the `codex` plugin is enabled: bound chat replies, image forwarding, model/fast/permissions, stop, and steer. ACP is an explicit fallback |
 | Run Claude Code, Gemini CLI, explicit Codex ACP, or another external harness _through_ OpenClaw | This page                             | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, background tasks, runtime controls                                                                 |
-| Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client                   | [`openclaw acp`](/cli/acp)            | Bridge mode: an IDE/client speaks ACP to OpenClaw over stdio/WebSocket                                                                                                      |
+| Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client                   | [`openclaw acp`](/cli/acp)            | Bridge mode: an IDE/client speaks ACP to an existing OpenClaw Gateway session                                                                                               |
+| Run OpenClaw _as_ an ACP agent for an editor or client                                          | [`openclaw-acp`](/cli/acp)            | Native mode: the ACP process owns the OpenClaw turn and local tools                                                                                                         |
 | Reuse a local AI CLI as a text-only fallback model                                              | [CLI Backends](/gateway/cli-backends) | Not ACP: no OpenClaw tools, no ACP controls, no harness runtime                                                                                                             |
 
 ## Does this work out of the box?
@@ -92,25 +93,25 @@ call those tools directly.
 With the `acpx` backend, use these ids as `/acp spawn <id>` or
 `sessions_spawn({ runtime: "acp", agentId: "<id>" })` targets:
 
-| Harness id   | Typical backend                                | Notes                                                                               |
-| ------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `claude`     | Claude Code ACP adapter                        | Requires Claude Code auth on the host.                                              |
-| `codex`      | Codex ACP adapter                              | Explicit ACP fallback only when native `/codex` is unavailable or ACP is requested. |
-| `copilot`    | GitHub Copilot ACP adapter                     | Requires Copilot CLI/runtime auth.                                                  |
-| `cursor`     | Cursor CLI ACP (`cursor-agent acp`)            | Override the acpx command if a local install exposes a different ACP entrypoint.    |
-| `droid`      | Factory Droid CLI                              | Requires Factory/Droid auth or `FACTORY_API_KEY` in the harness environment.        |
-| `fast-agent` | fast-agent-mcp ACP adapter                     | Fetched on demand with `uvx`.                                                       |
-| `gemini`     | Gemini CLI ACP adapter                         | Requires Gemini CLI auth or API key setup.                                          |
-| `iflow`      | iFlow CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
-| `kilocode`   | Kilo Code CLI                                  | Adapter availability and model control depend on the installed CLI.                 |
-| `kimi`       | Kimi/Moonshot CLI                              | Requires Kimi/Moonshot auth on the host.                                            |
-| `kiro`       | Kiro CLI                                       | Adapter availability and model control depend on the installed CLI.                 |
-| `mux`        | Mux CLI ACP adapter                            | Fetched on demand with `npx`.                                                       |
-| `opencode`   | OpenCode ACP adapter                           | Requires OpenCode CLI/provider auth.                                                |
-| `openclaw`   | OpenClaw Gateway bridge through `openclaw acp` | Lets an ACP-aware harness talk back to an OpenClaw Gateway session.                 |
-| `qoder`      | Qoder CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
-| `qwen`       | Qwen Code / Qwen CLI                           | Requires Qwen-compatible auth on the host.                                          |
-| `trae`       | Trae CLI ACP adapter                           | Adapter availability and model control depend on the installed CLI.                 |
+| Harness id   | Typical backend                     | Notes                                                                               |
+| ------------ | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| `claude`     | Claude Code ACP adapter             | Requires Claude Code auth on the host.                                              |
+| `codex`      | Codex ACP adapter                   | Explicit ACP fallback only when native `/codex` is unavailable or ACP is requested. |
+| `copilot`    | GitHub Copilot ACP adapter          | Requires Copilot CLI/runtime auth.                                                  |
+| `cursor`     | Cursor CLI ACP (`cursor-agent acp`) | Override the acpx command if a local install exposes a different ACP entrypoint.    |
+| `droid`      | Factory Droid CLI                   | Requires Factory/Droid auth or `FACTORY_API_KEY` in the harness environment.        |
+| `fast-agent` | fast-agent-mcp ACP adapter          | Fetched on demand with `uvx`.                                                       |
+| `gemini`     | Gemini CLI ACP adapter              | Requires Gemini CLI auth or API key setup.                                          |
+| `iflow`      | iFlow CLI                           | Adapter availability and model control depend on the installed CLI.                 |
+| `kilocode`   | Kilo Code CLI                       | Adapter availability and model control depend on the installed CLI.                 |
+| `kimi`       | Kimi/Moonshot CLI                   | Requires Kimi/Moonshot auth on the host.                                            |
+| `kiro`       | Kiro CLI                            | Adapter availability and model control depend on the installed CLI.                 |
+| `mux`        | Mux CLI ACP adapter                 | Fetched on demand with `npx`.                                                       |
+| `opencode`   | OpenCode ACP adapter                | Requires OpenCode CLI/provider auth.                                                |
+| `openclaw`   | OpenClaw Gateway bridge             | Launches `openclaw acp`; a Gateway must already be running.                         |
+| `qoder`      | Qoder CLI                           | Adapter availability and model control depend on the installed CLI.                 |
+| `qwen`       | Qwen Code / Qwen CLI                | Requires Qwen-compatible auth on the host.                                          |
+| `trae`       | Trae CLI ACP adapter                | Adapter availability and model control depend on the installed CLI.                 |
 
 `pi` (pi-acp) is also registered in the acpx backend but is not a coding
 harness in the same sense as the others above.
@@ -863,5 +864,6 @@ instead of repeating `/new`. See
 - [Codex harness](/plugins/codex-harness)
 - [Codex harness runtime](/plugins/codex-harness-runtime)
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
-- [`openclaw acp` (bridge mode)](/cli/acp)
+- [`openclaw acp` (Gateway bridge)](/cli/acp)
+- [`openclaw-acp`](/cli/acp)
 - [Sub-agents](/tools/subagents)

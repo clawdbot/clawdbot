@@ -968,6 +968,9 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain("Test-Path $entryPath");
     expect(gitInstallBody).toContain('Write-Host "[!] OpenClaw build did not produce $entryPath"');
     expect(gitInstallBody).toContain('node ""$entryPath"" %*');
+    expect(gitInstallBody).toContain('$acpEntryPath = Join-Path $RepoDir "openclaw-acp.mjs"');
+    expect(gitInstallBody).toContain('node ""$acpEntryPath"" %*');
+    expect(gitInstallBody).toContain("Test-Path $acpEntryPath");
     expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
     expect(gitInstallBody).not.toContain('node ""$RepoDir\\\\dist\\\\entry.js"" %*');
   });

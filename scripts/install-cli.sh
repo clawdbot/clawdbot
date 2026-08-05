@@ -1120,12 +1120,22 @@ install_openclaw() {
   fi
 
   mkdir -p "${PREFIX}/bin"
-  rm -f "${PREFIX}/bin/openclaw"
+  rm -f "${PREFIX}/bin/openclaw" "${PREFIX}/bin/openclaw-acp"
   cat > "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
 EOF
+  local acp_entry
+  acp_entry="$(node_dir)/lib/node_modules/openclaw/openclaw-acp.mjs"
+  if [[ -f "$acp_entry" ]]; then
+    cat > "${PREFIX}/bin/openclaw-acp" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "${PREFIX}/tools/node/bin/node" "${acp_entry}" "\$@"
+EOF
+    chmod +x "${PREFIX}/bin/openclaw-acp"
+  fi
   chmod +x "${PREFIX}/bin/openclaw"
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"version\":\"${requested}\"}"
 }
@@ -1231,6 +1241,15 @@ install_openclaw_from_git() {
 set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
 EOF
+  rm -f "${PREFIX}/bin/openclaw-acp"
+  if [[ -f "${repo_dir}/openclaw-acp.mjs" ]]; then
+    cat > "${PREFIX}/bin/openclaw-acp" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/openclaw-acp.mjs" "\$@"
+EOF
+    chmod +x "${PREFIX}/bin/openclaw-acp"
+  fi
   chmod +x "${PREFIX}/bin/openclaw"
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"method\":\"git\"}"
 }

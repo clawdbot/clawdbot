@@ -176,6 +176,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       params: { action: "apply", proposal_id: "weather" },
       toolCallId: "call-skill-local",
       ctx: {
+        runId: "run-skill-local",
         agentId: "main",
         sessionKey: "agent:main:main",
         config: {
@@ -195,6 +196,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       "broker.listPending()[0] test invariant",
     );
     expect(approval?.request.toolName).toBe("skill_workshop");
+    expect(approval?.runId).toBe("run-skill-local");
     expect(broker.resolve(approval?.id, "allow-once")).toBe(true);
 
     await expect(resultPromise).resolves.toEqual({

@@ -5,6 +5,6 @@ import { VERSION } from "../version.js";
 /** ACP agent identity advertised during protocol initialization. */
 export const ACP_AGENT_INFO = {
   name: "openclaw-acp",
-  title: "OpenClaw ACP Gateway",
+  title: "OpenClaw ACP",
   version: VERSION,
 };

@@ -196,6 +196,7 @@ async function requestPluginToolApproval(params: {
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
       const result = await embeddedApprovalBroker.request({
+        runId: params.ctx?.runId,
         request: {
           pluginId: approval.pluginId,
           title: approval.title,
