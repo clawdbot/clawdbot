@@ -12,6 +12,8 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
@@ -1996,6 +1998,58 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("retains history records when a fixed store database is missing", async () => {
+    const fixture = await createFixture(stateDir);
+    const storePath = path.join(stateDir, "unmounted-sessions.json");
+    getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
+    loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("retains history records when a retired fixed store is unavailable", async () => {
+    const fixture = await createFixture(stateDir, {
+      agentId: "retired",
+      sessionKey: "agent:retired:main",
+    });
+    const storePath = path.join(stateDir, "retired-sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "retired",
+      env,
+    });
+    openOpenClawAgentDatabase({ agentId: "retired", env, path: target.path });
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(target.path);
+    database.exec("DROP TABLE schema_meta;");
+    database.close();
+    const config = { session: { store: storePath } };
+    getRuntimeConfigMock.mockReturnValue(config);
+    loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
+    expect(
+      resolveExistingAgentSessionStoreTargetsReadOnlyResult(config, "retired", { env }),
+    ).toEqual({ available: false, reason: "schema-missing" });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 

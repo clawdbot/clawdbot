@@ -16,6 +16,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.js";
+import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
@@ -32,6 +33,7 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -115,7 +117,10 @@ type CleanupManagedOutgoingMediaRecordsResult = {
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
 type SessionManagedOutgoingAttachmentIndexRead =
   | { kind: "available"; index: SessionManagedOutgoingAttachmentIndex | null }
-  | { kind: "unavailable"; reason: "schema-missing" | "table-missing" };
+  | {
+      kind: "unavailable";
+      reason: "database-missing" | "schema-missing" | "table-missing" | "read-failed";
+    };
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
@@ -864,6 +869,13 @@ async function getSessionManagedOutgoingAttachmentIndex(
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
     return { kind: "available", index: cache.get(cacheKey) ?? null };
+  }
+  const cfg = getRuntimeConfig();
+  const ownerAgentId =
+    agentId ?? resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
+  const discovery = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId);
+  if (!discovery.available) {
+    return { kind: "unavailable", reason: discovery.reason };
   }
   const sessionOptions = sessionKey === "global" && agentId ? { agentId } : undefined;
   const loaded = loadSessionEntryReadOnly(sessionKey, sessionOptions);
