@@ -38,6 +38,45 @@ function replaceSessionEntryFromIndependentConnection(params: {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  it("settles a successful non-delivered turn after clearing its claim", async () => {
+    const root = tempDirs.make("openclaw-reply-no-delivery-settlement-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:cli:acceptance";
+    const sessionId = "session";
+    const startedAt = Date.now() - 100;
+    let entry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryBeforeAgentReplyState: "continue",
+      restartRecoveryDeliveryRunId: "cli-run",
+      sessionId,
+      startedAt,
+      status: "running",
+      updatedAt: startedAt,
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const controller = createReplyRestartRecoveryClaimController({
+      admissionRunId: "cli-run",
+      beforeAgentReplyState: "continue",
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => undefined,
+      sessionKey,
+      setEntry: (next) => {
+        entry = next;
+      },
+      storePath,
+    });
+
+    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+    await controller.clear();
+
+    const persisted = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+    expect(persisted).toMatchObject({ abortedLastRun: false, status: "done" });
+    expect(persisted?.endedAt).toBeTypeOf("number");
+    expect(persisted?.runtimeMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const root = tempDirs.make("openclaw-reply-admission-");
     const storePath = path.join(root, "sessions.json");

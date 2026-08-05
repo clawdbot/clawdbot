@@ -509,10 +509,13 @@ export function createReplyRestartRecoveryClaimController(params: {
           };
         }
         const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
-        const completesHandledSilent =
-          current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
-          !preservesPendingFinal;
-        const endedAt = completesHandledSilent ? Date.now() : undefined;
+        const beforeAgentReplyState = current.restartRecoveryBeforeAgentReplyState;
+        const completesWithoutPendingFinal =
+          !preservesPendingFinal &&
+          beforeAgentReplyState !== undefined &&
+          beforeAgentReplyState !== "admitted" &&
+          beforeAgentReplyState !== "pending";
+        const endedAt = completesWithoutPendingFinal ? Date.now() : undefined;
         return {
           ...buildRestartRecoveryClaimCleanupPatch({
             entry: current,
