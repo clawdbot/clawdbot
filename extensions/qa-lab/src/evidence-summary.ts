@@ -330,14 +330,6 @@ function resolveQaEvidenceRunner(params: { env?: NodeJS.ProcessEnv; fallback?: s
   return params.env?.OPENCLAW_QA_RUNNER?.trim() || params.fallback || "host";
 }
 
-function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
-  const id =
-    params.fallback?.trim() ||
-    params.env?.OPENCLAW_QA_CHANNEL_DRIVER?.trim() ||
-    params.env?.OPENCLAW_E2E_CHANNEL_DRIVER?.trim();
-  return id ? { id } : undefined;
-}
-
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
   const spec = env?.OPENCLAW_QA_PACKAGE_SOURCE?.trim() || undefined;
   const sha = env?.OPENCLAW_QA_PACKAGE_SOURCE_SHA?.trim() || undefined;
@@ -506,10 +498,7 @@ export function buildQaSuiteEvidenceSummary(
     env: params.env,
     explicit: params.profile,
   });
-  const channelDriver = resolveQaEvidenceChannelDriver({
-    env: params.env,
-    fallback: params.channelDriver,
-  });
+  const channelDriver = params.channelDriver?.trim() || undefined;
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
     const scenario = params.scenarioDefinitions[index];
     const primaryCoverageIds = uniqueSortedStrings(scenario?.coverage?.primary ?? []);
@@ -545,8 +534,8 @@ export function buildQaSuiteEvidenceSummary(
         provider,
         channel: {
           id: params.channelId,
-          live: channelDriver?.id === "live",
-          driver: channelDriver?.id,
+          live: channelDriver === "live",
+          driver: channelDriver,
         },
         packageSource,
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, "qa-suite"),
