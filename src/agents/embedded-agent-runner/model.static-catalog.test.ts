@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -662,11 +663,9 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     manifestMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        {
-          id: "google",
-          origin: "bundled",
+        createManifestRecord("google", {
           providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
+        }),
       ],
     });
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
@@ -729,16 +728,12 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "minimax"]);
     manifestMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        {
-          id: "google",
-          origin: "bundled",
+        createManifestRecord("google", {
           providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
-        {
-          id: "minimax",
-          origin: "bundled",
+        }),
+        createManifestRecord("minimax", {
           providerDiscoverySource: "/fixtures/minimax/provider-discovery.ts",
-        },
+        }),
       ],
     });
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(

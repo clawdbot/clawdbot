@@ -27,6 +27,14 @@ const contextTestState = vi.hoisted(() => {
         staticEntries: state.staticCatalogModels,
       },
     })),
+    loadPublishedModelCatalogOwnerSnapshot: vi.fn(async (_params: unknown) => ({
+      config: state.loadConfigImpl() as OpenClawConfig,
+      modelCatalog: {
+        entries: state.discoveredModels,
+        routeVariants: [],
+        staticEntries: state.staticCatalogModels,
+      },
+    })),
   };
   return state;
 });
@@ -44,6 +52,8 @@ vi.mock("../config/runtime-source-projection.js", () => ({
 
 vi.mock("./prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogOwnerSnapshot: contextTestState.loadModelCatalogOwnerSnapshot,
+  loadPublishedPreparedModelCatalogOwnerSnapshot:
+    contextTestState.loadPublishedModelCatalogOwnerSnapshot,
 }));
 
 function mockContextDeps(params: {
@@ -134,6 +144,15 @@ describe("lookupContextTokens", () => {
     contextTestState.runtimeConfigSourceSnapshot = null;
     contextTestState.loadModelCatalogOwnerSnapshot.mockClear();
     contextTestState.loadModelCatalogOwnerSnapshot.mockImplementation(async () => ({
+      modelCatalog: {
+        entries: contextTestState.discoveredModels,
+        routeVariants: [],
+        staticEntries: contextTestState.staticCatalogModels,
+      },
+    }));
+    contextTestState.loadPublishedModelCatalogOwnerSnapshot.mockClear();
+    contextTestState.loadPublishedModelCatalogOwnerSnapshot.mockImplementation(async () => ({
+      config: contextTestState.loadConfigImpl() as OpenClawConfig,
       modelCatalog: {
         entries: contextTestState.discoveredModels,
         routeVariants: [],
@@ -358,7 +377,7 @@ describe("lookupContextTokens", () => {
     );
   });
 
-  it("uses caller config when gateway startup starts cache warming", async () => {
+  it("keeps ordinary cache loading on the exact owner path", async () => {
     const config = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
     mockDiscoveryDeps([
       {
@@ -374,9 +393,54 @@ describe("lookupContextTokens", () => {
     expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ config, readOnly: true }),
     );
+    expect(contextTestState.loadPublishedModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
     expect(
       lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
     ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("warms from the current Gateway-published owner without hashing a fallback owner key", async () => {
+    const requestedConfig = createContextOverrideConfig("synthetic", "stale-model", 111_000);
+    const publishedConfig = createContextOverrideConfig("synthetic", "current-model", 222_000);
+    contextTestState.loadPublishedModelCatalogOwnerSnapshot.mockResolvedValueOnce({
+      config: publishedConfig,
+      modelCatalog: {
+        entries: [{ id: "discovered-model", provider: "synthetic", contextWindow: 64_000 }],
+        routeVariants: [],
+        staticEntries: [],
+      },
+    });
+
+    const { lookupContextTokens, prewarmContextWindowCacheAfterReady } =
+      await importContextModule();
+    await prewarmContextWindowCacheAfterReady({ config: requestedConfig });
+
+    expect(contextTestState.loadPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: requestedConfig,
+        allowGatewaySubagentBinding: true,
+        readOnly: true,
+      }),
+    );
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
+    expect(
+      lookupContextTokens("current-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(222_000);
+    expect(
+      lookupContextTokens("discovered-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(64_000);
+    expect(
+      lookupContextTokens("stale-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBeUndefined();
   });
 
   it("warms fresh caches instead of reusing a pre-generation load promise", async () => {

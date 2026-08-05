@@ -62,6 +62,7 @@ export async function saveIdentityDraft(params: {
   agents: ApplicationContext["agents"];
   agentIdentity: ApplicationContext["agentIdentity"];
   runtimeConfig: ApplicationContext["runtimeConfig"];
+  canDispatch: () => boolean;
   isCurrent: () => boolean;
   onSaved: () => void;
 }) {
@@ -82,12 +83,18 @@ export async function saveIdentityDraft(params: {
   host.identitySaving = true;
   host.identityError = null;
   try {
-    const mutation = await runtimeConfig.runExternalMutation((client) => {
-      if (client !== expectedClient) {
-        throw new Error("Connection changed before the agent identity update started.");
-      }
-      return updateAgentIdentity(client, { agentId, name, emoji, avatar });
-    });
+    const mutation = await runtimeConfig.runExternalMutation(
+      (client) => {
+        if (client !== expectedClient) {
+          throw new Error("Connection changed before the agent identity update started.");
+        }
+        return updateAgentIdentity(client, { agentId, name, emoji, avatar });
+      },
+      {
+        canDispatch: params.canDispatch,
+        dispatchError: "Access changed before the agent identity update started.",
+      },
+    );
     if (!mutation.ok) {
       throw new Error(mutation.error);
     }

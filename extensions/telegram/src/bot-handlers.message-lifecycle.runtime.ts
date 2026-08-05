@@ -146,7 +146,7 @@ export function createTelegramMessageLifecycleRuntime({
     return { process: true, claims: claim.kind === "claimed" ? [claim.handle] : [] };
   };
   const buildSyntheticTextMessage = (params: {
-    base: Message;
+    base: Message.ServiceMessage;
     text: string;
     entities?: Message["entities"];
     date?: number;

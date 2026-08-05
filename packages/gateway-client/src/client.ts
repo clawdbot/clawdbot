@@ -19,6 +19,7 @@ import type {
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
+import { isWssUrl } from "@openclaw/net-policy/url-protocol";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import {
   isSensitiveUrlQueryParamName,
@@ -518,7 +519,8 @@ export class GatewayClient {
 
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
-    if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
+    const usesTls = isWssUrl(url);
+    if (this.opts.tlsFingerprint && !usesTls) {
       throw new GatewayClientSocketFactoryConfigurationError(
         "gateway tls fingerprint requires wss:// gateway url",
       );
@@ -560,7 +562,7 @@ export class GatewayClient {
       handshakeTimeout: handshakeTimeoutMs,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
-    if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
+    if (usesTls && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
       wsOptions.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {
         const fingerprintValue =
@@ -606,7 +608,7 @@ export class GatewayClient {
     this.transportValidated = false;
     ws.on("open", () => {
       handlers.open();
-      if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
+      if (usesTls && this.opts.tlsFingerprint) {
         const tlsError = this.validateTlsFingerprint();
         if (tlsError) {
           handlers.error(tlsError);

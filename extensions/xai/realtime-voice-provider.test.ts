@@ -286,6 +286,60 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     await waitForRealtimeState(() => expect(FakeWebSocket.instances).toHaveLength(0));
   });
 
+  it("starts the socket timeout after async credential resolution", async () => {
+    vi.useFakeTimers();
+    let resolveCredentials: ((value: { apiKey: string | undefined }) => void) | undefined;
+    resolveApiKeyForProviderMock.mockImplementation(
+      () =>
+        new Promise<{ apiKey: string | undefined }>((resolve) => {
+          resolveCredentials = resolve;
+        }),
+    );
+    const bridge = createTestBridge({
+      cfg: {} as never,
+      providerConfig: {},
+    });
+
+    const connecting = bridge.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    resolveCredentials?.({ apiKey: "xai-oauth" }); // pragma: allowlist secret
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = requireSocket();
+    socket.open();
+    socket.emitServer({ type: "session.updated" });
+    await connecting;
+
+    const options = socket.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer xai-oauth");
+    bridge.close();
+  });
+
+  it("retains the socket timeout after async credential resolution", async () => {
+    vi.useFakeTimers();
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "xai-oauth" });
+    const bridge = createTestBridge({
+      cfg: {} as never,
+      providerConfig: {},
+    });
+
+    const connecting = bridge.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = requireSocket();
+    const timeoutAssertion = expect(connecting).rejects.toThrow(
+      "xAI realtime voice connection timeout",
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await timeoutAssertion;
+    expect(socket.terminated).toBe(true);
+    expect(bridge.isConnected()).toBe(false);
+  });
+
   it("starts a replacement immediately after canceling pending credentials", async () => {
     let resolveFirstCredentials: ((value: { apiKey: string | undefined }) => void) | undefined;
     resolveApiKeyForProviderMock

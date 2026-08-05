@@ -8,8 +8,34 @@ import { writeJson } from "../shared/http-json.js";
 export type ResponsesInputItem = Record<string, unknown>;
 
 export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockCompactionSummaryFaultMode =
+  | "none"
+  | "empty-output-once"
+  | "reasoning-only-output-once";
 
 type MockOpenAiRequestOutcome = "success" | "error";
+
+export type QaMockProviderDispatchRequest = {
+  route: "responses" | "anthropic-messages";
+  body: Record<string, unknown>;
+  raw: string;
+};
+
+export type QaMockProviderFailure = {
+  status: number;
+  type: string;
+  code?: string;
+  message: string;
+  presentation?: "anthropic-thinking";
+};
+
+export type QaMockProviderDispatchResult = {
+  events: StreamEvent[];
+  model: string;
+  failure?: QaMockProviderFailure;
+  onResponseSent?: () => void;
+  previewPauseMs?: number;
+};
 
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
@@ -127,10 +153,12 @@ export type MockOpenAiRequestSnapshot = {
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   requestKind: MockOpenAiRequestKind;
+  compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   outcome: MockOpenAiRequestOutcome;
   errorCode?: string;
   rawByteLength: number;
   plannedToolCallId?: string;
+  plannedToolItemId?: string;
   plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;

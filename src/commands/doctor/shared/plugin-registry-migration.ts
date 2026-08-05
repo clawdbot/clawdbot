@@ -28,14 +28,19 @@ const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
   openai: ["openai-codex"],
 };
 
-type PluginRegistryInstallMigrationPreflightAction = "skip-existing" | "migrate";
-
-type PluginRegistryInstallMigrationPreflight = {
-  /** Migration action selected before reading or writing registry state. */
-  action: PluginRegistryInstallMigrationPreflightAction;
-  /** Persisted plugin index path that migration will inspect or write. */
-  filePath: string;
-};
+type PluginRegistryInstallMigrationPreflight =
+  | {
+      /** Migration action selected before reading or writing registry state. */
+      action: "skip-existing";
+      /** Persisted plugin index path that migration will inspect or write. */
+      filePath: string;
+      /** Authoritative pre-repair generation used to detect a real inventory change. */
+      current: InstalledPluginIndex;
+    }
+  | {
+      action: "migrate";
+      filePath: string;
+    };
 
 type PluginRegistryInstallMigrationResult =
   | {
@@ -70,6 +75,7 @@ export function preflightPluginRegistryInstallMigration(
       return {
         action: "skip-existing",
         filePath,
+        current: currentRegistry,
       };
     }
   }

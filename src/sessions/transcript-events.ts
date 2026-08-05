@@ -68,7 +68,7 @@ export function onInternalSessionTranscriptUpdate(
 
 /** Emits a normalized transcript update to all registered listeners. */
 export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
-  const nextUpdate = normalizeSessionTranscriptUpdate(update, { allowIdentityOnly: true });
+  const nextUpdate = normalizeSessionTranscriptUpdate(update);
   if (!nextUpdate) {
     return;
   }
@@ -81,29 +81,18 @@ export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpd
 
 function normalizeSessionTranscriptUpdate(
   update: InternalSessionTranscriptUpdate,
-  options: { allowIdentityOnly: boolean },
 ): InternalSessionTranscriptUpdate | undefined {
-  const normalized = {
-    sessionFile: update.sessionFile,
-    target: update.target,
-    sessionKey: update.sessionKey,
-    agentId: update.agentId,
-    sessionId: update.sessionId,
-    lifecycleRevision: update.lifecycleRevision,
-    message: update.message,
-    messageId: update.messageId,
-    messageSeq: update.messageSeq,
-  };
-  const trimmed = normalizeOptionalString(normalized.sessionFile);
-  const target = normalizeUpdateTarget(normalized);
-  if (!trimmed && (!options.allowIdentityOnly || !target)) {
+  const trimmed = normalizeOptionalString(update.sessionFile);
+  const target = normalizeUpdateTarget(update);
+  if (!trimmed && !target) {
     return undefined;
   }
-  const messageSeq = asPositiveSafeInteger(normalized.messageSeq);
-  const sessionKey = normalizeOptionalString(normalized.sessionKey) ?? target?.sessionKey;
-  const agentId = normalizeOptionalString(normalized.agentId) ?? target?.agentId;
-  const sessionId = normalizeOptionalString(normalized.sessionId) ?? target?.sessionId;
-  const lifecycleRevision = normalizeOptionalString(normalized.lifecycleRevision);
+  const messageSeq = asPositiveSafeInteger(update.messageSeq);
+  const sessionKey = normalizeOptionalString(update.sessionKey) ?? target?.sessionKey;
+  const agentId = normalizeOptionalString(update.agentId) ?? target?.agentId;
+  const sessionId = normalizeOptionalString(update.sessionId) ?? target?.sessionId;
+  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+  const messageId = normalizeOptionalString(update.messageId);
   return {
     ...(trimmed ? { sessionFile: trimmed } : {}),
     ...(target ? { target } : {}),
@@ -111,10 +100,8 @@ function normalizeSessionTranscriptUpdate(
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(lifecycleRevision ? { lifecycleRevision } : {}),
-    ...(normalized.message !== undefined ? { message: normalized.message } : {}),
-    ...(normalizeOptionalString(normalized.messageId)
-      ? { messageId: normalizeOptionalString(normalized.messageId) }
-      : {}),
+    ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(messageId ? { messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
   };
 }

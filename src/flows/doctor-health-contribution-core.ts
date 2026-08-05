@@ -1,8 +1,23 @@
-import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import type {
+  DoctorHealthCheckContext,
+  DoctorHealthFlowContext,
+} from "./doctor-health-contribution-types.js";
 import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
+
+function withDoctorHealthCheckFacts<T extends object>(
+  ctx: DoctorHealthFlowContext,
+  input: T,
+): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot"> {
+  return {
+    ...input,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  };
+}
 
 export async function runStructuredHealthRepairs(
   ctx: DoctorHealthFlowContext,
@@ -22,13 +37,13 @@ export async function runStructuredHealthRepairs(
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
   const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks());
   const result = await runDoctorHealthRepairs(
-    {
-      mode: "fix",
+    withDoctorHealthCheckFacts(ctx, {
+      mode: "fix" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
-    },
+    }),
     { checks },
   );
   ctx.cfg = result.config;
@@ -61,14 +76,14 @@ export async function runCoreContributionHealth(
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
-    {
-      mode: "fix",
+    withDoctorHealthCheckFacts(ctx, {
+      mode: "fix" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
       dryRun,
-    },
+    }),
     { checks, dryRun },
   );
   ctx.cfg = result.config;
@@ -112,14 +127,16 @@ export async function runCoreHealthFindingNote(
   if (!check) {
     return;
   }
-  const findings = await check.detect({
-    mode: "doctor",
-    runtime: ctx.runtime,
-    cfg: ctx.cfg,
-    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
-    configPath: ctx.configPath,
-    allowExecSecretRefs: ctx.options.allowExec === true,
-  });
+  const findings = await check.detect(
+    withDoctorHealthCheckFacts(ctx, {
+      mode: "doctor" as const,
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+      configPath: ctx.configPath,
+      allowExecSecretRefs: ctx.options.allowExec === true,
+    }),
+  );
   if (findings.length === 0) {
     return;
   }

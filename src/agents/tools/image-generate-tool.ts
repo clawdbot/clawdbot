@@ -58,6 +58,7 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "./common.js";
+import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import {
   completeImageGenerationTaskRun,
   createImageGenerationTaskRun,
@@ -110,6 +111,7 @@ import {
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
+const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 const DEFAULT_MAX_INPUT_IMAGES = 10;
 const MAX_REFERENCE_IMAGE_INPUTS = 14;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
@@ -784,17 +786,20 @@ async function executeImageGenerationJob(params: {
       Boolean(normalizedAspectRatio));
 
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image");
-  const savedImages = await Promise.all(
-    result.images.map((image) =>
-      saveMediaBuffer(
+  const savedImages = await persistGeneratedMediaBatch({
+    subdir: GENERATED_IMAGE_MEDIA_SUBDIR,
+    mode: "concurrent",
+    saves: result.images.map((image) => async () => {
+      const savedMedia = await saveMediaBuffer(
         image.buffer,
         image.mimeType,
-        "tool-image-generation",
+        GENERATED_IMAGE_MEDIA_SUBDIR,
         mediaMaxBytes,
         params.filename || image.fileName,
-      ),
-    ),
-  );
+      );
+      return { value: savedMedia, savedMedia };
+    }),
+  });
 
   const revisedPrompts = result.images
     .map((image) => image.revisedPrompt?.trim())

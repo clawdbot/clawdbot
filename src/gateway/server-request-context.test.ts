@@ -51,6 +51,7 @@ function makeContextParams(
       entries: [],
       routeVariants: [],
     })),
+    readChatMetadata: vi.fn(async () => ({ swarmEnabled: false })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },

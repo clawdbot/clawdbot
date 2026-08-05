@@ -262,6 +262,7 @@ async function deliverSlackThreadAnnouncement(params: {
   sourceTool?: string;
   requesterAbandoned?: boolean;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
 }) {
   // Slack thread delivery exercises all origins because direct, session, and
   // completion routing can differ after a child run outlives its requester.
@@ -296,6 +297,7 @@ async function deliverSlackThreadAnnouncement(params: {
     sourceRunId: "run-generated-media",
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+    isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
   });
 }
 
@@ -1127,6 +1129,35 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "defers completion delivery when sessions_yield owns the handoff (active: %s)",
+    async (isActive) => {
+      const callGateway = createGatewayMock();
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+        "runtime_rejected",
+      ]);
+
+      const result = await deliverSlackThreadAnnouncement({
+        callGateway,
+        sessionId: "requester-session-1",
+        isActive,
+        directIdempotencyKey: `announce-yield-owned-completion-${isActive}`,
+        queueEmbeddedAgentMessageWithOutcome,
+        isCompletionOwnedByRequesterYield: () => true,
+      });
+
+      expect(result).toMatchObject({
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_pending",
+        terminal: true,
+        disposition: "intentional_non_delivery",
+      });
+      expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps direct external delivery for dormant completion requesters", async () => {
     const callGateway = createGatewayMock();

@@ -21,7 +21,8 @@ import {
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
-import { openTelegramIngressQueue, writeTelegramSpooledUpdate } from "./telegram-ingress-spool.js";
+import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
@@ -623,7 +624,7 @@ describe("startTelegramWebhook", () => {
     );
   });
 
-  it("aborts bot media fetches when the webhook stops", async () => {
+  it("aborts bot fetches and account-owned work when the webhook stops", async () => {
     const callerAbort = new AbortController();
     const started = await startTelegramWebhook({
       token: TELEGRAM_TOKEN,
@@ -640,17 +641,28 @@ describe("startTelegramWebhook", () => {
         "createTelegramBot params",
       );
       const fetchAbortSignal = botParams.fetchAbortSignal;
+      const accountAbortSignal = botParams.accountAbortSignal;
       expect(fetchAbortSignal).toBeInstanceOf(AbortSignal);
-      if (!(fetchAbortSignal instanceof AbortSignal)) {
-        throw new Error("expected bot fetch abort signal");
+      expect(accountAbortSignal).toBeInstanceOf(AbortSignal);
+      if (
+        !(fetchAbortSignal instanceof AbortSignal) ||
+        !(accountAbortSignal instanceof AbortSignal)
+      ) {
+        throw new Error("expected bot fetch and account abort signals");
       }
-      const aborted = new Promise<void>((resolve) => {
+      const fetchAborted = new Promise<void>((resolve) => {
         fetchAbortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      const accountAborted = new Promise<void>((resolve) => {
+        accountAbortSignal.addEventListener("abort", () => resolve(), { once: true });
       });
 
       await started.stop();
 
-      await expect(aborted).resolves.toBeUndefined();
+      await expect(Promise.all([fetchAborted, accountAborted])).resolves.toEqual([
+        undefined,
+        undefined,
+      ]);
       expect(callerAbort.signal.aborted).toBe(false);
     } finally {
       await started.stop();

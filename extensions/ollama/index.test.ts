@@ -14,6 +14,7 @@ import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
   vi.fn(async () => ({
     credential: "ollama-local",
+    defaultModel: "ollama/qwen-tool",
     config: {
       models: {
         providers: {
@@ -518,7 +519,7 @@ describe("ollama plugin", () => {
     expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
   });
 
-  it("does not preselect a default model during provider auth setup", async () => {
+  it("returns the exact model selected during provider auth setup", async () => {
     const provider = registerProvider();
 
     const result = await provider.auth[0].run({
@@ -547,7 +548,7 @@ describe("ollama plugin", () => {
         },
       },
     });
-    expect(result.defaultModel).toBeUndefined();
+    expect(result.defaultModel).toBe("ollama/qwen-tool");
   });
 
   it("discovers and prepares a loaded tool-capable model without pulling it", async () => {
@@ -635,6 +636,72 @@ describe("ollama plugin", () => {
     ).resolves.toBeNull();
 
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+    expect(queryOllamaModelShowInfoMock).not.toHaveBeenCalled();
+  });
+
+  it("prepares the exact configured model even when it is installed but idle", async () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama" as const,
+            models: [
+              {
+                id: "qwen-tool",
+                name: "qwen-tool",
+                reasoning: false,
+                input: ["text"] as const,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 8_192,
+                compat: { supportsTools: true },
+              },
+            ],
+          },
+        },
+      },
+    };
+    fetchLoadedOllamaModelNamesMock.mockResolvedValue({ reachable: true, models: [] });
+    mockDiscoveredOllamaProvider([
+      { id: "qwen-tool", name: "qwen-tool", compat: { supportsTools: true } },
+    ]);
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.prepare({
+        config,
+        env: {},
+        modelRef: "ollama/qwen-tool",
+      }),
+    ).resolves.toMatchObject({
+      defaultModel: "ollama/qwen-tool",
+      configPatch: {
+        models: {
+          providers: {
+            ollama: {
+              models: [expect.objectContaining({ id: "qwen-tool" })],
+            },
+          },
+        },
+      },
+    });
+    expect(fetchLoadedOllamaModelNamesMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit installed model that setup did not configure", async () => {
+    const provider = registerProvider();
+    mockDiscoveredOllamaProvider([
+      { id: "other-model", name: "other-model", compat: { supportsTools: true } },
+    ]);
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.prepare({
+        config: {},
+        env: {},
+        modelRef: "ollama/other-model",
+      }),
+    ).resolves.toBeNull();
     expect(queryOllamaModelShowInfoMock).not.toHaveBeenCalled();
   });
 

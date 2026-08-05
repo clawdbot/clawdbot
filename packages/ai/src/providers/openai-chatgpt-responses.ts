@@ -36,6 +36,8 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
+import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
   processResponsesStream,
   ResponsesStreamFailure,
@@ -137,6 +139,10 @@ interface RequestBody {
   prompt_cache_key?: string;
   [key: string]: unknown;
 }
+
+type ObserveResponsesPromptEgress = NonNullable<
+  ReturnType<typeof createResponsesPromptEgressObserver>
+>;
 
 // ============================================================================
 // Retry Helpers
@@ -284,6 +290,10 @@ export const streamOpenAICodexResponses: StreamFunction<
       if (nextBody !== undefined) {
         body = nextBody as RequestBody;
       }
+      const observePromptEgress = createResponsesPromptEgressObserver(
+        options,
+        context.systemPrompt,
+      );
       // NOTE: when options.sessionId is absent, this falls back to a fresh random id
       // per request, which forfeits session-affinity routing on the WS transport (the
       // backend routes by session_id/x-client-request-id). Left as-is for this fix;
@@ -324,6 +334,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               },
               requestOptions,
               firstEventAbort.abort,
+              observePromptEgress,
             );
 
             if (activeSignal?.aborted) {
@@ -395,6 +406,10 @@ export const streamOpenAICodexResponses: StreamFunction<
         let attemptResponse: Response;
         let errorText: string;
         try {
+          observePromptEgress?.(body, {
+            egress: "native-codex-sse",
+            payloadVariant: "initial",
+          });
           attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
             method: "POST",
             headers: sseHeaders,
@@ -516,11 +531,12 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
-  const base = buildBaseOptions(model, options, apiKey);
-  return streamOpenAICodexResponses(model, context, {
-    ...base,
+  const resolvedOptions = {
+    ...buildBaseOptions(model, options, apiKey),
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
-  } satisfies OpenAICodexResponsesOptions);
+  } satisfies OpenAICodexResponsesOptions;
+  responsesPromptObserver.copy(options, resolvedOptions);
+  return streamOpenAICodexResponses(model, context, resolvedOptions);
 };
 
 // ============================================================================
@@ -1461,6 +1477,7 @@ async function processWebSocketStream(
   onStart: () => void,
   options?: OpenAICodexResponsesOptions,
   abortFirstEventStream?: (reason: Error) => void,
+  observePromptEgress?: ObserveResponsesPromptEgress,
 ): Promise<void> {
   const { socket, entry, release } = await acquireWebSocket(
     url,
@@ -1480,6 +1497,10 @@ async function processWebSocketStream(
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);
     }
+    observePromptEgress?.(requestBody, {
+      egress: "native-codex-websocket",
+      payloadVariant: "initial",
+    });
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(
       startWebSocketOutputOnFirstEvent(

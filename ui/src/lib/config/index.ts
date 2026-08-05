@@ -1,7 +1,11 @@
 // Control UI runtime config capability and shared config-domain mutations.
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
@@ -15,6 +19,7 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { canCallGatewayMethod } from "../gateway-methods.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
@@ -32,6 +37,16 @@ type RuntimeConfigExternalMutationResult<T> =
       reason: "conflict" | "error" | "rejected" | "suspended" | "unavailable";
       error: string;
     };
+
+type RuntimeConfigExternalMutationOptions = {
+  waitForWritesResumed?: boolean;
+  canDispatch?: () => boolean;
+  dispatchError?: string;
+};
+
+type RuntimeConfigDispatchOptions = {
+  canDispatch?: () => boolean;
+};
 
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -187,6 +202,7 @@ type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
   phase: ApplicationGatewayPhase;
   sessionKey: string;
+  hello?: GatewayHelloOk | null;
 };
 
 type RuntimeConfigGateway = {
@@ -196,6 +212,10 @@ type RuntimeConfigGateway = {
 
 export type RuntimeConfigCapability = {
   readonly state: ConfigState;
+  readonly canSet?: boolean;
+  readonly canApply?: boolean;
+  readonly canPatch?: boolean;
+  readonly canOpenFile?: boolean;
   ensureLoaded: () => Promise<void>;
   ensureSchemaLoaded: () => Promise<void>;
   refresh: (options?: LoadConfigOptions) => Promise<void>;
@@ -210,7 +230,7 @@ export type RuntimeConfigCapability = {
   setWritesSuspended: (suspended: boolean) => void;
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
-  save: () => Promise<boolean>;
+  save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
   /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
@@ -224,7 +244,7 @@ export type RuntimeConfigCapability = {
    */
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: { waitForWritesResumed?: boolean },
+    options?: RuntimeConfigExternalMutationOptions,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
@@ -240,6 +260,8 @@ type ConfigPatchOptions = {
   note: string;
   /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
   replacePaths?: string[];
+  /** Caller-owned lifecycle/access guard, rechecked at the final dispatch boundary. */
+  canDispatch?: () => boolean;
 };
 
 type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
@@ -697,6 +719,7 @@ async function submitConfigChange(
   busyKey: ConfigSubmitBusyKey,
   extraParams: Record<string, unknown> = {},
   onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected) {
@@ -725,6 +748,9 @@ async function submitConfigChange(
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
+      return false;
+    }
+    if (!isCurrent() || !canDispatch()) {
       return false;
     }
     // Dispatch-phase report (ackHash null): if the connection dies before the
@@ -802,12 +828,16 @@ function teardownFlushConfigDraft(
   state: ConfigState,
   client: GatewayBrowserClient,
   baseHash: string,
+  canDispatch: () => boolean,
 ): void {
   // Must stay synchronous: page unload destroys the context before any
   // deferred work runs. If a JSON5 original parse is still pending, sanitize
   // passes placeholders through; the gateway restores restorable sentinels
   // (restoreRedactedValues) and rejects unrestorable ones, so the worst case
   // matches not flushing at all while the common case saves the draft.
+  if (!canDispatch()) {
+    return;
+  }
   const raw = serializeFormForSubmit(state);
   void client.request("config.set", { raw, baseHash }).catch(() => undefined);
 }
@@ -822,6 +852,7 @@ function teardownFlushConfigDraft(
 async function autoSaveConfig(
   state: ConfigState,
   onAck?: (ackHash: string | null) => void,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected || !state.configFormDirty || state.configFormMode !== "form") {
@@ -844,6 +875,9 @@ async function autoSaveConfig(
   if (!baseHash) {
     state.configAutoSaveStatus = "error";
     state.lastError = "Config hash missing; reload and retry.";
+    return false;
+  }
+  if (!isCurrent() || !canDispatch()) {
     return false;
   }
   state.configAutoSaveStatus = "saving";
@@ -931,14 +965,22 @@ function resetStaleAutoSaveStatus(state: ConfigState) {
 async function saveConfig(
   state: ConfigState,
   onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
+  canDispatch?: () => boolean,
 ): Promise<boolean> {
-  return submitConfigChange(state, "config.set", "configSaving", {}, onSubmitted);
+  return submitConfigChange(state, "config.set", "configSaving", {}, onSubmitted, canDispatch);
 }
 
-async function applyConfig(state: ConfigState): Promise<boolean> {
-  return submitConfigChange(state, "config.apply", "configApplying", {
-    sessionKey: state.applySessionKey,
-  });
+async function applyConfig(state: ConfigState, canDispatch?: () => boolean): Promise<boolean> {
+  return submitConfigChange(
+    state,
+    "config.apply",
+    "configApplying",
+    {
+      sessionKey: state.applySessionKey,
+    },
+    undefined,
+    canDispatch,
+  );
 }
 
 async function patchConfig(
@@ -955,6 +997,9 @@ async function patchConfig(
   const baseHash = currentSnapshot.hash;
   if (!baseHash) {
     state.lastError = "Config hash missing; refresh and retry.";
+    return false;
+  }
+  if (options.canDispatch && !options.canDispatch()) {
     return false;
   }
   state.lastError = null;
@@ -1379,6 +1424,8 @@ export function createRuntimeConfigCapability(
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let autoSaveInFlight: Promise<unknown> | null = null;
   let autoSaveTrailing = false;
+  let autoSaveDraftConnection: { client: GatewayBrowserClient; epoch: number } | null = null;
+  let autoSaveRequiresExplicitSubmit = false;
   let lastFlightSubmittedRaw: string | null = null;
   let lastFlightAckHash: string | null = null;
   let manualSubmitInFlight: Promise<unknown> | null = null;
@@ -1410,6 +1457,62 @@ export function createRuntimeConfigCapability(
   // a post-apply write is meaningless while the gateway restarts, so the
   // teardown flush fail-closes on them).
   let manualFlightInfo: { raw: string; ackHash: string | null } | null = null;
+  const canCallConfigMethod = (
+    method: "config.set" | "config.apply" | "config.patch" | "config.openFile",
+    options?: { requireAdvertisement?: boolean },
+  ) =>
+    canCallGatewayMethod(
+      {
+        client: gateway.snapshot.client,
+        hello: gateway.snapshot.hello ?? null,
+        phase: gateway.snapshot.phase,
+      },
+      method,
+      "operator.admin",
+      options,
+    );
+  const clearAutoSaveDraftConnection = () => {
+    autoSaveDraftConnection = null;
+    autoSaveRequiresExplicitSubmit = false;
+  };
+  const captureAutoSaveDraftConnection = () => {
+    if (
+      autoSaveRequiresExplicitSubmit ||
+      autoSaveDraftConnection ||
+      !state.client ||
+      !state.connected ||
+      !state.configFormDirty ||
+      state.configFormMode !== "form"
+    ) {
+      return;
+    }
+    autoSaveDraftConnection = {
+      client: state.client,
+      epoch: currentConfigConnectionEpoch(state),
+    };
+  };
+  const bindDraftToExplicitSubmit = () => {
+    if (!state.client || !state.connected || state.configFormMode !== "form") {
+      return;
+    }
+    autoSaveDraftConnection = {
+      client: state.client,
+      epoch: currentConfigConnectionEpoch(state),
+    };
+    autoSaveRequiresExplicitSubmit = false;
+  };
+  const canAutoSaveDraftOnCurrentConnection = () =>
+    !autoSaveRequiresExplicitSubmit &&
+    autoSaveDraftConnection !== null &&
+    autoSaveDraftConnection.client === state.client &&
+    autoSaveDraftConnection.epoch === currentConfigConnectionEpoch(state);
+  const reconcileAutoSaveDraftConnection = () => {
+    if (state.configFormDirty && state.configFormMode === "form") {
+      captureAutoSaveDraftConnection();
+    } else if (autoSaveInFlight === null && manualSubmitInFlight === null) {
+      clearAutoSaveDraftConnection();
+    }
+  };
 
   const publish = () => {
     if (disposed) {
@@ -1473,7 +1576,13 @@ export function createRuntimeConfigCapability(
   const cancelAppliedRefresh = appliedRefresh.cancel;
   const reconcileAppliedRefresh = appliedRefresh.reconcile;
   const runAutoSave = () => {
-    if (disposed || suppressAutoSave || writesSuspended) {
+    if (
+      disposed ||
+      suppressAutoSave ||
+      writesSuspended ||
+      !canAutoSaveDraftOnCurrentConnection() ||
+      !canCallConfigMethod("config.set")
+    ) {
       return;
     }
     if (autoSaveInFlight ?? manualSubmitInFlight) {
@@ -1490,9 +1599,13 @@ export function createRuntimeConfigCapability(
     lastFlightSubmittedRaw = serializeFormForSubmit(state);
     lastFlightAckHash = null;
     const flight = run(() =>
-      autoSaveConfig(state, (ackHash) => {
-        lastFlightAckHash = ackHash;
-      }),
+      autoSaveConfig(
+        state,
+        (ackHash) => {
+          lastFlightAckHash = ackHash;
+        },
+        () => canCallConfigMethod("config.set"),
+      ),
     )
       .catch(() => false)
       .then((saved) => {
@@ -1502,6 +1615,7 @@ export function createRuntimeConfigCapability(
           return;
         }
         autoSaveInFlight = null;
+        reconcileAutoSaveDraftConnection();
         // One trailing save catches edits (or reverts back to the pre-save
         // value) made while the request was in flight. A still-armed debounce
         // timer owns its own save, and failed flights never self-retry.
@@ -1532,7 +1646,14 @@ export function createRuntimeConfigCapability(
     // Only form-draft edits auto-save; raw-text drafts stay manual so a
     // half-typed JSON5 buffer never gets written to disk. Suspended writes
     // (app updater running) stay dirty and reschedule when suspension lifts.
-    if (disposed || writesSuspended || !state.configFormDirty || state.configFormMode !== "form") {
+    if (
+      disposed ||
+      writesSuspended ||
+      !canAutoSaveDraftOnCurrentConnection() ||
+      !canCallConfigMethod("config.set") ||
+      !state.configFormDirty ||
+      state.configFormMode !== "form"
+    ) {
       return;
     }
     // A conflict proves the snapshot is stale; retrying against the same base
@@ -1603,7 +1724,7 @@ export function createRuntimeConfigCapability(
   const afterPendingWritesSettled = <T>(
     task: () => Promise<T>,
     unavailable: T,
-    options: { flushScheduledDraft?: boolean } = {},
+    options: { flushScheduledDraft?: boolean; canDispatch?: () => boolean } = {},
   ): Promise<T> => {
     if (writesSuspended) {
       return Promise.resolve(unavailable);
@@ -1630,6 +1751,11 @@ export function createRuntimeConfigCapability(
           return unavailable;
         }
         if (!client || !isCurrentConfigConnection(state, client, connectionEpoch)) {
+          return unavailable;
+        }
+        // Hello method/scope metadata can change while the client and
+        // connection epoch stay stable. Recheck at the dispatch boundary.
+        if (options.canDispatch && !options.canDispatch()) {
           return unavailable;
         }
         manualFlightInfo = null;
@@ -1680,6 +1806,9 @@ export function createRuntimeConfigCapability(
     state.connected = connected;
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
+      const draftBelongsToPreviousConnection =
+        state.configFormMode === "form" &&
+        (state.configFormDirty || autoSaveInFlight !== null || manualSubmitInFlight !== null);
       configLoad = null;
       schemaLoad = null;
       // A dead prior-connection flight must not keep the reconnected owner's
@@ -1690,6 +1819,12 @@ export function createRuntimeConfigCapability(
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
       cancelAppliedRefresh();
+      if (draftBelongsToPreviousConnection) {
+        // A retained draft belongs to the Gateway connection where the edit
+        // began. Preserve it across replacement, but require an explicit
+        // Save/Apply or reload before the new Gateway may receive it.
+        autoSaveRequiresExplicitSubmit = true;
+      }
       if (autoSaveInFlight !== null || manualSubmitInFlight !== null) {
         // The epoch guard already blocks these flights from mutating state;
         // deregistering releases drain barriers and the trailing-save chain
@@ -1716,15 +1851,12 @@ export function createRuntimeConfigCapability(
       if (state.configAutoSaveStatus === "saving") {
         state.configAutoSaveStatus = "idle";
       }
-      // A reconnect must not strand a dirty draft whose debounce was just
-      // cancelled; reschedule against the new connection. If the file moved
-      // while offline, the save reports a baseHash conflict instead of
-      // clobbering the other writer.
       if (state.connected && state.client) {
         if (hasInterruptedWrite) {
           // The interrupted write may or may not have committed. Fetch the
-          // authoritative snapshot before autosave resumes so an uncertain
-          // flight can't strand a clean-looking draft or retry a stale base.
+          // authoritative snapshot so an uncertain flight cannot leave a
+          // clean-looking draft or a stale base. Replacement connections
+          // never resume autosave for the retained draft.
           const interruptedRaw = interruptedWriteRaw;
           // A revert made while the write was in flight reads clean (the ack
           // never rebased the originals), so the reload below would replace
@@ -1744,9 +1876,6 @@ export function createRuntimeConfigCapability(
               // Reload failed or the connection flipped again: keep the
               // interruption metadata so the NEXT reconnect retries
               // reconciliation instead of silently taking the plain path.
-              // A dirty draft may still reschedule; a stale base surfaces
-              // as a conflict with its Reload recovery, never a clobber.
-              scheduleAutoSave();
               reconcileAppliedRefresh();
               return;
             }
@@ -1763,7 +1892,17 @@ export function createRuntimeConfigCapability(
                 state.configNeedsApply = true;
               }
               if (state.configFormDirty) {
-                state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
+                if (serializeFormForSubmit(state) === interruptedRaw) {
+                  // The lost acknowledgement was the only missing event: the
+                  // retained bytes are already authoritative, so no draft
+                  // remains to submit on the replacement connection.
+                  applyConfigSnapshot(state, state.configSnapshot, {
+                    discardPendingChanges: true,
+                  });
+                  clearAutoSaveDraftConnection();
+                } else {
+                  state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
+                }
               } else if (
                 draftFormBefore &&
                 draftRawBefore !== null &&
@@ -1781,11 +1920,9 @@ export function createRuntimeConfigCapability(
               }
             }
             publish();
-            scheduleAutoSave();
             reconcileAppliedRefresh();
           });
         } else {
-          scheduleAutoSave();
           reconcileAppliedRefresh();
         }
       }
@@ -1833,7 +1970,10 @@ export function createRuntimeConfigCapability(
         }
       },
       false,
-      { flushScheduledDraft: true },
+      {
+        flushScheduledDraft: true,
+        canDispatch: () => canCallConfigMethod("config.patch"),
+      },
     ).finally(() => {
       scheduleAutoSave();
     });
@@ -1842,6 +1982,18 @@ export function createRuntimeConfigCapability(
   return {
     get state() {
       return state;
+    },
+    get canSet() {
+      return canCallConfigMethod("config.set");
+    },
+    get canApply() {
+      return canCallConfigMethod("config.apply");
+    },
+    get canPatch() {
+      return canCallConfigMethod("config.patch");
+    },
+    get canOpenFile() {
+      return canCallConfigMethod("config.openFile", { requireAdvertisement: false });
     },
     ensureLoaded,
     ensureSchemaLoaded,
@@ -1866,16 +2018,19 @@ export function createRuntimeConfigCapability(
       ),
     patchForm: (path, value) => {
       mutate(() => updateConfigFormValue(state, path, value));
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
     },
     removeFormValue: (path) => {
       mutate(() => removeConfigFormValue(state, path));
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
     },
     setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
     resetDraft: () => {
       cancelScheduledAutoSave();
       mutate(() => resetConfigPendingChanges(state));
+      clearAutoSaveDraftConnection();
       reconcileAppliedRefresh();
     },
     discardDraft: async () => {
@@ -1890,6 +2045,7 @@ export function createRuntimeConfigCapability(
             "config",
             run(() => loadConfig(state, { discardPendingChanges: true })),
           );
+          clearAutoSaveDraftConnection();
         } finally {
           reconcileAppliedRefresh();
         }
@@ -1907,6 +2063,7 @@ export function createRuntimeConfigCapability(
           state.lastError = null;
         }
       });
+      clearAutoSaveDraftConnection();
     },
     setWritesSuspended: (suspended) => {
       if (writesSuspended === suspended) {
@@ -1933,41 +2090,73 @@ export function createRuntimeConfigCapability(
       flushScheduledAutoSave();
       return drainPendingWrites(true);
     },
-    save: () =>
-      afterPendingWritesSettled(async () => {
-        cancelAppliedRefresh();
-        try {
-          return await saveConfig(state, (info) => {
-            manualFlightInfo = info;
-          });
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }, false),
+    save: (options = {}) => {
+      const canDispatch = () =>
+        canCallConfigMethod("config.set") && (options.canDispatch?.() ?? true);
+      return !canDispatch()
+        ? Promise.resolve(false)
+        : afterPendingWritesSettled(
+            async () => {
+              bindDraftToExplicitSubmit();
+              cancelAppliedRefresh();
+              try {
+                const saved = await saveConfig(
+                  state,
+                  (info) => {
+                    manualFlightInfo = info;
+                  },
+                  canDispatch,
+                );
+                reconcileAutoSaveDraftConnection();
+                return saved;
+              } finally {
+                reconcileAppliedRefresh();
+              }
+            },
+            false,
+            { canDispatch },
+          );
+    },
     apply: () =>
-      afterPendingWritesSettled(async () => {
-        cancelAppliedRefresh();
-        // Checked after the drain: a raw draft whose explicit Save is in
-        // flight resolves clean and may apply. A raw draft that is STILL
-        // dirty here was never reviewed-saved — applying would implicitly
-        // write unreviewed raw text, so refuse and point at the Raw editor.
-        if (state.configFormDirty && state.configFormMode === "raw") {
-          state.configAutoSaveStatus = "error";
-          state.lastError = t("configView.rawDraftBlocksApply");
-          reconcileAppliedRefresh();
-          return false;
-        }
-        try {
-          return await applyConfig(state);
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }, false),
-    openFile: () => run(() => openConfigFile(state)),
+      !canCallConfigMethod("config.apply")
+        ? Promise.resolve(false)
+        : afterPendingWritesSettled(
+            async () => {
+              bindDraftToExplicitSubmit();
+              cancelAppliedRefresh();
+              // Checked after the drain: a raw draft whose explicit Save is in
+              // flight resolves clean and may apply. A raw draft that is STILL
+              // dirty here was never reviewed-saved — applying would implicitly
+              // write unreviewed raw text, so refuse and point at the Raw editor.
+              if (state.configFormDirty && state.configFormMode === "raw") {
+                state.configAutoSaveStatus = "error";
+                state.lastError = t("configView.rawDraftBlocksApply");
+                reconcileAppliedRefresh();
+                return false;
+              }
+              try {
+                const applied = await applyConfig(state, () => canCallConfigMethod("config.apply"));
+                reconcileAutoSaveDraftConnection();
+                return applied;
+              } finally {
+                reconcileAppliedRefresh();
+              }
+            },
+            false,
+            { canDispatch: () => canCallConfigMethod("config.apply") },
+          ),
+    openFile: () =>
+      canCallConfigMethod("config.openFile", { requireAdvertisement: false })
+        ? run(() => openConfigFile(state))
+        : Promise.resolve(),
     agentEntry: (agentId, options) => agentConfigEntry(state, agentId, options),
     stageDefaultAgent: (agentId) => {
+      if (!canCallConfigMethod("config.set")) {
+        return false;
+      }
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
       return changed;
     },
@@ -1976,17 +2165,22 @@ export function createRuntimeConfigCapability(
     // Unlike save/apply, a patch does not submit the form draft — flush a
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
-    patch: (options) => queueConfigPatch(() => ({ options })),
+    patch: (options) =>
+      canCallConfigMethod("config.patch") && (options.canDispatch?.() ?? true)
+        ? queueConfigPatch(() => ({ options }))
+        : Promise.resolve(false),
     patchFromSnapshot: (build) =>
-      queueConfigPatch(() => {
-        const config = resolveEditableSnapshotConfig(state.configSnapshot);
-        return config
-          ? build(config)
-          : { error: "Configuration is unavailable; refresh and try again." };
-      }),
+      canCallConfigMethod("config.patch")
+        ? queueConfigPatch(() => {
+            const config = resolveEditableSnapshotConfig(state.configSnapshot);
+            return config
+              ? build(config)
+              : { error: "Configuration is unavailable; refresh and try again." };
+          })
+        : Promise.resolve(false),
     runExternalMutation: async <T>(
       task: (client: GatewayBrowserClient) => Promise<T>,
-      options: { waitForWritesResumed?: boolean } = {},
+      options: RuntimeConfigExternalMutationOptions = {},
     ): Promise<RuntimeConfigExternalMutationResult<T>> => {
       const mutationClient = state.client;
       const mutationConnectionEpoch = currentConfigConnectionEpoch(state);
@@ -2015,6 +2209,15 @@ export function createRuntimeConfigCapability(
           async (): Promise<RuntimeConfigExternalMutationResult<T>> => {
             if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
               return unavailable;
+            }
+            if (options.canDispatch && !options.canDispatch()) {
+              return {
+                ok: false,
+                reason: "unavailable",
+                error:
+                  options.dispatchError ??
+                  "Access changed before the configuration update started.",
+              };
             }
             let value: T;
             try {
@@ -2121,7 +2324,12 @@ export function createRuntimeConfigCapability(
       // invalidated below.
       const client = state.client;
       const canFlush =
-        state.connected && client !== null && state.configFormMode === "form" && !writesSuspended;
+        state.connected &&
+        client !== null &&
+        state.configFormMode === "form" &&
+        !writesSuspended &&
+        canAutoSaveDraftOnCurrentConnection() &&
+        canCallConfigMethod("config.set");
       const autoFlight = autoSaveInFlight;
       const pendingFlight = autoFlight ?? manualSubmitInFlight;
       cancelScheduledAutoSave();
@@ -2146,11 +2354,13 @@ export function createRuntimeConfigCapability(
           // pre-save value reads configFormDirty=false while the persisted
           // bytes are still the unreverted submission.
           if (ackHash && submittedRaw !== null && serializeFormForSubmit(state) !== submittedRaw) {
-            teardownFlushConfigDraft(state, client, ackHash);
+            teardownFlushConfigDraft(state, client, ackHash, () =>
+              canCallConfigMethod("config.set"),
+            );
           }
         });
       } else if (canFlush && state.configFormDirty) {
-        void autoSaveConfig(state);
+        void autoSaveConfig(state, undefined, () => canCallConfigMethod("config.set"));
       }
       invalidateConfigConnection(state);
       state.connected = false;
