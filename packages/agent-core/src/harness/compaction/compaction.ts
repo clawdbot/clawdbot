@@ -169,9 +169,7 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
  * summary-size budget, NOT from the input-side reserve floor (which is a
  * context-window holdback and can be 16x larger on high-maxTokens models).
  */
-const MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS = Math.ceil(
-  16_000 / CHARS_PER_TOKEN_ESTIMATE,
-);
+const MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS = Math.ceil(16_000 / CHARS_PER_TOKEN_ESTIMATE);
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
