@@ -1247,7 +1247,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
         lastAssistant: toolUseAssistant,
         currentAttemptAssistant: toolUseAssistant,
-        lastToolError: { toolName: "exec", error: "post-processing error" },
+        lastToolError: {
+          toolName: "exec",
+          error: "post-processing error",
+          errorCode: "SYSTEM_RUN_DENIED",
+        },
       });
     });
     const finalAssistant = {
@@ -1285,6 +1289,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(finalizationCall.prompt).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(finalizationCall.prompt).toContain(
       "If any tool failed, state that failure plainly and do not claim it succeeded.",
+    );
+    expect(result.meta.failureSignal).toEqual(
+      runPolicy.trigger === "cron"
+        ? {
+            kind: "execution_denied",
+            source: "tool",
+            toolName: "exec",
+            code: "SYSTEM_RUN_DENIED",
+            message: "post-processing error",
+            fatalForCron: true,
+          }
+        : undefined,
     );
   });
 
