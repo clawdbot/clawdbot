@@ -108,6 +108,8 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
+  // Thread participation admits implicit follow-ups without requesting a reply;
+  // preserve existing feedback only when typing was explicitly configured.
   const configuredTypingMode =
     resolveAgentConfig(cfg, route.agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
   const suppressImplicitThreadFeedback =
@@ -281,8 +283,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     (hookRunner?.hasHooks("message_sending") ?? false);
   // Portable previews and native progress cards exist before outbound modifiers accept the
   // payload. Native answer streaming stays enabled because it begins after both hook gates.
-  const allowPreHookProviderStreaming =
-    !suppressImplicitThreadFeedback && !modifyingHooksRegistered;
+  const allowPreHookProviderStreaming = !modifyingHooksRegistered;
   const previewStreamingEnabled =
     allowPreHookProviderStreaming &&
     !sourceRepliesAreToolOnly &&

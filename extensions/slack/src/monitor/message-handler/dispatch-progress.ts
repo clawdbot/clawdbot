@@ -98,7 +98,10 @@ export function createSlackProgressRuntime(runtimeParams: {
   let hasStreamedMessage = false;
   const streamMode = slackStreaming.draftMode;
   const useNativeProgressStreaming = useStreaming && slackStreaming.mode === "progress";
-  const progressDraftActive = Boolean(draftStream) || useNativeProgressStreaming;
+  // Preserve answer streaming while keeping provisional progress invisible on
+  // implicit thread turns that may intentionally finish without replying.
+  const progressDraftActive =
+    !setup.suppressImplicitThreadFeedback && (Boolean(draftStream) || useNativeProgressStreaming);
   const previewToolProgressEnabled =
     progressDraftActive &&
     resolveChannelStreamingPreviewToolProgress(account.config, true, slackStreaming.mode);
@@ -435,7 +438,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       await progressDraft.pushPlanProgress(steps, { explanation });
       return;
     }
-    if (previewToolProgressSuppressed || !draftStream) {
+    if (previewToolProgressSuppressed || !draftStream || !progressDraftActive) {
       return;
     }
     const text = formatChannelProgressDraftText({
