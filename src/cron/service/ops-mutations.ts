@@ -35,6 +35,7 @@ import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
 import type {
+  CronAddResult,
   CronAddOptions,
   CronServiceState,
   CronUpdateOptions,
@@ -52,6 +53,8 @@ import {
   warnIfDisabled,
 } from "./store.js";
 import { armTimer } from "./timer.js";
+
+const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session cleanup");
 
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
@@ -219,7 +222,12 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
 }
 
 /** Adds or converges a declaration-keyed cron job inside one store lock and write transaction. */
-export async function add(state: CronServiceState, input: CronJobCreate, opts?: CronAddOptions) {
+export async function add(
+  state: CronServiceState,
+  input: CronJobCreate,
+  opts?: CronAddOptions,
+): Promise<CronAddResult> {
+  let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     // Heartbeat monitors are gateway-converged system jobs; without this
@@ -239,6 +247,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     }
     if (normalizedId) {
       normalizeCronTaskRunJobId(normalizedId);
+      pendingSessionCleanup = state.pendingSessionCleanupByJobId.get(normalizedId);
+      if (pendingSessionCleanup) {
+        throw RETRY_ADD_AFTER_SESSION_CLEANUP;
+      }
     }
     const normalizedInput = normalizedId ? { ...input, id: normalizedId } : input;
     const declarationKey = normalizeOptionalString(input.declarationKey);
@@ -339,6 +351,12 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       nextRunAtMs: job.state.nextRunAtMs,
     });
     return declarationKey ? { ...job, created: true, job } : job;
+  }).catch(async (error: unknown) => {
+    if (error !== RETRY_ADD_AFTER_SESSION_CLEANUP || !pendingSessionCleanup) {
+      throw error;
+    }
+    await pendingSessionCleanup;
+    return await add(state, input, opts);
   });
 }
 
@@ -446,7 +464,13 @@ export async function remove(
   opts?: { systemOwned?: boolean },
 ) {
   let sessionCleanup:
-    | { activeMarker: CronActiveJobMarker | undefined; agentId: string; sessionStorePath: string }
+    | {
+        activeMarker: CronActiveJobMarker | undefined;
+        agentId: string;
+        sessionStorePath: string;
+        done: Promise<void>;
+        finish: () => void;
+      }
     | undefined;
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
@@ -486,10 +510,17 @@ export async function remove(
         sessionStorePath &&
         (removedJob.sessionTarget === "isolated" || removedJob.sessionTarget === "current")
       ) {
+        let finish!: () => void;
+        const done = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        state.pendingSessionCleanupByJobId.set(id, done);
         sessionCleanup = {
           activeMarker,
           agentId,
           sessionStorePath,
+          done,
+          finish,
         };
       }
       try {
@@ -509,7 +540,7 @@ export async function remove(
   if (!sessionCleanup) {
     return result;
   }
-  const { activeMarker, agentId, sessionStorePath } = sessionCleanup;
+  const { activeMarker, agentId, sessionStorePath, done, finish } = sessionCleanup;
   const cleanup = async () => {
     try {
       await removeCronJobBaseSession({
@@ -522,10 +553,16 @@ export async function remove(
       });
     } catch (error) {
       state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
+    } finally {
+      if (state.pendingSessionCleanupByJobId.get(id) === done) {
+        state.pendingSessionCleanupByJobId.delete(id);
+      }
+      finish();
     }
   };
   if (activeMarker) {
     onCronJobInactive(activeMarker, () => void cleanup());
+    return result;
   }
   await cleanup();
   return result;

@@ -280,6 +280,8 @@ export type CronServiceState = {
   runAdmission: CronRunAdmission;
   /** Durable markers for cron runs that are waiting for the shared admission limit. */
   queuedRunReservationsByJobId: Map<string, QueuedCronRunReservation>;
+  /** Prevents a reused job id from overtaking deletion of its prior base session. */
+  pendingSessionCleanupByJobId: Map<string, Promise<void>>;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -313,6 +315,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
     queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),
+    pendingSessionCleanupByJobId: new Map<string, Promise<void>>(),
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),

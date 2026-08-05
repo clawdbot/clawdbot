@@ -91,7 +91,15 @@ describe("CronService.remove session cleanup", () => {
     const sessionKey = `agent:main:cron:${job.id}`;
     const marker = markCronJobActive(job.id);
 
+    await replaceSessionEntry(
+      { agentId: "main", storePath: sessionStorePath, sessionKey },
+      { sessionId: "active-session", updatedAt: Date.now() },
+    );
+
     await cron.remove(job.id);
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toMatchObject({
+      entry: { sessionId: "active-session" },
+    });
     await replaceSessionEntry(
       { agentId: "main", storePath: sessionStorePath, sessionKey },
       { sessionId: "late-session", updatedAt: Date.now() },
@@ -128,24 +136,38 @@ describe("CronService.remove session cleanup", () => {
     const sessionKey = `agent:main:cron:${original.id}`;
     const originalMarker = markCronJobActive(original.id);
 
+    await replaceSessionEntry(
+      { agentId: "main", storePath: sessionStorePath, sessionKey },
+      { sessionId: "original-session", updatedAt: Date.now() },
+    );
+
     await cron.remove(original.id);
-    await cron.add({
-      id: original.id,
-      name: "replacement job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 120_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "replacement" },
-    });
-    const replacementMarker = markCronJobActive(original.id);
+    let replacementAdded = false;
+    const replacementPromise = cron
+      .add({
+        id: original.id,
+        name: "replacement job",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 120_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "replacement" },
+      })
+      .then((job) => {
+        replacementAdded = true;
+        return job;
+      });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(replacementAdded).toBe(false);
+
+    clearCronJobActive(original.id, originalMarker);
+    await replacementPromise;
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
     await replaceSessionEntry(
       { agentId: "main", storePath: sessionStorePath, sessionKey },
       { sessionId: "replacement-session", updatedAt: Date.now() },
     );
 
-    clearCronJobActive(original.id, replacementMarker);
-    clearCronJobActive(original.id, originalMarker);
     await Promise.resolve();
     await Promise.resolve();
 
