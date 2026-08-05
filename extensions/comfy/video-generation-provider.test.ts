@@ -72,7 +72,7 @@ describe("comfy video-generation provider", () => {
             "local-video-1": {
               outputs: {
                 "9": {
-                  gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
+                  images: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
                 },
               },
             },
