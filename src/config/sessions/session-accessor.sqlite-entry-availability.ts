@@ -10,7 +10,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
-export type ExactSessionEntryReadOnlyResult =
+type ExactSessionEntryReadOnlyResult =
   | { found: true; value: ExactSessionEntry | undefined }
   | {
       found: false;
