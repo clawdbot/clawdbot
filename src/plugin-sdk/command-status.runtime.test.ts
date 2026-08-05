@@ -25,9 +25,15 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveSessionAgentId,
 }));
 
-vi.mock("../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent,
-}));
+vi.mock("../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
+    "../agents/model-selection.js",
+  );
+  return {
+    ...actual,
+    resolveDefaultModelForAgent,
+  };
+});
 
 vi.mock("../auto-reply/reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel,
@@ -252,5 +258,134 @@ describe("resolveDirectStatusReplyForSession", () => {
     });
 
     expectResolvedReasoningLevel(result, "stream");
+  });
+
+  it("applies channels.modelByChannel before building the status reply", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: {
+          defaults: {
+            reasoningDefault: "off",
+          },
+        },
+        channels: {
+          modelByChannel: {
+            discord: {
+              "*": "anthropic/claude-fable-5",
+            },
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    expect(statusCall.provider).toBe("anthropic");
+    expect(statusCall.model).toBe("claude-fable-5");
+  });
+
+  it("preserves explicit session model override over channels.modelByChannel", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: {
+          defaults: {
+            reasoningDefault: "off",
+          },
+        },
+        channels: {
+          modelByChannel: {
+            discord: {
+              "*": "anthropic/claude-fable-5",
+            },
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        providerOverride: "xai",
+        modelOverride: "grok-4.3",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    expect(statusCall.provider).toBe("xai");
+    expect(statusCall.model).toBe("grok-4.3");
+  });
+
+  it("skips channels.modelByChannel when model selection is locked", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: {
+          defaults: {
+            reasoningDefault: "off",
+          },
+        },
+        channels: {
+          modelByChannel: {
+            discord: {
+              "*": "anthropic/claude-fable-5",
+            },
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        modelSelectionLocked: true,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    expect(statusCall.provider).toBe("openai");
+    expect(statusCall.model).toBe("gpt-5.4");
   });
 });

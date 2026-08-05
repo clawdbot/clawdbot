@@ -1,14 +1,23 @@
 // Command status runtime helpers collect agent/session state for plugin command status output.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../agents/model-selection.js";
 import { buildStatusReply } from "../auto-reply/reply/commands-status.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-handling.levels.js";
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadSessionEntryReadOnly } from "../gateway/session-utils.js";
+import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 /** Inputs for rendering direct-session status replies outside the active channel turn. */
 export type ResolveDirectStatusReplyForSessionParams = {
@@ -63,12 +72,60 @@ export async function resolveDirectStatusReplyForSession(
     cfg: statusCfg,
     agentId: statusAgentId,
   });
+  // Native status returns before the ordinary reply pipeline reaches
+  // channel-model routing, so resolve the effective channel model here before
+  // preparing model-bound thinking, runtime, auth, context, and fast-mode facts.
+  const canApplyChannelModel =
+    statusCfg.channels?.modelByChannel != null &&
+    !isModelSelectionLocked(statusEntry) &&
+    !normalizeOptionalString(statusEntry?.modelOverride) &&
+    !normalizeOptionalString(statusEntry?.providerOverride) &&
+    statusModel.provider === defaultProvider &&
+    statusModel.model === defaultModel;
+  const deliveryChannel = normalizeMessageChannel(sessionDeliveryChannel(statusEntry));
+  // Shared sessions can retain another channel's peer; never let that stale
+  // identity outrank the authorized current command's live sender.
+  const deliveryOrigin =
+    deliveryChannel && deliveryChannel === normalizeMessageChannel(params.channel)
+      ? sessionDeliveryOrigin(statusEntry)
+      : undefined;
+  const channelModelOverride = canApplyChannelModel
+    ? resolveChannelModelOverride({
+        cfg: statusCfg,
+        channel: params.channel,
+        groupId: statusEntry?.groupId,
+        groupChatType: statusEntry?.chatType,
+        groupChannel: statusEntry?.groupChannel,
+        groupSubject: statusEntry?.subject,
+        parentSessionKey: statusEntry?.parentSessionKey,
+        directUserIds: [
+          deliveryOrigin?.nativeDirectUserId,
+          deliveryOrigin?.from,
+          deliveryOrigin?.to,
+          params.senderId,
+        ],
+      })
+    : null;
+  const resolvedChannelModel = channelModelOverride
+    ? resolveModelRefFromString({
+        cfg: statusCfg,
+        raw: channelModelOverride.model,
+        defaultProvider,
+        aliasIndex: buildModelAliasIndex({
+          cfg: statusCfg,
+          agentId: statusAgentId,
+          defaultProvider,
+        }),
+      })
+    : null;
+  const effectiveProvider = resolvedChannelModel?.ref.provider ?? statusModel.provider;
+  const effectiveModel = resolvedChannelModel?.ref.model ?? statusModel.model;
   const selectedProvider =
     statusEntry?.providerOverride?.trim() ||
     statusEntry?.modelProvider?.trim() ||
-    statusModel.provider;
+    effectiveProvider;
   const selectedModel =
-    statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel.model;
+    statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || effectiveModel;
   const modelState = await createModelSelectionState({
     cfg: statusCfg,
     agentId: statusAgentId,
