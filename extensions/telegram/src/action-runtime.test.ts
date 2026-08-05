@@ -164,11 +164,19 @@ const sendDurableMessageBatch = vi.fn(
     } as const;
   },
 );
-const sendPollTelegram = vi.fn(async () => ({
-  messageId: "790",
-  chatId: "123",
-  pollId: "poll-1",
-}));
+const sendPollTelegram = vi.fn(
+  async (): Promise<{
+    messageId: string;
+    chatId: string;
+    pollId: string;
+    pollAnswerRouting?: "enabled" | "unavailable";
+    warning?: string;
+  }> => ({
+    messageId: "790",
+    chatId: "123",
+    pollId: "poll-1",
+  }),
+);
 const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
@@ -1353,6 +1361,60 @@ describe("handleTelegramAction", () => {
     expect(details.messageId).toBe("790");
     expect(details.chatId).toBe("123");
     expect(details.pollId).toBe("poll-1");
+  });
+
+  it("returns a model-visible warning when public poll routing is unavailable", async () => {
+    sendPollTelegram.mockResolvedValueOnce({
+      messageId: "790",
+      chatId: "123",
+      pollId: "poll-1",
+      pollAnswerRouting: "unavailable",
+      warning: "Poll answers cannot reach the agent. Ask the user to reply in text.",
+    });
+
+    const result = await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        isAnonymous: false,
+      },
+      telegramConfig(),
+    );
+
+    expect(resultDetails(result)).toMatchObject({
+      pollAnswerRouting: "unavailable",
+      warning: "Poll answers cannot reach the agent. Ask the user to reply in text.",
+    });
+  });
+
+  it("returns the public-poll opt-in for default anonymous polls", async () => {
+    sendPollTelegram.mockResolvedValueOnce({
+      messageId: "790",
+      chatId: "123",
+      pollId: "poll-1",
+      pollAnswerRouting: "unavailable",
+      warning:
+        "Poll sent anonymously, so Telegram does not identify voters and answers cannot reach the agent. Send a public poll to route votes into this conversation.",
+    });
+
+    const result = await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+      },
+      telegramConfig(),
+    );
+
+    const options = requireRecord(mockCall(sendPollTelegram, 0, "anonymous poll")[2], "options");
+    expect(options.isAnonymous).toBeUndefined();
+    expect(resultDetails(result)).toMatchObject({
+      pollAnswerRouting: "unavailable",
+      warning: expect.stringContaining("Send a public poll"),
+    });
   });
 
   it("rejects fractional poll durations before sending", async () => {
