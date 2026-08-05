@@ -25,7 +25,7 @@ class FakeSocket {
  * Scripted extension: auto-answers relay commands so the bridge can complete
  * attach/CDP round-trips. Attach returns a deterministic targetId per tab.
  */
-function wireExtension(bridge: ExtensionRelayBridge) {
+function wireExtension(bridge: ExtensionRelayBridge, opts: { answerCdp?: boolean } = {}) {
   const socket = new FakeSocket();
   const handlers = bridge.attachExtensionSocket(socket);
   // Auto-reply to commands the bridge issues to the extension.
@@ -37,6 +37,9 @@ function wireExtension(bridge: ExtensionRelayBridge) {
       return;
     }
     queueMicrotask(() => {
+      if (msg.type === "cdp" && opts.answerCdp === false) {
+        return;
+      }
       const reply = replyFor(msg);
       if (reply) {
         handlers.onMessage(JSON.stringify(reply));
@@ -246,6 +249,59 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
     expect(client.frames().find((frame) => frame.id === 5)?.result).toEqual({});
+  });
+
+  it("identifies an unanswered page CDP command when the relay deadline expires", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge, { answerCdp: false });
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.attachToBrowserTarget" }));
+    await flush();
+    const browserSessionId = (
+      client.frames().find((frame) => frame.id === 2)?.result as { sessionId?: string }
+    )?.sessionId;
+    expect(browserSessionId).toBeTruthy();
+
+    cdp.onMessage(
+      JSON.stringify({
+        id: 3,
+        sessionId: browserSessionId,
+        method: "Target.attachToTarget",
+        params: { targetId: "target-1", flatten: true },
+      }),
+    );
+    await flush();
+    const pageSessionId = (
+      client.frames().find((frame) => frame.id === 3)?.result as { sessionId?: string }
+    )?.sessionId;
+    expect(pageSessionId).toBeTruthy();
+
+    vi.useFakeTimers();
+    try {
+      cdp.onMessage(
+        JSON.stringify({
+          id: 4,
+          sessionId: pageSessionId,
+          method: "Runtime.evaluate",
+          params: { expression: "document.title" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(client.frames().find((frame) => frame.id === 4)?.error).toMatchObject({
+        message: "extension relay command timed out: cdp (tabId=1, method=Runtime.evaluate)",
+      });
+    } finally {
+      bridge.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("creates a tab inside the group and returns its synthetic target", async () => {

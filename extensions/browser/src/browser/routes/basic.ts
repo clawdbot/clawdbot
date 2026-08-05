@@ -21,7 +21,7 @@ import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { parseSystemProfileDomains } from "../system-profile-domains.js";
 import { dismissSystemProfileImportPrompt } from "../system-profile-import-state.js";
-import { resolveProfileContext } from "./agent.shared.js";
+import { getPwAiModule, resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import {
   jsonBrowserError,
@@ -262,7 +262,11 @@ async function buildBrowserStatus(
   };
 }
 
-async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSignal) {
+async function runBrowserLiveProbe(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  signal: AbortSignal,
+) {
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
   try {
     const tab = await profileCtx.ensureTabAvailable(undefined, { signal });
@@ -280,15 +284,21 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         summary: `Chrome MCP snapshot succeeded on ${tab.suggestedTargetId ?? tab.targetId}`,
       };
     }
-    if (!tab.wsUrl) {
-      return {
-        id: "live-snapshot",
-        label: "Live snapshot",
-        status: "warn" as const,
-        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
-      };
-    }
-    const snap = await snapshotAria({ wsUrl: tab.wsUrl, limit: 25 });
+    const snap = tab.wsUrl
+      ? await snapshotAria({ wsUrl: tab.wsUrl, limit: 25 })
+      : await (async () => {
+          const pw = await getPwAiModule();
+          if (!pw) {
+            throw new Error("Playwright is not available for the live snapshot probe.");
+          }
+          return await pw.snapshotAriaViaPlaywright({
+            cdpUrl: profileCtx.profile.cdpUrl,
+            targetId: tab.targetId,
+            limit: 25,
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          });
+        })();
+    signal.throwIfAborted();
     return {
       id: "live-snapshot",
       label: "Live snapshot",
@@ -423,7 +433,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
           const doctorReport = buildBrowserDoctorReport({ status });
           if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-            doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
+            doctorReport.checks.push(await runBrowserLiveProbe(ctx, profileCtx, signal));
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
           }
           return doctorReport;

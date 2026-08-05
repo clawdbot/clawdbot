@@ -358,7 +358,11 @@ export class ExtensionRelayBridge {
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingExtension.delete(seq);
-        reject(new Error(`extension relay command timed out: ${command.type}`));
+        const commandDetail =
+          command.type === "cdp"
+            ? `cdp (tabId=${command.tabId}, method=${command.method})`
+            : command.type;
+        reject(new Error(`extension relay command timed out: ${commandDetail}`));
       }, timeoutMs);
       timer.unref?.();
       this.pendingExtension.set(seq, { resolve, reject, timer });

@@ -593,6 +593,46 @@ describe("browser control server", () => {
     });
   });
 
+  it("agent contract: doctor deep fails an extension profile Playwright snapshot", async () => {
+    pwMocks.listPagesViaPlaywright = vi.fn(async () => [
+      {
+        targetId: "extension-target-1",
+        title: "Extension tab",
+        url: "https://example.com",
+        type: "page",
+      },
+    ]);
+    pwMocks.snapshotAriaViaPlaywright = vi.fn(async () => {
+      throw new Error(
+        "extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+      );
+    });
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+
+    const report = (await realFetch(`${base}/doctor?profile=chrome&deep=true`).then((r) =>
+      r.json(),
+    )) as {
+      ok: boolean;
+      checks?: Array<{ id?: string; status?: string; summary?: string }>;
+    };
+
+    expect(report.ok).toBe(false);
+    const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
+    expectRecordFields(liveSnapshotCheck, { id: "live-snapshot", status: "fail" });
+    expect(liveSnapshotCheck?.summary).toContain(
+      "extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+    );
+    expect(requirePwMock("snapshotAriaViaPlaywright")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: "extension-target-1",
+        limit: 25,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      }),
+    );
+    expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
+  });
+
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
     const realFetch = getBrowserTestFetch();
