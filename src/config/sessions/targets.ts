@@ -425,12 +425,31 @@ function resolveFixedSessionStoreTargetsReadOnly(
     storePath: resolveStorePath(storeConfig, { agentId: requested, env }),
   };
   try {
+    const configuredTargets = listConfiguredSessionStoreAgentIds(cfg).map((configuredAgentId) => ({
+      agentId: configuredAgentId,
+      storePath: resolveStorePath(storeConfig, { agentId: configuredAgentId, env }),
+    }));
+    if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
+      configuredTargets.push(fixedTarget);
+    }
     const resolvedTarget = resolveSqliteTargetFromSessionStorePath(fixedTarget.storePath, {
       agentId: requested,
       defaultAgentId,
       env,
     });
     const sqlitePath = resolvedTarget.path;
+    if (
+      !resolvedTarget.shared &&
+      !dedupeSessionStoreTargetsBySqliteTarget(configuredTargets, {
+        defaultAgentId,
+        env,
+      }).some((target) => normalizeAgentId(target.agentId) === requested)
+    ) {
+      return {
+        available: false,
+        reason: sqlitePath && fsSync.existsSync(sqlitePath) ? "read-failed" : "database-missing",
+      };
+    }
     if (!sqlitePath) {
       return { available: false, reason: "read-failed" };
     }
