@@ -231,7 +231,7 @@ async function agentCommandInternal(
     });
     return await sessionWorkAdmission.run(async () => {
       executionIdentity.record({
-        admission: opts.executionIdentityAdmission,
+        attribution: opts.executionAttribution,
         agentId: sessionAgentId,
         cfg,
         ingress: admissionIngress,
@@ -674,10 +674,10 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  // Plugin SDK callers may be plain JavaScript. Enforce the private recovery
+  // Plugin SDK callers may be plain JavaScript. Enforce the private execution
   // boundary at runtime so extra or inherited properties cannot author audit identity.
   return await agentCommandFromIngressInternal(
-    { ...opts, executionIdentityAdmission: undefined },
+    { ...opts, executionAttribution: undefined },
     runtime,
     deps,
   );

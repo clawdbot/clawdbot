@@ -494,7 +494,7 @@ describe("agentCommand", () => {
         );
 
         expect(record).toHaveBeenCalledWith(
-          expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
+          expect.objectContaining({ attribution: undefined, runId: "public-ingress-run" }),
         );
       } finally {
         record.mockRestore();
