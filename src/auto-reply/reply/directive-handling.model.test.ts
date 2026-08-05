@@ -175,6 +175,7 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
     ensureAuthProfileStoreForLocalUpdate: store,
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
       authProfilesStoreMock.profiles[profileId],
+    getRuntimeAuthProfileStoreSnapshot: store,
     hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
     loadAuthProfileStore: store,
     loadAuthProfileStoreForRuntime: store,
