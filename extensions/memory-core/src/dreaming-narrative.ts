@@ -309,9 +309,14 @@ function buildNarrativeSessionKey(params: {
 
 // ── Prompt building ────────────────────────────────────────────────────
 
-function buildNarrativePrompt(data: NarrativePhaseData): string {
+function buildNarrativePrompt(data: NarrativePhaseData, language?: DreamingLanguage): string {
   const lines: string[] = [];
+  const languageInstruction = formatNarrativeLanguageInstruction(language);
   lines.push("Write a dream diary entry from these memory fragments:\n");
+  if (languageInstruction) {
+    lines.push(`Language: ${languageInstruction}`);
+    lines.push("");
+  }
 
   for (const snippet of data.snippets.slice(0, 12)) {
     lines.push(`- ${snippet}`);
@@ -443,6 +448,25 @@ function splitDiaryBlocks(diaryContent: string): string[] {
     .split(/\n---\n/)
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
+}
+
+
+function formatNarrativeLanguageInstruction(language?: DreamingLanguage): string | null {
+  switch (language) {
+    case "zh-CN":
+      return "Write the diary entry in Simplified Chinese (简体中文).";
+    case "zh-TW":
+      return "Write the diary entry in Traditional Chinese (繁體中文).";
+    case "ja":
+      return "Write the diary entry in Japanese (日本語).";
+    case "ko":
+      return "Write the diary entry in Korean (한국어).";
+    case "en":
+    case undefined:
+      return null;
+    default:
+      return `Write the diary entry in the configured language: ${language}.`;
+  }
 }
 
 function clampDiaryContextEntry(entry: string): string {
@@ -813,7 +837,7 @@ async function generateAndAppendDreamNarrative(
     workspaceDir: params.workspaceDir,
     phase: params.data.phase,
   });
-  const message = buildNarrativePrompt(params.data);
+  const message = buildNarrativePrompt(params.data, params.language);
   let cleanupFailure: string | undefined;
   await withNarrativeSessionLock(sessionKey, async () => {
     const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
