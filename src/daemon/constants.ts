@@ -51,6 +51,17 @@ export function resolveGatewaySystemdServiceName(profile?: string): string {
   return `openclaw-gateway${suffix}`;
 }
 
+/**
+ * Legacy systemd service name (`openclaw[-<profile>]`), used by installs that
+ * predate the `openclaw-gateway-` rename. The default profile maps to
+ * `openclaw`; the pre-rename Clawdbot era is covered separately by
+ * {@link LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES}.
+ */
+export function resolveLegacyGatewaySystemdServiceName(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  return normalized ? `openclaw-${normalized}` : "openclaw";
+}
+
 export function resolveGatewayWindowsTaskName(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
   if (!normalized) {

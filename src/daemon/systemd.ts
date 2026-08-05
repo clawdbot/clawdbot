@@ -24,6 +24,7 @@ import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayServiceDescription,
   resolveGatewaySystemdServiceName,
+  resolveLegacyGatewaySystemdServiceName,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
@@ -93,8 +94,11 @@ const SYSTEM_SYSTEMD_UNIT_DIRS = [
   "/lib/systemd/system",
 ] as const;
 
-async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string | null> {
-  const serviceFile = `${resolveSystemdServiceName(env)}.service`;
+async function findSystemSystemdUnitPath(
+  env: GatewayServiceEnv,
+  name = resolveSystemdServiceName(env),
+): Promise<string | null> {
+  const serviceFile = `${name}.service`;
   for (const dir of SYSTEM_SYSTEMD_UNIT_DIRS) {
     const candidate = path.posix.join(dir, serviceFile);
     try {
@@ -142,6 +146,30 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
     }
   }
   return null;
+}
+
+/**
+ * True when a scanned system unit name belongs to the gateway of THIS profile.
+ *
+ * The system-wide marker scan (`findSystemGatewayServices`) collects every
+ * `openclaw-*` unit on the host; on multi-agent hosts that includes unrelated
+ * running agents. A unit must match the canonical (`openclaw-gateway[-profile]`)
+ * or legacy (`openclaw-<profile>`) name for the target profile before it may be
+ * treated as the target's installation — otherwise doctor could report another
+ * agent's PID as this gateway's runtime and recommend restarting the wrong
+ * service (#119648).
+ */
+function isSystemdGatewayUnitNameForProfile(
+  unitName: string,
+  canonicalName: string,
+  profile: string | undefined,
+): boolean {
+  const normalized = unitName.replace(/\.service$/i, "");
+  if (normalized === canonicalName) {
+    return true;
+  }
+  const legacyName = resolveLegacyGatewaySystemdServiceName(profile);
+  return legacyName !== null && normalized === legacyName;
 }
 
 /**
@@ -193,10 +221,36 @@ async function findSystemSystemdGatewayScope(
   if (systemPath) {
     return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
   }
+  // Older installs predate the `openclaw-gateway-` rename and use
+  // `openclaw-<profile>`; resolve the same profile under that convention
+  // before scanning system-wide (#119648).
+  const hasUnitOverride = Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
+  const legacyName = hasUnitOverride
+    ? null
+    : resolveLegacyGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  if (legacyName) {
+    const legacyPath = await findSystemSystemdUnitPath(env, legacyName);
+    if (legacyPath) {
+      return { scope: "system", unitName: `${legacyName}.service`, unitPath: legacyPath };
+    }
+  }
   // System-scope installs may use a non-canonical unit name; fall back to a
-  // marker-owned lookup before declaring no system unit exists.
+  // marker-owned lookup, but only accept a unit that plausibly belongs to THIS
+  // profile. An unrelated running `openclaw-*` unit (another agent on the same
+  // host) must never be reported as this gateway's runtime, and doctor must
+  // never recommend restarting it (#119648).
   const owned = await findMarkerOwnedSystemSystemdUnit();
-  return owned ? { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath } : null;
+  if (
+    owned &&
+    isSystemdGatewayUnitNameForProfile(
+      owned.unitName,
+      resolveSystemdServiceName(env),
+      env.OPENCLAW_PROFILE,
+    )
+  ) {
+    return { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath };
+  }
+  return null;
 }
 
 /**

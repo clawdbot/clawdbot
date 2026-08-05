@@ -733,6 +733,80 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     });
   });
 
+  it("findInstalledSystemdGatewayScope resolves the legacy openclaw-<profile> system unit for a named profile", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-lisa.service" });
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-lisa.service",
+      unitPath: "/etc/systemd/system/openclaw-lisa.service",
+    });
+  });
+
+  it("refuses to borrow an unrelated marker-owned unit as the target profile's gateway (#119648)", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-darlene.service",
+        detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("accepts a marker-owned unit matching the target profile's legacy name", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-lisa.service",
+        detail: "unit: /etc/systemd/system/openclaw-lisa.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-lisa.service",
+      unitPath: "/etc/systemd/system/openclaw-lisa.service",
+    });
+  });
+
+  it("readSystemdServiceRuntime reads the legacy unit's own status instead of an unrelated agent's (#119648)", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-lisa.service" });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args[0]).toBe("show");
+      expect(args).toContain("openclaw-lisa.service");
+      cb(
+        null,
+        ["Id=openclaw-lisa.service", "ActiveState=inactive", "SubState=dead", "MainPID=0"].join(
+          "\n",
+        ),
+        "",
+      );
+    });
+    const runtime = await readSystemdServiceRuntime({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(runtime.status).toBe("stopped");
+    expect(runtime.systemd?.unit).toBe("openclaw-lisa.service");
+  });
+
   it("findInstalledSystemdGatewayScope ignores legacy clawdbot system units in the marker fallback", async () => {
     mockUnitFileLayout({ system: false });
     findSystemGatewayServicesMock.mockResolvedValueOnce([
