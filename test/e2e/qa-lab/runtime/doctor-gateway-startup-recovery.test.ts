@@ -35,6 +35,10 @@ describe("doctor gateway startup recovery producer", () => {
         OPENCLAW_STATE_DIR: "/tmp/host-state",
         OPENCLAW_SUPERVISOR_MODE: "external",
         PATH: "/usr/bin",
+        SUDO_COMMAND: "/usr/bin/sudo openclaw doctor",
+        SUDO_GID: "1000",
+        SUDO_UID: "1000",
+        SUDO_USER: "ambient-admin",
       },
       accountHome,
     );
@@ -52,6 +56,10 @@ describe("doctor gateway startup recovery producer", () => {
     expect(env.OPENCLAW_GATEWAY_URL).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
     expect(env.OPENCLAW_SUPERVISOR_MODE).toBeUndefined();
+    expect(env.SUDO_COMMAND).toBeUndefined();
+    expect(env.SUDO_GID).toBeUndefined();
+    expect(env.SUDO_UID).toBeUndefined();
+    expect(env.SUDO_USER).toBeUndefined();
   });
 
   it("uses the stable built launcher for every child CLI command", () => {
