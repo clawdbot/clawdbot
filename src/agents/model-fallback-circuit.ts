@@ -35,7 +35,7 @@ export type ModelCircuitAttempt = {
   wasHalfOpen: boolean;
 };
 
-export type ModelCircuitGate =
+type ModelCircuitGate =
   | { type: "attempt"; attempt: ModelCircuitAttempt }
   | { type: "open"; error: string; reason: FailoverReason };
 
@@ -126,7 +126,7 @@ export function releaseModelCircuitAttempt(attempt: ModelCircuitAttempt | undefi
   return true;
 }
 
-export function recordModelCircuitSuccess(attempt: ModelCircuitAttempt): boolean {
+function recordModelCircuitSuccess(attempt: ModelCircuitAttempt): boolean {
   if (!attempt.wasHalfOpen) {
     return false;
   }
@@ -167,7 +167,7 @@ function clearIneligibleHalfOpen(attempt: ModelCircuitAttempt): null {
   return null;
 }
 
-export function recordModelCircuitFailure(
+function recordModelCircuitFailure(
   attempt: ModelCircuitAttempt,
   reason: FailoverReason | null | undefined,
   now = Date.now(),
@@ -230,4 +230,6 @@ export const modelCircuitInternals = {
   MAX_TRACKED_ROUTES,
   circuitKey,
   pruneCircuitStates,
+  recordModelCircuitSuccess,
+  recordModelCircuitFailure,
 } as const;

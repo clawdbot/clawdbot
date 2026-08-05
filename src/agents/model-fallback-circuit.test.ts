@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireModelCircuit,
   modelCircuitInternals,
-  recordModelCircuitFailure,
-  recordModelCircuitSuccess,
   releaseModelCircuitAttempt,
 } from "./model-fallback-circuit.js";
+
+const { recordModelCircuitFailure, recordModelCircuitSuccess } = modelCircuitInternals;
 
 const ROUTE = { provider: "openai", model: "gpt-5.5", agentDir: "/agent-a" } as const;
 
