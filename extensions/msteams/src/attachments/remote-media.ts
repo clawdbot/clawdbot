@@ -32,7 +32,9 @@ async function saveRemoteMediaDirect(params: {
   } finally {
     // Guarded responses release their pinned dispatcher on EOF or cancel. A
     // storage failure can happen before the body is read, so always cancel it.
-    await response.body?.cancel().catch(() => undefined);
+    // A debug-capture clone can keep the tee open, so waiting for cancel would
+    // hang this path instead of releasing the response.
+    void response.body?.cancel().catch(() => undefined);
   }
 }
 

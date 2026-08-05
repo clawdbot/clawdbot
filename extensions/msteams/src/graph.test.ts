@@ -44,6 +44,7 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   };
 });
 
+import { createCaptureTeedResponse, expectSettled } from "./capture-tee.test-helpers.js";
 import { findGraphUsersByExactIdentity, searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
@@ -421,7 +422,36 @@ describe("msteams graph helpers", () => {
     });
 
     expect(upstreamCancel).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledTimes(1);
+    // The cancel is fire-and-forget so a debug-capture tee cannot stall the
+    // delete; `responseWithRelease` still releases once its cancel settles.
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("releases a bodyful DELETE response without awaiting a debug-capture tee", async () => {
+    const captured = createCaptureTeedResponse();
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: captured.response,
+      finalUrl: "https://graph.microsoft.com/v1.0/chats/chat-1/messages/msg-1",
+      release,
+    });
+
+    try {
+      await expectSettled(
+        deleteGraphRequest({
+          token: graphToken,
+          path: "/chats/chat-1/messages/msg-1",
+        }),
+        "graph DELETE",
+      );
+
+      expect(captured.cancellationSettled()).toBe(false);
+      // Release still follows the cancellation, so it is still pending here:
+      // this fix unblocks the caller, it does not release the transport sooner.
+      expect(release).not.toHaveBeenCalled();
+    } finally {
+      captured.releaseCaptureBranch();
+    }
   });
 
   it("resolves Graph tokens through the SDK auth provider", async () => {

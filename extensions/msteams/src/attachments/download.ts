@@ -199,7 +199,9 @@ async function fetchWithAuthFallback(params: {
         resolveFn: params.resolveFn,
         timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
       });
-      await fallbackAttempt.body?.cancel().catch(() => undefined);
+      // A debug-capture clone can keep the tee open, so waiting for cancel would
+      // stall this retry loop before the superseded attempt can be released.
+      void fallbackAttempt.body?.cancel().catch(() => undefined);
       if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
         // Redirects in guarded fetch mode must propagate to the outer guard.
         return authAttempt;

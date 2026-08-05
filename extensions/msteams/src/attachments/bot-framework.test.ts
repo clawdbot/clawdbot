@@ -1,6 +1,7 @@
 // Msteams tests cover bot framework plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createCaptureTeedResponse, expectSettled } from "../capture-tee.test-helpers.js";
 import { setMSTeamsRuntime } from "../runtime.js";
 import {
   downloadMSTeamsBotFrameworkAttachments,
@@ -20,6 +21,7 @@ type MockRuntime = {
   saveCalls: SavedCall[];
   savePath: string;
   savedContentType: string;
+  saveResponseMediaError?: Error;
 };
 
 type DownloadSingleAttachmentParams = Omit<
@@ -83,6 +85,9 @@ function installRuntime(): MockRuntime {
             originalFilename?: string;
           },
         ) => {
+          if (state.saveResponseMediaError) {
+            throw state.saveResponseMediaError;
+          }
           const buffer = Buffer.from(await response.arrayBuffer());
           state.saveCalls.push({
             buffer,
@@ -271,6 +276,81 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
     expectUnavailableMedia(media, "att-1");
     expect(runtime.saveCalls).toHaveLength(0);
+  });
+
+  it("releases a non-ok attachment info body without awaiting a debug-capture tee", async () => {
+    const captured = createCaptureTeedResponse({ status: 500 });
+    const fetchFn = createMockFetch([
+      {
+        match: /\/v3\/attachments\//,
+        response: captured.response,
+      },
+    ]);
+
+    try {
+      const media = await expectSettled(
+        downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+        }),
+        "bot framework attachment download",
+      );
+
+      expectUnavailableMedia(media, "att-1");
+      expect(captured.cancellationSettled()).toBe(false);
+    } finally {
+      captured.releaseCaptureBranch();
+    }
+  });
+
+  it("releases an attachment view body when saving fails without awaiting the tee", async () => {
+    const info = {
+      name: "report.pdf",
+      type: "application/pdf",
+      views: [{ viewId: "original", size: 1024 }],
+    };
+    const captured = createCaptureTeedResponse({ status: 200 });
+    // A storage failure leaves the body unread, which is exactly when the
+    // cleanup cancel meets a live capture tee.
+    runtime.saveResponseMediaError = new Error("disk full");
+    const fetchFn = createMockFetch([
+      {
+        match: /\/v3\/attachments\/att-1$/,
+        response: new Response(JSON.stringify(info), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+      {
+        match: /\/v3\/attachments\/att-1\/views\/original$/,
+        response: captured.response,
+      },
+    ]);
+
+    try {
+      const media = await expectSettled(
+        downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+        }),
+        "bot framework attachment view save",
+      );
+
+      expectUnavailableMedia(media, "att-1");
+      expect(captured.cancellationSettled()).toBe(false);
+    } finally {
+      captured.releaseCaptureBranch();
+    }
   });
 
   it("does not send Bot Framework service tokens to non-auth-allowlisted media hosts", async () => {

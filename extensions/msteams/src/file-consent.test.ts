@@ -1,5 +1,6 @@
 // Msteams tests cover file consent plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createCaptureTeedResponse, expectSettled } from "./capture-tee.test-helpers.js";
 import { uploadToConsentUrl } from "./file-consent.js";
 import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -523,6 +524,29 @@ describe("uploadToConsentUrl", () => {
       }),
     ).rejects.toThrow("File upload to consent URL failed: 403 Forbidden");
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("reports the upload status without awaiting a debug-capture tee", async () => {
+    const captured = createCaptureTeedResponse({ status: 403, statusText: "Forbidden" });
+    const mockFetch = vi.fn<typeof fetch>(async () => captured.response);
+
+    try {
+      await expectSettled(
+        expect(
+          uploadToConsentUrl({
+            url: "https://contoso.sharepoint.com/sites/uploads/file.pdf",
+            buffer: Buffer.from("data"),
+            fetchFn: mockFetch,
+            validationOpts: { resolveFn: publicResolve },
+          }),
+        ).rejects.toThrow("File upload to consent URL failed: 403 Forbidden"),
+        "msteams consent upload",
+      );
+
+      expect(captured.cancellationSettled()).toBe(false);
+    } finally {
+      captured.releaseCaptureBranch();
+    }
   });
 
   it("blocks HTTP (non-HTTPS) upload before fetch is called", async () => {

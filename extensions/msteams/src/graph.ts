@@ -287,7 +287,9 @@ export async function deleteGraphRequest(params: { token: string; path: string }
     method: "DELETE",
     errorPrefix: "Graph DELETE",
   });
-  await response.body?.cancel().catch(() => undefined);
+  // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+  // the delete before the response and its dispatcher can be released.
+  void response.body?.cancel().catch(() => undefined);
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {

@@ -4,6 +4,7 @@ import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
 import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsAttachments } from "./attachments/download.js";
 import { resolveRequestUrl } from "./attachments/shared.js";
+import { createCaptureTeedResponse, expectSettled } from "./capture-tee.test-helpers.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const saveResponseMediaMock = vi.hoisted(() =>
@@ -499,6 +500,35 @@ describe("msteams attachments", () => {
       expectAttachmentMediaLength(media, 1);
       expect(tokenProvider.getAccessToken).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls.map(([calledUrl]) => calledUrl)).toContain(redirectedUrl);
+    });
+
+    it("retries past a superseded attempt without awaiting a debug-capture tee", async () => {
+      // The debug proxy clones every captured response, so the 401 the retry
+      // supersedes is one branch of a live tee. Awaiting its cancel would stall
+      // the retry loop instead of releasing the attempt.
+      const captured = createCaptureTeedResponse({ status: 401 });
+      const tokenProvider = createTokenProvider((scope) => `token:${scope}`);
+      const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
+        if (!new Headers(opts?.headers).has("Authorization")) {
+          return captured.response;
+        }
+        return createBufferResponse(PNG_BUFFER, CONTENT_TYPE_IMAGE_PNG);
+      });
+
+      try {
+        const media = await expectSettled(
+          downloadAttachmentsWithFetch(createImageAttachments(TEST_URL_IMAGE), fetchMock, {
+            tokenProvider,
+            authAllowHosts: [TEST_HOST],
+          }),
+          "msteams attachment auth retry",
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        expect(captured.cancellationSettled()).toBe(false);
+      } finally {
+        captured.releaseCaptureBranch();
+      }
     });
 
     it("continues scope fallback after non-auth failure and succeeds on later scope", async () => {

@@ -62,6 +62,7 @@ vi.mock("../runtime.js", () => ({
   }),
 }));
 
+import { createCaptureTeedResponse, expectSettled } from "../capture-tee.test-helpers.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -162,6 +163,31 @@ describe("downloadAndStoreMSTeamsRemoteMedia", () => {
       ).rejects.toThrow("mkdir failed");
 
       expect(cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases a guarded response without awaiting a debug-capture tee", async () => {
+      const captured = createCaptureTeedResponse({ status: 200 });
+      const fetchImpl = vi.fn(async () => captured.response);
+      saveResponseMediaMock.mockRejectedValueOnce(new Error("mkdir failed"));
+
+      try {
+        await expectSettled(
+          expect(
+            downloadAndStoreMSTeamsRemoteMedia({
+              url: "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content",
+              filePathHint: "file.png",
+              maxBytes: 1024,
+              useDirectFetch: true,
+              fetchImpl,
+            }),
+          ).rejects.toThrow("mkdir failed"),
+          "msteams remote media direct save",
+        );
+
+        expect(captured.cancellationSettled()).toBe(false);
+      } finally {
+        captured.releaseCaptureBranch();
+      }
     });
 
     it("falls back to the runtime saveRemoteMedia path when useDirectFetch is omitted", async () => {
