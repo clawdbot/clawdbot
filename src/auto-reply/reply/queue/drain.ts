@@ -594,6 +594,16 @@ type QueueSummaryDelivery = {
   sources: FollowupRun[];
 };
 
+function resolveQueueSummaryLines(
+  queue: Pick<FollowupQueueSummaryState, "summaryLines" | "summarySources">,
+  sources: FollowupRun[],
+): string[] {
+  return sources.map((source) => {
+    const sourceIndex = queue.summarySources.indexOf(source);
+    return expectDefined(queue.summaryLines[sourceIndex], "summary line for retained source");
+  });
+}
+
 function createQueueSummaryDelivery(params: {
   queue: FollowupQueueSummaryState;
   sources?: FollowupRun[];
@@ -607,7 +617,7 @@ function createQueueSummaryDelivery(params: {
   }
   const droppedCount = params.sources ? sources.length : params.queue.droppedCount;
   const summaryLines = params.sources
-    ? params.queue.summaryLines.slice(0, sources.length)
+    ? resolveQueueSummaryLines(params.queue, sources)
     : [...params.queue.summaryLines];
   const prompt = previewQueueSummaryPrompt({
     state: {
@@ -1028,7 +1038,7 @@ async function drainElidedOverflowSummary(params: {
   const elidedCount = entry.sources.length;
   const elidedSources = [...entry.sources];
   const droppedCount = elidedCount + retainedSources.length;
-  const retainedSummaryLines = params.queue.summaryLines.slice(0, retainedSources.length);
+  const retainedSummaryLines = resolveQueueSummaryLines(params.queue, retainedSources);
   const summaryLines = [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap);
   const prompt = previewQueueSummaryPrompt({
     state: {
