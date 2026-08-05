@@ -1708,6 +1708,12 @@ describe("runMemoryFlushIfNeeded", () => {
   it.each([
     ["failed 400", false, "Provider returned 400", { reason: "format", status: 400 }],
     ["failed 401", false, "Provider returned 401", { reason: "auth", status: 401 }],
+    [
+      "failed TLS certificate",
+      false,
+      "Provider certificate verification failed",
+      { reason: "tls_certificate", status: 502 },
+    ],
     ["successful 403 no-op", true, "Provider returned 403", undefined],
     ["text-only transient", false, "Provider returned 503 from model", undefined],
   ])(

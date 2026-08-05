@@ -120,6 +120,7 @@ describe("isTransientCompactionFailureResult", () => {
     },
     { ok: false, compacted: false, reason: "Provider returned 503" },
     { ok: false, compacted: false, failure: { reason: "format", status: 400 } },
+    { ok: false, compacted: false, failure: { reason: "tls_certificate", status: 502 } },
     { ok: true, compacted: false, failure: { reason: "server_error", status: 503 } },
   ])("keeps non-transient or non-failure result %j blocking", (result) => {
     expect(isTransientCompactionFailureResult(result)).toBe(false);

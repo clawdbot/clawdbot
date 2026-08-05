@@ -93,6 +93,9 @@ export function isTransientCompactionFailureResult(result: {
   if (result.ok || result.compacted || !result.failure) {
     return false;
   }
+  if (result.failure.reason === "tls_certificate") {
+    return false;
+  }
   const status = result.failure.status;
   if (status === 408 || status === 429 || (status !== undefined && status >= 500 && status < 600)) {
     return true;
