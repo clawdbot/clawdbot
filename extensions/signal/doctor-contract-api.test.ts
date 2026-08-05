@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
+import { resolveSignalAccount } from "./src/accounts.js";
 import { migrateLegacySignalTransportConfig } from "./src/config-compat.js";
 
 function signalConfig(entry: Record<string, unknown>): OpenClawConfig {
@@ -653,9 +654,10 @@ describe("signal transport compatibility", () => {
       httpHost: "127.0.0.1",
       httpPort: 8181,
     });
+    expect(() => resolveSignalAccount({ cfg: result.config })).not.toThrow();
   });
 
-  it("preserves legacy native proxy URL paths when the daemon bind matches", async () => {
+  it("keeps the explicit daemon bind when a legacy URL carries the same proxy port", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({
         apiMode: "native",
@@ -669,7 +671,6 @@ describe("signal transport compatibility", () => {
     expect(result.config.channels?.signal?.transport).toEqual({
       kind: "managed-native",
       httpHost: "127.0.0.1",
-      url: "http://127.0.0.1:8181/proxy",
       httpPort: 8181,
     });
   });

@@ -114,11 +114,16 @@ function resolveManagedConnectionUrl(
       ? 443
       : 80;
   const matchesBindEndpoint =
-    endpoint.pathname === "/" &&
-    endpoint.protocol === "http:" &&
-    endpointHost === bindHost &&
-    endpointPort === bindPort;
-  return matchesBindEndpoint ? undefined : normalizedUrl;
+    endpoint.protocol === "http:" && endpointHost === bindHost && endpointPort === bindPort;
+  // An explicit legacy httpPort owns the daemon bind, even when httpUrl carries a proxy path.
+  // Drop the same-port URL during migration so account resolution does not reject a self-collision.
+  if (matchesBindEndpoint && rawBindPort !== undefined) {
+    return undefined;
+  }
+  if (matchesBindEndpoint && endpoint.pathname === "/") {
+    return undefined;
+  }
+  return normalizedUrl;
 }
 
 export function buildManagedNativeTransport(
