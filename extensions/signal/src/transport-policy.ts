@@ -90,6 +90,11 @@ export function isSignalManagedNativeConnectionUrlForBind(
     return false;
   }
   const connectionUrl = new URL(transport.url);
+  // A path-prefixed URL addresses a local proxy, not signal-cli's root daemon endpoint.
+  // Keep it independent so bind-port allocation never rewrites the proxy URL.
+  if (connectionUrl.pathname !== "/") {
+    return false;
+  }
   // signal-cli's daemon bind is plain HTTP. A local HTTPS URL is an independent proxy endpoint,
   // even when its host and port happen to match the configured daemon bind.
   if (connectionUrl.protocol !== "http:") {

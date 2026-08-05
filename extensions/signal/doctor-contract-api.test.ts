@@ -655,7 +655,7 @@ describe("signal transport compatibility", () => {
     });
   });
 
-  it("ignores legacy native URL paths when the daemon bind matches", async () => {
+  it("preserves legacy native proxy URL paths when the daemon bind matches", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({
         apiMode: "native",
@@ -669,8 +669,26 @@ describe("signal transport compatibility", () => {
     expect(result.config.channels?.signal?.transport).toEqual({
       kind: "managed-native",
       httpHost: "127.0.0.1",
+      url: "http://127.0.0.1:8181/proxy",
       httpPort: 8181,
     });
+  });
+
+  it("keeps a path-prefixed legacy proxy endpoint independent when httpPort is absent", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:8082/proxy",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082/proxy",
+    });
+    expect(result.config.channels?.signal?.transport).not.toHaveProperty("httpPort");
   });
 
   it("preserves an independent managed connection URL", async () => {

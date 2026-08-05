@@ -48,6 +48,15 @@ describe("inferLegacyManagedNativePortFromConnectionUrl", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("does not infer a daemon bind from a path-prefixed proxy URL", () => {
+    expect(
+      inferLegacyManagedNativePortFromConnectionUrl({
+        kind: "managed-native",
+        url: "http://127.0.0.1:8082/signal",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("assignSignalManagedNativePort", () => {
@@ -76,5 +85,14 @@ describe("assignSignalManagedNativePort", () => {
     );
     expect(next.url).toBe("http://127.0.0.1:8082");
     expect(next.httpPort).toBe(8080);
+  });
+
+  it("keeps a path-prefixed proxy URL independent on bind-port changes", () => {
+    const next = assignSignalManagedNativePort(
+      managedTransport("http://127.0.0.1:8080/signal", "127.0.0.1"),
+      9090,
+    );
+    expect(next.url).toBe("http://127.0.0.1:8080/signal");
+    expect(next.httpPort).toBe(9090);
   });
 });

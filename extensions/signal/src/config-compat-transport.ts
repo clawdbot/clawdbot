@@ -114,7 +114,10 @@ function resolveManagedConnectionUrl(
       ? 443
       : 80;
   const matchesBindEndpoint =
-    endpoint.protocol === "http:" && endpointHost === bindHost && endpointPort === bindPort;
+    endpoint.pathname === "/" &&
+    endpoint.protocol === "http:" &&
+    endpointHost === bindHost &&
+    endpointPort === bindPort;
   return matchesBindEndpoint ? undefined : normalizedUrl;
 }
 
