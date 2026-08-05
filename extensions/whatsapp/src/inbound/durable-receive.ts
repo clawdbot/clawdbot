@@ -138,6 +138,12 @@ export function createWhatsAppIngressMonitor(params: {
     },
     drain: {
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
+      // The lane is per-conversation (remoteJid) and dispatch defers into the
+      // debouncer while the merge window is open. Holding the lane during that
+      // wait (the drain default) blocks every other message in the same
+      // conversation from being admitted, so no two messages ever land in the
+      // same debounce flush. Same defect and same fix as #101335 (Telegram).
+      deferredLaneOccupancy: "release",
       deriveLaneKey: (record) => {
         try {
           return inspectWhatsAppIngressMessage(

@@ -135,7 +135,7 @@ describe("createWhatsAppIngressMonitor", () => {
     });
   });
 
-  it("keeps a second same-lane message pending until the first turn adopts", async () => {
+  it("admits a second same-lane message while the first is still deferred, without waiting for adoption", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
         channelId: "whatsapp",
@@ -155,6 +155,7 @@ describe("createWhatsAppIngressMonitor", () => {
 
       const dispatched: string[] = [];
       let adoptFirst: (() => void | Promise<void>) | undefined;
+      let adoptSecond: (() => void | Promise<void>) | undefined;
       const monitor = createWhatsAppIngressMonitor({
         queue,
         pollIntervalMs: 10,
@@ -166,28 +167,34 @@ describe("createWhatsAppIngressMonitor", () => {
           dispatched.push(id);
           if (id === "msg-4a") {
             adoptFirst = lifecycle.onAdopted;
-            return { kind: "deferred" as const };
+          } else {
+            adoptSecond = lifecycle.onAdopted;
           }
-          return { kind: "completed" as const };
+          return { kind: "deferred" as const };
         },
       });
 
       monitor.start();
       await monitor.waitForIdle();
 
-      // Core drain serializes a conversation lane: msg-4b cannot reach the
-      // channel debouncer until msg-4a transfers into the reply lane.
-      expect(dispatched).toEqual(["msg-4a"]);
-      expect((await queue.listClaims()).map((row) => row.id)).toEqual([firstId]);
-      expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).toEqual([secondId]);
+      // deferredLaneOccupancy: "release" frees the conversation lane as soon as
+      // a claim defers (before adoption), so a debounce-window merge is
+      // possible: msg-4b reaches the channel debouncer without waiting for
+      // msg-4a to transfer into the reply lane. This is the WhatsApp side of
+      // the same fix Telegram already carries for #101335.
+      expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
+      expect((await queue.listClaims()).map((row) => row.id).toSorted()).toEqual(
+        [firstId, secondId].toSorted(),
+      );
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
-      if (!adoptFirst) {
-        throw new Error("expected first adoption callback");
+      if (!adoptFirst || !adoptSecond) {
+        throw new Error("expected both adoption callbacks");
       }
       await adoptFirst();
+      await adoptSecond();
       await monitor.waitForIdle();
 
-      expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await monitor.stop();

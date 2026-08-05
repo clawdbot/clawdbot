@@ -344,10 +344,15 @@ describe("web monitor inbox delivery and dedupe", () => {
     const closePromise = listener.close().then(() => {
       closed = true;
     });
-    await waitForMessageCalls(onMessage, 3);
+    // deferredLaneOccupancy: "release" frees the conversation lane as soon as
+    // the first message's ingress dispatch defers, instead of holding it
+    // until the first turn adopts. So "second" and "third" (delivered in the
+    // same upsert batch) both reach the debouncer inside one debounce window
+    // and land in a single merged flush, rather than each paying its own
+    // window serially.
+    await waitForMessageCalls(onMessage, 2);
     expect(closed).toBe(false);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-    expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second\nthird");
 
     releaseFirst?.();
     await closePromise;
@@ -650,7 +655,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator keeps same-lane follow-up pending until turn adoption", async () => {
+  it("delivery coordinator admits a same-lane follow-up before the first turn adopts", async () => {
     let adoptFirst: (() => void | Promise<void>) | undefined;
     const onMessage = vi.fn(async (message: WebInboundMessage) => {
       if (!adoptFirst) {
@@ -686,17 +691,18 @@ describe("web monitor inbox delivery and dedupe", () => {
         },
       ],
     });
-    await settleInboundWork();
 
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(inboundMessage(onMessage).payload.body).toBe("ping");
+    // deferredLaneOccupancy: "release" frees the WhatsApp conversation lane as
+    // soon as the first message's ingress dispatch defers, so the follow-up
+    // reaches onMessage without waiting for the first turn's own (much
+    // later) session-level adoption.
+    await waitForMessageCalls(onMessage, 2);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("pong");
 
     if (!adoptFirst) {
       throw new Error("expected first adoption callback");
     }
     await adoptFirst();
-    await waitForMessageCalls(onMessage, 2);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("pong");
     await listener.close();
   });
 });
