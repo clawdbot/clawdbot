@@ -442,6 +442,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       entry: account.config,
       lines: [...progressDraft.getSnapshot().lines],
       seed: progressSeed,
+      formatLine: formatSlackProgressDraftLine,
       narration: explanation,
       plan: steps,
     });
