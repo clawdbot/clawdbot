@@ -876,6 +876,7 @@ vi.mock("../../format.js", () => ({
 
 vi.mock("../../limits.js", () => ({
   SLACK_TEXT_LIMIT: 4000,
+  SLACK_EDIT_TEXT_MAX_BYTES: 4000,
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
@@ -2263,6 +2264,44 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { description: "plain text", finalText: "x".repeat(4001) },
+    { description: "multibyte text", finalText: "é".repeat(2001) },
+  ])(
+    "delivers oversized $description intact through the normal chunked sender",
+    async ({ finalText }) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      mockedSlackStreamingMode = "progress";
+      mockedSlackDraftMode = "status_final";
+      mockedDispatchSequence = [{ kind: "final", payload: { text: finalText } }];
+      mockedReplyOptionEvents = [
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "preamble-1",
+          progressText: "Checking the full answer before replying.",
+        },
+      ];
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: {
+            streaming: {
+              mode: "progress",
+              progress: { label: false, commentary: true, toolProgress: false },
+            },
+          },
+        }),
+      );
+
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+      expectDeliverReplyCall(0, finalText);
+      expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("retains the progress draft when both the final edit and fallback send fail", async () => {
     const draftStream = createDraftStreamStub();
@@ -3744,7 +3783,39 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      "_I’m using the `monorepo` skill on Linux x86_64._",
+      "_I’m using the `monorepo` skill on Linux x86\\_64._",
+    );
+  });
+
+  it("escapes Slack mentions and formatting in commentary without losing outer italics or inline code", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText:
+          "checking <@U123> in <#C123> and <!channel> with *urgent* _context_ `src/one.ts`",
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { label: false, commentary: true, toolProgress: false },
+          },
+        },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with \\*urgent\\* \\_context\\_ `src/one.ts`_",
     );
   });
 
