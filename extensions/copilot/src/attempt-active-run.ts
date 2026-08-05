@@ -50,6 +50,9 @@ export function registerCopilotActiveRun(params: {
       ) {
         return;
       }
+      if (params.isSettled() || params.isAborted()) {
+        throw new Error("Copilot steering is unavailable after the active run ended");
+      }
       if (!params.canAcceptSteering()) {
         throw new Error("Copilot steering is unavailable before initial user validation");
       }

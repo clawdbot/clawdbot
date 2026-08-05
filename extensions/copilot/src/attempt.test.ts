@@ -42,6 +42,13 @@ function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResult["ter
 
 const gatewayQuestionMock = vi.hoisted(() => ({
   waiters: new Map<string, (value: unknown) => void>(),
+  claimPendingAgentQuestionAnswer: undefined as
+    | ((
+        ...args: Parameters<
+          typeof import("openclaw/plugin-sdk/agent-harness-runtime").claimPendingAgentQuestionAnswer
+        >
+      ) => Promise<boolean>)
+    | undefined,
   cancelError: undefined as Error | undefined,
   warn: vi.fn(),
   setActiveEmbeddedRun: vi.fn(),
@@ -62,6 +69,12 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       }
       return await actual.cancelPendingAgentQuestionForSession(...args);
     },
+    claimPendingAgentQuestionAnswer: async (
+      ...args: Parameters<typeof actual.claimPendingAgentQuestionAnswer>
+    ) =>
+      gatewayQuestionMock.claimPendingAgentQuestionAnswer
+        ? await gatewayQuestionMock.claimPendingAgentQuestionAnswer(...args)
+        : await actual.claimPendingAgentQuestionAnswer(...args),
     callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
       const [method, , rawParams] = args;
       const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
@@ -2193,6 +2206,48 @@ describe("runCopilotAttempt", () => {
 
     initialTurn.resolve(makeAssistantMessageEvent("done"));
     await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
+  });
+
+  it("rejects steering when the run settles during pending-question lookup", async () => {
+    const initialTurn = createDeferred<SessionEventShape | undefined>();
+    const questionClaim = createDeferred<boolean>();
+    const claimPendingAgentQuestionAnswer = vi.fn(() => questionClaim.promise);
+    gatewayQuestionMock.claimPendingAgentQuestionAnswer = claimPendingAgentQuestionAnswer;
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+          return initialTurn.promise;
+        });
+      },
+    });
+    try {
+      const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      await vi.waitFor(() => expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1));
+      const handle = expectDefined(
+        gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.at(-1)?.[1] as
+          | {
+              queueMessage: (
+                text: string,
+                options?: { isInboundUserMessage?: boolean },
+              ) => Promise<void>;
+            }
+          | undefined,
+        "active Copilot steering handle",
+      );
+      const steering = handle.queueMessage("late steer", { isInboundUserMessage: true });
+      await vi.waitFor(() => expect(claimPendingAgentQuestionAnswer).toHaveBeenCalledTimes(1));
+
+      initialTurn.resolve(makeAssistantMessageEvent("done"));
+      await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
+      questionClaim.resolve(false);
+
+      await expect(steering).rejects.toThrow("active run ended");
+      expect(requireSession(sdk).send).not.toHaveBeenCalled();
+    } finally {
+      gatewayQuestionMock.claimPendingAgentQuestionAnswer = undefined;
+    }
   });
 
   it("enableSessionTelemetry is omitted from createSession when undefined (SDK default)", async () => {
