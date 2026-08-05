@@ -93,6 +93,7 @@ const view = {
   allowedAppToolNames: new Set(["shared", "app-only"]),
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "sunny" }] },
+  requestTimeoutMs: 60_000,
   expiresAtMs: nowMs + 10 * 60_000,
   requestWindowStartedAtMs: nowMs,
   requestCount: 0,
@@ -138,6 +139,7 @@ describe("MCP App standalone host", () => {
     Object.assign(view, {
       allowedAppToolNames: new Set(["shared", "app-only"]),
       readOnly: undefined,
+      requestTimeoutMs: 60_000,
       requestWindowStartedAtMs: nowMs,
       requestCount: 0,
       toolCallCount: 0,
@@ -218,9 +220,11 @@ describe("MCP App standalone host", () => {
     expect(body).toContain("event.origin");
     expect(body).toContain("if (!initializeAccepted)");
     // Initial view load keeps a short bounded timeout; operation fetches honor
-    // the configured MCP request deadline carried in the view payload.
+    // the configured MCP request deadline plus a bounded gateway grace.
     expect(body).toContain("AbortSignal.timeout(MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS)");
-    expect(body).toContain("payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs");
+    expect(body).toContain(
+      "(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) + config.requestTimeoutGraceMs",
+    );
     expect(body).not.toContain('postMessage(message, "*")');
     expect(body).not.toContain(view.html);
     expect(body).not.toContain("agent:main:main");
@@ -265,18 +269,10 @@ describe("MCP App standalone host", () => {
     });
   });
 
-  it("emits an operation fetch timeout that honors a non-default configured deadline", async () => {
-    const customCatalog = {
-      ...defaultCatalog,
-      servers: {
-        demo: {
-          ...defaultCatalog.servers.demo,
-          requestTimeoutMs: 120_000,
-        },
-      },
-    };
-    runtime.peekCatalog.mockReturnValue(customCatalog);
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+  it("emits an operation fetch timeout that honors a non-default configured deadline plus gateway grace", async () => {
+    const customView = { ...view, requestTimeoutMs: 120_000 };
+    mocks.getMcpAppViewLease.mockReturnValue(customView);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view: customView, nowMs, secret });
     const accepted = await request({
       url: "/__openclaw__/mcp-app/view",
       authorization: `MCP-App ${issued.ticket}`,
@@ -288,9 +284,27 @@ describe("MCP App standalone host", () => {
 
     const shell = await request({ url: "/__openclaw__/mcp-app" });
     const body = String(shell.end.mock.calls[0]?.[0]);
-    // The operation fetch must use the configured deadline, not the hardcoded 30s cap.
-    expect(body).toContain("payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs");
+    // The operation fetch must use the configured deadline plus a bounded grace,
+    // not the hardcoded 30s cap.
+    expect(body).toContain(
+      "(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) + config.requestTimeoutGraceMs",
+    );
     expect(body).toContain("AbortSignal.timeout(MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS)");
+  });
+
+  it("preserves the configured timeout in the view payload even when the cached catalog is invalidated", async () => {
+    const customView = { ...view, requestTimeoutMs: 120_000 };
+    mocks.getMcpAppViewLease.mockReturnValue(customView);
+    runtime.peekCatalog.mockReturnValue(null as never);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view: customView, nowMs, secret });
+    const accepted = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${issued.ticket}`,
+    });
+    expect(accepted.res.statusCode).toBe(200);
+    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
+      requestTimeoutMs: 120_000,
+    });
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {

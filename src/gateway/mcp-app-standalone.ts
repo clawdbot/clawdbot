@@ -21,6 +21,11 @@ import {
 
 const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
 const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
+// Grace added to the browser-side operation fetch so the outer timer expires
+// only after the runtime MCP deadline has had time to complete and the Gateway
+// has had time to return its response. This avoids visible false failures for
+// valid near-deadline operations.
+const MCP_APP_STANDALONE_REQUEST_GRACE_MS = 5_000;
 const MCP_APP_STANDALONE_TICKET_TTL_MS = 2 * 60_000;
 const MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS = 15_000;
 const MCP_APP_STANDALONE_TICKET_MAX_ENTRIES = 256;
@@ -220,6 +225,7 @@ function runStandaloneMcpAppHost(config: {
   protocolVersion: string;
   viewPath: string;
   defaultRequestTimeoutMs: number;
+  requestTimeoutGraceMs: number;
 }): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
@@ -337,7 +343,10 @@ function runStandaloneMcpAppHost(config: {
       body: JSON.stringify({ method, params }),
       cache: "no-store",
       credentials: "omit",
-      signal: AbortSignal.timeout(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs),
+      signal: AbortSignal.timeout(
+        (payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) +
+          config.requestTimeoutGraceMs,
+      ),
     });
     const body = (await response.json().catch(() => undefined)) as
       | { ok?: boolean; result?: unknown; error?: string }
@@ -525,6 +534,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
     defaultRequestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    requestTimeoutGraceMs: MCP_APP_STANDALONE_REQUEST_GRACE_MS,
   })});`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
   return {
@@ -666,9 +676,9 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
-      const requestTimeoutMs =
-        runtime.peekCatalog()?.servers[view.serverName]?.requestTimeoutMs ??
-        DEFAULT_REQUEST_TIMEOUT_MS;
+      // The timeout was snapshotted onto the view when it was created, so it
+      // survives later catalog invalidation (e.g. tools/list_changed) that can
+      // clear the runtime's cached catalog.
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -686,7 +696,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
-              requestTimeoutMs,
+              requestTimeoutMs: view.requestTimeoutMs,
             }),
       );
       return true;
