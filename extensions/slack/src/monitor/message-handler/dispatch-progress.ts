@@ -85,6 +85,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         ...(!hasSlackCustomIdentity && slackIdentity ? { identity: slackIdentity } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
+        onMessageSent: setup.rearmQueuedThreadStatus,
         resolveThreadTs: () => {
           const ts = replyPlan.peekThreadTs();
           if (ts) {
@@ -237,6 +238,9 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
     if (startedSession) {
       markNativeProgressDelivered(startedSession, streamThreadTs);
+      if (startedSession.delivered) {
+        setup.rearmQueuedThreadStatus();
+      }
     }
     nativeProgressChunkKey = chunkKey;
     replyPlan.markSent();
@@ -408,6 +412,7 @@ export function createSlackProgressRuntime(runtimeParams: {
           ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         });
         delivery.acknowledgeStoppedStreamedDeliveries(session, stopResult?.messageId);
+        setup.rearmQueuedThreadStatus();
         if (pendingNativeProgressReceipt && stopResult?.messageId) {
           await collapseProgressReceipt({
             channelId: session.channel,
