@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/agent-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -31,6 +32,37 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+
+/**
+ * Returns true when the persisted auth-profile override belongs to the same
+ * provider as the selected model after auth-alias resolution, so the native
+ * Telegram picker does not silently destroy a profile set by a non-picker
+ * source (#92244).
+ */
+function shouldPreservePickerAuthProfile(params: {
+  entry: { authProfileOverride?: string };
+  selectedProvider: string;
+  isDefaultSelection: boolean;
+  cfg: OpenClawConfig;
+}): boolean {
+  if (params.isDefaultSelection) {
+    return false;
+  }
+  const profileOverride = params.entry.authProfileOverride?.trim();
+  if (!profileOverride || !params.selectedProvider) {
+    return false;
+  }
+  const delimiterIndex = profileOverride.indexOf(":");
+  if (delimiterIndex < 0) {
+    return false;
+  }
+  const profileProvider = profileOverride.slice(0, delimiterIndex);
+  const lookupParams = { config: params.cfg };
+  return (
+    resolveProviderIdForAuth(profileProvider, lookupParams) ===
+    resolveProviderIdForAuth(params.selectedProvider, lookupParams)
+  );
+}
 
 export async function handleTelegramModelCallback(params: {
   data: string;
@@ -277,6 +309,10 @@ export async function handleTelegramModelCallback(params: {
         fallbackEntry: { sessionId: randomUUID(), updatedAt: Date.now() },
         replaceEntry: true,
         update: (entry) => {
+          // Preserve a compatible auth-profile override set by a non-picker
+          // source (#92244). The profile must belong to the same provider as
+          // the selected model after auth-alias resolution; an incompatible
+          // profile is still cleared by the mutator's default path.
           applyModelOverrideToSessionEntry({
             entry,
             selection: {
@@ -284,6 +320,12 @@ export async function handleTelegramModelCallback(params: {
               model: selection.model,
               isDefault: isDefaultSelection,
             },
+            preserveAuthProfileOverride: shouldPreservePickerAuthProfile({
+              entry,
+              selectedProvider: selection.provider,
+              isDefaultSelection,
+              cfg: runtimeCfg,
+            }),
           });
           return entry;
         },

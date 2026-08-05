@@ -528,4 +528,85 @@ describe("applySessionModelSelection", () => {
     expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
     expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
   });
+
+  it("preserves a compatible auth-profile override when switching to the same provider (#92244)", async () => {
+    const sessionEntry = createEntry({
+      authProfileOverride: "openai:work-profile",
+      authProfileOverrideSource: "cli",
+    });
+    const result = await applySessionModelSelection(
+      createParams({
+        sessionEntry,
+        currentProvider: "anthropic",
+        currentModel: "claude-opus-4-6",
+        request: {
+          provider: "openai",
+          model: "gpt-4o",
+          isDefault: false,
+          runtime: { kind: "unchanged" },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "applied" });
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.authProfileOverride).toBe("openai:work-profile");
+    expect(sessionEntry.authProfileOverrideSource).toBe("cli");
+  });
+
+  it("clears an incompatible auth-profile override when switching to a different provider", async () => {
+    const sessionEntry = createEntry({
+      authProfileOverride: "anthropic:legacy",
+      authProfileOverrideSource: "user",
+    });
+    await applySessionModelSelection(
+      createParams({
+        sessionEntry,
+        currentProvider: "anthropic",
+        currentModel: "claude-opus-4-6",
+        request: {
+          provider: "openai",
+          model: "gpt-4o",
+          isDefault: false,
+          runtime: { kind: "unchanged" },
+        },
+      }),
+    );
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    // incompatible profile cleared because provider doesn't match
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("clears the auth-profile override on an explicit reset to default", async () => {
+    const sessionEntry = createEntry({
+      authProfileOverride: "openai:work-profile",
+      authProfileOverrideSource: "cli",
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
+    });
+    await applySessionModelSelection(
+      createParams({
+        sessionEntry,
+        currentProvider: "openai",
+        currentModel: "gpt-4o",
+        request: {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          isDefault: true,
+          runtime: { kind: "unchanged" },
+        },
+      }),
+    );
+
+    // default reset clears overrides including the auth profile
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+  });
 });

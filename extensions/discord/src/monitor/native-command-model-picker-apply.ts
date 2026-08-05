@@ -1,5 +1,6 @@
 // Discord plugin module implements native command model picker apply behavior.
 import { randomUUID } from "node:crypto";
+import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -33,6 +34,31 @@ type DiscordModelPickerApplyResult =
   | { status: "timeout"; noticeMessage: string }
   | { status: "failed"; noticeMessage: string };
 
+function shouldPreserveDiscordPickerAuthProfile(params: {
+  entry: { authProfileOverride?: string };
+  selectedProvider: string;
+  isDefaultSelection: boolean;
+  cfg: OpenClawConfig;
+}): boolean {
+  if (params.isDefaultSelection) {
+    return false;
+  }
+  const profileOverride = params.entry.authProfileOverride?.trim();
+  if (!profileOverride || !params.selectedProvider) {
+    return false;
+  }
+  const delimiterIndex = profileOverride.indexOf(":");
+  if (delimiterIndex < 0) {
+    return false;
+  }
+  const profileProvider = profileOverride.slice(0, delimiterIndex);
+  const lookupParams = { config: params.cfg };
+  return (
+    resolveProviderIdForAuth(profileProvider, lookupParams) ===
+    resolveProviderIdForAuth(params.selectedProvider, lookupParams)
+  );
+}
+
 async function persistDiscordModelPickerOverride(params: {
   cfg: OpenClawConfig;
   route: ResolvedAgentRoute;
@@ -54,6 +80,12 @@ async function persistDiscordModelPickerOverride(params: {
     },
     replaceEntry: true,
     update: (entry) => {
+      const preserveAuthProfile = shouldPreserveDiscordPickerAuthProfile({
+        entry,
+        selectedProvider: params.provider,
+        isDefaultSelection: params.isDefault,
+        cfg: params.cfg,
+      });
       persisted =
         applyModelOverrideToSessionEntry({
           entry,
@@ -62,6 +94,7 @@ async function persistDiscordModelPickerOverride(params: {
             model: params.model,
             isDefault: params.isDefault,
           },
+          preserveAuthProfileOverride: preserveAuthProfile,
           markLiveSwitchPending: true,
         }).updated || persisted;
       const runtime = params.runtime?.trim();

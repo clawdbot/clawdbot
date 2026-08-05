@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -5,6 +6,7 @@ import {
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, normalizeProviderId } from "../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
   resolveCompatibleAgentRuntimeForProvider,
   resolveSessionRuntimeOverrideForProvider,
@@ -95,17 +97,60 @@ type ApplySessionModelSelectionToEntryResult = {
   runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
 };
 
+/**
+ * Returns true when the persisted auth-profile override is compatible with
+ * the newly selected provider so the native picker does not silently destroy
+ * a profile set by a non-picker source (#92244).
+ */
+function shouldPreserveAuthProfileForModelSelection(params: {
+  entry: SessionEntry;
+  selectedProvider: string;
+  isDefaultSelection: boolean;
+  cfg: OpenClawConfig;
+}): boolean {
+  // Explicit reset to default clears the override; preserve only on a
+  // non-default selection where the existing profile is compatible.
+  if (params.isDefaultSelection) {
+    return false;
+  }
+  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
+  if (!profileOverride) {
+    return false;
+  }
+  const provider = normalizeOptionalString(params.selectedProvider);
+  if (!provider) {
+    return false;
+  }
+  // profileOverride has the form "provider:name" for profiles
+  // or a bare provider id for direct-override forms.
+  const delimiterIndex = profileOverride.indexOf(":");
+  const profileProvider = delimiterIndex < 0 ? provider : profileOverride.slice(0, delimiterIndex);
+  const lookupParams = { config: params.cfg };
+  return (
+    resolveProviderIdForAuth(profileProvider, lookupParams) ===
+    resolveProviderIdForAuth(provider, lookupParams)
+  );
+}
+
 /** Applies the model transaction field family to one caller-owned snapshot. */
 function applySessionModelSelectionToEntry(params: {
   entry: SessionEntry;
   request: SessionModelSelectionRequest;
   runtime: AppliedRuntimeDirective;
+  cfg: OpenClawConfig;
   markLiveSwitchPending?: boolean;
 }): ApplySessionModelSelectionToEntryResult {
+  const preserveAuthProfileOverride = shouldPreserveAuthProfileForModelSelection({
+    entry: params.entry,
+    selectedProvider: params.request.provider,
+    isDefaultSelection: params.request.isDefault,
+    cfg: params.cfg,
+  });
   const modelChange = applyModelOverrideToSessionEntry({
     entry: params.entry,
     selection: params.request,
     profileOverride: params.request.profileOverride,
+    preserveAuthProfileOverride,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const runtimeChange = applyModelRuntimeDirective(params.entry, params.runtime);
@@ -210,6 +255,7 @@ export async function applySessionModelSelection(
     entry: nextEntry,
     request,
     runtime,
+    cfg: params.cfg,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const thinkingCatalog = params.thinkingCatalog ?? params.modelCatalog;
