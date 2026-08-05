@@ -17,6 +17,11 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import {
+  emitTrustedDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -142,6 +147,7 @@ function createTrackingService(
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticEventsForTest();
     resetPluginRuntimeStateForTest();
   });
 
@@ -163,6 +169,60 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("drains diagnostics after producers stop and before exporters detach", async () => {
+    const order: string[] = [];
+    let unsubscribe = () => undefined;
+    const registry = createRegistry(
+      [
+        {
+          id: "producer",
+          start: () => undefined,
+          stop: () => {
+            order.push("producer");
+            emitTrustedDiagnosticEvent({
+              type: "log.record",
+              level: "INFO",
+              message: "queued during producer shutdown",
+            });
+          },
+        },
+      ],
+      "plugin:test",
+      "workspace",
+    );
+    registry.services.push(
+      ...createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start: (ctx) => {
+              unsubscribe = ctx.internalDiagnostics!.onEvent((event) => {
+                if (event.type === "log.record") {
+                  order.push("event");
+                }
+              });
+            },
+            stop: () => {
+              order.push("exporter");
+              unsubscribe();
+            },
+          },
+        ],
+        "diagnostics-otel",
+        "bundled",
+      ).services,
+    );
+
+    const handle = await startPluginServices({
+      registry,
+      config: createServiceConfig(),
+    });
+    await handle.stop();
+    await waitForDiagnosticEventsDrained();
+
+    expect(order).toEqual(["producer", "event", "exporter"]);
   });
 
   it("rolls back partially started services before starting their siblings", async () => {
@@ -474,10 +534,15 @@ describe("startPluginServices", () => {
     await handle.stop();
   });
 
-  it("logs start/stop failures and continues", async () => {
+  it("attempts every service stop and reports independent failures", async () => {
     const stopOk = vi.fn();
-    const stopThrows = vi.fn(() => {
-      throw new Error("stop failed");
+    const firstError = new Error("first stop failed");
+    const secondError = new Error("second stop failed");
+    const stopFirst = vi.fn(() => {
+      throw firstError;
+    });
+    const stopSecond = vi.fn(() => {
+      throw secondError;
     });
 
     const handle = await startTrackingServices({
@@ -486,12 +551,13 @@ describe("startPluginServices", () => {
           failOnStart: true,
           stopSpy: vi.fn(),
         }),
+        createTrackingService("service-stop-first", { stopSpy: stopFirst }),
         createTrackingService("service-ok", { stopSpy: stopOk }),
-        createTrackingService("service-stop-fail", { stopSpy: stopThrows }),
+        createTrackingService("service-stop-second", { stopSpy: stopSecond }),
       ],
     });
 
-    await handle.stop();
+    const stopError = await handle.stop().catch((error: unknown) => error);
 
     expect(mockedLogger.error.mock.calls).toEqual([
       [
@@ -500,10 +566,16 @@ describe("startPluginServices", () => {
     ]);
     expect(requireLoggerErrorMessage()).not.toContain("\n");
     expect(mockedLogger.warn.mock.calls).toEqual([
-      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
+      ["plugin service stop failed (service-stop-second): Error: second stop failed"],
+      ["plugin service stop failed (service-stop-first): Error: first stop failed"],
     ]);
     expect(stopOk).toHaveBeenCalledOnce();
-    expect(stopThrows).toHaveBeenCalledOnce();
+    expect(stopFirst).toHaveBeenCalledOnce();
+    expect(stopSecond).toHaveBeenCalledOnce();
+    expect(stopError).toBeInstanceOf(AggregateError);
+    expect(stopError).toMatchObject({
+      errors: [secondError, firstError],
+    });
   });
 
   it("continues starting siblings when rollback also fails", async () => {
