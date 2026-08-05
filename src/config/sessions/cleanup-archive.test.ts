@@ -78,12 +78,17 @@ describe("SessionArchiveCleanupPreviewCoordinator", () => {
     });
 
     await expect(coordinator.preview({ target: main, maintenance })).resolves.toEqual({
-      report: { scannedFiles: 0, removedFiles: 0 },
+      report: {
+        scannedFiles: 0,
+        removedFiles: 0,
+        skipReason: "shared-directory-requires-all-agents",
+      },
       excludeCanonicalPaths: new Set(),
     });
     await expect(coordinator.apply({ target: main, maintenance })).resolves.toEqual({
       scannedFiles: 0,
       removedFiles: 0,
+      skipReason: "shared-directory-requires-all-agents",
     });
     expect(mocks.cleanupSessionArchivedTranscriptFiles).not.toHaveBeenCalled();
   });

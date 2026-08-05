@@ -599,6 +599,125 @@ describe("sessionsCleanupCommand", () => {
     expectLogsToInclude(logs, "Pruned deleted/reset archives: 2");
   });
 
+  it.each([
+    { dryRun: true, label: "dry-run" },
+    { dryRun: false, label: "applied" },
+  ])("renders a protected shared-directory skip for $label cleanup", async ({ dryRun }) => {
+    const summary = {
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "enforce" as const,
+      dryRun,
+      beforeCount: 1,
+      afterCount: 1,
+      missing: 0,
+      dmScopeRetired: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+      archiveCleanup: {
+        scannedFiles: 0,
+        removedFiles: 0,
+        skipReason: "shared-directory-requires-all-agents" as const,
+      },
+      unreferencedArtifacts: {
+        scannedFiles: 0,
+        removedFiles: 0,
+        freedBytes: 0,
+        olderThanMs: 604800000,
+      },
+      diskBudget: null,
+      wouldMutate: false,
+      ...(dryRun ? {} : { applied: true as const, appliedCount: 1 }),
+    };
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "enforce",
+      previewResults: dryRun
+        ? [
+            {
+              summary,
+              beforeStore: {},
+              missingKeys: new Set<string>(),
+              staleKeys: new Set<string>(),
+              cappedKeys: new Set<string>(),
+              budgetEvictedKeys: new Set<string>(),
+              dmScopeRetiredKeys: new Set<string>(),
+              modelRunPrunedKeys: new Set<string>(),
+            },
+          ]
+        : [],
+      appliedSummaries: dryRun ? [] : [summary],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun,
+        enforce: true,
+        ...(dryRun ? {} : { store: "/resolved/sessions.json" }),
+      },
+      runtime,
+    );
+
+    expectLogsToInclude(
+      logs,
+      "Skipped deleted/reset archive cleanup: directory is shared with unselected agents; use --all-agents.",
+    );
+  });
+
+  it("preserves the protected shared-directory skip reason in JSON", async () => {
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "enforce",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "enforce",
+            dryRun: true,
+            beforeCount: 0,
+            afterCount: 0,
+            missing: 0,
+            dmScopeRetired: 0,
+            modelRunPruned: 0,
+            pruned: 0,
+            capped: 0,
+            archiveCleanup: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              skipReason: "shared-directory-requires-all-agents",
+            },
+            unreferencedArtifacts: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: 604800000,
+            },
+            diskBudget: null,
+            wouldMutate: false,
+          },
+          beforeStore: {},
+          missingKeys: new Set<string>(),
+          staleKeys: new Set<string>(),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand({ dryRun: true, enforce: true, json: true }, runtime);
+
+    expect(JSON.parse(logs[0] ?? "{}").archiveCleanup).toEqual({
+      scannedFiles: 0,
+      removedFiles: 0,
+      skipReason: "shared-directory-requires-all-agents",
+    });
+  });
+
   it("renders a dry-run summary grouped by session label", async () => {
     mocks.enforceSessionDiskBudget.mockResolvedValue(null);
     mocks.runSessionsCleanup.mockResolvedValue({

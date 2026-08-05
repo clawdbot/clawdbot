@@ -108,7 +108,10 @@ export class SessionArchiveCleanupPreviewCoordinator {
     const archiveDirectory = resolveArchiveDirectory(params.target);
     if (!this.#cleanableDirectories.has(archiveDirectory)) {
       return {
-        report: { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT },
+        report: {
+          ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
+          skipReason: "shared-directory-requires-all-agents",
+        },
         excludeCanonicalPaths: new Set<string>(),
       };
     }
@@ -137,10 +140,13 @@ export class SessionArchiveCleanupPreviewCoordinator {
     maintenance: ResolvedSessionMaintenanceConfig;
   }): Promise<SessionArchiveCleanupReport> {
     const archiveDirectory = resolveArchiveDirectory(params.target);
-    if (
-      !this.#cleanableDirectories.has(archiveDirectory) ||
-      this.#appliedDirectories.has(archiveDirectory)
-    ) {
+    if (!this.#cleanableDirectories.has(archiveDirectory)) {
+      return {
+        ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
+        skipReason: "shared-directory-requires-all-agents",
+      };
+    }
+    if (this.#appliedDirectories.has(archiveDirectory)) {
       return { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
     }
     this.#appliedDirectories.add(archiveDirectory);

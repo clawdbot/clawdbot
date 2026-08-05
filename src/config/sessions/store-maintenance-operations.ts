@@ -24,6 +24,7 @@ type SessionArchiveCleanupRule = {
 export type SessionArchiveCleanupReport = {
   scannedFiles: number;
   removedFiles: number;
+  skipReason?: "shared-directory-requires-all-agents";
 };
 
 export const EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT: SessionArchiveCleanupReport = {

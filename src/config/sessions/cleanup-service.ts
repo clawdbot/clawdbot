@@ -572,14 +572,22 @@ export async function runSessionsCleanup(params: {
       });
       const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
       const appliedReport = lifecycleResult.maintenanceReport;
+      const preview = previewResults.find(
+        (result) =>
+          result.summary.agentId === target.agentId &&
+          result.summary.storePath === target.storePath,
+      );
+      const previewArchiveCleanup = preview?.summary.archiveCleanup;
       const appliedArchiveCleanup =
         mode === "warn"
           ? { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT }
-          : (appliedReport?.archiveCleanup ??
-            (await archiveCleanupCoordinator.apply({
-              target,
-              maintenance,
-            })));
+          : previewArchiveCleanup?.skipReason
+            ? previewArchiveCleanup
+            : (appliedReport?.archiveCleanup ??
+              (await archiveCleanupCoordinator.apply({
+                target,
+                maintenance,
+              })));
       const appliedUnreferencedArtifacts =
         mode === "warn"
           ? null
@@ -617,11 +625,6 @@ export async function runSessionsCleanup(params: {
         mode,
         maintenance,
       });
-      const preview = previewResults.find(
-        (result) =>
-          result.summary.agentId === target.agentId &&
-          result.summary.storePath === target.storePath,
-      );
       const summary: SessionCleanupSummary =
         appliedReport === null
           ? {
@@ -671,7 +674,7 @@ export async function runSessionsCleanup(params: {
               modelRunPruned: appliedReport.modelRunPruned,
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
-              archiveCleanup: appliedReport.archiveCleanup,
+              archiveCleanup: appliedArchiveCleanup,
               unreferencedArtifacts,
               diskBudget: appliedDiskBudget,
               wouldMutate:
@@ -680,7 +683,7 @@ export async function runSessionsCleanup(params: {
                 appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
-                appliedReport.archiveCleanup.removedFiles > 0 ||
+                appliedArchiveCleanup.removedFiles > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
                 (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
                 (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
