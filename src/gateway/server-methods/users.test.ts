@@ -17,6 +17,10 @@ const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profiles.js", () => ({
+  classifyTailscaleLogin: (login: string) =>
+    login.endsWith("@github")
+      ? { kind: "provider", provider: "github", subject: login.slice(0, -"@github".length) }
+      : { kind: "email", email: login },
   ensureProfileForEmail,
   getUserProfileListItem,
   linkEmail,
@@ -89,6 +93,26 @@ describe("users gateway methods", () => {
     expect(ensureProfileForEmail).toHaveBeenNthCalledWith(2, "ada@example.com");
     expect(getUserProfileListItem).toHaveBeenNthCalledWith(1, profile.id);
     expect(getUserProfileListItem).toHaveBeenNthCalledWith(2, profile.id);
+  });
+
+  it("uses the connect-time provider profile without recreating an email alias", async () => {
+    const providerClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { scopes: ["operator.write"] },
+    };
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
+
+    const respond = await runUsersHandler("users.self", {}, providerClient);
+
+    expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
+    expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
 
   it("rejects users.self without an authenticated user", async () => {
@@ -213,6 +237,30 @@ describe("users gateway methods", () => {
     expect(displayName).toHaveBeenCalledWith(true, { profile });
     expect(avatar).toHaveBeenCalledWith(true, { profile });
     expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@example.com");
+  });
+
+  it("authorizes provider-owned profile edits from the connect-time profile id", async () => {
+    const providerClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { scopes: ["operator.write"] },
+    };
+    resolveUserProfileId.mockReturnValue(profile.id);
+    setDisplayName.mockReturnValue(profile);
+
+    expect(
+      await runUsersHandler(
+        "users.setDisplayName",
+        { profileId: profile.id, displayName: "Ada Lovelace" },
+        providerClient,
+      ),
+    ).toHaveBeenCalledWith(true, { profile });
+    expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
 
   it("denies an identified write caller changing another profile's avatar", async () => {

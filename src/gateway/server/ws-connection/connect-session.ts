@@ -19,7 +19,10 @@ import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js"
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+} from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
@@ -188,7 +191,9 @@ export async function attachAuthenticatedGatewayConnect(
   let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
   if (authenticatedUserId) {
     try {
-      const profile = ensureProfileForEmail(authenticatedUserId);
+      const profile = authResult.tailscaleIdentity
+        ? await ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
+        : ensureProfileForEmail(authenticatedUserId);
       // Profile metadata is a connect-time snapshot; edits become visible after reconnect.
       authenticatedUserProfile = {
         profileId: profile.id,
@@ -197,7 +202,7 @@ export async function attachAuthenticatedGatewayConnect(
         updatedAt: profile.updatedAt,
       };
     } catch (error) {
-      // Profile storage must not block login; retain the legacy email-only identity on failure.
+      // Profile storage and best-effort provider metadata must never block login.
       logWsControl.warn(
         `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
       );

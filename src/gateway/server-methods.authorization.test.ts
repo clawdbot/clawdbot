@@ -21,6 +21,7 @@ const resolveUserProfileId = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
 
 vi.mock("../state/user-profiles.js", () => ({
+  classifyTailscaleLogin: (login: string) => ({ kind: "email", email: login }),
   ensureProfileForEmail,
   getUserProfileListItem: vi.fn(),
   linkEmail: vi.fn(),

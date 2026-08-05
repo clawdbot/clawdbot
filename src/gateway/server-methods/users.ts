@@ -10,6 +10,7 @@ import {
   validateUsersSetDisplayNameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { classifyTailscaleLogin } from "../../state/user-profiles-tailscale-login.js";
 import {
   ensureProfileForEmail,
   getUserProfileListItem,
@@ -49,6 +50,24 @@ function profileError(error: unknown) {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
+function resolveAuthenticatedProfileId(
+  client: GatewayRequestHandlerOptions["client"],
+): string | undefined {
+  if (client?.authenticatedUserProfile?.profileId) {
+    return resolveUserProfileId(client.authenticatedUserProfile.profileId);
+  }
+  const authenticatedUserId = client?.authenticatedUserId;
+  if (!authenticatedUserId) {
+    return undefined;
+  }
+  // A failed Tailscale profile snapshot must not recreate its provider login
+  // through the legacy email resolver on a later self-profile request.
+  if (classifyTailscaleLogin(authenticatedUserId).kind === "provider") {
+    return undefined;
+  }
+  return ensureProfileForEmail(authenticatedUserId).id;
+}
+
 function canMutateProfile(
   client: GatewayRequestHandlerOptions["client"],
   profileId: string,
@@ -56,10 +75,11 @@ function canMutateProfile(
   if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
     return true;
   }
-  const authenticatedUserId = client?.authenticatedUserId;
-  return authenticatedUserId
-    ? ensureProfileForEmail(authenticatedUserId).id === resolveUserProfileId(profileId)
-    : false;
+  const authenticatedProfileId = resolveAuthenticatedProfileId(client);
+  return (
+    authenticatedProfileId !== undefined &&
+    authenticatedProfileId === resolveUserProfileId(profileId)
+  );
 }
 
 function requireProfileMutationAccess(
@@ -102,8 +122,16 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const profile = ensureProfileForEmail(client.authenticatedUserId);
-      respond(true, { profile: getUserProfileListItem(profile.id) });
+      const profileId = resolveAuthenticatedProfileId(client);
+      if (!profileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
+        );
+        return;
+      }
+      respond(true, { profile: getUserProfileListItem(profileId) });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
