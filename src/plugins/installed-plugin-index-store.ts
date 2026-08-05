@@ -482,7 +482,11 @@ function hasPotentiallyRecoverableInstallRecord(
       installRecords[pluginId] = record;
     }
   }
-  return hasMaterializableInstalledPluginRecords({ installRecords, env });
+  return hasMaterializableInstalledPluginRecords({
+    installRecords,
+    existingPluginIds: persisted.plugins.map((plugin) => plugin.pluginId),
+    env,
+  });
 }
 
 function buildRecoverableInstallRecordRefresh(

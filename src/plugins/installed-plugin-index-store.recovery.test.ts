@@ -382,6 +382,61 @@ describe("installed plugin index policy recovery", () => {
       ]);
     });
 
+    it("skips broad discovery when a recoverable record collides with a persisted plugin id", async () => {
+      const stateDir = makeTempDir();
+      const existingPluginDir = path.join(stateDir, "plugins", "existing");
+      const retainedPluginDir = path.join(stateDir, "plugins", "retained");
+      fs.mkdirSync(existingPluginDir, { recursive: true });
+      fs.mkdirSync(retainedPluginDir, { recursive: true });
+      const existingCandidate = createCandidate(existingPluginDir, "Case-Collision");
+      createCandidate(retainedPluginDir, "case-collision");
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const installRecords = {
+        "case-collision": {
+          source: "npm" as const,
+          spec: "case-collision@1.0.0",
+          installPath: retainedPluginDir,
+        },
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=case-folded-recovery-collision",
+      );
+      const initial = await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [existingCandidate],
+        env,
+        installRecords,
+      });
+      expectPluginIds(initial, ["Case-Collision"]);
+      discoverSpy.mockClear();
+
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, ["Case-Collision"]);
+      expectInstallRecord(refreshed, "case-collision", {
+        source: "npm",
+        installPath: retainedPluginDir,
+      });
+    });
+
     it("skips broad discovery for an ordinary record rejected by minHostVersion", async () => {
       const stateDir = makeTempDir();
       const env = {

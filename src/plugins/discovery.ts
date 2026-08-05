@@ -41,6 +41,7 @@ import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { withPluginScanExistenceCache } from "./plugin-scan-existence-cache.js";
 import { resolvePluginSourceRoots } from "./roots.js";
 import {
@@ -624,12 +625,12 @@ function discoverInstalledPluginRecordsInto(
   return { installedPluginDirKeys, managedPluginDirs };
 }
 
-function isMaterializableInstalledPluginCandidate(params: {
+function resolveMaterializableInstalledPluginCandidateId(params: {
   candidate: PluginCandidate;
   env: NodeJS.ProcessEnv;
   installRecords?: Record<string, PluginInstallRecord>;
   realpathCache: Map<string, string>;
-}): boolean {
+}): string | undefined {
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
     origin: params.candidate.origin,
     rootDir: params.candidate.rootDir,
@@ -637,21 +638,21 @@ function isMaterializableInstalledPluginCandidate(params: {
     realpathCache: params.realpathCache,
   });
   if ((params.candidate.format ?? "openclaw") === "bundle") {
-    return Boolean(
+    const bundleManifest =
       params.candidate.bundleFormat &&
       loadBundleManifest({
         rootDir: params.candidate.rootDir,
         bundleFormat: params.candidate.bundleFormat,
         rejectHardlinks,
-      }).ok,
-    );
+      });
+    return bundleManifest?.ok ? bundleManifest.manifest.id : undefined;
   }
   const resolvedManifest = resolveCandidateManifest(params.candidate.rootDir, rejectHardlinks);
   if (!resolvedManifest) {
-    return false;
+    return undefined;
   }
   if (params.candidate.origin === "bundled") {
-    return true;
+    return resolvedManifest.manifest.id;
   }
   const allowLegacyBareMinHostVersion =
     params.candidate.origin === "global" &&
@@ -670,24 +671,25 @@ function isMaterializableInstalledPluginCandidate(params: {
     allowLegacyBareSemver: allowLegacyBareMinHostVersion,
   });
   if (!minHostVersionCheck.ok) {
-    return false;
+    return undefined;
   }
   const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.candidate.packageManifest);
   if (!packagePluginApiRangeCheck.ok) {
-    return false;
+    return undefined;
   }
-  return (
+  const compatible =
     !packagePluginApiRangeCheck.range ||
     satisfiesPluginApiRange(
       resolveCompatibilityHostVersion(params.env),
       packagePluginApiRangeCheck.range,
-    )
-  );
+    );
+  return compatible ? resolvedManifest.manifest.id : undefined;
 }
 
 /** Returns whether any installed record can cross the manifest registry materialization boundary. */
 export function hasMaterializableInstalledPluginRecords(params: {
   installRecords?: Record<string, PluginInstallRecord>;
+  existingPluginIds?: readonly string[];
   ownershipUid?: number | null;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -706,13 +708,42 @@ export function hasMaterializableInstalledPluginRecords(params: {
     realpathCache,
     packageManifestCache: new Map<string, PackageManifest | null>(),
   });
-  return result.candidates.some((candidate) =>
-    isMaterializableInstalledPluginCandidate({
+  const materializablePluginIds = result.candidates.flatMap((candidate) => {
+    const pluginId = resolveMaterializableInstalledPluginCandidateId({
       candidate,
       env,
       installRecords: params.installRecords,
       realpathCache,
-    }),
+    });
+    return pluginId ? [pluginId] : [];
+  });
+  if (materializablePluginIds.length === 0) {
+    return false;
+  }
+
+  // The manifest registry rejects every record when distinct declared IDs share
+  // one normalized policy ID. Keep recovery eligibility equivalent to that
+  // cross-candidate boundary so a collision cannot trigger broad discovery.
+  const declaredIdsByPolicyId = new Map<string, Set<string>>();
+  for (const pluginId of params.existingPluginIds ?? []) {
+    const policyId = normalizePluginPolicyId(pluginId);
+    const declaredIds = declaredIdsByPolicyId.get(policyId) ?? new Set<string>();
+    declaredIds.add(pluginId);
+    declaredIdsByPolicyId.set(policyId, declaredIds);
+  }
+  for (const pluginId of materializablePluginIds) {
+    const policyId = normalizePluginPolicyId(pluginId);
+    const declaredIds = declaredIdsByPolicyId.get(policyId) ?? new Set<string>();
+    declaredIds.add(pluginId);
+    declaredIdsByPolicyId.set(policyId, declaredIds);
+  }
+  const collidingPolicyIds = new Set(
+    Array.from(declaredIdsByPolicyId.entries())
+      .filter(([, declaredIds]) => declaredIds.size > 1)
+      .map(([policyId]) => policyId),
+  );
+  return materializablePluginIds.some(
+    (pluginId) => !collidingPolicyIds.has(normalizePluginPolicyId(pluginId)),
   );
 }
 
