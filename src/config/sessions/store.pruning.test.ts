@@ -987,6 +987,20 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(maintenance.highWaterBytes).toBeNull();
   });
 
+  it("disables the disk budget when maxDiskBytes is 0", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when maxDiskBytes is the string '0'", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "0" });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
     const defaultMaintenance = resolveMaintenanceConfigFromInput({ maxEntries: 50 });
     expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
