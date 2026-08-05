@@ -10,11 +10,11 @@ import {
   advisoryCriteriaForHostingProfile,
   buildHostingProfileSubjects,
   buildHostingProfileConditions,
-  HOSTING_PROFILE_CONTRACT_VERSION,
   isReadinessCriterionSelectedByHostingProfile,
   requiredCriteriaForHostingProfile,
   resolveHostingProfileSelection,
 } from "../hosting/profiles.js";
+import { HOSTING_PROFILE_CONTRACT_VERSION } from "../hosting/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
