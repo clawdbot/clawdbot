@@ -14,9 +14,9 @@ export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
 
 export const HOSTING_PROFILE_CONTRACT_VERSION = 1 as const;
 
-export type HostingProfileSource = "argument" | "environment" | "config";
+type HostingProfileSource = "argument" | "environment" | "config";
 
-export type HostingProfileSelection = {
+type HostingProfileSelection = {
   profile: HostingProfileId;
   source: HostingProfileSource;
 };

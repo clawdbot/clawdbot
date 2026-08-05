@@ -35,7 +35,7 @@ type ReadinessResult = {
   advisories?: string[];
 };
 
-export type HostingProfileReadinessMetadata = {
+type HostingProfileReadinessMetadata = {
   profileContractVersion: 1;
   profile: string;
   profileSource: "argument" | "environment" | "config";
