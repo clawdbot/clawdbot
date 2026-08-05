@@ -45,6 +45,27 @@ beforeEach(() => {
 });
 
 describe("Microsoft Teams read policy", () => {
+  it.each([
+    { groupPolicy: undefined, allowed: false },
+    { groupPolicy: "allowlist", allowed: false },
+    { groupPolicy: "open", allowed: true },
+  ])("applies the $groupPolicy group policy to unconfigured channel targets", async (testCase) => {
+    const cfg = {
+      channels: {
+        msteams: testCase.groupPolicy ? { groupPolicy: testCase.groupPolicy } : {},
+      },
+    } as OpenClawConfig;
+    const target = "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2";
+    const result = assertMSTeamsReadTargetAllowed({ cfg, ctx, target });
+
+    if (testCase.allowed) {
+      await expect(result).resolves.toBe(target);
+    } else {
+      await expect(result).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    }
+    expect(mocks.resolveGraphToken).not.toHaveBeenCalled();
+  });
+
   it("uses startup-equivalent resolved channel policy for stable action targets", async () => {
     const cfg = {
       channels: {

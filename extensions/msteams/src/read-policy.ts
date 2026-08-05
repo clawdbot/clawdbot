@@ -233,11 +233,11 @@ async function resolveAllowedChannelTarget(
     allowNameMatching: isDangerousNameMatchingEnabled(teams),
   });
   const stableTarget = await resolveStableChannelTarget(cfg, target);
-  if (directRoute.allowed) {
-    return stableTarget;
-  }
   if (!directRoute.allowlistConfigured) {
     return groupPolicy === "open" ? stableTarget : undefined;
+  }
+  if (directRoute.allowed) {
+    return stableTarget;
   }
   if (!stableTarget || !teams?.teams) {
     return undefined;
