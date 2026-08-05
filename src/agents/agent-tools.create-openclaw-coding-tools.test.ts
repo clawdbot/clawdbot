@@ -2407,6 +2407,266 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("serializes concurrent sandbox memory-flush appends instead of losing one", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-race-"));
+    const memoryRelativePath = "memory/2026-08-01.md";
+    try {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, memoryRelativePath), "seed", "utf8");
+
+      // Hold the first append at the bridge. A second append sharing the same
+      // mutation queue must not reach the bridge until the first one commits.
+      let writerCount = 0;
+      let statCount = 0;
+      let releaseFirstWriter = () => {};
+      let resolveFirstWriterEntered = () => {};
+      const firstWriterEntered = new Promise<void>((resolve) => {
+        resolveFirstWriterEntered = resolve;
+      });
+      const baseBridge = createHostSandboxFsBridge(workspaceDir);
+      const sharedBridge = {
+        ...baseBridge,
+        stat: async (params: Parameters<typeof baseBridge.stat>[0]) => {
+          statCount += 1;
+          return baseBridge.stat(params);
+        },
+        writeFile: async (params: Parameters<typeof baseBridge.writeFile>[0]) => {
+          writerCount += 1;
+          if (writerCount === 1) {
+            resolveFirstWriterEntered();
+            await new Promise<void>((resolve) => {
+              releaseFirstWriter = resolve;
+            });
+          }
+          return baseBridge.writeFile(params);
+        },
+      };
+
+      const buildWriteTool = () => {
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir,
+          fsBridge: sharedBridge,
+          workspaceAccess: "rw",
+        });
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          sandbox,
+          trigger: "memory",
+          memoryFlushWritePath: memoryRelativePath,
+        });
+        return requireToolExecute(requireTool(tools, "write"));
+      };
+
+      const writeA = buildWriteTool();
+      const writeB = buildWriteTool();
+
+      const writeAPromise = writeA("session-a-flush", {
+        path: memoryRelativePath,
+        content: "durable-note-A",
+      });
+      await firstWriterEntered;
+      const writeBPromise = writeB("session-b-flush", {
+        path: memoryRelativePath,
+        content: "durable-note-B",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const secondAppendStayedQueued = statCount === 1 && writerCount === 1;
+      releaseFirstWriter();
+      await Promise.all([writeAPromise, writeBPromise]);
+
+      const finalContent = await fs.readFile(path.join(workspaceDir, memoryRelativePath), "utf8");
+      expect(secondAppendStayedQueued).toBe(true);
+      expect(finalContent).toBe("seed\ndurable-note-A\ndurable-note-B");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      operation: "write",
+      initialContent: "seed value",
+      expectedContent: "ordinary write\ndurable note",
+      run: async (tool: ReturnType<typeof requireToolExecute>, memoryRelativePath: string) =>
+        tool("ordinary-write", {
+          path: memoryRelativePath,
+          content: "ordinary write",
+        }),
+    },
+    {
+      operation: "edit",
+      initialContent: "seed value",
+      expectedContent: "edited value\ndurable note",
+      run: async (tool: ReturnType<typeof requireToolExecute>, memoryRelativePath: string) =>
+        tool("ordinary-edit", {
+          path: memoryRelativePath,
+          edits: [{ oldText: "seed", newText: "edited" }],
+        }),
+    },
+  ])(
+    "serializes sandbox memory-flush appends with ordinary $operation mutations",
+    async ({ operation, initialContent, expectedContent, run }) => {
+      const workspaceDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), `openclaw-memory-sandbox-${operation}-race-`),
+      );
+      const memoryRelativePath = "memory/2026-08-02.md";
+      let releaseOrdinaryMutation = () => {};
+      try {
+        await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, memoryRelativePath), initialContent, "utf8");
+
+        let resolveOrdinaryMutationEntered = () => {};
+        const ordinaryMutationEntered = new Promise<void>((resolve) => {
+          resolveOrdinaryMutationEntered = resolve;
+        });
+        const baseBridge = createHostSandboxFsBridge(workspaceDir);
+        const ordinaryBridge = {
+          ...baseBridge,
+          writeFile: async (params: Parameters<typeof baseBridge.writeFile>[0]) => {
+            resolveOrdinaryMutationEntered();
+            await new Promise<void>((resolve) => {
+              releaseOrdinaryMutation = resolve;
+            });
+            return baseBridge.writeFile(params);
+          },
+        };
+        let memoryFlushReadStarted = false;
+        const memoryBridge = {
+          ...baseBridge,
+          stat: async (params: Parameters<typeof baseBridge.stat>[0]) => {
+            memoryFlushReadStarted = true;
+            return baseBridge.stat(params);
+          },
+        };
+        const ordinarySandbox = createAgentToolsSandboxContext({
+          workspaceDir,
+          fsBridge: ordinaryBridge,
+          workspaceAccess: "rw",
+        });
+        const memorySandbox = createAgentToolsSandboxContext({
+          workspaceDir,
+          fsBridge: memoryBridge,
+          workspaceAccess: "rw",
+        });
+        const ordinaryTools = createOpenClawCodingTools({
+          workspaceDir,
+          sandbox: ordinarySandbox,
+        });
+        const memoryTools = createOpenClawCodingTools({
+          workspaceDir,
+          sandbox: memorySandbox,
+          trigger: "memory",
+          memoryFlushWritePath: memoryRelativePath,
+        });
+
+        const ordinaryMutationPromise = run(
+          requireToolExecute(requireTool(ordinaryTools, operation)),
+          memoryRelativePath,
+        );
+        await ordinaryMutationEntered;
+        const memoryFlushPromise = requireToolExecute(requireTool(memoryTools, "write"))(
+          "memory-flush",
+          {
+            path: memoryRelativePath,
+            content: "durable note",
+          },
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const memoryFlushStayedQueued = !memoryFlushReadStarted;
+        releaseOrdinaryMutation();
+        await Promise.all([ordinaryMutationPromise, memoryFlushPromise]);
+
+        const finalContent = await fs.readFile(path.join(workspaceDir, memoryRelativePath), "utf8");
+        expect(memoryFlushStayedQueued).toBe(true);
+        expect(finalContent).toBe(expectedContent);
+      } finally {
+        releaseOrdinaryMutation();
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects a queued sandbox memory-flush append after its caller aborts while waiting", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-abort-"));
+    const memoryRelativePath = "memory/2026-08-02.md";
+    try {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, memoryRelativePath), "seed", "utf8");
+
+      // A's first real bridge call is held open (bounded by a fallback timeout)
+      // until explicitly released, so B -- invoked immediately after A and
+      // racing through the same tool wrapper chain -- has time to pass its own
+      // pre-execution checks and land inside the mutation queue, genuinely
+      // waiting behind A's still-unresolved turn, before B's caller aborts.
+      let releaseA: (() => void) | undefined;
+      let resolveAEntered: (() => void) | undefined;
+      const aEntered = new Promise<void>((resolve) => {
+        resolveAEntered = resolve;
+      });
+      let statCallCount = 0;
+      const baseBridge = createHostSandboxFsBridge(workspaceDir);
+      const sharedBridge = {
+        ...baseBridge,
+        stat: async (params: Parameters<typeof baseBridge.stat>[0]) => {
+          statCallCount += 1;
+          if (statCallCount === 1) {
+            resolveAEntered?.();
+            await new Promise<void>((resolve) => {
+              releaseA = resolve;
+              setTimeout(resolve, 200);
+            });
+          }
+          return baseBridge.stat(params);
+        },
+      };
+      const buildWriteTool = () => {
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir,
+          fsBridge: sharedBridge,
+          workspaceAccess: "rw",
+        });
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          sandbox,
+          trigger: "memory",
+          memoryFlushWritePath: memoryRelativePath,
+        });
+        return requireToolExecute(requireTool(tools, "write"));
+      };
+
+      const writeA = buildWriteTool();
+      const writeB = buildWriteTool();
+      const controllerB = new AbortController();
+
+      const writeAPromise = writeA("session-a-flush", {
+        path: memoryRelativePath,
+        content: "durable-note-A",
+      });
+      const writeBPromise = writeB(
+        "session-b-flush",
+        { path: memoryRelativePath, content: "durable-note-B" },
+        controllerB.signal,
+      );
+      await aEntered;
+      controllerB.abort();
+      releaseA?.();
+
+      await writeAPromise;
+      await expect(writeBPromise).rejects.toThrow("Operation aborted");
+
+      const finalContent = await fs.readFile(path.join(workspaceDir, memoryRelativePath), "utf8");
+      expect(finalContent).toBe("seed\ndurable-note-A");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects legacy alias parameters", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-alias-"));
     try {
