@@ -12,7 +12,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginApprovalRequest,
@@ -54,6 +53,7 @@ import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
 } from "../worker-environments/service-contract.js";
+import type { ChatMetadataReadParams, ChatMetadataResult } from "./chat-metadata-contract.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /**
@@ -218,10 +218,7 @@ export type GatewayRequestContext = {
     agentDir?: string;
     workspaceDir?: string;
   }) => Promise<ModelCatalogEntry[] | undefined>;
-  readChatMetadata: (params: {
-    agentId: string;
-    sessionEntry?: SessionEntry;
-  }) => Promise<import("./chat-metadata-runtime.js").ChatMetadataResult>;
+  readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;

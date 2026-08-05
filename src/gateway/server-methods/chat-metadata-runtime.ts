@@ -10,20 +10,20 @@ import {
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
+import type {
+  ChatMetadataReadParams,
+  ChatMetadataResult,
+  ChatMetadataSessionEntry,
+} from "./chat-metadata-contract.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export type ChatMetadataResult = {
-  commands?: unknown[];
-  models?: unknown[];
-  swarmEnabled: boolean;
-};
+export type { ChatMetadataResult } from "./chat-metadata-contract.js";
 
 type PreparedAgentFacts = {
   agentId: string;
@@ -163,7 +163,7 @@ function generationFactsMatch(
   });
 }
 
-function resolveSessionProfiles(sessionEntry: SessionEntry | undefined): {
+function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
   preferredProfileId?: string;
   lockedProfileId?: string;
 } {
@@ -180,7 +180,7 @@ function resolveSessionProfiles(sessionEntry: SessionEntry | undefined): {
   };
 }
 
-function metadataKey(agentId: string, sessionEntry: SessionEntry | undefined): string {
+function metadataKey(agentId: string, sessionEntry: ChatMetadataSessionEntry | undefined): string {
   const profiles = resolveSessionProfiles(sessionEntry);
   return [
     normalizeAgentId(agentId),
@@ -246,7 +246,7 @@ export function createGatewayChatMetadataRuntime(params: {
   invalidate: () => void;
   fail: (error: unknown) => void;
   refresh: () => Promise<void>;
-  read: (params: { agentId: string; sessionEntry?: SessionEntry }) => Promise<ChatMetadataResult>;
+  read: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
 } {
   const deps: ChatMetadataRuntimeDeps = {
     getConfig: params.getConfig,
@@ -275,7 +275,7 @@ export function createGatewayChatMetadataRuntime(params: {
   const projectMetadata = (
     generation: PreparedMetadataGeneration,
     agent: PreparedAgentMetadata,
-    sessionEntry?: SessionEntry,
+    sessionEntry?: ChatMetadataSessionEntry,
   ): Promise<ChatMetadataResult> => {
     const key = metadataKey(agent.agentId, sessionEntry);
     const existing = generation.metadataByKey.get(key);
@@ -416,10 +416,7 @@ export function createGatewayChatMetadataRuntime(params: {
     return trackRefresh(promise, epoch, facts);
   };
 
-  const read = async (readParams: {
-    agentId: string;
-    sessionEntry?: SessionEntry;
-  }): Promise<ChatMetadataResult> => {
+  const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {
     for (;;) {
       const replacementPromise = replacement?.promise;
       if (replacementPromise) {
