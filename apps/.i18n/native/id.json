@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw bereaksi saat pemicu apa pun muncul dalam transkripsi. Buat frasa tetap singkat untuk menghindari positif palsu."
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "Gunakan relai Gateway waktu nyata"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "Gunakan sesi suara waktu nyata yang dikonfigurasi Gateway di Mac ini. Memerlukan realtime, gateway-relay, dan agent-consult di pengaturan Talk."
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "Uji Bangun Suara"

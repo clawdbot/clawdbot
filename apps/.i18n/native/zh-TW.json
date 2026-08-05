@@ -24844,6 +24844,16 @@
       "translated": "當轉錄中出現任何觸發詞時，OpenClaw 會做出反應。請保持短語簡短，以避免誤觸發。"
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "使用即時 Gateway 中繼"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "在此 Mac 上使用 Gateway 已設定的即時語音工作階段。需在 Talk 設定中啟用 realtime、gateway-relay 和 agent-consult。"
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "測試語音喚醒"

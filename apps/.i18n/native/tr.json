@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw, bir transkripsiyonda herhangi bir tetikleyici göründüğünde tepki verir. Yanlış pozitifleri önlemek için ifadeleri kısa tutun."
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "Gerçek zamanlı Gateway aktarımını kullan"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "Gateway'in yapılandırılmış gerçek zamanlı ses oturumunu bu Mac'te kullanın. Konuşma ayarlarında realtime, gateway-relay ve agent-consult seçeneklerinin etkinleştirilmiş olması gerekir."
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "Sesle Uyandırmayı Test Et"

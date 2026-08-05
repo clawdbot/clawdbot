@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw زمانی واکنش نشان می‌دهد که هر فعال‌سازی در رونوشت ظاهر شود. برای جلوگیری از تشخیص‌های نادرست، عبارت‌ها را کوتاه نگه دارید."
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "استفاده از رلهٔ بلادرنگ Gateway"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "از نشست صوتی بلادرنگ پیکربندی‌شدهٔ Gateway در این Mac استفاده کنید. مستلزم فعال بودن realtime، gateway-relay و agent-consult در تنظیمات Talk است."
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "آزمایش بیدارباش صوتی"

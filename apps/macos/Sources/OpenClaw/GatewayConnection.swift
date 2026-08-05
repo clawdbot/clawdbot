@@ -74,6 +74,11 @@ actor GatewayConnection {
         fileprivate let client: GatewayChannelActor
     }
 
+    private struct ServerLeaseKey: Hashable {
+        let routeGeneration: UInt64
+        let socketGeneration: UInt64
+    }
+
     enum Method: String {
         case agent
         case status
@@ -167,6 +172,8 @@ actor GatewayConnection {
     private var lastRetiredSocketGeneration: UInt64?
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
+    private var serverLeaseInvalidationSubscribers:
+        [ServerLeaseKey: [UUID: AsyncStream<Void>.Continuation]] = [:]
     private var lastSnapshot: HelloOk?
     var canvasPluginSurfaceURL: String?
 
@@ -910,6 +917,7 @@ extension GatewayConnection {
     /// Invalidate every route-owned fact before shutdown can suspend; otherwise
     /// reentrant work could continue on a client whose replacement is in flight.
     private func retireConfiguredConnection() -> GatewayChannelActor? {
+        self.finishServerLeaseInvalidationSubscribers(routeGeneration: self.routeGeneration)
         self.routeGeneration &+= 1
         self.resetSocketGeneration()
         self.lastSnapshot = nil
@@ -984,6 +992,9 @@ extension GatewayConnection {
         {
             return false
         }
+        self.finishServerLeaseInvalidationSubscribers(
+            routeGeneration: self.routeGeneration,
+            socketGeneration: socketGeneration)
         activeSocketGeneration = nil
         lastRetiredSocketGeneration = socketGeneration
         return true
@@ -992,6 +1003,45 @@ extension GatewayConnection {
     private func resetSocketGeneration() {
         self.activeSocketGeneration = nil
         self.lastRetiredSocketGeneration = nil
+    }
+
+    func subscribeServerLeaseInvalidation(_ lease: ServerLease) -> AsyncStream<Void> {
+        let key = ServerLeaseKey(
+            routeGeneration: lease.route.generation,
+            socketGeneration: lease.socketGeneration)
+        let id = UUID()
+        let connection = self
+        return AsyncStream { continuation in
+            guard self.serverLeaseMatchesCurrentState(lease) else {
+                continuation.finish()
+                return
+            }
+            self.serverLeaseInvalidationSubscribers[key, default: [:]][id] = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { await connection.removeServerLeaseInvalidationSubscriber(id, key: key) }
+            }
+        }
+    }
+
+    private func removeServerLeaseInvalidationSubscriber(_ id: UUID, key: ServerLeaseKey) {
+        self.serverLeaseInvalidationSubscribers[key]?[id] = nil
+        if self.serverLeaseInvalidationSubscribers[key]?.isEmpty == true {
+            self.serverLeaseInvalidationSubscribers[key] = nil
+        }
+    }
+
+    private func finishServerLeaseInvalidationSubscribers(
+        routeGeneration: UInt64,
+        socketGeneration: UInt64? = nil)
+    {
+        let keys = self.serverLeaseInvalidationSubscribers.keys.filter { key in
+            key.routeGeneration == routeGeneration &&
+                socketGeneration.map { key.socketGeneration == $0 } ?? true
+        }
+        for key in keys {
+            let continuations = self.serverLeaseInvalidationSubscribers.removeValue(forKey: key)
+            continuations?.values.forEach { $0.finish() }
+        }
     }
 
     #if DEBUG

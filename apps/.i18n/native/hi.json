@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw किसी भी ट्रिगर के ट्रांसक्रिप्शन में दिखाई देने पर प्रतिक्रिया देता है। गलत सक्रियण से बचने के लिए वाक्यांश छोटे रखें।"
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "रीयलटाइम Gateway रिले का उपयोग करें"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "इस Mac पर Gateway के कॉन्फ़िगर किए गए रीयलटाइम वॉइस सेशन का उपयोग करें। Talk सेटिंग्स में realtime, gateway-relay और agent-consult आवश्यक हैं।"
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "वॉयस वेक का परीक्षण करें"

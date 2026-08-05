@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw จะตอบสนองเมื่อมีทริกเกอร์ใด ๆ ปรากฏในการถอดเสียง ควรใช้วลีสั้น ๆ เพื่อหลีกเลี่ยงการตรวจจับผิดพลาด"
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "ใช้รีเลย์ Gateway แบบเรียลไทม์"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "ใช้เซสชันเสียงแบบเรียลไทม์ที่กำหนดค่าไว้ของ Gateway บน Mac เครื่องนี้ ต้องเปิดใช้ realtime, gateway-relay และ agent-consult ในการตั้งค่า Talk"
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "ทดสอบการปลุกด้วยเสียง"

@@ -6,9 +6,10 @@ read_when:
 title: "Talk mode"
 ---
 
-Talk mode covers five runtime shapes:
+Talk mode covers six runtime shapes:
 
 - **Native macOS/iOS/Android Talk**: native speech recognition, Gateway chat, and `talk.speak` TTS. Apple Speech recognition on macOS/iOS may use network services; Android behavior depends on the installed speech service. Nodes advertise the `talk` capability and declare which `talk.*` commands they support.
+- **macOS Talk (realtime relay)**: a per-Mac, default-off setting uses Gateway-owned relay audio only when the shared Talk config selects `mode: "realtime"`, `transport: "gateway-relay"`, and `brain: "agent-consult"`. Existing macOS Talk users remain on the native loop until they opt in locally.
 - **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport, including framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
 - **Browser Talk**: `talk.client.create` for client-owned `webrtc`/`provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
 - **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready and the configured model passes the Android client gate; it never opens a client-owned WebRTC session. The Gateway now supports `gpt-live-*` relay sessions, but Android intentionally keeps those models on native speech recognition, Gateway chat, and `talk.speak` until the relay path is proven live from an Android device.
@@ -39,6 +40,7 @@ stopping Talk releases the camera and microphone tracks.
 - On a short pause (silence window), the current transcript is sent.
 - Replies are written to WebChat (same as typing).
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
+- Native Talk remains the default. Enable **Settings → Voice & Talk → Use realtime Gateway relay** on each Mac to use a compatible Gateway relay configuration.
 
 ## Voice directives in replies
 
@@ -98,6 +100,13 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 }
 ```
 
+The macOS realtime relay requires both the local **Use realtime Gateway relay**
+setting and this exact shared config tuple:
+`mode: "realtime"`, `transport: "gateway-relay"`, and
+`brain: "agent-consult"`. The Gateway tuple configures relay capability for
+clients; it does not opt a Mac in. Existing macOS installations stay on native
+Talk after upgrade until the setting is enabled on that device.
+
 OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set
 `talk.realtime.model` to `gpt-live-1-boulder-alpha`; `gpt-live-1-codex`,
 `gpt-live-1`, and `gpt-live-1-mini` are not valid. These Talk paths create
@@ -125,6 +134,7 @@ voice or model is invalid for the selected route.
 | --------------------------- | ----------------------------------------------------------------------- |
 | Browser Talk                | Supported with client WebRTC and Gateway-owned sideband                 |
 | Gateway-relay Talk          | Supported with Gateway-owned WebRTC and sideband                        |
+| macOS realtime Talk         | Supported through Gateway relay with an explicit per-Mac opt-in         |
 | Discord bidirectional voice | Supported with the Platform-key backend WebSocket                       |
 | Voice Call and telephony    | Supported with the Platform-key backend WebSocket                       |
 | iOS client-owned Talk       | Pending                                                                 |
@@ -170,7 +180,7 @@ the upstream call and sideband ownership contract is proven end to end.
 | `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                                              |
 | `realtime.providers.openai.speakerVoice` | `alloy` for GA; `marin` for GPT-Live       | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2.1` and GPT-Live voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
 | `realtime.model`                         | provider default                           | Realtime voice model. Overrides `realtime.providers.<id>.model` when both are set — the same precedence `talk.client.create` applies at session time.                                                                                                                                   |
-| `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                               |
+| `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport, while macOS also requires the local opt-in.   |
 | `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                                              |
 | `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                                       |
 | `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                                                     |
@@ -180,7 +190,7 @@ the upstream call and sideband ownership contract is proven end to end.
 ## macOS UI
 
 - Menu bar toggle: **Talk**
-- Config tab: **Talk Mode** group (voice id + interrupt toggle)
+- **Settings → Voice & Talk → Use realtime Gateway relay**: default-off, per-Mac opt-in for a compatible Gateway relay configuration.
 - Overlay: the orb renders the universal talk waveform (shared with iOS, watchOS, and Android). Listening follows the live mic level, Speaking follows the actual TTS playback envelope, Thinking breathes softly. Click the orb to pause/resume, double-click to stop speaking, click X to exit Talk mode.
 
 ## Android UI

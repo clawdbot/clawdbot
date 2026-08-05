@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw는 전사에 트리거가 나타나면 반응합니다. 오탐을 피하려면 문구를 짧게 유지하세요."
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "실시간 Gateway 릴레이 사용"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "이 Mac에서 Gateway에 구성된 실시간 음성 세션을 사용합니다. Talk 설정에서 realtime, gateway-relay 및 agent-consult가 필요합니다."
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "음성 깨우기 테스트"

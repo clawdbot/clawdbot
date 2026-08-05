@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw reaguje, gdy w transkrypcji pojawi się dowolny wyzwalacz. Używaj krótkich fraz, aby uniknąć fałszywych wykryć."
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "Używaj przekaźnika Gateway w czasie rzeczywistym"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "Używaj skonfigurowanej w Gateway sesji głosowej w czasie rzeczywistym na tym Macu. Wymaga włączenia realtime, gateway-relay i agent-consult w ustawieniach Talk."
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "Przetestuj wybudzanie głosem"

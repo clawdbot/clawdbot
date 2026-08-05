@@ -2321,6 +2321,10 @@ final class TalkModeManager: NSObject {
             return .ignored
         }
         guard self.isCurrentStartAttempt(attemptID) else { return .ignored }
+        guard let gatewayRoute = await gateway.currentRoute() else {
+            return .unavailable(realtimeIssue(message: "Gateway not connected", phase: "start"))
+        }
+        guard self.isCurrentStartAttempt(attemptID) else { return .ignored }
         if self.realtimeRelaySession != nil {
             GatewayDiagnostics.log("talk realtime ignored: already active")
             return .started
@@ -2342,24 +2346,36 @@ final class TalkModeManager: NSObject {
         GatewayDiagnostics.log("talk.timeline realtime relay start attempt sessionKey=\(sessionKey)")
         let startedAt = Self.nowSeconds()
         let relaySession = RealtimeTalkRelaySession(
-            gateway: gateway,
+            transport: .ios(gateway: gateway, route: gatewayRoute),
             options: RealtimeTalkRelaySession.Options(
                 sessionKey: sessionKey,
                 provider: self.realtimeProvider,
                 model: self.realtimeModelId,
                 voice: self.realtimeVoiceId),
+            audioCapture: IOSRealtimeTalkAudioCapture(),
             pcmPlayer: self.pcmPlayer,
             onStatus: { [weak self] status in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
                 self.handleRealtimeRelayStatus(status)
             },
-            onIssue: { [weak self] issue in
+            onIssue: { [weak self] relayIssue in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                let issue = TalkRuntimeIssue(
+                    code: .realtimeUnavailable,
+                    message: relayIssue.message,
+                    provider: relayIssue.provider,
+                    model: relayIssue.model,
+                    transport: relayIssue.transport,
+                    phase: relayIssue.phase)
                 self.realtimeRelayStartIssue = issue
                 self.pendingRealtimeIssue = issue
                 self.gatewayTalkLastIssueText = issue.diagnosticSummary
                 self.gatewayTalkActiveModeTitle = String(localized: "Realtime unavailable")
                 self.gatewayTalkActiveModeSubtitle = issue.displayMessage
+            },
+            onTermination: { [weak self] termination in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                self.handleRealtimeRelayTermination(termination)
             },
             onSpeakingChanged: { [weak self] speaking in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
@@ -4147,17 +4163,13 @@ extension TalkModeManager {
         let phase = Self.phase(forRealtimeStatus: status)
         if status == "Listening (Realtime)" {
             // Ready can be followed by a buffered close before start() resumes. Commit continuous
-            // state here so the close still enters bounded recovery.
+            // state here so the typed terminal callback still enters bounded recovery.
             self.markRealtimeSessionReady()
         } else {
             self.setStatus(
                 Self.presentationText(forRealtimeStatus: status),
                 phase: phase,
                 watchPresentation: Self.watchPresentation(forRealtimeStatus: status))
-            if status == "Ready" {
-                self.realtimeRelaySession = nil
-                self.handleRealtimeSessionFinish()
-            }
         }
         self.isListening = phase == .listening
         if phase == .thinking || phase == .connecting {
@@ -4165,6 +4177,13 @@ extension TalkModeManager {
             self.isSpeaking = false
             self.isUserSpeechDetected = false
         }
+    }
+
+    private func handleRealtimeRelayTermination(_ termination: RealtimeTalkRelayTermination) {
+        GatewayDiagnostics.log("talk realtime relay terminated reason=\(String(describing: termination))")
+        self.realtimeRelaySession = nil
+        guard self.captureMode != .pushToTalk else { return }
+        self.handleRealtimeSessionFinish()
     }
 
     private func prepareRealtimeRelayStart() {
@@ -5085,11 +5104,26 @@ extension TalkModeManager {
         self.handleRealtimeRelayStatus(status)
     }
 
+    func _test_handleRealtimeRelayTermination(
+        _ termination: RealtimeTalkRelayTermination = .remoteClose(reason: "completed"))
+    {
+        self.handleRealtimeRelayTermination(termination)
+    }
+
     func _test_prepareEnabledRealtimeSessionForClose() {
         self.isEnabled = true
         self.gatewayConnected = true
         self.captureMode = .idle
         self.realtimeSessionReadyAt = nil
+    }
+
+    func _test_preparePushToTalkRealtimeSessionForClose(_ session: RealtimeTalkRelaySession) {
+        self.captureMode = .pushToTalk
+        self.realtimeRelaySession = session
+    }
+
+    func _test_hasRealtimeRelaySession() -> Bool {
+        self.realtimeRelaySession != nil
     }
 
     func _test_rapidRealtimeRestartCount() -> Int {

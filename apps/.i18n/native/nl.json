@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw reageert wanneer er een trigger in een transcriptie verschijnt. Houd zinnen kort om fout-positieven te voorkomen."
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "Realtime Gateway-relay gebruiken"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "Gebruik de geconfigureerde realtime spraaksessie van de Gateway op deze Mac. Vereist realtime, gateway-relay en agent-consult in de Talk-instellingen."
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "Voice Wake testen"

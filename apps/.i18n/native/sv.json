@@ -24844,6 +24844,16 @@
       "translated": "OpenClaw reagerar när en aktivering förekommer i en transkribering. Håll fraserna korta för att undvika falska positiva träffar."
     },
     {
+      "id": "native.apple.31708bc96d7b1f5f",
+      "source": "Use realtime Gateway relay",
+      "translated": "Använd Gateway-relä i realtid"
+    },
+    {
+      "id": "native.apple.9ef48cad7ccbf2c2",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "translated": "Använd Gateways konfigurerade röstsamtal i realtid på denna Mac. Kräver realtime, gateway-relay och agent-consult i Talk-inställningarna."
+    },
+    {
       "id": "native.apple.2bcc6f4eca98f7f2",
       "source": "Test Voice Wake",
       "translated": "Testa röstväckning"

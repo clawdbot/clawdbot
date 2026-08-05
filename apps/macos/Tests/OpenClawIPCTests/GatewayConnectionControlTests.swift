@@ -224,6 +224,71 @@ private func assertConfigLookupCannotRecreateRoute(
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test func `realtime talk transport pins requests to its server lease`() async throws {
+        let recorder = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    recorder.append(message)
+                    guard sendIndex > 0,
+                          let data = Self.messageData(message),
+                          let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let id = frame["id"] as? String
+                    else { return }
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                },
+                receiveHook: { task, receiveIndex in
+                    if receiveIndex == 0 {
+                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                    }
+                    let id = task.snapshotConnectRequestID() ?? "connect"
+                    return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
+                })
+        })
+        let connection = GatewayConnection(
+            configProvider: {
+                (
+                    url: URL(string: "wss://gateway.example.invalid:9443")!,
+                    token: "test-token-placeholder",
+                    password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        try await connection.refresh()
+        let transport = try await connection.acquireRealtimeTalkTransport()
+        #expect(await transport.isCurrent())
+        let events = await transport.subscribeServerEvents(10)
+        let nextEvent = Task {
+            var iterator = events.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        _ = try await transport.request(
+            "talk.session.close",
+            ["sessionId": AnyCodable("talk-session-1")],
+            4321)
+
+        let talkRequest = try #require(recorder.snapshot().first { message in
+            guard let data = Self.messageData(message),
+                  let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return frame["method"] as? String == "talk.session.close"
+        })
+        let talkRequestData = try #require(Self.messageData(talkRequest))
+        let talkRequestFrame = try #require(
+            JSONSerialization.jsonObject(with: talkRequestData) as? [String: Any])
+        let params = try #require(talkRequestFrame["params"] as? [String: Any])
+        #expect(params["sessionId"] as? String == "talk-session-1")
+
+        await connection._test_handleDisconnect(socketGeneration: 1)
+        #expect(!(await transport.isCurrent()))
+        #expect(await nextEvent.value == nil)
+        await #expect(throws: (any Error).self) {
+            _ = try await transport.request("talk.session.close", nil, 4321)
+        }
+        await connection.shutdown()
+    }
+
     @Test func `operator widget capability refresh is shared and retained`() async throws {
         let rawOldSurface = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
         let rawNewSurface = "http://127.0.0.1:18789/__openclaw__/cap/new-token"

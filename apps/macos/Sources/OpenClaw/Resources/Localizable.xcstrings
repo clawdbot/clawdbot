@@ -155313,6 +155313,278 @@
         }
       }
     },
+    "Use realtime Gateway relay": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use realtime Gateway relay"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用实时 Gateway 中继"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用即時 Gateway 中繼"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usar retransmissão em tempo real do Gateway"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway-Relay in Echtzeit verwenden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usar la retransmisión en tiempo real del Gateway"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リアルタイム Gateway リレーを使用"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실시간 Gateway 릴레이 사용"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiliser le relais Gateway en temps réel"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "रीयलटाइम Gateway रिले का उपयोग करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "استخدام ترحيل Gateway في الوقت الفعلي"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa il relay Gateway in tempo reale"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerçek zamanlı Gateway aktarımını kullan"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Використовувати ретрансляцію Gateway у реальному часі"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gunakan relai Gateway waktu nyata"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Używaj przekaźnika Gateway w czasie rzeczywistym"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ใช้รีเลย์ Gateway แบบเรียลไทม์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sử dụng chuyển tiếp Gateway theo thời gian thực"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Realtime Gateway-relay gebruiken"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "استفاده از رلهٔ بلادرنگ Gateway"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать ретрансляцию Gateway в реальном времени"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Använd Gateway-relä i realtid"
+          }
+        }
+      }
+    },
+    "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在此 Mac 上使用 Gateway 中配置的实时语音会话。需要在 Talk 设置中启用 realtime、gateway-relay 和 agent-consult。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在此 Mac 上使用 Gateway 已設定的即時語音工作階段。需在 Talk 設定中啟用 realtime、gateway-relay 和 agent-consult。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a sessão de voz em tempo real configurada no Gateway neste Mac. Requer realtime, gateway-relay e agent-consult nas configurações de Conversa."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die im Gateway konfigurierte Echtzeit-Sprachsitzung auf diesem Mac verwenden. Erfordert realtime, gateway-relay und agent-consult in den Talk-Einstellungen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa la sesión de voz en tiempo real configurada del Gateway en este Mac. Requiere realtime, gateway-relay y agent-consult en la configuración de Talk."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この Mac で Gateway に設定されたリアルタイム音声セッションを使用します。Talk 設定で realtime、gateway-relay、agent-consult が必要です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 Mac에서 Gateway에 구성된 실시간 음성 세션을 사용합니다. Talk 설정에서 realtime, gateway-relay 및 agent-consult가 필요합니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilisez la session vocale en temps réel configurée du Gateway sur ce Mac. Nécessite realtime, gateway-relay et agent-consult dans les réglages de Talk."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस Mac पर Gateway के कॉन्फ़िगर किए गए रीयलटाइम वॉइस सेशन का उपयोग करें। Talk सेटिंग्स में realtime, gateway-relay और agent-consult आवश्यक हैं।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "استخدم جلسة الصوت في الوقت الفعلي المُعدّة في Gateway على جهاز Mac هذا. يتطلب ذلك تفعيل realtime وgateway-relay وagent-consult في إعدادات Talk."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa la sessione vocale in tempo reale configurata del Gateway su questo Mac. Richiede realtime, gateway-relay e agent-consult nelle impostazioni di Talk."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway'in yapılandırılmış gerçek zamanlı ses oturumunu bu Mac'te kullanın. Konuşma ayarlarında realtime, gateway-relay ve agent-consult seçeneklerinin etkinleştirilmiş olması gerekir."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Використовувати налаштований у Gateway голосовий сеанс у реальному часі на цьому Mac. Потрібно ввімкнути realtime, gateway-relay і agent-consult у налаштуваннях Talk."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gunakan sesi suara waktu nyata yang dikonfigurasi Gateway di Mac ini. Memerlukan realtime, gateway-relay, dan agent-consult di pengaturan Talk."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Używaj skonfigurowanej w Gateway sesji głosowej w czasie rzeczywistym na tym Macu. Wymaga włączenia realtime, gateway-relay i agent-consult w ustawieniach Talk."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ใช้เซสชันเสียงแบบเรียลไทม์ที่กำหนดค่าไว้ของ Gateway บน Mac เครื่องนี้ ต้องเปิดใช้ realtime, gateway-relay และ agent-consult ในการตั้งค่า Talk"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sử dụng phiên thoại theo thời gian thực đã cấu hình của Gateway trên máy Mac này. Yêu cầu bật realtime, gateway-relay và agent-consult trong cài đặt Talk."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gebruik de geconfigureerde realtime spraaksessie van de Gateway op deze Mac. Vereist realtime, gateway-relay en agent-consult in de Talk-instellingen."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "از نشست صوتی بلادرنگ پیکربندی‌شدهٔ Gateway در این Mac استفاده کنید. مستلزم فعال بودن realtime، gateway-relay و agent-consult در تنظیمات Talk است."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать настроенный в Gateway сеанс голосовой связи в реальном времени на этом Mac. Для этого в настройках Talk должны быть включены realtime, gateway-relay и agent-consult."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Använd Gateways konfigurerade röstsamtal i realtid på denna Mac. Kräver realtime, gateway-relay och agent-consult i Talk-inställningarna."
+          }
+        }
+      }
+    },
     "Use the panel + Canvas": {
       "localizations": {
         "en": {
