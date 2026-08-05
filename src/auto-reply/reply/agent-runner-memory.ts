@@ -198,17 +198,23 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-function shouldSkipRequiredPreflightCompactionResult(result: {
-  ok: boolean;
-  compacted: boolean;
-  reason?: string;
-  failure?: {
+function shouldSkipRequiredPreflightCompactionResult(
+  result: {
+    ok: boolean;
+    compacted: boolean;
     reason?: string;
-    status?: number;
-    code?: string;
-  };
-}): boolean {
+    failure?: {
+      reason?: string;
+      status?: number;
+      code?: string;
+    };
+  },
+  abortSignal?: AbortSignal,
+): boolean {
   if (result.compacted) {
+    return false;
+  }
+  if (abortSignal?.aborted) {
     return false;
   }
   return isBenignCompactionSkipResult(result) || isTransientCompactionFailureResult(result);
@@ -939,7 +945,10 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";
-      if (result && shouldSkipRequiredPreflightCompactionResult(result)) {
+      if (
+        result &&
+        shouldSkipRequiredPreflightCompactionResult(result, params.replyOperation.abortSignal)
+      ) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
@@ -951,7 +960,7 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result.compacted) {
       const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
-      if (shouldSkipRequiredPreflightCompactionResult(result)) {
+      if (shouldSkipRequiredPreflightCompactionResult(result, params.replyOperation.abortSignal)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;

@@ -66,12 +66,12 @@ type TestReplyOperation = ReplyOperation & {
   updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
 };
 
-function createReplyOperation(): TestReplyOperation {
+function createReplyOperation(abortSignal = new AbortController().signal): TestReplyOperation {
   const now = Date.now();
   return {
     key: "test",
     sessionId: "session",
-    abortSignal: new AbortController().signal,
+    abortSignal,
     staleExpiryReason: undefined,
     resetTriggered: false,
     terminalRecovery: false,
@@ -1704,6 +1704,67 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
     },
   );
+
+  it("keeps a timeout-shaped external cancellation terminal", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const abortController = new AbortController();
+    const replyOperation = createReplyOperation(abortController.signal);
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+      abortController.abort(new Error("request timed out"));
+      return {
+        ok: false,
+        compacted: false,
+        reason: "Compaction timed out",
+        failure: { reason: "timeout", status: 408, code: "ETIMEDOUT" },
+      };
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      transcriptPath: sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+    };
+    const onCompactionNotice = vi.fn();
+
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
+        sessionKey: "agent:main:main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation,
+        onCompactionNotice,
+      }),
+    ).rejects.toThrow("Preflight compaction required but failed: Compaction timed out");
+
+    expect(replyOperation.abortSignal.aborted).toBe(true);
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["failed 400", false, "Provider returned 400", { reason: "format", status: 400 }],
