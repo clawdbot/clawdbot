@@ -127,8 +127,7 @@ flow:
                     await fs.rm(toggleStorePath, { force: true });
                     await fs.mkdir(path.dirname(toggleStorePath), { recursive: true });
                     await fs.writeFile(toggleStorePath, `${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\n`, "utf8");
-                    // This automation owns a safe state migration, so use doctor's non-interactive contract.
-                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes", "--non-interactive"], {
+                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes"], {
                       timeoutMs: liveTurnTimeoutMs(env, 60000),
                     });
                     await fs.writeFile(doctorOutputPath, doctorFixOutput, "utf8");
@@ -175,12 +174,11 @@ flow:
             expr: "normalizeLowercaseStringOrEmpty(baselineReply.text)"
         - set: baselineMockRequests
           value:
-            # Heartbeats share this mock provider, so bind the trace to this scenario's turn.
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`))"
         - assert:
             expr: baselineMockRequests.length === 1
             message:
-              expr: "`disabled baseline expected exactly one marked model request: ${JSON.stringify(baselineMockRequests)}`"
+              expr: "`disabled baseline expected exactly one model request: ${JSON.stringify(baselineMockRequests)}`"
         - set: baselineMainRequest
           value:
             expr: baselineMockRequests[0]
@@ -245,8 +243,7 @@ flow:
             message: active memory recall left a transient SQLite session behind
         - set: activeRequests
           value:
-            # The marker propagates through the helper context and excludes unrelated background turns.
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`))"
         - assert:
             expr: activeRequests.length === 4
             message:
