@@ -177,7 +177,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps a long title clear of the maximum trailing state set", async () => {
+  it("reserves only the visible desktop trailing surface for a long active row", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -261,9 +261,28 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
-      await row.hover();
       const pin = row.getByRole("button", { name: "Pin thread" });
       const menu = row.getByRole("button", { name: "Open thread menu" });
+
+      const [restingNameBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
+        await Promise.all([
+          row.locator(".sidebar-recent-session__name").boundingBox(),
+          state.boundingBox(),
+          pin.boundingBox(),
+          menu.boundingBox(),
+        ]);
+      if (!restingNameBounds || !restingStateBounds || !restingPinBounds || !restingMenuBounds) {
+        throw new Error("Expected visible resting session state geometry");
+      }
+      const actionSurfaceWidth = restingMenuBounds.x + restingMenuBounds.width - restingPinBounds.x;
+      expect(restingNameBounds.x + restingNameBounds.width).toBeLessThanOrEqual(
+        restingStateBounds.x,
+      );
+      expect(restingNameBounds.x + restingNameBounds.width).toBeGreaterThan(
+        restingStateBounds.x - actionSurfaceWidth,
+      );
+
+      await row.hover();
       await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
@@ -278,6 +297,23 @@ suite.define(() => {
       }
       expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
+
+      await page.mouse.move(0, 0);
+      await pin.focus();
+      await expect.poll(() => actionOpacity(state)).toBe("0");
+      await expect.poll(() => actionOpacity(pin)).toBe("1");
+      await expect.poll(() => actionOpacity(menu)).toBe("1");
+
+      const [focusedNameBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__name").boundingBox(),
+        pin.boundingBox(),
+        menu.boundingBox(),
+      ]);
+      if (!focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
+        throw new Error("Expected visible focused session action geometry");
+      }
+      expect(focusedNameBounds.x + focusedNameBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
+      expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
       await context.close();
     }

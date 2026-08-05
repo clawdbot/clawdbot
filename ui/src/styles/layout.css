@@ -2186,16 +2186,14 @@ html.openclaw-native-macos
     > .sidebar-recent-session__aside > .session-row-state
   )
   > .sidebar-recent-session__link {
-  padding-right: 62px;
+  padding-right: 68px;
 }
 
-/* Running rows keep state and actions together on hover, so reserve their
-   combined maximum instead of letting a long title paint underneath either. */
-.sidebar-recent-session.session-row-host--running:not(.sidebar-recent-session--child):has(
-    > .sidebar-recent-session__aside > .session-row-state
-  )
+/* Desktop hover/focus swaps resting state for actions, so reserve only the
+   action surface while it is visible. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   > .sidebar-recent-session__link {
-  padding-right: 125px;
+  padding-right: 52px;
 }
 
 /* While the actions are surfaced, the link content fades out beneath them.
