@@ -271,7 +271,10 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
   it("retains restart-unsafe committed side effects", () => {
     const evidence = buildRestartRecoveryTerminalDeliveryEvidence({ successfulCronAdds: 1 });
 
-    expect(evidence).toEqual({ captured: true, restartUnsafeSideEffectsDetected: true });
+    expect(evidence).toEqual({
+      captured: true,
+      restartUnsafeSideEffectsDetected: true,
+    });
   });
 
   it("preserves explicit negative messaging-target visibility", () => {

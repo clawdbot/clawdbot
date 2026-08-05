@@ -2,16 +2,9 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
-import {
-  collectDeliveredMediaUrls,
-  collectMessagingToolDeliveredMediaUrls,
-  hasCommittedOutboundDeliveryEvidence,
-  hasUnaccountedMessagingToolAggregateEvidence,
-  hasVisibleAgentPayload,
-  hasVisibleCommittedMessagingToolDeliveryEvidence,
-  type AgentDeliveryEvidence,
-} from "./embedded-agent-runner/delivery-evidence.js";
+import { hasVisibleAgentPayload } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
+import { projectTerminalDeliveryEvidence } from "./terminal-delivery-evidence.js";
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -123,156 +116,15 @@ export function constrainRestartRecoveryDeliveryPayloads(
   return constrained;
 }
 
-function hasExplicitlyVisiblePayload(payload: unknown): boolean {
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const visible = (payload as { visible?: unknown }).visible;
-    if (typeof visible === "boolean") {
-      return visible;
-    }
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    { includeErrorPayloads: false, includeReasoningPayloads: false },
-  );
-}
-
 /** Reduce a terminal result to bounded, route-checkable delivery evidence. */
 export function buildRestartRecoveryTerminalDeliveryEvidence(
-  result: AgentDeliveryEvidence,
+  result: Parameters<typeof projectTerminalDeliveryEvidence>[0],
 ): RestartRecoveryTerminalDeliveryEvidenceResult {
-  const rawPayloads = Array.isArray(result.payloads) ? result.payloads : undefined;
-  const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = Array.isArray(
-    rawPayloads,
-  )
-    ? rawPayloads.slice(0, 64).map((payload) => {
-        const mediaUrls = collectDeliveredMediaUrls({ payloads: [payload] });
-        const visible = hasExplicitlyVisiblePayload(payload);
-        const evidence: { mediaUrls?: string[]; visible?: boolean } = { visible };
-        if (mediaUrls.length > 0) {
-          evidence.mediaUrls = mediaUrls;
-        }
-        return evidence;
-      })
-    : undefined;
-  const payloadsTruncated = rawPayloads && rawPayloads.length > 64 ? (true as const) : undefined;
-  const rawDeliveryStatus = result.deliveryStatus;
-  const status =
-    rawDeliveryStatus?.status === "failed" ||
-    rawDeliveryStatus?.status === "partial_failed" ||
-    rawDeliveryStatus?.status === "sent" ||
-    rawDeliveryStatus?.status === "suppressed"
-      ? rawDeliveryStatus.status
-      : undefined;
-  const rawPayloadOutcomes =
-    rawDeliveryStatus && typeof rawDeliveryStatus === "object"
-      ? (rawDeliveryStatus as { payloadOutcomes?: unknown }).payloadOutcomes
-      : undefined;
-  const payloadOutcomes: NonNullable<
-    RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
-  >["payloadOutcomes"] = Array.isArray(rawPayloadOutcomes)
-    ? rawPayloadOutcomes.flatMap((outcome) => {
-        if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
-          return [];
-        }
-        const record = outcome as Record<string, unknown>;
-        const outcomeStatus =
-          record.status === "failed" || record.status === "sent" || record.status === "suppressed"
-            ? record.status
-            : undefined;
-        if (!outcomeStatus || typeof record.index !== "number" || !Number.isInteger(record.index)) {
-          return [];
-        }
-        return [
-          {
-            index: record.index,
-            status: outcomeStatus,
-            ...(typeof record.sentBeforeError === "boolean"
-              ? { sentBeforeError: record.sentBeforeError }
-              : {}),
-          },
-        ];
-      })
-    : undefined;
-  const errorMessage = normalizeOptionalString(rawDeliveryStatus?.errorMessage);
-  const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
-    ? {
-        status,
-        ...(errorMessage ? { errorMessage } : {}),
-        ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
-      }
-    : undefined;
-  const rawMessagingToolSentTargets = Array.isArray(result.messagingToolSentTargets)
-    ? result.messagingToolSentTargets
-    : undefined;
-  const messagingToolSentTargets: RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"] =
-    rawMessagingToolSentTargets
-      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((target) => {
-          if (!target || typeof target !== "object" || Array.isArray(target)) {
-            return [];
-          }
-          const record = target as Record<string, unknown>;
-          const mediaUrls = collectMessagingToolDeliveredMediaUrls({
-            messagingToolSentTargets: [record],
-          });
-          const visible = hasVisibleCommittedMessagingToolDeliveryEvidence({
-            messagingToolSentTargets: [record],
-          });
-          const evidence: NonNullable<
-            RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"]
-          >[number] = { visible };
-          const provider = normalizeOptionalString(record.provider);
-          const accountId = normalizeOptionalString(record.accountId);
-          const to = normalizeOptionalString(record.to);
-          const threadId = normalizeOptionalThreadId(record.threadId);
-          if (provider) {
-            evidence.provider = provider;
-          }
-          if (accountId) {
-            evidence.accountId = accountId;
-          }
-          if (to) {
-            evidence.to = to;
-          }
-          if (threadId) {
-            evidence.threadId = threadId;
-          }
-          if (record.threadImplicit === true) {
-            evidence.threadImplicit = true;
-          }
-          if (record.threadSuppressed === true) {
-            evidence.threadSuppressed = true;
-          }
-          if (mediaUrls.length > 0) {
-            evidence.mediaUrls = mediaUrls;
-          }
-          return [evidence];
-        })
-      : undefined;
-  const messagingToolSentTargetsTruncated =
-    rawMessagingToolSentTargets && rawMessagingToolSentTargets.length > 64
-      ? (true as const)
-      : undefined;
-  const messagingToolAggregateEvidenceUnaccounted = hasUnaccountedMessagingToolAggregateEvidence(
-    result,
-  )
-    ? (true as const)
-    : undefined;
-  const restartUnsafeSideEffectsDetected =
-    hasCommittedOutboundDeliveryEvidence(result) ||
-    result.didSendDeterministicApprovalPrompt === true
-      ? (true as const)
-      : undefined;
+  const projected = projectTerminalDeliveryEvidence(result);
+  const { unsafeSideEffectsDetected, ...legacyEvidence } = projected;
   return {
-    captured: true,
-    ...(payloads?.length ? { payloads } : {}),
-    ...(payloadsTruncated ? { payloadsTruncated } : {}),
-    ...(deliveryStatus ? { deliveryStatus } : {}),
-    ...(messagingToolSentTargets?.length ? { messagingToolSentTargets } : {}),
-    ...(messagingToolSentTargetsTruncated ? { messagingToolSentTargetsTruncated } : {}),
-    ...(messagingToolAggregateEvidenceUnaccounted
-      ? { messagingToolAggregateEvidenceUnaccounted }
-      : {}),
-    ...(restartUnsafeSideEffectsDetected ? { restartUnsafeSideEffectsDetected } : {}),
+    ...legacyEvidence,
+    ...(unsafeSideEffectsDetected ? { restartUnsafeSideEffectsDetected: true as const } : {}),
   };
 }
 

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeTerminalDeliveryEvidenceResult } from "../../agents/terminal-delivery-evidence.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -44,13 +45,6 @@ export function resolveRestartRecoveryChannelAuthority(
   };
 }
 
-function normalizeThreadId(value: unknown): string | undefined {
-  return (
-    normalizeRunId(value) ??
-    (typeof value === "number" && Number.isFinite(value) ? String(value) : undefined)
-  );
-}
-
 function normalizeStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -73,154 +67,23 @@ function normalizePresentStringArray(value: unknown): string[] | undefined {
   return normalizeStringArray(value) ?? [];
 }
 
-function normalizeTerminalDeliveryEvidenceResult(
+function normalizeRestartRecoveryTerminalDeliveryEvidenceResult(
   value: unknown,
 ): RestartRecoveryTerminalDeliveryEvidenceResult | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const normalized = normalizeTerminalDeliveryEvidenceResult(value);
+  if (!normalized) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  const captured = record.captured === true ? (true as const) : undefined;
-  const rawPayloads = Array.isArray(record.payloads) ? record.payloads : undefined;
-  const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
-    ? rawPayloads.slice(0, 64).map((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
-          return {};
-        }
-        const payload = item as Record<string, unknown>;
-        const mediaUrls = normalizeStringArray(payload.mediaUrls);
-        const visible = typeof payload.visible === "boolean" ? payload.visible : undefined;
-        const evidence: { mediaUrls?: string[]; visible?: boolean } = {};
-        if (mediaUrls) {
-          evidence.mediaUrls = mediaUrls;
-        }
-        if (visible !== undefined) {
-          evidence.visible = visible;
-        }
-        return evidence;
-      })
-    : undefined;
-  const payloadsTruncated =
-    record.payloadsTruncated === true || (rawPayloads?.length ?? 0) > 64
-      ? (true as const)
-      : undefined;
-  const rawStatus =
-    record.deliveryStatus && typeof record.deliveryStatus === "object"
-      ? (record.deliveryStatus as Record<string, unknown>)
-      : undefined;
-  const status =
-    rawStatus?.status === "failed" ||
-    rawStatus?.status === "partial_failed" ||
-    rawStatus?.status === "sent" ||
-    rawStatus?.status === "suppressed"
-      ? rawStatus.status
-      : undefined;
-  const payloadOutcomes: NonNullable<
-    RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
-  >["payloadOutcomes"] = Array.isArray(rawStatus?.payloadOutcomes)
-    ? rawStatus.payloadOutcomes.slice(0, 64).flatMap((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
-          return [];
-        }
-        const outcome = item as Record<string, unknown>;
-        const outcomeStatus =
-          outcome.status === "failed" ||
-          outcome.status === "sent" ||
-          outcome.status === "suppressed"
-            ? outcome.status
-            : undefined;
-        if (
-          !outcomeStatus ||
-          typeof outcome.index !== "number" ||
-          !Number.isInteger(outcome.index) ||
-          outcome.index < 0
-        ) {
-          return [];
-        }
-        return [
-          {
-            index: outcome.index,
-            status: outcomeStatus,
-            ...(typeof outcome.sentBeforeError === "boolean"
-              ? { sentBeforeError: outcome.sentBeforeError }
-              : {}),
-          },
-        ];
-      })
-    : undefined;
-  const errorMessage = normalizeRunId(rawStatus?.errorMessage);
-  const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
-    ? {
-        status,
-        ...(errorMessage ? { errorMessage } : {}),
-        ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
-      }
-    : undefined;
-  const rawMessagingToolSentTargets = Array.isArray(record.messagingToolSentTargets)
-    ? record.messagingToolSentTargets
-    : undefined;
-  const messagingToolSentTargets: RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"] =
-    rawMessagingToolSentTargets
-      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((item) => {
-          if (!item || typeof item !== "object" || Array.isArray(item)) {
-            return [];
-          }
-          const target = item as Record<string, unknown>;
-          const provider = normalizeRunId(target.provider);
-          const accountId = normalizeRunId(target.accountId);
-          const to = normalizeRunId(target.to);
-          const threadId = normalizeThreadId(target.threadId);
-          const mediaUrls = normalizeStringArray(target.mediaUrls);
-          const visible = typeof target.visible === "boolean" ? target.visible : undefined;
-          if (!provider && !accountId && !to && !threadId && !mediaUrls && visible === undefined) {
-            return [];
-          }
-          return [
-            {
-              ...(provider ? { provider } : {}),
-              ...(accountId ? { accountId } : {}),
-              ...(to ? { to } : {}),
-              ...(threadId ? { threadId } : {}),
-              ...(target.threadImplicit === true ? { threadImplicit: true as const } : {}),
-              ...(target.threadSuppressed === true ? { threadSuppressed: true as const } : {}),
-              ...(mediaUrls ? { mediaUrls } : {}),
-              ...(visible !== undefined ? { visible } : {}),
-            },
-          ];
-        })
-      : undefined;
-  const messagingToolSentTargetsTruncated =
-    record.messagingToolSentTargetsTruncated === true ||
-    (rawMessagingToolSentTargets?.length ?? 0) > 64
-      ? (true as const)
-      : undefined;
-  const messagingToolAggregateEvidenceUnaccounted =
-    record.messagingToolAggregateEvidenceUnaccounted === true ? (true as const) : undefined;
-  const restartUnsafeSideEffectsDetected =
-    record.restartUnsafeSideEffectsDetected === true ? (true as const) : undefined;
-  if (
-    !captured &&
-    !payloads?.length &&
-    !payloadsTruncated &&
-    !deliveryStatus &&
-    !messagingToolSentTargets?.length &&
-    !messagingToolSentTargetsTruncated &&
-    !messagingToolAggregateEvidenceUnaccounted &&
-    !restartUnsafeSideEffectsDetected
-  ) {
-    return undefined;
-  }
+  const { unsafeSideEffectsDetected, ...legacyEvidence } = normalized;
   return {
-    ...(captured ? { captured } : {}),
-    ...(payloads?.length ? { payloads } : {}),
-    ...(payloadsTruncated ? { payloadsTruncated } : {}),
-    ...(deliveryStatus ? { deliveryStatus } : {}),
-    ...(messagingToolSentTargets?.length ? { messagingToolSentTargets } : {}),
-    ...(messagingToolSentTargetsTruncated ? { messagingToolSentTargetsTruncated } : {}),
-    ...(messagingToolAggregateEvidenceUnaccounted
-      ? { messagingToolAggregateEvidenceUnaccounted }
+    ...legacyEvidence,
+    ...(unsafeSideEffectsDetected ||
+    (value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value as Record<string, unknown>).restartUnsafeSideEffectsDetected === true)
+      ? { restartUnsafeSideEffectsDetected: true as const }
       : {}),
-    ...(restartUnsafeSideEffectsDetected ? { restartUnsafeSideEffectsDetected } : {}),
   };
 }
 
@@ -236,7 +99,7 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       continue;
     }
     const runId = normalizeRunId((item as Record<string, unknown>).runId);
-    const result = normalizeTerminalDeliveryEvidenceResult(item);
+    const result = normalizeRestartRecoveryTerminalDeliveryEvidenceResult(item);
     if (!runId || !result) {
       continue;
     }
