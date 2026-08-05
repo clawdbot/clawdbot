@@ -195,8 +195,7 @@ const TELEGRAM_RICH_HTML_TABLE_PATTERN = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
 const TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
 const TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
 const TELEGRAM_HTML_CAPTION_PATTERN = /<caption\b[^>]*>([\s\S]*?)<\/caption>/i;
-const TELEGRAM_HTML_COLSPAN_PATTERN =
-  /(?:^|\s)colspan\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i;
+const TELEGRAM_HTML_COLSPAN_PATTERN = /(?:^|\s)colspan\s*=\s*(['"]?)\s*(\d+)\s*\1(?=\s|$)/i;
 const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
   "b",
   "strong",
@@ -605,12 +604,8 @@ function normalizeTelegramLegacyHtmlTables(html: string): string {
 }
 
 function parseTelegramHtmlColspan(attrs: string): number {
-  const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.slice(1).find(Boolean);
-  const normalized = raw?.trim();
-  if (!normalized || !/^\d+$/u.test(normalized)) {
-    return 1;
-  }
-  const value = Number.parseInt(normalized, 10);
+  const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.[2];
+  const value = raw ? Number.parseInt(raw, 10) : 1;
   return Number.isFinite(value) && value > 1 ? Math.min(value, 21) : 1;
 }
 
