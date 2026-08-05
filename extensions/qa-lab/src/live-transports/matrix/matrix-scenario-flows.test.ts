@@ -5,6 +5,7 @@ import {
   readQaScenarioExecutionConfig,
 } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
+import { collectQaSuitePluginIds } from "../../suite-planning.js";
 
 const MATRIX_MENTION_GATE_PRIMARY_SCENARIOS = [
   "matrix-allowbots-default-block",
@@ -221,14 +222,17 @@ describe("Matrix QA Lab scenario flows", () => {
   });
 
   it("loads the voice preflight provider and media overrides", () => {
-    expect(readQaScenarioById("matrix-voice-preflight-mention").plugins).toEqual(["openai"]);
-    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
+    const scenario = readQaScenarioById("matrix-voice-preflight-mention");
+
+    expect(scenario.execution).toMatchObject({
       kind: "flow",
       providerMode: "mock-openai",
       retryCount: 0,
       timeoutMs: 90_000,
     });
-    expect(readQaScenarioById("matrix-voice-preflight-mention").gatewayConfigPatch).toMatchObject({
+    expect(scenario.plugins).toEqual(["openai"]);
+    expect(collectQaSuitePluginIds([scenario])).toEqual(["openai"]);
+    expect(scenario.gatewayConfigPatch).toMatchObject({
       tools: {
         media: {
           models: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],
@@ -273,5 +277,38 @@ describe("Matrix QA Lab scenario flows", () => {
         },
       },
     });
+  });
+
+  it("configures image generation before the single generated-image flow call", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("matrix-room-generated-image-delivery"),
+    );
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+
+    expect(scenario.execution).toMatchObject({
+      channel: "matrix",
+      retryCount: 0,
+      timeoutMs: 180_000,
+      config: {
+        requiredChannelDriver: "live",
+      },
+    });
+    expect(actions).toEqual([
+      {
+        call: "ensureImageGenerationConfigured",
+        args: [{ ref: "env" }],
+      },
+      {
+        set: "scenarioModule",
+        value: {
+          expr: "await qaImport('./live-transports/matrix/scenarios/scenario-runtime-media.js')",
+        },
+      },
+      {
+        call: "scenarioModule.runGeneratedImageDeliveryScenario",
+        args: [{ expr: "scenarioContext" }],
+        saveAs: "result",
+      },
+    ]);
   });
 });

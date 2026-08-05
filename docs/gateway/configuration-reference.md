@@ -1169,10 +1169,10 @@ Validation:
 Notes:
 
 - `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
-- File and exec provider paths fail closed when Windows ACL verification is unavailable. Set `allowInsecurePath: true` only for trusted paths that cannot be verified.
+- File and exec provider paths fail closed when Windows ACL verification is unavailable. Use paths whose ACLs OpenClaw can verify; there is no provider-level bypass.
 - `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
-- By default, symlink command paths are rejected. Set `allowSymlinkCommand: true` to allow symlink paths while validating the resolved target path.
-- If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.
+- Symlink command paths are rejected. Configure the resolved absolute binary path instead.
+- If `trustedDirs` is configured, the command path must be inside an approved directory.
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
 - Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.
@@ -1215,6 +1215,7 @@ Notes:
   logging: {
     audit: {
       enabled: true,
+      executionIdentity: false,
       messages: "off", // off | direct | all
     },
   },
@@ -1239,6 +1240,11 @@ and coverage limits.
   the incident. Setting `false` stops new event inserts after the Gateway restarts;
   existing records stay readable until they expire. Turning it back on resumes
   recording from that point — the gap is not backfilled.
+- `executionIdentity`: retain bounded attribution context for exact execution
+  inspection (default: `false`). This privacy-sensitive metadata is disabled
+  on fresh installs and upgrades. Collection requires `enabled: true`; use
+  `openclaw config set logging.audit.executionIdentity true`, then restart the
+  Gateway. There is no environment-variable alias.
 - `messages`: message metadata scope (default: `"off"`). `"direct"` records
   known direct conversations only. `"all"` also records group, channel, and
   unknown conversation kinds. Both modes remain content-free and replace raw
@@ -1250,9 +1256,9 @@ A root-level `audit` block is retired; the canonical path is `logging.audit`.
 The root config object is strict, so an old top-level `audit` block is rejected.
 Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
-The running Gateway captures `logging.audit.enabled` and
-`logging.audit.messages` at startup;
-restart it after changing either setting. Message coverage currently includes
+The running Gateway captures `logging.audit.enabled`,
+`logging.audit.executionIdentity`, and `logging.audit.messages` at startup;
+restart it after changing any of these settings. Message coverage currently includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
 Plugin-local and direct-send paths that bypass those shared boundaries are not

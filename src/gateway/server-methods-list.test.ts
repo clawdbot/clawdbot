@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-30)).toEqual([
+    expect(listGatewayMethods().slice(-31)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -97,6 +97,7 @@ describe("listGatewayMethods", () => {
       "hooks.status",
       "tasks.retry",
       "tasks.dismiss",
+      "audit.run.inspect",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -134,6 +135,8 @@ describe("listGatewayMethods", () => {
   it("advertises the versioned activity audit method", () => {
     expect(listGatewayMethods()).toContain("audit.activity.list");
     expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
+    expect(listGatewayMethods()).toContain("audit.run.inspect");
+    expect(coreGatewayHandlers["audit.run.inspect"]).toBeTypeOf("function");
   });
 
   it("does not advertise hidden core handlers", () => {
@@ -162,7 +165,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-37)).toEqual([
+    expect(coreMethods.slice(-38)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -200,9 +203,11 @@ describe("listGatewayMethods", () => {
       "hooks.status",
       "tasks.retry",
       "tasks.dismiss",
+      "audit.run.inspect",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
+    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

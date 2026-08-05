@@ -170,6 +170,7 @@
     "!dist/plugin-sdk/qa-runner-runtime.d.ts",
     "!dist/plugin-sdk/realtime-bootstrap-context.d.ts",
     "!dist/plugin-sdk/realtime-transcription.d.ts",
+    "!dist/plugin-sdk/realtime-voice-audio-queue.d.ts",
     "!dist/plugin-sdk/realtime-voice.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
@@ -1126,6 +1127,9 @@
     "./plugin-sdk/realtime-bootstrap-context": {
       "default": "./dist/plugin-sdk/realtime-bootstrap-context.js"
     },
+    "./plugin-sdk/realtime-voice-audio-queue": {
+      "default": "./dist/plugin-sdk/realtime-voice-audio-queue.js"
+    },
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
@@ -1958,7 +1962,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.5.0",
+    "@openclaw/fs-safe": "0.5.2",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.14.1",

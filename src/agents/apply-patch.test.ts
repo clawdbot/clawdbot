@@ -886,7 +886,9 @@ describe("applyPatch", () => {
 *** End Patch`;
 
       await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-        /path is not a regular file under root|symlink open blocked/i,
+        // fs-safe 0.5.2 reports the symlink rejection through the boundary-read
+        // validation path ("unsafe path") instead of a symlink-specific message.
+        /path is not a regular file under root|symlink open blocked|unsafe path/i,
       );
       const contents = await fs.readFile(target, "utf8");
       expect(contents).toBe("initial\n");

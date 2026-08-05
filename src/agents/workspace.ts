@@ -10,7 +10,7 @@ import path from "node:path";
 import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
-import { openRootFile } from "../infra/boundary-file-read.js";
+import { openRootFileFollowingParents } from "../infra/boundary-file-read.js";
 import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -140,7 +140,7 @@ async function readWorkspaceFileWithGuards(params: {
     // in openRootFile still protects against a swapped file between attempts.
     return await retryAsync(
       async () => {
-        const opened = await openRootFile({
+        const opened = await openRootFileFollowingParents({
           absolutePath: params.filePath,
           rootPath: params.workspaceDir,
           boundaryLabel: "workspace root",

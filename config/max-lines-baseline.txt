@@ -229,7 +229,6 @@ extensions/qqbot/src/engine/messaging/outbound-deliver.ts
 extensions/qqbot/src/engine/messaging/outbound-media-send.ts
 extensions/qqbot/src/engine/messaging/streaming-c2c.ts
 extensions/signal/src/approval-reactions.ts
-extensions/signal/src/channel.ts
 extensions/signal/src/client-container.test.ts
 extensions/signal/src/client-container.ts
 extensions/signal/src/core.test.ts

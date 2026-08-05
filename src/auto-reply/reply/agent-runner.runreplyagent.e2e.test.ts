@@ -1015,10 +1015,14 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("cleans up typing when followup admission is rejected", async () => {
-    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+  it("records queue-cap rejection while cleaning up typing", async () => {
+    vi.mocked(enqueueFollowupRun).mockImplementationOnce((...args) => {
+      args[1].onQueueDisposition?.("queue-cap-new");
+      return false;
+    });
+    const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false },
+      opts: { isHeartbeat: false, [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       isRunActive: () => true,
       shouldFollowup: true,
@@ -1032,6 +1036,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "queue-cap" });
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {

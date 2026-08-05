@@ -32,6 +32,7 @@ import {
   createTelegramMessageProcessor,
   resolveTelegramMessageTurnSettings,
 } from "./bot-message.js";
+import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   ensureTelegramMessageProcessingResult,
@@ -389,7 +390,10 @@ export function createTelegramBotCore(
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     opts,
-    telegramDeps,
+    telegramDeps: {
+      ...telegramDeps,
+      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+    },
   });
 
   registerTelegramHandlers({

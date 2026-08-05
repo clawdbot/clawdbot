@@ -169,7 +169,7 @@ function formatStartupMigrationFailure(params: { warnings: string[]; blockers: s
   return [
     "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
     ...details,
-    'Run "openclaw doctor --fix" against the mounted state/config, then restart the container.',
+    'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
   ].join("\n");
 }
 

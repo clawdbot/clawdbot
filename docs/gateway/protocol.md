@@ -602,7 +602,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.list` returns gateway-visible agent entries, including effective model/runtime metadata and optional semantic `kind` (`agent` or `system`). Clients advertise the `agent-kind` handshake capability to receive the complete typed roster; clients without it keep the legacy selector-safe roster without system rows. Kind-aware clients exclude `system` rows from ordinary selectors while retaining them in diagnostic views. Older v4 gateways may return rows without `kind`.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
-    - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.list` remains the compatibility-safe run/tool RPC.
+    - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.run.inspect` discovers execution ids or inspects one exact execution identity context; `audit.list` remains the compatibility-safe run/tool RPC.
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
@@ -840,6 +840,16 @@ recording is separately controlled by `logging.audit.messages` and defaults to
 `"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written
 earlier until they expire.
+
+`audit.run.inspect` also requires `operator.read`. Its closed request selects
+exactly one `executionId` for exact inspection or one `runId` for bounded
+execution discovery. One run match resolves directly; multiple matches return
+an explicit `ambiguous` result with at most 50 candidates and require exact
+execution selection. Decision pages contain at most 100 receipts. Execution
+identity collection is separately off by default and requires
+`logging.audit.executionIdentity: true` plus an enabled audit ledger after
+Gateway restart. Missing best-effort evidence never proves that a run did not
+occur.
 
 The shipped `audit.list` request, result, and `AuditEvent` schemas remain
 unchanged and return only agent-run and tool-action records. New operator
