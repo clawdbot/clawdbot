@@ -1,6 +1,6 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { SessionScope } from "../../config/sessions/types.js";
-import type { GatewayAgentRow } from "../session-utils.types.js";
+import type { SessionScope } from "../../config/types.base.js";
+import type { GatewayAgentRow } from "../../shared/session-types.js";
 import type { ChatMetadataResult, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 
 export type ChatStartupProjectionReadParams = {
