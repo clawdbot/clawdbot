@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -107,7 +108,10 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
-  const suppressImplicitThreadFeedback = prepared.ctxPayload.MentionSource === "implicit_thread";
+  const configuredTypingMode =
+    resolveAgentConfig(cfg, route.agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
+  const suppressImplicitThreadFeedback =
+    prepared.ctxPayload.MentionSource === "implicit_thread" && configuredTypingMode === undefined;
 
   // Shared context for the `message_sent` plugin hook emitted on each delivered
   // reply (both the `deliverReplies` paths and the native-streaming finalizer).
