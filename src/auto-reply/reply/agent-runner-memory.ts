@@ -885,7 +885,9 @@ export async function runPreflightCompactionIfNeeded(params: {
     startedCompactionNotice = true;
     await notifyCompaction("start");
   };
-  const notifyTerminalCompaction = async (phase: "end" | "incomplete" | "skipped") => {
+  const notifyTerminalCompaction = async (
+    phase: "end" | "incomplete" | "skipped" | "transient_failure",
+  ) => {
     terminalCompactionNoticeSent = true;
     await notifyCompaction(phase);
   };
@@ -949,8 +951,14 @@ export async function runPreflightCompactionIfNeeded(params: {
         result &&
         shouldSkipRequiredPreflightCompactionResult(result, params.replyOperation.abortSignal)
       ) {
-        await notifyTerminalCompaction("skipped");
-        logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+        await notifyTerminalCompaction(
+          isTransientCompactionFailureResult(result) ? "transient_failure" : "skipped",
+        );
+        logVerbose(
+          isTransientCompactionFailureResult(result)
+            ? `preflightCompaction continued after transient failure: sessionKey=${params.sessionKey} reason=${reason}`
+            : `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`,
+        );
         return entry ?? params.sessionEntry;
       }
       await notifyTerminalCompaction("incomplete");
@@ -961,8 +969,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     if (!result.compacted) {
       const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
       if (shouldSkipRequiredPreflightCompactionResult(result, params.replyOperation.abortSignal)) {
-        await notifyTerminalCompaction("skipped");
-        logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+        await notifyTerminalCompaction(
+          isTransientCompactionFailureResult(result) ? "transient_failure" : "skipped",
+        );
+        logVerbose(
+          isTransientCompactionFailureResult(result)
+            ? `preflightCompaction continued after transient failure: sessionKey=${params.sessionKey} reason=${reason}`
+            : `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`,
+        );
         return entry ?? params.sessionEntry;
       }
       await notifyTerminalCompaction("incomplete");

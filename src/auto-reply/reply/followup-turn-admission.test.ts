@@ -121,6 +121,30 @@ beforeEach(() => {
 });
 
 describe("admitFollowupTurn", () => {
+  it("delivers a degraded notice when transient preflight compaction continues", async () => {
+    const operation = createOperation();
+    const sessionEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const onCompactionNoticePayload = vi.fn();
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry });
+    state.shouldNotifyCompaction = true;
+    state.preflight.mockImplementation(async ({ onCompactionNotice, sessionEntry: entry }) => {
+      await onCompactionNotice?.("transient_failure");
+      return entry;
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry }),
+        onCompactionNoticePayload,
+      }),
+    ).resolves.toMatchObject({ kind: "admitted" });
+    expect(onCompactionNoticePayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "transient_failure" }),
+      expect.anything(),
+    );
+  });
+
   it("returns a closed deferral without adopting the queued source", async () => {
     state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
 

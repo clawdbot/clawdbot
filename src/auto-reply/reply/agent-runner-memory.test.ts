@@ -1701,7 +1701,7 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
       expect(incrementCompactionCountMock).not.toHaveBeenCalled();
       expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "transient_failure");
     },
   );
 
