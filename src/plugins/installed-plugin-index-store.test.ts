@@ -1,7 +1,7 @@
 // Covers installed plugin index store persistence and recovery behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   acquireStartupMigrationLease,
