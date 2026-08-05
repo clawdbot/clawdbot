@@ -22,7 +22,6 @@ import {
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
@@ -30,21 +29,10 @@ import {
   fetchOllamaModels,
   resolveOllamaApiBase,
 } from "./provider-models.js";
-import { checkOllamaCloudAuth } from "./setup.js";
-
-const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
-  {
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Integer({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: 10,
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+import {
+  OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
+  OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,
+} from "./web-search-contract.js";
 
 const OLLAMA_HOSTED_WEB_SEARCH_PATH = "/api/web_search";
 const OLLAMA_LOCAL_WEB_SEARCH_PROXY_PATH = "/api/experimental/web_search";
@@ -323,6 +311,7 @@ async function warnOllamaWebSearchPrereqs(params: {
     return params.config;
   }
 
+  const { checkOllamaCloudAuth } = await import("./setup.js");
   const auth = await checkOllamaCloudAuth(baseUrl);
   if (!auth.signedIn) {
     await params.prompter.note(
@@ -359,9 +348,8 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
         prompter: ctx.prompter,
       }),
     createTool: (ctx) => ({
-      description:
-        "Search the web using Ollama's web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
-      parameters: OLLAMA_WEB_SEARCH_SCHEMA,
+      description: OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
+      parameters: OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,
       execute: async (args, context) => {
         context?.signal?.throwIfAborted();
         return await runOllamaWebSearch({

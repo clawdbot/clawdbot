@@ -23,7 +23,7 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
+import { DEFAULT_OLLAMA_EMBEDDING_MODEL, OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
@@ -75,7 +75,7 @@ export type OllamaEmbeddingClient = {
 
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
-export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+export { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./defaults.js";
 const OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 const QUERY_INSTRUCTION_TEMPLATES = [

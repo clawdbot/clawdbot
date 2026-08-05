@@ -22,8 +22,8 @@ import {
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
-  OLLAMA_DOCKER_HOST_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
+  resolveOllamaSetupDefaultBaseUrl,
 } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
@@ -46,7 +46,7 @@ import {
 } from "./setup-model-selection.js";
 import { pullOllamaModel, pullOllamaModelNonInteractive } from "./setup-pull.js";
 
-export { buildOllamaProvider };
+export { buildOllamaProvider, resolveOllamaSetupDefaultBaseUrl };
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
 const OLLAMA_SUGGESTED_MODELS_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map((model) => model.id);
@@ -70,16 +70,6 @@ type OllamaSetupResult = {
   credentialMode?: SecretInputMode;
   defaultModel?: string;
 };
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-
-export function resolveOllamaSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
-    ? OLLAMA_DOCKER_HOST_BASE_URL
-    : OLLAMA_DEFAULT_BASE_URL;
-}
 
 type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
 type HostBackedOllamaInteractiveMode = Exclude<OllamaInteractiveMode, "cloud-only">;
