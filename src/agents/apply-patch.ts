@@ -232,7 +232,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
             noOpPaths.delete(target.display);
             await createPatchTarget({
               target: moveTarget,
-              contents: applied,
+              contents: normalizeNewWindowsBatchContent(moveTarget.resolved, applied),
               ops: fileOps,
               hint: "Delete it earlier in the same patch to replace it.",
             });

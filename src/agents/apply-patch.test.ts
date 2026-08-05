@@ -424,6 +424,24 @@ describe("applyPatch", () => {
     expect(result.summary.modified).toEqual(["dest.txt"]);
   });
 
+  it("normalizes moved Windows batch files to CRLF", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "@echo off\necho hello\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: launch.cmd
+@@
+ @echo off
+ echo hello
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/launch.cmd")).toBe("@echo off\r\necho hello\r\n");
+    expect(memory.files.has("/sandbox/source.txt")).toBe(false);
+  });
+
   it("updates in place when move target resolves to the source file", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "foo\nbar\n",
