@@ -89,9 +89,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     // when WhatsApp omits sender_pn entirely. Keep the LID JID as the peer so
     // the message is delivered instead of silently dropped (replies route back
     // through toWhatsappJid(), which passes through any `@`-containing JID).
-    const from =
-      resolvedFrom ??
-      (group || !isDirectLidJid(remoteJid) ? null : remoteJid);
+    const from = resolvedFrom ?? (group || !isDirectLidJid(remoteJid) ? null : remoteJid);
     if (!from) {
       return null;
     }
