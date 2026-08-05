@@ -170,6 +170,26 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("matches service-managed dotenv override keys case-insensitively", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        const stateEnvPath = path.join(stateDir, ".env");
+        await writeEnvFile(stateEnvPath, "hass_token=from-state\n");
+        process.env.HASS_TOKEN = "stale-uppercase-service-value";
+        process.env.hass_token = "stale-lowercase-service-value";
+
+        loadGlobalRuntimeDotEnvFiles({
+          stateEnvPath,
+          overrideKeys: ["HASS_TOKEN"],
+          quiet: true,
+        });
+
+        expect(process.env.HASS_TOKEN).toBe("from-state");
+        expect(process.env.hass_token).toBe("from-state");
+      });
+    });
+  });
+
   it("loads fallback state .env when CWD .env is missing", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {

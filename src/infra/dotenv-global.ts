@@ -83,9 +83,11 @@ function loadParsedDotEnvFiles(
   overrideKeys?: Iterable<string>,
 ): Map<string, string[]> {
   const preExistingKeys = new Set(Object.keys(process.env));
+  const canonicalizeKey = (key: string): string | null =>
+    normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
   const normalizedOverrideKeys = new Set(
     [...(overrideKeys ?? [])].flatMap((key) => {
-      const normalized = normalizeEnvVarKey(key, { portable: true });
+      const normalized = canonicalizeKey(key);
       return normalized ? [normalized] : [];
     }),
   );
@@ -95,11 +97,13 @@ function loadParsedDotEnvFiles(
 
   for (const file of files) {
     for (const { key, value } of file.entries) {
-      const mayOverride = normalizedOverrideKeys.has(key);
+      const canonicalKey = canonicalizeKey(key);
+      const mayOverride = canonicalKey !== null && normalizedOverrideKeys.has(canonicalKey);
+      const precedenceKey = mayOverride && canonicalKey ? canonicalKey : key;
       if (preExistingKeys.has(key) && !mayOverride) {
         continue;
       }
-      const previous = firstSeen.get(key);
+      const previous = firstSeen.get(precedenceKey);
       if (previous) {
         if (previous.value !== value) {
           // First file wins for deterministic startup; conflicts are logged once
@@ -118,8 +122,17 @@ function loadParsedDotEnvFiles(
         }
         continue;
       }
-      firstSeen.set(key, { value, filePath: file.filePath });
+      firstSeen.set(precedenceKey, { value, filePath: file.filePath });
       if (process.env[key] === undefined || mayOverride) {
+        if (mayOverride) {
+          // Service ownership is case-insensitive. Refresh every inherited alias so Linux cannot
+          // retain a stale uppercase value beside a newly parsed lowercase dotenv key.
+          for (const inheritedKey of preExistingKeys) {
+            if (canonicalizeKey(inheritedKey) === canonicalKey) {
+              process.env[inheritedKey] = value;
+            }
+          }
+        }
         process.env[key] = value;
         const appliedKeys = appliedKeysByFile.get(file.filePath);
         if (appliedKeys) {
