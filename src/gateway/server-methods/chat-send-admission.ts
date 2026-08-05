@@ -402,6 +402,7 @@ export async function admitChatSend(params: {
     }
   }
 
+  const acquiredGatewayWorkAdmission = gatewayWorkAdmission;
   let gatewayWorkAdmissionRetains = 1;
   const releaseGatewayWorkAdmission = () => {
     if (gatewayWorkAdmissionRetains === 0) {
@@ -409,7 +410,7 @@ export async function admitChatSend(params: {
     }
     gatewayWorkAdmissionRetains -= 1;
     if (gatewayWorkAdmissionRetains === 0) {
-      gatewayWorkAdmission.release();
+      acquiredGatewayWorkAdmission.release();
     }
   };
   let initialGatewayWorkAdmissionReleased = false;
