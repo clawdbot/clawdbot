@@ -211,11 +211,33 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (claim) {
         assertClaimIdentity(claim, input);
       }
+      const now = Date.now();
+      // Mirror reclaim: when the card leaves running, clear the phantom
+      // execution and close running attempts so the owner's dispatch slot
+      // is freed.
+      const movingOutOfRunning = status !== "running";
       return await this.updateCard(
         id,
         {
           status,
-          metadata: { ...existing.metadata, claim: undefined },
+          ...(movingOutOfRunning
+            ? { execution: existing.execution?.status === "running" ? null : existing.execution }
+            : {}),
+          metadata: {
+            ...existing.metadata,
+            claim: undefined,
+            ...(movingOutOfRunning
+              ? {
+                  attempts: closeRunningAttempts(
+                    existing.metadata?.attempts,
+                    now,
+                    "stopped",
+                    "Workboard card released by worker.",
+                  ),
+                  stale: null,
+                }
+              : {}),
+          },
         },
         { enforceStatusHolds: input.status !== undefined },
       );
