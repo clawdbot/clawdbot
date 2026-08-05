@@ -122,13 +122,13 @@ describe("memory manager fast-path vector store availability (#92102)", () => {
     const memoryManager = await createManager({ vectorEnabled: true, purpose: "status" });
 
     const status = memoryManager.status();
-    expect(status.vector.storeAvailable).toBe(true);
+    expect(status.vector?.storeAvailable).toBe(true);
   });
 
   it("reports unknown when no indexed chunks exist", async () => {
     const memoryManager = await createManager({ vectorEnabled: true, purpose: "status" });
 
     const status = memoryManager.status();
-    expect(status.vector.storeAvailable).toBeUndefined();
+    expect(status.vector?.storeAvailable).toBeUndefined();
   });
 });
