@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createRequire } from "node:module";
 import {
   Filter,
   createClient as createMatrixJsClient,
   type IFilterDefinition,
   type MatrixClient as MatrixJsClient,
 } from "matrix-js-sdk/lib/matrix.js";
-import { SyncApi, SyncState } from "matrix-js-sdk/lib/sync.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -29,6 +27,7 @@ import {
   type MatrixOwnDeviceInfo,
   type MatrixOwnDeviceVerificationStatus,
 } from "./client-support.js";
+import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
@@ -41,20 +40,6 @@ import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } f
 import type { MatrixVerificationSummary } from "./verification-manager.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
-const MATRIX_SYNC_QUIESCE_TIMEOUT_MS = 5_000;
-const MATRIX_JS_SDK_SYNC_VERSION = "41.9.0";
-const matrixJsSdkPackage = createRequire(import.meta.url)("matrix-js-sdk/package.json") as {
-  version?: unknown;
-};
-
-function assertMatrixJsSdkSyncVersion(): void {
-  const version = matrixJsSdkPackage.version;
-  if (version !== MATRIX_JS_SDK_SYNC_VERSION) {
-    throw new Error(
-      `Matrix sync quiesce requires matrix-js-sdk ${MATRIX_JS_SDK_SYNC_VERSION}; found ${String(version)}`,
-    );
-  }
-}
 
 export type MatrixMessageWireDispatch = {
   roomId: string;
@@ -573,66 +558,14 @@ export abstract class MatrixClientBase {
   }
 
   async quiesceSync(): Promise<void> {
-    await this.syncStore?.freezeSyncCursorPersistence();
-    try {
-      assertMatrixJsSdkSyncVersion();
-    } catch (error) {
-      this.syncStore?.discardPendingSyncCursorPersistence();
-      throw error;
-    }
-
-    // 41.9.0: stop protected classic sync here; public stopClient also stops crypto.
-    const syncApi = (this.client as MatrixJsClient & { syncApi?: unknown }).syncApi;
-    if (syncApi === undefined && !this.started) {
-      return;
-    }
-    if (!(syncApi instanceof SyncApi)) {
-      this.syncStore?.discardPendingSyncCursorPersistence();
-      throw new Error(
-        syncApi === undefined
-          ? "Matrix sync quiesce requires the classic matrix-js-sdk SyncApi, but none is active"
-          : "Matrix sync quiesce rejected a sliding or unknown matrix-js-sdk sync implementation",
-      );
-    }
-    if (syncApi.getSyncState() === SyncState.Stopped) {
-      this.started = false;
-      return;
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const settle = (error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        this.off("sync.state", onSyncState);
-        if (error) {
-          reject(error);
-        } else {
-          this.started = false;
-          resolve();
-        }
-      };
-      const onSyncState = (state: MatrixSyncState) => {
-        if (state === SyncState.Stopped) {
-          settle();
-        }
-      };
-      const timeout = setTimeout(() => {
-        this.syncStore?.discardPendingSyncCursorPersistence();
-        settle(new Error(`Matrix classic sync did not reach STOPPED within 5000ms`));
-      }, MATRIX_SYNC_QUIESCE_TIMEOUT_MS);
-      timeout.unref?.();
-
-      this.on("sync.state", onSyncState);
-      try {
-        syncApi.stop();
-      } catch (error) {
-        this.syncStore?.discardPendingSyncCursorPersistence();
-        settle(error instanceof Error ? error : new Error(String(error)));
-      }
+    await quiesceMatrixClientSync({
+      client: this.client,
+      emitter: this.emitter,
+      markStopped: () => {
+        this.started = false;
+      },
+      started: this.started,
+      syncStore: this.syncStore,
     });
   }
 

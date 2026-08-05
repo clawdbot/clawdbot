@@ -248,6 +248,7 @@ class FakeMatrixEvent extends EventEmitter {
 }
 
 type MatrixJsClientStub = {
+  classicSyncStop: ReturnType<typeof vi.fn>;
   emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
   on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MatrixJsClientStub;
   startClient: ReturnType<typeof vi.fn>;
@@ -285,13 +286,14 @@ type MatrixJsClientStub = {
 
 function createMatrixJsClientStub(): MatrixJsClientStub {
   const client = new EventEmitter() as unknown as MatrixJsClientStub;
+  client.classicSyncStop = vi.fn(() => {
+    queueMicrotask(() => {
+      client.emit("sync", SyncState.Stopped, SyncState.Syncing, undefined);
+    });
+  });
   client.syncApi = Object.assign(Object.create(SyncApi.prototype) as SyncApi, {
     getSyncState: vi.fn(() => SyncState.Syncing),
-    stop: vi.fn(() => {
-      queueMicrotask(() => {
-        client.emit("sync", SyncState.Stopped, SyncState.Syncing, undefined);
-      });
-    }),
+    stop: client.classicSyncStop,
   });
   client.startClient = vi.fn(async () => {
     queueMicrotask(() => {
@@ -1462,7 +1464,7 @@ describe("MatrixClient request hardening", () => {
       }
     ).emitter;
     const listenerCountBefore = emitter.listenerCount("sync.state");
-    const syncStop = vi.mocked(matrixJsClient.syncApi.stop);
+    const syncStop = matrixJsClient.classicSyncStop;
     syncStop.mockImplementation(() => {
       expect(emitter.listenerCount("sync.state")).toBe(listenerCountBefore + 1);
       queueMicrotask(() => {
@@ -1480,14 +1482,14 @@ describe("MatrixClient request hardening", () => {
   it("stops classic sync created by a partial startup before readiness", async () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
     const abortController = new AbortController();
-    matrixJsClient.startClient.mockImplementation(async () => {});
+    matrixJsClient.startClient.mockImplementation(() => {});
     const startup = client.start({ abortSignal: abortController.signal });
     await vi.waitFor(() => {
       expect(matrixJsClient.startClient).toHaveBeenCalledTimes(1);
     });
     abortController.abort();
     await expectAbortError(startup);
-    const syncStop = vi.mocked(matrixJsClient.syncApi.stop);
+    const syncStop = matrixJsClient.classicSyncStop;
 
     await client.quiesceSync();
 
@@ -1509,7 +1511,7 @@ describe("MatrixClient request hardening", () => {
         }
       ).emitter;
       const listenerCountBefore = emitter.listenerCount("sync.state");
-      vi.mocked(matrixJsClient.syncApi.stop).mockImplementation(() => {});
+      matrixJsClient.classicSyncStop.mockImplementation(() => {});
 
       const quiesce = client.quiesceSync();
       const rejection = expect(quiesce).rejects.toThrow(
@@ -1542,7 +1544,7 @@ describe("MatrixClient request hardening", () => {
       version: string;
     };
     const originalVersion = manifest.version;
-    const syncStop = vi.mocked(matrixJsClient.syncApi.stop);
+    const syncStop = matrixJsClient.classicSyncStop;
     manifest.version = "41.9.1";
     try {
       const client = new MatrixClient("https://matrix.example.org", "token");

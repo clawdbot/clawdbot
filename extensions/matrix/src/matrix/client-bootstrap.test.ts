@@ -45,8 +45,9 @@ describe("client bootstrap", () => {
   });
 
   it("releases leased shared clients when readiness setup fails", async () => {
-    const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.prepareForOneOff).mockRejectedValue(new Error("prepare failed"));
+    const prepareForOneOff = vi.fn(async () => undefined);
+    const sharedClient = Object.assign(createMockMatrixClient(), { prepareForOneOff });
+    prepareForOneOff.mockRejectedValue(new Error("prepare failed"));
     setAcquiredMatrixClient(sharedClient);
 
     await expect(
@@ -61,8 +62,9 @@ describe("client bootstrap", () => {
   });
 
   it("starts through the shared lease and releases when startup fails", async () => {
-    const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.start).mockRejectedValue(new Error("start failed"));
+    const start = vi.fn(async () => undefined);
+    const sharedClient = Object.assign(createMockMatrixClient(), { start });
+    start.mockRejectedValue(new Error("start failed"));
     setAcquiredMatrixClient(sharedClient);
 
     await expect(
@@ -115,7 +117,8 @@ describe("client bootstrap", () => {
   });
 
   it("does not borrow or stop an explicitly injected client", async () => {
-    const injected = createMockMatrixClient();
+    const start = vi.fn(async () => undefined);
+    const injected = Object.assign(createMockMatrixClient(), { start });
 
     await withResolvedRuntimeMatrixClient(
       { client: injected, readiness: "started" },
@@ -125,7 +128,7 @@ describe("client bootstrap", () => {
       "persist",
     );
 
-    expect(injected.start).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
     expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
   });

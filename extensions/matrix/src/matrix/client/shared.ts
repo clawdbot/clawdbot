@@ -506,7 +506,7 @@ async function forceRetireState(state: SharedMatrixClientState): Promise<void> {
     deleteSharedClientState(state);
     return;
   }
-  await retirementPromise.catch((error) => {
+  await retirementPromise.catch((error: unknown) => {
     if (!state.poisonError) {
       throw error;
     }
