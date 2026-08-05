@@ -105,6 +105,11 @@ export async function prepareReplyAgentPayloads(state: {
   if (deliberateSilentTerminalReply) {
     opts?.onDeliberateSilentTerminalReply?.();
   }
+  const pendingContinuation =
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  if (pendingContinuation) {
+    opts?.onPendingContinuation?.();
+  }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
     blockReplyPipeline,
@@ -149,8 +154,7 @@ export async function prepareReplyAgentPayloads(state: {
         isMessageToolOnly:
           (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
           "message_tool_only",
-        hasPendingContinuation:
-          runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+        hasPendingContinuation: pendingContinuation,
         // Upstream hoists the deliberate-silent classification; the fork's wider
         // commitment set stays authoritative so a side-effect-only or
         // session-spawn turn is never re-delivered as an empty interactive reply.

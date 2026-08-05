@@ -29,7 +29,21 @@ function plugin(
   } = {},
 ) {
   const { origin = "global", channelId = id, enabledByDefault = false, ...metadata } = options;
-  return { id, origin, channels: [channelId], enabledByDefault, ...metadata };
+  const rootDir = `/plugins/${id}`;
+  return {
+    id,
+    origin,
+    channels: [channelId],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    enabledByDefault,
+    rootDir,
+    source: `${rootDir}/index.ts`,
+    manifestPath: `${rootDir}/openclaw.plugin.json`,
+    ...metadata,
+  };
 }
 
 function mockManifestPlugins(plugins: unknown[]) {

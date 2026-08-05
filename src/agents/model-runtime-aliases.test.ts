@@ -64,6 +64,7 @@ function createAnthropicAuthConfig(params: {
 describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
       resolvePluginSetupRegistry: () => ({
         providers: [],
         cliBackends: [],

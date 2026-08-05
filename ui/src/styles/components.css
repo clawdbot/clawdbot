@@ -1800,7 +1800,9 @@ openclaw-chat-session-rail {
 .chat-session-rail__status {
   --rail-health-color: var(--muted);
   gap: 5px;
-  min-width: 0;
+  /* Never shrink: the chip has no overflow clipping, so a squeezed box paints
+     its label over the pill headline next to it. */
+  flex: 0 0 auto;
   color: var(--rail-health-color);
   font-size: 11px;
   font-weight: 650;
@@ -1866,6 +1868,9 @@ openclaw-chat-session-rail {
 }
 
 .chat-session-rail__headline {
+  /* Block, not inline: ellipsis needs a block box inside the pill's expand
+     button, or the text hard-clips at the button edge. */
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--text);

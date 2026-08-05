@@ -115,6 +115,26 @@ describe("resolveGatewayScopedTools", () => {
     expect(names).toContain("request_compaction");
   });
 
+  it("keeps default-agent credentials out of unbound gateway calls", () => {
+    const cfg = {
+      agents: { defaults: { imageModel: { primary: "openai/gpt-5.4-mini" } } },
+    } as OpenClawConfig;
+    const unbound = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+    const grantBound = resolveGatewayScopedTools({
+      cfg,
+      agentDir: "/agents/cli",
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    expect(unbound.tools.some((tool) => tool.name === "image")).toBe(false);
+    expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
+  });
+
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
     try {

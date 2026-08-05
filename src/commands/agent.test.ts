@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 // Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
+import { executionIdentity } from "../agents/agent-command-execution-identity.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
@@ -444,6 +445,67 @@ describe("agentCommand", () => {
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("strips private recovery identity from runtime-shaped public ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const record = vi.spyOn(executionIdentity, "record").mockImplementation(() => undefined);
+      const inheritedAdmission = {
+        token: {
+          tokenVersion: 1 as const,
+          contextId: "inherited-context",
+          executionId: "inherited-execution",
+          runId: "public-ingress-run",
+          createdAt: 1,
+        },
+        retryOnly: true,
+      };
+      const priorDescriptor = Object.getOwnPropertyDescriptor(
+        Object.prototype,
+        "executionIdentityAdmission",
+      );
+      // oxlint-disable-next-line no-extend-native -- Simulate a hostile JS plugin's prototype pollution.
+      Object.defineProperty(Object.prototype, "executionIdentityAdmission", {
+        configurable: true,
+        value: inheritedAdmission,
+      });
+
+      try {
+        await agentCommandFromIngress(
+          {
+            message: "public plugin turn",
+            agentId: "main",
+            runId: "public-ingress-run",
+            allowModelOverride: false,
+            executionIdentityAdmission: {
+              token: {
+                tokenVersion: 1,
+                contextId: "forged-context",
+                executionId: "forged-execution",
+                runId: "public-ingress-run",
+                createdAt: 1,
+              },
+              retryOnly: true,
+            },
+          } as never,
+          runtime,
+        );
+
+        expect(record).toHaveBeenCalledWith(
+          expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
+        );
+      } finally {
+        record.mockRestore();
+        if (priorDescriptor) {
+          // oxlint-disable-next-line no-extend-native -- Restore the exact pre-test prototype descriptor.
+          Object.defineProperty(Object.prototype, "executionIdentityAdmission", priorDescriptor);
+        } else {
+          delete (Object.prototype as Record<string, unknown>).executionIdentityAdmission;
+        }
+      }
+    });
   });
 
   it("rejects a missing harness-owned session before local CLI dispatch", async () => {

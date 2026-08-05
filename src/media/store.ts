@@ -290,11 +290,12 @@ async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
   await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
 }
 
-async function prunePlaybackTranscodeCacheRetention(): Promise<void> {
+/** Prunes expired playback renditions and reapplies the fixed cache size budget. */
+export async function prunePlaybackTranscodeCache(): Promise<void> {
   await queuePlaybackCacheOperation(async () => {
     const cacheDir = resolveMediaScopedDir(
       PLAYBACK_TRANSCODE_SUBDIR,
-      "prunePlaybackTranscodeCacheRetention",
+      "prunePlaybackTranscodeCache",
     );
     await openMediaStore(MAX_BYTES, cacheDir).pruneExpired({
       ttlMs: PLAYBACK_TRANSCODE_TTL_MS,
@@ -305,10 +306,9 @@ async function prunePlaybackTranscodeCacheRetention(): Promise<void> {
   });
 }
 
-/** Prunes expired media files, optionally recursing into scoped media subdirectories. */
+/** Prunes expired non-playback media, optionally recursing into scoped subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await pruneNonPlaybackMedia(ttlMs, options);
-  await prunePlaybackTranscodeCacheRetention();
   // Trust metadata must not outlive the staged file that it authorizes.
   const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
   await pruneStaleTrustedGeneratedHtmlMarkers();

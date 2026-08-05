@@ -20,6 +20,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import type { resolveControlUiAuthPolicy } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
+import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type ControlUiAuthPolicy = ReturnType<typeof resolveControlUiAuthPolicy>;
@@ -60,6 +61,7 @@ export type GatewayWsMessageHandlerParams = {
   extraHandlers: GatewayRequestHandlers;
   getMethodRegistry?: () => GatewayMethodRegistry;
   buildRequestContext: () => GatewayRequestContext;
+  nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   send: (obj: unknown) => void;
   close: (code?: number, reason?: string) => void;

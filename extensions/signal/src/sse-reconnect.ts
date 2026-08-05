@@ -1,5 +1,6 @@
 // Signal plugin module implements sse reconnect behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
   logVerbose,
@@ -82,13 +83,7 @@ export async function runSignalSseLoop({
         timeoutMs,
         transportKind,
         onStreamOpen: () => {
-          statusSink?.({
-            connected: true,
-            lifecycle: "ready",
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+          statusSink?.(channelReadyPatch());
         },
         onEvent: async (event: SignalSseEvent) => {
           reconnectAttempts = 0;

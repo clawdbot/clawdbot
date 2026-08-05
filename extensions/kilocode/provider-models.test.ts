@@ -281,6 +281,59 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
   });
 
+  it("prefers the primary provider context window over the catalog-wide value", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          makeGatewayModel({
+            id: "minimax/minimax-m3",
+            context_length: 1048576,
+            top_provider: {
+              is_moderated: false,
+              context_length: 524288,
+              max_completion_tokens: 512000,
+            },
+          }),
+        ],
+      }),
+    );
+
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      expect(requireModelById(models, "minimax/minimax-m3")).toMatchObject({
+        contextWindow: 524288,
+        maxTokens: 512000,
+      });
+    });
+  });
+
+  it("falls back to the catalog window when the provider window is unusable", async () => {
+    const unusable: unknown[] = [0, -1, 4096.5, Number.POSITIVE_INFINITY, null, "131072"];
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: unusable.map((context_length, index) =>
+          makeGatewayModel({
+            id: `some/provider-window-${index}`,
+            context_length: 200000,
+            top_provider: { is_moderated: false, context_length, max_completion_tokens: 8192 },
+          }),
+        ),
+      }),
+    );
+
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      for (let index = 0; index < unusable.length; index++) {
+        expect(requireModelById(models, `some/provider-window-${index}`)).toMatchObject({
+          contextWindow: 200000,
+          maxTokens: 8192,
+        });
+      }
+    });
+  });
+
   it("ensures kilo-auto/balanced is present even when API doesn't return it", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({

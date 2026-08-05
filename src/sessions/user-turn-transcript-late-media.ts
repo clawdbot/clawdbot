@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { buildPersistedUserTurnMediaInputsFromFields } from "./user-turn-transcript.media-normalize.js";
 import type { PersistedUserTurnMessage } from "./user-turn-transcript.types.js";
@@ -5,10 +6,7 @@ import type { PersistedUserTurnMessage } from "./user-turn-transcript.types.js";
 export function readUserTurnMessageMeta(
   message: AgentMessage,
 ): Record<string, unknown> | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
-  return meta && typeof meta === "object" && !Array.isArray(meta)
-    ? (meta as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord((message as unknown as Record<string, unknown>)["__openclaw"]);
 }
 
 export function buildLateResolvedMediaMessage(params: {

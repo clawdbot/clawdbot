@@ -146,7 +146,7 @@ export async function handleAssistantFailover(params: {
     const timeoutFailure = terminal.timedOut;
     const failureReason = params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
-      if (!failedProfileId || !failureReason) {
+      if (!failureReason) {
         return;
       }
       try {
@@ -213,7 +213,14 @@ export async function handleAssistantFailover(params: {
     const markFailedProfilePromise = markFailedProfile();
     if (timeoutFailure && !params.isProbeSession && failedProfileId) {
       const timeoutLabel = terminal.idleTimedOut ? "idle timeout (model silent)" : "timed out";
-      params.warn(`Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`);
+      // Only promise a next account when one was actually selected. Credentials
+      // that config does not authorize are not rotation targets, so this can end
+      // with no further account even when one exists in the environment.
+      params.warn(
+        rotated
+          ? `Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`
+          : `Profile ${failedProfileId} ${timeoutLabel}. No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover.`,
+      );
     }
     if (params.cloudCodeAssistFormatError && failedProfileId) {
       params.warn(

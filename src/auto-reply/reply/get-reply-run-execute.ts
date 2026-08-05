@@ -334,6 +334,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
+    ...(opts?.onFollowupQueueDisposition
+      ? { onQueueDisposition: opts.onFollowupQueueDisposition }
+      : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),

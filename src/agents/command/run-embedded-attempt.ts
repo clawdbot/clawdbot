@@ -170,6 +170,8 @@ export async function runEmbeddedAgentAttempt(params: {
             input: {
               text: recorderTranscriptText,
               ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
+              senderIsOwner: params.opts.senderIsOwner,
+              ...(params.opts.inputProvenance ? { provenance: params.opts.inputProvenance } : {}),
             },
           }
         : {}),

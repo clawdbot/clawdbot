@@ -13,6 +13,7 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { openMemoryCoreStateStore } from "./dreaming-state.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -609,6 +610,52 @@ describe("memory cli", () => {
     expectLogged(log, "Vector store: unknown");
     expectNotLogged(log, "llama.cpp:");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("fans JSON status out to every keyed agent entry", async () => {
+    const agentIds = ["main", ...Array.from({ length: 21 }, (_, index) => `agent-${index + 1}`)];
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        entries: Object.fromEntries(
+          agentIds.map((agentId, index) => [agentId, { default: index === 0 }]),
+        ),
+      },
+    });
+    getMemorySearchManager.mockImplementation(async ({ agentId }: { agentId: string }) => ({
+      manager: {
+        status: () =>
+          makeMemoryStatus({
+            workspaceDir: undefined,
+            dbPath: `/state/agents/${agentId}/agent/openclaw-agent.sqlite`,
+          }),
+        close: vi.fn(async () => {}),
+      },
+    }));
+    const json = spyRuntimeJson(defaultRuntime);
+    const keyedStore = {};
+    const openKeyedStore = vi.fn(() => keyedStore);
+    resetMemoryCoreDreamingStateForTests();
+
+    try {
+      await runMemoryCli(["status", "--json"], { openKeyedStore: openKeyedStore as never });
+
+      expect(
+        getMemorySearchManager.mock.calls.map(
+          ([params]) => (params as { agentId: string }).agentId,
+        ),
+      ).toEqual(agentIds);
+      const payload =
+        firstWrittenJsonArg<Array<{ agentId: string; status: { dbPath: string } }>>(json);
+      expect(payload?.map(({ agentId }) => agentId)).toEqual(agentIds);
+      expect(payload?.map(({ status }) => status.dbPath)).toEqual(
+        agentIds.map((agentId) => `/state/agents/${agentId}/agent/openclaw-agent.sqlite`),
+      );
+      const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
+      expect(openMemoryCoreStateStore(storeOptions)).toBe(keyedStore);
+      expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
+    } finally {
+      await configureMemoryCoreDreamingStateForTests();
+    }
   });
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {

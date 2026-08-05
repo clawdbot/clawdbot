@@ -12,6 +12,7 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -322,6 +323,10 @@ export async function runCliFallbackCandidate(params: {
           runParams: {
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
+            chatType:
+              normalizeChatType(turn.followupRun.originatingChatType) ??
+              normalizeChatType(turn.sessionCtx.ChatType) ??
+              params.candidateRun.chatType,
             runtimePolicySessionKey:
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,

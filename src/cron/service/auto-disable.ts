@@ -78,6 +78,8 @@ export function autoDisableCronJob(params: {
   if (params.deferredNotifications) {
     params.deferredNotifications.push(notify);
   } else {
+    // Production mutations always supply a post-persist queue; this fallback
+    // remains only for direct unit callers that have no durable owner.
     notify();
   }
   return true;

@@ -66,7 +66,7 @@ export function createApplicationGateway(
   initialPassword = "",
   initialBootstrapToken = "",
   createClient: GatewayClientFactory = defaultClientFactory,
-  options: { persistDefaultConnectionSettings?: boolean } = {},
+  options: { persistDefaultConnectionSettings?: boolean; basePath?: string } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
   let persistConnectionSettings = options.persistDefaultConnectionSettings !== false;
@@ -288,6 +288,7 @@ export function createApplicationGateway(
         settings: { token: nextConnection.token },
         password: nextConnection.password,
       }),
+      options.basePath,
     );
     updateSettings(
       {
@@ -327,6 +328,7 @@ export function createApplicationGateway(
             settings: { token: nextConnection.token },
             password: nextConnection.password,
           }),
+          options.basePath,
         );
         connection = { ...connection, bootstrapToken: "" };
         if (persistConnectionSettings) {

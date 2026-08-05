@@ -952,6 +952,7 @@ export async function runAgentAttempt(params: {
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               sessionEntry: params.sessionEntry,
+              chatType: params.sessionEntry?.chatType,
               agentId: params.sessionAgentId,
               trigger: "user",
               sessionFile: params.sessionFile,
@@ -1278,6 +1279,7 @@ export async function runAgentAttempt(params: {
   const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    chatType: params.sessionEntry?.chatType,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,

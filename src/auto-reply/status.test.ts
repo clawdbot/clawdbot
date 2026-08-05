@@ -4,10 +4,7 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import {
-  MODEL_CONTEXT_TOKEN_CACHE,
-  providerContextTokenCacheKey,
-} from "../agents/context-cache.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
@@ -100,7 +97,7 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   listPluginCommands.mockReset();
   listPluginCommands.mockImplementation(() => []);
-  MODEL_CONTEXT_TOKEN_CACHE.clear();
+  getContextWindowCaches().discoveredTokenCache.clear();
 });
 
 function registerAnthropicCliBackendForTest(): void {
@@ -2575,7 +2572,7 @@ describe("buildStatusMessage", () => {
   it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
     await withTempHome(
       async (dir) => {
-        MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+        getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
 
         const sessionId = "sess-openrouter-google";
         writeTranscriptUsageLog({
@@ -2626,7 +2623,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps runtime slash model ids on model-only context lookup when modelProvider is missing", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+    getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
 
     const text = buildStatusMessage({
       config: {
@@ -2660,7 +2657,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    getContextWindowCaches().discoveredTokenCache.clear();
 
     const text = buildStatusMessage({
       config: {
@@ -2707,7 +2704,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    getContextWindowCaches().discoveredTokenCache.clear();
 
     const text = buildStatusMessage({
       config: {
@@ -2744,8 +2741,8 @@ describe("buildStatusMessage", () => {
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
     await withTempHome(
       async (dir) => {
-        MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
-        MODEL_CONTEXT_TOKEN_CACHE.set(
+        getContextWindowCaches().discoveredTokenCache.set("gemini-2.5-pro", 128_000);
+        getContextWindowCaches().discoveredTokenCache.set(
           providerContextTokenCacheKey("google-gemini-cli", "gemini-2.5-pro"),
           1_000_000,
         );
@@ -2790,8 +2787,8 @@ describe("buildStatusMessage", () => {
   });
 
   it("prefers provider-qualified context windows for fresh bare model ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set(
+    getContextWindowCaches().discoveredTokenCache.set("claude-opus-4-6", 200_000);
+    getContextWindowCaches().discoveredTokenCache.set(
       providerContextTokenCacheKey("anthropic", "claude-opus-4-6"),
       1_000_000,
     );
@@ -2818,7 +2815,10 @@ describe("buildStatusMessage", () => {
   });
 
   it("does not let agent contextTokens inflate status above the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey("openai", "gpt-5.5"),
+      272_000,
+    );
 
     const text = buildStatusMessage({
       agent: {

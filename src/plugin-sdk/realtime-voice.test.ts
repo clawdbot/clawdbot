@@ -164,7 +164,7 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     expect(openTransport).not.toHaveBeenCalled();
   });
 
-  it("settles connect attempts once and releases timeout and abort ownership", async () => {
+  it("starts connect timeouts explicitly and releases timeout and abort ownership", async () => {
     vi.useFakeTimers();
     try {
       const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
@@ -179,6 +179,7 @@ describe("RealtimeVoiceSessionLifecycle", () => {
         timeoutMs: 10,
       });
 
+      attempt.startTimeout();
       attempt.resolve(true);
       attempt.reject(new Error("late failure"));
       await expect(attempt.promise).resolves.toBeUndefined();
@@ -200,6 +201,11 @@ describe("RealtimeVoiceSessionLifecycle", () => {
         timeoutMs: 10,
       });
       const rejected = expect(timeoutAttempt.promise).rejects.toThrow("timed out");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      timeoutAttempt.startTimeout();
+      timeoutAttempt.startTimeout();
       await vi.advanceTimersByTimeAsync(10);
       await rejected;
 
@@ -231,6 +237,19 @@ describe("RealtimeVoiceSessionLifecycle", () => {
 });
 
 describe("createRealtimeVoiceAudioQueue", () => {
+  it("releases byte budget as queued audio is consumed", () => {
+    const queue = createRealtimeVoiceAudioQueue("reject-newest");
+    const first = Buffer.alloc(512 * 1024, 0x01);
+    const second = Buffer.alloc(512 * 1024, 0x02);
+
+    expect(queue.enqueue(first)).toBe(true);
+    expect(queue.enqueue(second)).toBe(true);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
+    expect(queue.dequeue()).toEqual(first);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
+    expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
+  });
+
   it("drops the oldest audio and resets accounting on clear", () => {
     const queue = createRealtimeVoiceAudioQueue("drop-oldest");
     for (let index = 0; index < 322; index += 1) {

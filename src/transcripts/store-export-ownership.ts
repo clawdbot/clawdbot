@@ -12,6 +12,7 @@ import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
   isCaseSensitiveDirectory,
+  TRANSCRIPT_EXPORT_FILE_NAMES,
   transcriptSessionExportKey,
   transcriptSessionSelector,
 } from "./store-artifacts.js";
@@ -22,13 +23,6 @@ type ExportOwnershipParams = {
   exportRootDir: string;
   databaseOptions: OpenClawStateDatabaseOptions;
 };
-
-const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
-  "metadata.json",
-  "summary.json",
-  "summary.md",
-  "transcript.jsonl",
-]);
 
 function database(options: OpenClawStateDatabaseOptions) {
   ensureMeetingTranscriptsSchema(options);

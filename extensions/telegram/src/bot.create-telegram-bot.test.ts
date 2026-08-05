@@ -13,6 +13,10 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
@@ -30,6 +34,8 @@ import {
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import type { TelegramPollRegistryEntry } from "./poll-registry.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
 
@@ -79,7 +85,7 @@ type BuildModelsProviderDataMock = ReturnType<
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
-const { getTelegramSequentialKey } = await import("./sequential-key.js");
+const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
@@ -89,7 +95,9 @@ const {
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
-const { resetTelegramAccountThrottlersForTest } = await import("./runtime.test-support.js");
+const { clearTelegramRuntimeForTest, resetTelegramAccountThrottlersForTest } =
+  await import("./runtime.test-support.js");
+const { setTelegramRuntime } = await import("./runtime.js");
 const {
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
@@ -309,21 +317,24 @@ function installPerKeySequentializer(): void {
   sequentializeSpy.mockImplementationOnce(() => {
     const lanes = new Map<string, Promise<void>>();
     return async (ctx: TelegramMiddlewareTestContext, next: () => Promise<void>) => {
-      const key = harness.sequentializeKey?.(ctx) ?? "default";
-      const previous = lanes.get(key) ?? Promise.resolve();
+      const constraint = harness.sequentializeKey?.(ctx) ?? "default";
+      const keys = Array.isArray(constraint) ? constraint : [constraint];
+      const previous = Promise.all(keys.map((key) => lanes.get(key) ?? Promise.resolve()));
       const current = previous.then(async () => {
         await next();
       });
-      lanes.set(
-        key,
-        current.catch(() => undefined),
-      );
+      const tracked = current.catch(() => undefined);
+      for (const key of keys) {
+        lanes.set(key, tracked);
+      }
 
       try {
         await current;
       } finally {
-        if (lanes.get(key) === current) {
-          lanes.delete(key);
+        for (const key of keys) {
+          if (lanes.get(key) === tracked) {
+            lanes.delete(key);
+          }
         }
       }
     };
@@ -590,7 +601,155 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    expect(harness.sequentializeKey).toBe(getTelegramSequentialConstraints);
+  });
+
+  it("prepares the recorded poll topic before sequentialization", async () => {
+    const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
+      options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
+    ) => pluginStateTestRuntime.createPluginStateKeyedStoreForTests<T>("telegram", options);
+    const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <T>(
+      options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
+    ) => pluginStateTestRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
+    const store = openKeyedStore<TelegramPollRegistryEntry>({
+      namespace: "telegram.poll-registry",
+      maxEntries: 10_000,
+      overflowPolicy: "reject-new",
+    });
+    await store.register("default:poll-topic", {
+      pollId: "poll-topic",
+      chat: { id: -1001, type: "supergroup", title: "Reviewers", is_forum: true },
+      messageId: 7,
+      messageThreadId: 9,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+    setTelegramRuntime({
+      state: { openKeyedStore, openSyncKeyedStore },
+      channel: {},
+    } as TelegramRuntime);
+    let sequentialKey: string | string[] | undefined;
+    sequentializeSpy.mockImplementationOnce(
+      () => async (ctx: TelegramMiddlewareTestContext, next: () => Promise<void>) => {
+        sequentialKey = harness.sequentializeKey?.(ctx);
+        await next();
+      },
+    );
+    createTelegramBot({ token: "tok" });
+    const update = {
+      update_id: 40,
+      poll_answer: {
+        poll_id: "poll-topic",
+        option_ids: [0],
+        user: { id: 9, first_name: "Ada" },
+      },
+    };
+
+    try {
+      await runTelegramTestMiddlewareChain(middlewareUseSpy, { update }, async () => {});
+      expect(sequentialKey).toBe("telegram:-1001:topic:9");
+    } finally {
+      clearTelegramRuntimeForTest();
+    }
+  });
+
+  it("keeps poll registry preparation failures retryable during durable replay", async () => {
+    const readError = new Error("poll registry unavailable");
+    const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() => ({
+      register: async () => {},
+      registerIfAbsent: async () => false,
+      lookup: async (): Promise<T | undefined> => {
+        throw readError;
+      },
+      consume: async () => undefined,
+      delete: async () => false,
+      entries: async () => [],
+      clear: async () => {},
+    });
+    const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <
+      T,
+    >(): PluginStateSyncKeyedStore<T> => ({
+      register: () => {},
+      registerIfAbsent: () => false,
+      lookup: (): T | undefined => {
+        throw readError;
+      },
+      consume: () => undefined,
+      delete: () => false,
+      entries: () => [],
+      clear: () => {},
+    });
+    setTelegramRuntime({
+      state: { openKeyedStore, openSyncKeyedStore },
+      channel: {},
+    } as TelegramRuntime);
+    createTelegramBot({ token: "tok" });
+    const update = {
+      update_id: 41,
+      poll_answer: {
+        poll_id: "poll-retry",
+        option_ids: [0],
+        user: { id: 9, first_name: "Ada" },
+      },
+    };
+
+    try {
+      await expect(
+        runWithTelegramSpooledReplayUpdate(update, async () => {
+          await runTelegramTestMiddlewareChain(middlewareUseSpy, { update }, async () => {});
+        }),
+      ).rejects.toMatchObject({
+        name: TelegramSpooledReplayProcessingError.name,
+        cause: readError,
+      });
+    } finally {
+      clearTelegramRuntimeForTest();
+    }
+  });
+
+  it.each([
+    {
+      name: "bot voter",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [0],
+        user: { id: 9, first_name: "Bot", is_bot: true },
+      },
+    },
+    {
+      name: "vote retraction",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [],
+        user: { id: 9, first_name: "Ada" },
+      },
+    },
+    {
+      name: "voter chat without a user identity",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [0],
+        voter_chat: { id: -100123, type: "supergroup", title: "Reviewers" },
+      },
+    },
+  ])("skips registry preparation for $name", async ({ pollAnswer }) => {
+    const lookup = vi.fn(async () => {
+      throw new Error("registry should not be read");
+    });
+    const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() =>
+      ({ lookup }) as unknown as PluginStateKeyedStore<T>;
+    setTelegramRuntime({ state: { openKeyedStore }, channel: {} } as TelegramRuntime);
+    createTelegramBot({ token: "tok" });
+    const update = { update_id: 42, poll_answer: pollAnswer };
+    const reachedHandlers = vi.fn();
+
+    try {
+      await runTelegramTestMiddlewareChain(middlewareUseSpy, { update }, reachedHandlers);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(reachedHandlers).toHaveBeenCalledOnce();
+    } finally {
+      clearTelegramRuntimeForTest();
+    }
   });
 
   it("answers callback queries before same-chat sequentialize delays handlers", async () => {

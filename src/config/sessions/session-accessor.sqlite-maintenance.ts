@@ -26,6 +26,7 @@ import type { SqliteSessionEntryMaintenancePlan } from "./session-accessor.sqlit
 import {
   cloneSessionEntry,
   getSessionKysely,
+  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
@@ -236,28 +237,55 @@ export function applySqliteSessionEntryMaintenance(
   };
 }
 
-export function finalizeSqliteSessionEntryMaintenancePlansBestEffort(
+export async function finalizeSqliteSessionEntryMaintenancePlansBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   plans: readonly SqliteSessionEntryMaintenancePlan[],
-): SessionLifecycleArchivedTranscript[] {
+): Promise<SessionLifecycleArchivedTranscript[]> {
+  return await finalizeSqliteSessionEntryMaintenancePlansWithCommit(scope, plans, async (commit) =>
+    commit(),
+  );
+}
+
+/** Finalizes maintenance after its caller releases the per-store writer lane. */
+export async function finalizeSqliteSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  plans: readonly SqliteSessionEntryMaintenancePlan[],
+): Promise<SessionLifecycleArchivedTranscript[]> {
+  return await finalizeSqliteSessionEntryMaintenancePlansWithCommit(
+    scope,
+    plans,
+    async (commit) => await runExclusiveSqliteSessionWrite(scope, async () => commit()),
+  );
+}
+
+async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  plans: readonly SqliteSessionEntryMaintenancePlan[],
+  commit: (
+    fn: () => SessionLifecycleArchivedTranscript[],
+  ) => Promise<SessionLifecycleArchivedTranscript[]>,
+): Promise<SessionLifecycleArchivedTranscript[]> {
   const entryRemovals = plans.flatMap((plan) => plan.entryRemovals);
   const stateDeletePlans = plans.flatMap((plan) => plan.stateDeletePlans);
   if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
     return [];
   }
   try {
-    const materializedPlans = materializeSqliteSessionStateDeletePlans(stateDeletePlans);
-    let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-    runOpenClawAgentWriteTransaction((database) => {
-      assertPlannedSqliteLifecycleArtifactEntriesUnchanged(database, entryRemovals);
-      archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
-        database,
-        materializedPlans,
-        undefined,
-        new Set(entryRemovals.map((removal) => removal.sessionKey)),
-      );
-      deletePlannedSqliteLifecycleArtifactEntries(database, entryRemovals);
-    }, toDatabaseOptions(scope));
+    const materializedPlans = await materializeSqliteSessionStateDeletePlans(stateDeletePlans);
+    const archivedTranscripts = await commit(() => {
+      let committed: SessionLifecycleArchivedTranscript[] = [];
+      runOpenClawAgentWriteTransaction((database) => {
+        assertPlannedSqliteLifecycleArtifactEntriesUnchanged(database, entryRemovals);
+        committed = deleteMaterializedSqliteSessionStatePlans(
+          database,
+          materializedPlans,
+          undefined,
+          new Set(entryRemovals.map((removal) => removal.sessionKey)),
+        );
+        deletePlannedSqliteLifecycleArtifactEntries(database, entryRemovals);
+      }, toDatabaseOptions(scope));
+      return committed;
+    });
     emitCommittedSessionEntryRemovals(entryRemovals);
     return archivedTranscripts;
   } catch (error) {
@@ -273,6 +301,3 @@ export function finalizeSqliteSessionEntryMaintenancePlansBestEffort(
     return [];
   }
 }
-
-// Revalidates transcript bytes before row deletion so a concurrent append is
-// not dropped by an archive prepared from older content.

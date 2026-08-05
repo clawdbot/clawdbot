@@ -44,6 +44,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -419,6 +420,39 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect((caught as UnsupportedAttachmentError).name).toBe("UnsupportedAttachmentError");
     expect((caught as UnsupportedAttachmentError).reason).toBe("empty-payload");
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "an empty string", attachment: { content: "" } },
+    { name: "an empty typed array", attachment: { content: new Uint8Array(0) } },
+    { name: "an empty array buffer", attachment: { content: new ArrayBuffer(0) } },
+    {
+      name: "an empty nested base64 source",
+      attachment: { source: { type: "base64", media_type: "application/pdf", data: "" } },
+    },
+    { name: "whitespace-only content", attachment: { content: "   " } },
+  ])("rejects normalized RPC attachments with $name", async ({ attachment }) => {
+    const normalized = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "empty.pdf",
+        ...attachment,
+      },
+    ]);
+
+    await expectUnsupportedAttachmentReason(normalized, {}, "empty-payload");
+  });
+
+  it("continues to omit RPC attachments without recognized content", () => {
+    expect(
+      normalizeRpcAttachmentsToChatAttachments([
+        { content: undefined },
+        { content: null },
+        { mimeType: "image/png" },
+        { source: { type: "base64", media_type: "application/pdf", data: null } },
+      ]),
+    ).toEqual([]);
   });
 
   it("throws UnsupportedAttachmentError on non-image when acceptNonImage is false", async () => {

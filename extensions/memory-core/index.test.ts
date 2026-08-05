@@ -207,7 +207,7 @@ describe("memory-core plugin runtime registration", () => {
       .mockResolvedValueOnce({ manager: { sync: syncMain } } as never)
       .mockResolvedValueOnce({ manager: { sync: syncWork } } as never);
     const config = {
-      agents: { list: [{ id: "main" }, { id: "work" }] },
+      agents: { entries: { main: { default: true }, work: {} } },
     } as OpenClawConfig;
     const testApi = createTestPluginApi({
       config,
@@ -317,6 +317,7 @@ describe("memory-core plugin runtime registration", () => {
 
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
       acquireLocalService: hostRuntime.llm.acquireLocalService,
+      openKeyedStore: expect.any(Function),
       withLease: expect.any(Function),
     });
   });
@@ -353,17 +354,21 @@ describe("memory-core plugin runtime registration", () => {
     });
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
       acquireLocalService: hostRuntime.llm.acquireLocalService,
+      openKeyedStore: expect.any(Function),
       withLease: expect.any(Function),
     });
   });
 
-  it("binds the host SQLite lease hook to tools and CLI runtime", async () => {
+  it("binds the host SQLite state hooks to tools and CLI runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
     const cfg = {} as OpenClawConfig;
 
     await runtime.getMemorySearchManager({ cfg, agentId: "main" });
 
     const host = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+    const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
+    host?.openKeyedStore?.(storeOptions);
+    expect(hostRuntime.state.openKeyedStore).toHaveBeenCalledWith(storeOptions);
     expect(host?.withLease).toEqual(expect.any(Function));
   });
 });

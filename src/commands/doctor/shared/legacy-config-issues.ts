@@ -2,12 +2,18 @@
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
-import type { LegacyConfigIssue, OpenClawConfig } from "../../../config/types.js";
+import type {
+  ConfigFileSnapshot,
+  LegacyConfigIssue,
+  OpenClawConfig,
+} from "../../../config/types.js";
+import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
   collectRelevantDoctorPluginIds,
   collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../../../plugins/doctor-contract-registry.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 
 function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
   if (!raw || typeof raw !== "object") {
@@ -51,4 +57,22 @@ export function findDoctorLegacyConfigIssues(
     ],
     touchedPaths,
   );
+}
+
+export function addDoctorLegacyIssues(
+  snapshot: ConfigFileSnapshot,
+  pluginMetadataSnapshot?: PluginMetadataSnapshot,
+): ConfigFileSnapshot {
+  if (!snapshot.exists) {
+    return snapshot;
+  }
+  const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
+  const collect = () => {
+    const sourceRaw = snapshot.parsed ?? resolvedRaw;
+    const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+    return legacyIssues.length === 0 ? snapshot : { ...snapshot, legacyIssues };
+  };
+  return pluginMetadataSnapshot
+    ? withPluginMetadataSnapshotScope(pluginMetadataSnapshot, collect, { config: resolvedRaw })
+    : collect();
 }

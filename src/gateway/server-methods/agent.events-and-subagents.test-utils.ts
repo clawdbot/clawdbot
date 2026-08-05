@@ -417,13 +417,25 @@ describe("gateway agent handler", () => {
         },
         idempotencyKey: "test-public-provenance-accounting",
       },
-      { reqId: "public-provenance-accounting" },
+      {
+        reqId: "public-provenance-accounting",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
     );
 
     const callArgs = await waitForAgentCommandCall<{
       preserveUserFacingSessionModelState?: boolean;
     }>();
     expect(callArgs.preserveUserFacingSessionModelState).toBe(false);
+    expect(callArgs).toMatchObject({
+      senderIsOwner: true,
+      userTurnTranscriptRecorder: {
+        message: {
+          provenance: { kind: "inter_session" },
+          __openclaw: { senderIsOwner: false },
+        },
+      },
+    });
   });
 
   it("rejects public internal session-effect controls", async () => {
@@ -552,7 +564,10 @@ describe("gateway agent handler", () => {
       },
     );
 
-    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(true);
+    expect(await waitForAgentCommandCall()).toMatchObject({
+      senderIsOwner: true,
+      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: true } } },
+    });
 
     mocks.agentCommand.mockClear();
     await invokeAgent(
@@ -568,9 +583,10 @@ describe("gateway agent handler", () => {
       },
     );
 
-    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(
-      false,
-    );
+    expect(await waitForAgentCommandCall()).toMatchObject({
+      senderIsOwner: false,
+      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: false } } },
+    });
   });
 
   it("enables Gateway-bound plugin runtimes for ingress agent runs", async () => {

@@ -575,6 +575,9 @@ export function createSubagentRegistryLifecycleCleanup(
       suppressChildSessionEffects: suppressSessionEffects,
       isChildSessionEffectsAllowed: childSessionEffectsAllowed,
       isCompletionDeliveryAllowed: () => isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
+      isCompletionOwnedByRequesterYield: () =>
+        entry.requesterTurnYielded === true ||
+        entry.requesterSettleWake?.requesterYieldBatch === true,
       onBeforeDeleteChildSession:
         cleanup === "delete"
           ? () => {

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/index.ts";
+import { searchClawHub } from "./clawhub-search.ts";
 import {
   installFromClawHub,
   installSkill,
@@ -13,7 +14,6 @@ import {
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
-  searchClawHub,
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
@@ -818,6 +818,58 @@ describe("skill mutations", () => {
       expect(methods).toEqual(["config.set", "skills.update", "config.get", "skills.status"]);
       expect(runtimeConfig.state.configForm).toEqual({ count: 2, skillEnabled: true });
       expect(state.skillMessages.github).toEqual({ kind: "success", message: "Skill enabled" });
+    } finally {
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("does not dispatch a queued skill update after access changes", async () => {
+    const { state, request } = createState();
+    const firstSet = createDeferred<unknown>();
+    const methods: string[] = [];
+    let canDispatch = true;
+    request.mockImplementation((method) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        return firstSet.promise;
+      }
+      return Promise.resolve({
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        skills: [],
+      });
+    });
+    const client = expectDefined(state.client, "connected skill mutation client");
+    const runtimeConfig = createRuntimeConfigCapability({
+      snapshot: { client, phase: "connected", sessionKey: "main" },
+      subscribe: () => () => undefined,
+    });
+    state.runtimeConfig = runtimeConfig;
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+
+    try {
+      runtimeConfig.patchForm(["count"], 2);
+      const mutation = updateSkillEnabled(state, "github", true, () => canDispatch);
+      await waitForFast(() => expect(methods).toEqual(["config.set"]));
+      canDispatch = false;
+      firstSet.resolve({ hash: "hash-2" });
+      await mutation;
+
+      expect(methods).toEqual(["config.set"]);
+      expect(state.skillMessages.github).toEqual({
+        kind: "error",
+        message: "Access changed before the skill update started.",
+      });
     } finally {
       runtimeConfig.dispose();
     }

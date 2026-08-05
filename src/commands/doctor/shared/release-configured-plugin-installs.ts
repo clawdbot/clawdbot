@@ -350,6 +350,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   warnings: string[];
   completed: boolean;
   touchedConfig: boolean;
+  pluginInventoryChanged?: true;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 }> {
   const env = params.env ?? process.env;
@@ -381,6 +382,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
       warnings,
       completed: repaired.warnings.length === 0,
       touchedConfig: false,
+      ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
       ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
     };
   }
@@ -406,6 +408,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     warnings,
     completed,
     touchedConfig: completed,
+    ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
     ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
   };
 }

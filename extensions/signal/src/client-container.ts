@@ -63,6 +63,7 @@ const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 // Receive envelopes contain metadata only; cap frames, and do not let upgrades block reconnect.
 const WS_MAX_PAYLOAD = 1024 * 1024;
 const WS_HANDSHAKE_MS = 30_000;
+const WS_SHUTDOWN_DRAIN_TIMEOUT_MS = 1_500;
 // Outbound file paths are converted to base64 before posting to the container. Cap
 // reads to the same default the native signal send path uses (8 MiB) so a path to a
 // huge or symlinked file cannot OOM the gateway before encoding.
@@ -445,8 +446,13 @@ export async function streamContainerEvents(params: {
     let settled = false;
     let eventChain = Promise.resolve();
     let abortHandler: (() => void) | undefined;
+    let shutdownDrainTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
+      if (shutdownDrainTimer) {
+        clearTimeout(shutdownDrainTimer);
+        shutdownDrainTimer = undefined;
+      }
       if (abortHandler) {
         params.abortSignal?.removeEventListener("abort", abortHandler);
         abortHandler = undefined;
@@ -532,10 +538,22 @@ export async function streamContainerEvents(params: {
     if (params.abortSignal) {
       abortHandler = () => {
         log("[signal-ws] aborted, closing connection");
+        // Arm before close: ws can synchronously flush buffered messages and emit
+        // close, whose final eventChain owns every accepted durable admission.
+        shutdownDrainTimer = setTimeout(() => {
+          logError(
+            "[signal-ws] shutdown timed out draining accepted receive events; messages may be lost",
+          );
+          ws.terminate();
+          resolveOnce();
+        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS);
+        shutdownDrainTimer.unref?.();
         ws.close();
-        resolveOnce();
       };
       params.abortSignal.addEventListener("abort", abortHandler, { once: true });
+      if (params.abortSignal.aborted) {
+        abortHandler();
+      }
     }
   });
 }
@@ -739,7 +757,7 @@ async function containerSendReceipt(params: {
 }
 
 /**
- * Send a reaction to a message via bbernhard container REST API.
+ * Add or remove a message reaction via the bbernhard container REST API.
  */
 async function containerSendReaction(params: {
   baseUrl: string;
@@ -750,6 +768,7 @@ async function containerSendReaction(params: {
   targetTimestamp: number;
   groupId?: string;
   timeoutMs?: number;
+  remove?: boolean;
 }): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
     recipient: params.recipient,
@@ -765,41 +784,7 @@ async function containerSendReaction(params: {
   const result = await containerRestRequest<{ timestamp?: number }>(
     `/v1/reactions/${encodeURIComponent(params.account)}`,
     { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    payload,
-  );
-
-  return result ?? {};
-}
-
-/**
- * Remove a reaction from a message via bbernhard container REST API.
- */
-async function containerRemoveReaction(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const payload: Record<string, unknown> = {
-    recipient: params.recipient,
-    reaction: params.emoji,
-    target_author: params.targetAuthor,
-    timestamp: params.targetTimestamp,
-  };
-
-  if (params.groupId) {
-    payload.group_id = params.groupId;
-  }
-
-  const result = await containerRestRequest<{ timestamp?: number }>(
-    `/v1/reactions/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "DELETE",
+    params.remove ? "DELETE" : "POST",
     payload,
   );
 
@@ -924,9 +909,9 @@ export async function containerRpcRequest<T = unknown>(
         targetTimestamp: p.targetTimestamp as number,
         groupId: formattedGroupId,
         timeoutMs: opts.timeoutMs,
+        remove: Boolean(p.remove),
       };
-      const fn = p.remove ? containerRemoveReaction : containerSendReaction;
-      return (await fn(reactionParams)) as T;
+      return (await containerSendReaction(reactionParams)) as T;
     }
 
     case "getAttachment": {

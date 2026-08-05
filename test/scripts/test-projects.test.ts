@@ -44,6 +44,7 @@ import {
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
 const normalizeRepoPath = toRepoPath;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 
 type VitestTestConfig = {
   dir?: string;
@@ -72,6 +73,11 @@ function findVitestConfigFactory(mod: Record<string, unknown>): VitestConfigFact
     }
   }
   return null;
+}
+
+function expectedMatrixTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots(["extensions/matrix"]).length;
+  return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
 }
 
 async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
@@ -481,6 +487,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-scenarios-assertions.test.ts",
         "test/scripts/release-user-journey-assertions.test.ts",
       ],
+      "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs": [
+        "test/scripts/release-plugin-marketplace-lifecycle.test.ts",
+      ],
       "scripts/e2e/lib/openai-chat-tools/write-config.mjs": [
         "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
       ],
@@ -714,7 +723,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       "scripts/e2e/lib/onboard/assert-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
       "scripts/e2e/lib/onboard/write-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
-      "scripts/e2e/lib/package-compat.mjs": ["test/scripts/docker-build-helper.test.ts"],
+      "scripts/e2e/lib/package-compat.mjs": [
+        "test/scripts/direct-run-entrypoints.test.ts",
+        "test/scripts/docker-build-helper.test.ts",
+      ],
       "scripts/e2e/agents-delete-shared-workspace-docker.sh": [
         "test/scripts/docker-e2e-plan.test.ts",
         "src/scripts/ci-changed-scope.test.ts",
@@ -756,6 +768,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
+      ],
+      "scripts/e2e/cli-installer-distribution-docker.sh": [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
       ],
       "scripts/e2e/update-channel-switch-docker.sh": [
         "test/scripts/docker-build-helper.test.ts",
@@ -1670,6 +1686,11 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/release-check.test.ts",
         "test/official-channel-catalog.test.ts",
       ],
+      "scripts/lib/official-external-channel-seed.json": [
+        "src/plugins/official-external-plugin-catalog.test.ts",
+        "test/release-check.test.ts",
+        "test/official-channel-catalog.test.ts",
+      ],
       "scripts/lib/official-external-plugin-catalog.json": [
         "src/plugins/official-external-plugin-catalog.test.ts",
         "test/release-check.test.ts",
@@ -1682,7 +1703,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugins/recommended-tool-installs.test.ts",
         "test/release-check.test.ts",
       ],
-      "scripts/lib/direct-run.mjs": ["test/scripts/changed-lanes.test.ts"],
+      "scripts/lib/direct-run.mjs": [
+        "test/scripts/changed-lanes.test.ts",
+        "test/scripts/direct-run-entrypoints.test.ts",
+      ],
       "scripts/lib/npm-verify-exec.ts": ["test/scripts/npm-verify-exec.test.ts"],
       "scripts/lib/plugin-npm-runtime-build.mjs": [
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -1893,13 +1917,17 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       "scripts/plugin-clawhub-release-check.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/plugin-clawhub-release-plan.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
-      "scripts/plugin-npm-release-check.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
+      "scripts/plugin-npm-release-check.ts": [
+        "test/e2e/qa-lab/plugins/clawhub-release-policy-contracts.e2e.test.ts",
+        "test/scripts/release-wrapper-scripts.test.ts",
+      ],
       "scripts/plugin-npm-release-plan.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/plugin-release-pretag-pack-check.ts": [
         "test/scripts/plugin-release-pretag-pack-check.test.ts",
       ],
       "scripts/plan-release-workflow-matrix.mjs": [
         "test/scripts/release-workflow-matrix-plan.test.ts",
+        "test/scripts/direct-run-entrypoints.test.ts",
       ],
       "scripts/release-verify-beta.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/validate-release-publish-approval.mjs": [
@@ -2589,6 +2617,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
+          "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -2774,6 +2803,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
+          "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -3230,8 +3260,12 @@ describe("scripts/test-projects changed-target routing", () => {
           watchMode: false,
         })),
     );
-    expect(matrixPlans).toHaveLength(3);
-    expect(matrixPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 40)).toBe(true);
+    expect(matrixPlans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      matrixPlans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
     expect(matrixPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -3241,11 +3275,13 @@ describe("scripts/test-projects changed-target routing", () => {
   it("bounds an explicit Matrix directory target across process lifetimes", () => {
     const plans = buildVitestRunPlans(["extensions/matrix"], process.cwd());
 
-    expect(plans).toHaveLength(3);
+    expect(plans).toHaveLength(expectedMatrixTestProcessCount());
     expect(
       plans.every((plan) => plan.config === "test/vitest/vitest.extension-matrix.config.ts"),
     ).toBe(true);
-    expect(plans.every((plan) => (plan.includePatterns?.length ?? 0) <= 40)).toBe(true);
+    expect(
+      plans.every((plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -3259,7 +3295,10 @@ describe("scripts/test-projects changed-target routing", () => {
 
     const plans = buildVitestRunPlans(["extensions/matrix", testFile], process.cwd());
 
-    expect(plans).toHaveLength(3);
+    expect(plans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      plans.every((plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -4615,7 +4654,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(gatewayPlans).toHaveLength(4);
     expect(gatewayTargets.length).toBeGreaterThan(90);
     expect(new Set(gatewayTargets).size).toBe(gatewayTargets.length);
-    expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
+    expect(gatewayTargets).not.toContain("src/gateway/server-network-runtime.e2e.test.ts");
     expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
     expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
     const agentsCoreTargets = agentsCorePlans.flatMap((plan) => plan.forwardedArgs);
@@ -4647,8 +4686,10 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     const matrixTargets = matrixPlans.flatMap((plan) => plan.forwardedArgs);
-    expect(matrixPlans).toHaveLength(3);
-    expect(matrixPlans.every((plan) => plan.forwardedArgs.length <= 40)).toBe(true);
+    expect(matrixPlans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      matrixPlans.every((plan) => plan.forwardedArgs.length <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(matrixTargets).toEqual(listExtensionTestFilesForRoots(["extensions/matrix"]));
     expect(
       plans.filter(

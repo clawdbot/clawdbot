@@ -336,6 +336,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       toolBuildStages.mark(name);
     },
     onToolOutcome: params.onToolOutcome,
+    isTurnTainted: params.isTurnTainted,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
     drainsContinuationDelegateQueue: params.drainsContinuationDelegateQueue,
     continueWorkOpts: params.continueWorkOpts,

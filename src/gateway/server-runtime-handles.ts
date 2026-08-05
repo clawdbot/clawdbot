@@ -28,6 +28,7 @@ export type GatewayServerMutableState = {
   delegateArtifactCleanup: ReturnType<typeof setInterval> | null;
   skillCuratorCleanup: () => void;
   heartbeatRunner: HeartbeatRunner;
+  stopOutboundDeliveryRecovery: () => Promise<void>;
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
   postReadySidecars: GatewayPostReadySidecarHandle[];
@@ -67,6 +68,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
       stop: () => {},
       updateConfig: (_cfg: OpenClawConfig) => {},
     } satisfies HeartbeatRunner,
+    stopOutboundDeliveryRecovery: async () => {},
     stopGatewayUpdateCheck: () => {},
     tailscaleCleanup: null as (() => Promise<void>) | null,
     postReadySidecars: [],

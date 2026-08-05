@@ -14,6 +14,7 @@ import {
   acquireAgentRunPreparedModelRuntimeMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
+  buildEmbeddedExtensionFactoriesMock,
   buildAgentRuntimePlanMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
@@ -37,6 +38,7 @@ import {
   resolveProviderEntryApiKeyProfileReferenceMock,
   resolveContextWindowInfoMock,
   resolveContextEngineMock,
+  resolveEffectiveCompactionModeMock,
   resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
   resolveModelAsyncMock,
@@ -51,8 +53,10 @@ import {
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
+  sessionAutomaticCompactionMock,
   sessionMessages,
   sessionCompactImpl,
+  sessionManualCompactionMock,
   triggerInternalHook,
 } from "./compact.hooks.harness.js";
 import {
@@ -2222,6 +2226,28 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result).toMatchObject({ ok: true, compacted: true });
     expect(sessionCompactImpl).toHaveBeenCalledOnce();
   });
+
+  it.each(["overflow", "budget", "timeout_recovery"] as const)(
+    "uses caller-owned automatic recovery once for default-mode %s compaction",
+    async (trigger) => {
+      hookRunner.hasHooks.mockReturnValue(true);
+      resolveEffectiveCompactionModeMock.mockReturnValue("default");
+
+      const result = await compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({
+          trigger,
+          config: { agents: { defaults: { compaction: { mode: "default" } } } },
+        }),
+      );
+
+      expect(result).toMatchObject({ ok: true, compacted: true });
+      expect(sessionAutomaticCompactionMock).toHaveBeenCalledOnce();
+      expect(sessionManualCompactionMock).not.toHaveBeenCalled();
+      expect(buildEmbeddedExtensionFactoriesMock).toHaveBeenCalledOnce();
+      expect(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
+      expect(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
+    },
+  );
 
   it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {
     const messages = [

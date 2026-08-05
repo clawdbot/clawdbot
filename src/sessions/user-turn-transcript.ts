@@ -1,4 +1,6 @@
 // User turn transcript helpers extract user-turn text from session transcripts.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
   persistSessionTranscriptTurn,
@@ -35,22 +37,9 @@ export function buildRunUserTurnIdempotencyKey(runId: string): string {
   return `${runId}:user`;
 }
 
-function normalizeOptionalText(value: string | null | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
-
-function normalizeTranscriptText(value: string | null | undefined): string {
-  return value ?? "";
-}
-
 // Select normalized text for persisted user turns.
 export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
-  const normalized = normalizeOptionalText(value);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized;
+  return normalizeOptionalString(value);
 }
 
 export function buildLateMediaAttachedProjection(message: AgentMessage): {
@@ -71,9 +60,9 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
 function buildUserTurnSenderMeta(
   sender: UserTurnInput["sender"],
 ): Record<string, string> | undefined {
-  const senderId = normalizeOptionalText(sender?.id);
-  const senderName = normalizeOptionalText(sender?.name);
-  const senderUsername = normalizeOptionalText(sender?.username);
+  const senderId = normalizeOptionalString(sender?.id);
+  const senderName = normalizeOptionalString(sender?.name);
+  const senderUsername = normalizeOptionalString(sender?.username);
   if (!senderId && !senderName && !senderUsername) {
     return undefined;
   }
@@ -86,7 +75,7 @@ function buildUserTurnSenderMeta(
 
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
-  const text = normalizeTranscriptText(params.text);
+  const text = params.text ?? "";
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
   // derived from each message's own `timestamp` field, so the current turn and
@@ -95,7 +84,14 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
   const senderMeta = buildUserTurnSenderMeta(params.sender);
   const openClawMeta = {
-    ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
+    // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
+    ...(params.senderIsOwner === undefined
+      ? {}
+      : {
+          senderIsOwner:
+            params.senderIsOwner &&
+            (!params.provenance || params.provenance.kind === "external_user"),
+        }),
     ...senderMeta,
     ...(params.transport ? { transport: params.transport } : {}),
     ...(params.sessionDeliveryAckIds && params.sessionDeliveryAckIds.length > 0
@@ -234,10 +230,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     originalMediaImageLayout === undefined ? undefined : structuredClone(originalMediaImageLayout);
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
-  const transport =
-    originalTransport && typeof originalTransport === "object" && !Array.isArray(originalTransport)
-      ? { ...originalTransport }
-      : undefined;
+  const originalTransportRecord = asOptionalRecord(originalTransport);
+  const transport = originalTransportRecord ? { ...originalTransportRecord } : undefined;
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),

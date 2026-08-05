@@ -29,8 +29,8 @@ function makePlist(): string {
   return plist;
 }
 
-function runHelper(script: string) {
-  return spawnSync("bash", ["-lc", script], {
+function runHelper(script: string, shell = "bash") {
+  return spawnSync(shell, ["-lc", script], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -62,6 +62,17 @@ function getSparkleBuildHelperBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("sparkle_canonical_build_from_version()");
   const end = script.indexOf("build_path_for_arch()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getMLXTTSHelperBuildBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("build_mlx_tts_helper() {");
+  const end = script.indexOf("sparkle_framework_for_arch()", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -495,6 +506,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("builds and bundles the MLX TTS helper for every requested architecture", () => {
     const script = readFileSync(scriptPath, "utf8");
+    const helperBlock = getMLXTTSHelperBuildBlock();
     const buildLoop = script.slice(
       script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
       script.indexOf('BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"'),
@@ -504,14 +516,93 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf("SPARKLE_FRAMEWORK_PRIMARY="),
     );
 
-    expect(buildLoop).toContain('swift build --package-path "$MLX_TTS_HELPER_ROOT"');
-    expect(buildLoop).toContain('--product "$MLX_TTS_HELPER_PRODUCT"');
-    expect(buildLoop).toContain('--arch "$arch"');
+    expect(buildLoop).toContain('build_mlx_tts_helper "$arch"');
+    expect(helperBlock).toContain('--package-path "$MLX_TTS_HELPER_ROOT"');
+    expect(helperBlock).toContain('--product "$MLX_TTS_HELPER_PRODUCT"');
+    expect(helperBlock).toContain('--arch "$arch"');
     expect(helperCopy).toContain(
       'cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"',
     );
     expect(helperCopy).toContain('/usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}"');
     expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
+  });
+
+  it.each([
+    { title: "keeps the default backend when Xcode's Metal shim works", shimExit: 0, xcrunExit: 0 },
+    {
+      title: "uses the native backend when xcrun can run Metal but Xcode's shim is broken",
+      shimExit: 1,
+      xcrunExit: 0,
+    },
+    {
+      title: "keeps the default backend when no working Metal compiler is installed",
+      shimExit: 1,
+      xcrunExit: 1,
+    },
+  ])("$title", ({ shimExit, xcrunExit }) => {
+    const helperBlock = getMLXTTSHelperBuildBlock();
+    const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
+    const toolsDir = path.join(tempRoot, "tools");
+    const toolchainDir = path.join(tempRoot, "xcode-toolchain");
+    const invocationPath = path.join(tempRoot, "swift-args");
+
+    mkdirSync(toolsDir, { recursive: true });
+    mkdirSync(toolchainDir, { recursive: true });
+
+    const tools: Array<[string, string]> = [
+      [
+        path.join(toolsDir, "xcrun"),
+        [
+          "#!/usr/bin/env bash",
+          'case "$*" in',
+          '  "--find swift") printf "%s\\n" "$MOCK_SWIFT_PATH" ;;',
+          '  "metal --version") exit "$MOCK_XCRUN_EXIT" ;;',
+          "  *) exit 1 ;;",
+          "esac",
+          "",
+        ].join("\n"),
+      ],
+      [
+        path.join(toolsDir, "swift"),
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$MOCK_SWIFT_ARGS"\n',
+      ],
+      [path.join(toolchainDir, "swift"), "#!/usr/bin/env bash\nexit 0\n"],
+      [path.join(toolchainDir, "metal"), `#!/usr/bin/env bash\nexit ${shimExit}\n`],
+    ];
+
+    for (const [toolPath, contents] of tools) {
+      writeFileSync(toolPath, contents, "utf8");
+      chmodSync(toolPath, 0o755);
+    }
+
+    const result = runHelper(
+      `
+      set -euo pipefail
+      export PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      export MOCK_SWIFT_PATH=${JSON.stringify(path.join(toolchainDir, "swift"))}
+      export MOCK_XCRUN_EXIT=${JSON.stringify(String(xcrunExit))}
+      export MOCK_SWIFT_ARGS=${JSON.stringify(invocationPath)}
+      MLX_TTS_HELPER_ROOT=${JSON.stringify(path.join(tempRoot, "helper"))}
+      MLX_TTS_HELPER_PRODUCT=openclaw-mlx-tts
+      BUILD_CONFIG=debug
+      helper_build_path_for_arch() { printf '%s\\n' ${JSON.stringify(path.join(tempRoot, "build"))}/"$1"; }
+      ${helperBlock}
+      build_mlx_tts_helper arm64
+    `,
+      "/bin/bash",
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const swiftArgs = readFileSync(invocationPath, "utf8").trim().split("\n");
+    expect(swiftArgs[0]).toBe("build");
+    expect(swiftArgs).toContain("--package-path");
+    expect(swiftArgs).toContain("--arch");
+    expect(swiftArgs).toContain("arm64");
+    if (shimExit === 0 || xcrunExit !== 0) {
+      expect(swiftArgs).not.toContain("--build-system");
+    } else {
+      expect(swiftArgs.slice(1, 3)).toEqual(["--build-system", "native"]);
+    }
   });
 
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {

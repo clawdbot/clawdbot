@@ -32,7 +32,10 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import {
+  buildKnownAgentRunFailureReplyPayload,
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -367,6 +370,9 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     cfg: OpenClawConfig;
+    blockReplyPipeline: BlockReplyPipeline | null;
+    didDeliverVisiblePartialReply: () => boolean;
+    isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
@@ -376,6 +382,9 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     cfg,
+    blockReplyPipeline,
+    didDeliverVisiblePartialReply,
+    isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
     resolvedVerboseLevel,
@@ -427,6 +436,28 @@ export async function handleReplyAgentRunError(
   if (knownFailurePayload) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(knownFailurePayload);
+  }
+  if (blockReplyPipeline) {
+    try {
+      await blockReplyPipeline.flush({ force: true });
+    } catch (flushError) {
+      logVerbose(
+        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
+      );
+    }
+  }
+  const didDeliverVisibleReply =
+    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
+    didDeliverVisiblePartialReply();
+  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
+    replyOperation.fail("run_failed", error);
+    return returnWithQueuedFollowupDrain(
+      buildTerminalAgentRunFailureReplyPayload({
+        visibleReplyDelivered: true,
+        sessionCtx,
+        cfg,
+      }),
+    );
   }
   replyOperation.fail("run_failed", error);
   // Keep the followup queue moving even when an unexpected exception escapes

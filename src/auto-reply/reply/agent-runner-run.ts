@@ -41,6 +41,7 @@ import {
   createShouldEmitToolResult,
   isAudioPayload,
 } from "./agent-runner-helpers.js";
+import { createPartialReplyTracker } from "./agent-runner-partial-reply.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { createTouchActiveSessionEntry } from "./agent-runner-session-touch.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
@@ -57,7 +58,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping, refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
@@ -116,7 +117,8 @@ export async function runReplyAgent(
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const hookTrigger = resolveReplyHookTrigger(opts);
-  const replyOperationRunState = resolveReplyOperationRunState(opts);
+  const partialReplyTracker = createPartialReplyTracker(opts);
+  const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -392,6 +394,7 @@ export async function runReplyAgent(
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
+    replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -606,11 +609,7 @@ export async function runReplyAgent(
       activeSessionEntry = entry;
     },
   });
-  type SessionResetOptions = {
-    failureLabel: string;
-    buildLogMessage: (nextSessionId: string) => string;
-    cleanupTranscripts?: boolean;
-  };
+  type SessionResetOptions = Parameters<typeof resetReplyRunSession>[0]["options"];
   const resetSession = async ({
     failureLabel,
     buildLogMessage,
@@ -668,7 +667,7 @@ export async function runReplyAgent(
       isContinuationWake: isContinuationWake === true,
       isHeartbeat,
       isRestartRecoveryArmed,
-      opts,
+      opts: partialReplyTracker.options,
       pendingToolTasks,
       performSessionReset: resetSession,
       queueKey,
@@ -708,7 +707,10 @@ export async function runReplyAgent(
     });
   } catch (error) {
     return await handleReplyAgentRunError(error, {
+      blockReplyPipeline,
       cfg,
+      didDeliverVisiblePartialReply: partialReplyTracker.didDeliver,
+      isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,
       resolvedVerboseLevel,
