@@ -122,10 +122,6 @@ describe("healthHandlers.ready", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ readiness }),
-      undefined,
-    );
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ readiness }), undefined);
   });
 });

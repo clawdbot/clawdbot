@@ -296,13 +296,13 @@ async function resolveStatusRuntimeDetails(params: {
         })
     : undefined;
   const readiness = params.includeReadiness
-    ? ("readiness" in (health ?? {})
-        ? (health as HealthSummary).readiness
-        : await resolveStatusGatewayReadiness({
-            config: params.config,
-            timeoutMs: params.timeoutMs,
-            gatewayReachable: params.gatewayReachable,
-          }))
+    ? "readiness" in (health ?? {})
+      ? (health as HealthSummary).readiness
+      : await resolveStatusGatewayReadiness({
+          config: params.config,
+          timeoutMs: params.timeoutMs,
+          gatewayReachable: params.gatewayReachable,
+        })
     : undefined;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat = params.deep
