@@ -127,6 +127,7 @@ async function stopMaintenanceTimers(timers: {
   tickInterval: NodeJS.Timeout;
   healthInterval: NodeJS.Timeout;
   dedupeCleanup: NodeJS.Timeout;
+  startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<void>;
   worktreeCleanup: NodeJS.Timeout;
   skillCuratorCleanup: () => void;
@@ -153,11 +154,34 @@ describe("startGatewayMaintenanceTimers", () => {
     });
   });
 
+  it("does not run media cleanup before the lifecycle owner activates it", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
+    });
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(prunePlaybackTranscodeCacheMock).not.toHaveBeenCalled();
+    expect(cleanupManagedOutgoingMediaRecordsMock).not.toHaveBeenCalled();
+    expect(cleanOldMediaMock).not.toHaveBeenCalled();
+
+    await timers.stopMediaCleanup();
+    timers.startMediaCleanup();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(prunePlaybackTranscodeCacheMock).not.toHaveBeenCalled();
+    expect(cleanupManagedOutgoingMediaRecordsMock).not.toHaveBeenCalled();
+    expect(cleanOldMediaMock).not.toHaveBeenCalled();
+    await stopMaintenanceTimers(timers);
+  });
+
   it("runs playback cache cleanup at startup and hourly without an attachment ttl", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
 
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    timers.startMediaCleanup();
 
     await vi.advanceTimersByTimeAsync(0);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
@@ -175,6 +199,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
 
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    timers.startMediaCleanup();
 
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
@@ -278,6 +303,7 @@ describe("startGatewayMaintenanceTimers", () => {
       ...createMaintenanceTimerDeps(),
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
+    timers.startMediaCleanup();
 
     await vi.advanceTimersByTimeAsync(0);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
@@ -313,6 +339,7 @@ describe("startGatewayMaintenanceTimers", () => {
       ...deps,
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
+    timers.startMediaCleanup();
 
     await vi.waitFor(() => {
       expect(deps.logHealth.error).toHaveBeenCalledWith(
@@ -338,6 +365,7 @@ describe("startGatewayMaintenanceTimers", () => {
       ...deps,
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
+    timers.startMediaCleanup();
 
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
@@ -407,6 +435,7 @@ describe("startGatewayMaintenanceTimers", () => {
       ...createMaintenanceTimerDeps(),
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
+    timers.startMediaCleanup();
 
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
@@ -444,6 +473,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
 
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    timers.startMediaCleanup();
 
     await vi.advanceTimersByTimeAsync(0);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
@@ -473,6 +503,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
 
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    timers.startMediaCleanup();
 
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
@@ -518,6 +549,7 @@ describe("startGatewayMaintenanceTimers", () => {
       ...createMaintenanceTimerDeps(),
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
+    timers.startMediaCleanup();
     await vi.waitFor(() => {
       expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);

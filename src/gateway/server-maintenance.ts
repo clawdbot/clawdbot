@@ -81,6 +81,7 @@ export function startGatewayMaintenanceTimers(params: {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
+  startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<void>;
   worktreeCleanup: ReturnType<typeof setInterval>;
   skillCuratorCleanup: () => void;
@@ -354,6 +355,7 @@ export function startGatewayMaintenanceTimers(params: {
     return mediaCleanupInFlight;
   };
 
+  let mediaCleanupInterval: ReturnType<typeof setInterval> | undefined;
   let mediaCleanupStopped = false;
   const runMediaMaintenance = () => {
     if (mediaCleanupStopped) {
@@ -365,10 +367,19 @@ export function startGatewayMaintenanceTimers(params: {
     void managedOutgoingCleanupLoader.load();
     void runConfiguredMediaCleanup();
   };
-  const mediaCleanup = setInterval(runMediaMaintenance, 60 * 60_000);
+  const startMediaCleanup = () => {
+    if (mediaCleanupStopped || mediaCleanupInterval) {
+      return;
+    }
+    mediaCleanupInterval = setInterval(runMediaMaintenance, 60 * 60_000);
+    runMediaMaintenance();
+  };
   const stopMediaCleanup = async () => {
     mediaCleanupStopped = true;
-    clearInterval(mediaCleanup);
+    if (mediaCleanupInterval) {
+      clearInterval(mediaCleanupInterval);
+      mediaCleanupInterval = undefined;
+    }
     const pending = [
       playbackTranscodeCacheCleanupLoader.peek(),
       managedOutgoingCleanupLoader.peek(),
@@ -377,12 +388,11 @@ export function startGatewayMaintenanceTimers(params: {
     await Promise.allSettled(pending);
   };
 
-  runMediaMaintenance();
-
   return {
     tickInterval,
     healthInterval,
     dedupeCleanup,
+    startMediaCleanup,
     stopMediaCleanup,
     worktreeCleanup,
     skillCuratorCleanup,

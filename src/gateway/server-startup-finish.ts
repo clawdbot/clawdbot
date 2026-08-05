@@ -659,9 +659,12 @@ export async function finishGatewayStartup(params: {
         runtimeState.tickInterval = maintenance.tickInterval;
         runtimeState.healthInterval = maintenance.healthInterval;
         runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
+        // Publish the stop owner before cleanup can touch SQLite or state paths;
+        // shutdown may begin immediately after this synchronous handoff.
         runtimeState.stopMediaCleanup = maintenance.stopMediaCleanup;
         runtimeState.worktreeCleanup = maintenance.worktreeCleanup;
         runtimeState.skillCuratorCleanup = maintenance.skillCuratorCleanup;
+        maintenance.startMediaCleanup();
       },
       shouldStartCron: () => !lifecycle.closePreludeStarted && !cronStartState.handled,
       markCronStartHandled: () => {

@@ -838,6 +838,8 @@ describe("server-runtime-services", () => {
     await Promise.resolve();
 
     expect(applyMaintenance).not.toHaveBeenCalled();
+    expect(maintenance.startMediaCleanup).not.toHaveBeenCalled();
+    expect(maintenance.stopMediaCleanup).toHaveBeenCalledTimes(1);
     expect(cron.start).not.toHaveBeenCalled();
     expect(recordPostReadyMemory).not.toHaveBeenCalled();
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.tickInterval);
@@ -957,6 +959,7 @@ function createMaintenanceHandles() {
     tickInterval: setInterval(() => undefined, 60_000),
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
+    startMediaCleanup: vi.fn(),
     stopMediaCleanup: vi.fn(async () => undefined),
     worktreeCleanup: setInterval(() => undefined, 60_000),
     skillCuratorCleanup: vi.fn(),
