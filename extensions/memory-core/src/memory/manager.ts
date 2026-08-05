@@ -454,6 +454,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   // the latch).
   private lastPrimaryRecoveryAttemptMs = 0;
   private primaryProviderRecoveryPromise: Promise<boolean> | null = null;
+  private primaryProviderRecoveryBackgroundPromise: Promise<void> | null = null;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected override providerRuntime?: EmbeddingProviderRuntime;
@@ -1256,6 +1257,35 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return indexIdentity;
   }
 
+  private schedulePrimaryProviderRecovery(): void {
+    if (
+      !this.fallbackFrom ||
+      this.closing ||
+      this.closed ||
+      this.primaryProviderRecoveryBackgroundPromise
+    ) {
+      return;
+    }
+    // A stalled primary probe must not block a healthy fallback result or the
+    // caller's deadline; reindex only after the manager has recovered primary.
+    const recovery = (async () => {
+      const recovered = await this.attemptPrimaryProviderRecovery({});
+      if (recovered && !this.closing && !this.closed) {
+        await this.reindexAfterPrimaryProviderRecovery();
+      }
+    })();
+    this.primaryProviderRecoveryBackgroundPromise = recovery;
+    void recovery
+      .catch((err: unknown) => {
+        log.warn(`memory background primary recovery failed: ${formatErrorMessage(err)}`);
+      })
+      .finally(() => {
+        if (this.primaryProviderRecoveryBackgroundPromise === recovery) {
+          this.primaryProviderRecoveryBackgroundPromise = null;
+        }
+      });
+  }
+
   private refreshKeywordFallbackIndexIdentity() {
     const meta = this.readMeta();
     const state = this.resolveCurrentIndexIdentityState({
@@ -1326,7 +1356,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     normalizedQuery: string,
     opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
-    return await this.withManagerOperation(async () => {
+    let shouldRecoverPrimaryInBackground = false;
+    const results = await this.withManagerOperation(async () => {
       const enteredDuringFallbackInitialization =
         this.getPendingFallbackProviderInitialization() !== null;
       opts?.onDebug?.({ backend: "builtin" });
@@ -1429,7 +1460,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           });
         }
       }
-      let indexIdentity = embeddingBootstrapKeywordOnly
+      const indexIdentity = embeddingBootstrapKeywordOnly
         ? this.refreshKeywordFallbackIndexIdentity()
         : this.refreshIndexIdentityDirty({
             providerKeyKnown: this.providerInitialized,
@@ -1441,12 +1472,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.fallbackFrom &&
         !opts?.signal?.aborted
       ) {
-        const recovered = await this.attemptPrimaryProviderRecovery({
-          signal: opts?.signal,
-        });
-        if (recovered) {
-          indexIdentity = await this.reindexAfterPrimaryProviderRecovery();
-        }
+        shouldRecoverPrimaryInBackground = true;
       }
       if (indexIdentity.status !== "valid") {
         return [];
@@ -1682,6 +1708,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         relaxedMinScore,
       );
     });
+    if (shouldRecoverPrimaryInBackground) {
+      this.schedulePrimaryProviderRecovery();
+    }
+    return results;
   }
 
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(
@@ -2551,6 +2581,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.queuedForce = false;
     this.queuedProgressCallbacks.clear();
     await this.awaitManagerIdle();
+    const pendingBackgroundRecovery = this.primaryProviderRecoveryBackgroundPromise;
+    if (pendingBackgroundRecovery) {
+      await pendingBackgroundRecovery.catch((err: unknown) => {
+        log.warn(`memory close: background primary recovery failed: ${formatErrorMessage(err)}`);
+      });
+    }
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
     const pendingFallbackInit = this.getPendingFallbackProviderInitialization();

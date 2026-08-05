@@ -4247,7 +4247,7 @@ describe("memory index", () => {
     expect(fields.provider?.id).toBe("mock");
   });
 
-  it("uses the query timeout for recovery from a mismatched fallback search", async () => {
+  it("returns fallback results before a stalled primary recovery finishes", async () => {
     const cfg = createCfg({
       provider: "openai",
       fallback: "fallback-provider",
@@ -4272,44 +4272,89 @@ describe("memory index", () => {
     await expect(manager.search("alpha")).resolves.toEqual([]);
     expect(fields.provider?.id).toBe("fallback-provider");
 
-    const batchCallsBeforeRecovery = embedBatchCalls;
+    // Establish a valid fallback-owned index before blocking the separate
+    // primary recovery probe below.
+    await expect(manager.sync({ reason: "test", force: true })).resolves.toBeUndefined();
+    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
     const queryCallsBeforeRecovery = providerQueryCalls;
+    const fallbackProvider = fields.provider;
+    if (!fallbackProvider) {
+      throw new Error("Expected a fallback embedding provider");
+    }
+    fallbackProvider.embedQuery = async () => [1, 0, 0, 0];
     let releaseProbe: () => void = () => {};
     providerProbeGate = new Promise<void>((resolve) => {
       releaseProbe = resolve;
     });
-    providerQueryTimeoutMs = 10;
-    vi.useFakeTimers();
-
-    let searchSettled = false;
-    const recoverySearch = manager.search("alpha").then(
-      () => {
-        searchSettled = true;
-      },
-      () => {
-        searchSettled = true;
-      },
-    );
+    providerQueryTimeoutMs = 1_000;
     try {
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await Promise.resolve();
-        if (providerQueryCalls !== queryCallsBeforeRecovery) {
-          break;
-        }
-      }
-      expect(providerQueryCalls).toBe(queryCallsBeforeRecovery + 1);
-
-      await vi.advanceTimersByTimeAsync(10);
-      expect(searchSettled).toBe(true);
-      await expect(recoverySearch).resolves.toBeUndefined();
-      expect(embedBatchCalls).toBe(batchCallsBeforeRecovery);
+      const results = await manager.search("alpha");
+      expect(results).not.toEqual([]);
+      await vi.waitFor(() => {
+        expect(providerQueryCalls).toBe(queryCallsBeforeRecovery + 1);
+      });
       expect(fields.provider?.id).toBe("fallback-provider");
+
+      releaseProbe();
+      await vi.waitFor(() => {
+        expect(fields.provider?.id).toBe("mock");
+        expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      });
     } finally {
       releaseProbe();
       providerProbeGate = null;
       providerQueryTimeoutMs = null;
-      await Promise.allSettled([recoverySearch]);
-      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a background primary recovery before closing the manager", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("primary provider unavailable");
+    };
+    await expect(manager.search("alpha")).resolves.toEqual([]);
+    expect(fields.provider?.id).toBe("fallback-provider");
+    await manager.sync({ reason: "test", force: true });
+    fields.provider.embedQuery = async () => [1, 0, 0, 0];
+
+    let releaseProbe: () => void = () => {};
+    providerProbeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    try {
+      await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
+      await vi.waitFor(() => expect(providerQueryCalls).toBeGreaterThan(0));
+
+      let closeSettled = false;
+      const closePromise = manager.close().then(() => {
+        closeSettled = true;
+      });
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+
+      releaseProbe();
+      await closePromise;
+      expect(closeSettled).toBe(true);
+    } finally {
+      releaseProbe();
+      providerProbeGate = null;
     }
   });
 
