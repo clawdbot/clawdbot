@@ -17,7 +17,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import {
   type OfficialExternalPluginRepairHint,
-  resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints,
 } from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   appendBaseUrlBit,
@@ -116,6 +116,13 @@ export async function formatConfigChannelsStatusLines(
       ...listExplicitConfiguredChannelIdsForConfig(cfg),
     ]),
   ];
+  const missingHintsByChannelId = new Map(
+    resolveMissingOfficialExternalChannelPluginRepairHints({
+      config: cfg,
+      activationSourceConfig: sourceConfig,
+      channelIds: missingChannelIds,
+    }).map((hint) => [hint.channelId, hint]),
+  );
   for (const channelId of missingChannelIds) {
     if (requestedChannel && channelId !== requestedChannel) {
       continue;
@@ -123,11 +130,7 @@ export async function formatConfigChannelsStatusLines(
     if (visibleChannelIds.has(channelId)) {
       continue;
     }
-    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-      config: cfg,
-      activationSourceConfig: sourceConfig,
-      channelId,
-    });
+    const hint = missingHintsByChannelId.get(channelId);
     if (!hint?.channelId || visibleChannelIds.has(hint.channelId)) {
       continue;
     }

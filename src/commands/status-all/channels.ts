@@ -28,7 +28,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   summarizeTokenConfig,
@@ -525,16 +525,19 @@ export async function buildChannelsTable(
     ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
     ...listExplicitConfiguredChannelIdsForConfig(cfg),
   ]);
+  const missingHintsByChannelId = new Map(
+    resolveMissingOfficialExternalChannelPluginRepairHints({
+      config: cfg,
+      activationSourceConfig: sourceConfig,
+      channelIds: missingCandidateChannelIds,
+      manifestRecords: metadataSnapshot.plugins,
+    }).map((hint) => [hint.channelId, hint]),
+  );
   for (const channelId of missingCandidateChannelIds) {
     if (visibleChannelIds.has(channelId)) {
       continue;
     }
-    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-      config: cfg,
-      activationSourceConfig: sourceConfig,
-      channelId,
-      manifestRecords: metadataSnapshot.plugins,
-    });
+    const hint = missingHintsByChannelId.get(channelId);
     if (!hint || hint.channelId !== channelId) {
       if (!includeSetupFallbackPlugins && explicitConfiguredChannelIds.has(channelId)) {
         // Fast mode intentionally skips setup fallback plugins, but configured ids still deserve visibility.

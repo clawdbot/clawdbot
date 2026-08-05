@@ -15,7 +15,7 @@ import {
 import type { AgentBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../plugins/channel-plugin-ids.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../plugins/official-external-plugin-repair-hints.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type ProviderAccountStatus = {
@@ -82,15 +82,14 @@ export function buildProviderSummaryMetadataIndex(
       },
     ]),
   );
-  for (const channelId of listExplicitConfiguredChannelIdsForConfig(cfg)) {
-    if (metadata.has(channelId)) {
-      continue;
-    }
-    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+  const missingHintsByChannelId = new Map(
+    resolveMissingOfficialExternalChannelPluginRepairHints({
       config: cfg,
-      channelId,
-    });
-    if (!hint) {
+      channelIds: listExplicitConfiguredChannelIdsForConfig(cfg),
+    }).map((hint) => [hint.channelId, hint]),
+  );
+  for (const [channelId, hint] of missingHintsByChannelId) {
+    if (metadata.has(channelId)) {
       continue;
     }
     metadata.set(channelId as ChannelId, {
