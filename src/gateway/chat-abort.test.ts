@@ -1036,11 +1036,24 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
+        snapshot: { runId: "run-1", text: "x".repeat(1_000), startedAt: 1_000, plan },
         messages: [],
         maxBytes: 200,
       }),
-    ).toEqual({ runId: "run-1", text: "", plan });
+    ).toEqual({ runId: "run-1", text: "", startedAt: 1_000, plan });
+  });
+
+  it("drops startedAt when the former minimal fallback exactly fills the budget", () => {
+    const messages = [{ role: "user", content: "near budget" }];
+    const minimal = { runId: "run-1", text: "" };
+    const maxBytes = jsonUtf8Bytes(messages) + jsonUtf8Bytes(minimal);
+    const result = boundInFlightRunSnapshotForChatHistory({
+      snapshot: { runId: "run-1", text: "x", startedAt: 1_000 },
+      messages,
+      maxBytes,
+    });
+    expect(result).toEqual(minimal);
+    expect(jsonUtf8Bytes(messages) + jsonUtf8Bytes(result)).toBeLessThanOrEqual(maxBytes);
   });
 
   it("drops an oversized plan after dropping text", () => {

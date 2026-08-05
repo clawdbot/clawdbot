@@ -391,16 +391,22 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   if (messagesBytes + snapshotBytes <= params.maxBytes) {
     return params.snapshot;
   }
-  // Recovery priority is run adoption, then active progress, plan replay, and
-  // opportunistic text. Explicit empty projections authoritatively clear any
-  // stale client state when a richer snapshot cannot fit the history budget.
+  // Recovery priority is run adoption, authoritative timing, active progress,
+  // plan replay, and opportunistic text. Explicit empty projections
+  // authoritatively clear stale client state when a richer snapshot cannot fit.
   let bounded: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
-    ...(params.snapshot.startedAt !== undefined ? { startedAt: params.snapshot.startedAt } : {}),
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
+
+  if (params.snapshot.startedAt !== undefined) {
+    const candidate = { ...bounded, startedAt: params.snapshot.startedAt };
+    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+      bounded = candidate;
+    }
+  }
 
   if (params.snapshot.events) {
     const events = [...params.snapshot.events];
