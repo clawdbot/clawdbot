@@ -1,21 +1,17 @@
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
-} from "./diagnostic-events.js";
 import {
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 
-export type DiagnosticTracePropagationBridge = Readonly<{
+export type DiagnosticTracePropagationBridge<TEvent, TMetadata, TPrivateData> = Readonly<{
   /** Prepares exporter-owned state before an outbound caller can resolve it. */
-  prepareEvent?: (
-    event: DiagnosticEventPayload,
-    metadata: DiagnosticEventMetadata,
-    privateData: DiagnosticEventPrivateData,
-  ) => void;
+  prepareEvent?: (event: TEvent, metadata: TMetadata, privateData: TPrivateData) => void;
   /** Translates a diagnostic correlation context to an exporter-owned context. */
+  resolveTraceContext: (traceContext: DiagnosticTraceContext) => DiagnosticTraceContext | undefined;
+}>;
+
+type RegisteredDiagnosticTracePropagationBridge = Readonly<{
+  prepareEvent?: (event: unknown, metadata: unknown, privateData: unknown) => void;
   resolveTraceContext: (traceContext: DiagnosticTraceContext) => DiagnosticTraceContext | undefined;
 }>;
 
@@ -25,7 +21,7 @@ type DiagnosticTracePropagationResolution =
 
 type DiagnosticTracePropagationState = {
   marker: symbol;
-  bridges: Set<DiagnosticTracePropagationBridge>;
+  bridges: Set<RegisteredDiagnosticTracePropagationBridge>;
 };
 
 const DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY = Symbol.for(
@@ -67,25 +63,39 @@ function getDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
   return state;
 }
 
-function activeDiagnosticTracePropagationBridge(): DiagnosticTracePropagationBridge | undefined {
+function activeDiagnosticTracePropagationBridge():
+  | RegisteredDiagnosticTracePropagationBridge
+  | undefined {
   return Array.from(getDiagnosticTracePropagationState().bridges).at(-1);
 }
 
-export function registerDiagnosticTracePropagationBridge(
-  bridge: DiagnosticTracePropagationBridge,
+export function registerDiagnosticTracePropagationBridge<TEvent, TMetadata, TPrivateData>(
+  bridge: DiagnosticTracePropagationBridge<TEvent, TMetadata, TPrivateData>,
 ): () => void {
   const state = getDiagnosticTracePropagationState();
-  state.bridges.add(bridge);
+  const prepareEvent = bridge.prepareEvent;
+  // The global registry crosses preloaded and plugin-owned SDK copies. Erase
+  // event types only inside that registry; callers keep the exact typed seam.
+  const registered: RegisteredDiagnosticTracePropagationBridge = {
+    resolveTraceContext: bridge.resolveTraceContext,
+    ...(prepareEvent
+      ? {
+          prepareEvent: (event: unknown, metadata: unknown, privateData: unknown) =>
+            prepareEvent(event as TEvent, metadata as TMetadata, privateData as TPrivateData),
+        }
+      : {}),
+  };
+  state.bridges.add(registered);
   return () => {
-    state.bridges.delete(bridge);
+    state.bridges.delete(registered);
   };
 }
 
-export function prepareDiagnosticTracePropagation(
-  event: DiagnosticEventPayload,
-  metadata: DiagnosticEventMetadata,
-  privateData: DiagnosticEventPrivateData,
-): void {
+export function prepareDiagnosticTracePropagation<
+  TEvent extends { type: string; seq: number },
+  TMetadata,
+  TPrivateData,
+>(event: TEvent, metadata: TMetadata, privateData: TPrivateData): void {
   const bridge = activeDiagnosticTracePropagationBridge();
   if (!bridge?.prepareEvent) {
     return;
