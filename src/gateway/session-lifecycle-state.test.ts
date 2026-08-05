@@ -191,6 +191,65 @@ describe("session lifecycle state", () => {
   );
 
   it.each([
+    { eventRunId: "run-a", currentRunId: "run-a", stale: false },
+    { eventRunId: "run-a", currentRunId: "run-b", stale: true },
+    { eventRunId: undefined, currentRunId: "run-b", stale: true },
+    { eventRunId: "run-a", currentRunId: undefined, stale: true },
+  ])(
+    "uses run identity before start-time ordering (event=$eventRunId current=$currentRunId)",
+    ({ eventRunId, currentRunId, stale }) => {
+      expect(
+        isStaleLifecycleEventForSession({
+          owningSessionId: "session-id",
+          currentSessionId: "session-id",
+          eventRunId,
+          currentRunId,
+          eventStartedAt: 1_000,
+          currentStartedAt: 1_005,
+        }),
+      ).toBe(stale);
+    },
+  );
+
+  it.each(["end", "error"] as const)(
+    "settles the same run's terminal %s even when its start persisted a later timestamp (#119407)",
+    async (phase) => {
+      // Embedded runs mint two clocks: the command attempt captures startedAt
+      // before the subscribe-layer start event stamps its own Date.now(), so
+      // the run's terminal event carries an earlier startedAt than the row's.
+      const started = await persistLifecycle(
+        { sessionId: "session-id", updatedAt: 900 },
+        {
+          ts: 1_005,
+          sessionId: "session-id",
+          runId: "run-a",
+          data: { phase: "start", startedAt: 1_005 },
+        },
+      );
+      expect(started).toMatchObject({ status: "running", lifecycleRunId: "run-a" });
+
+      const settled = await persistLifecycle(started, {
+        ts: 3_000,
+        sessionId: "session-id",
+        runId: "run-a",
+        data: {
+          phase,
+          startedAt: 1_000,
+          endedAt: 3_000,
+          ...(phase === "error" ? { error: "run failed" } : {}),
+        },
+      });
+
+      expect(settled).toMatchObject({
+        status: phase === "end" ? "done" : "failed",
+        startedAt: 1_000,
+        endedAt: 3_000,
+        runtimeMs: 2_000,
+      });
+    },
+  );
+
+  it.each([
     {
       name: "aborted",
       data: { phase: "end", endedAt: 1_800, stopReason: "aborted" },

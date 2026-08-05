@@ -12,6 +12,7 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
   return {
     ...entry,
     status: undefined,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,

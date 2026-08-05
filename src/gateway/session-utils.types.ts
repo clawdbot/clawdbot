@@ -147,6 +147,8 @@ export type GatewaySessionRow = {
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
+  /** Run id that last wrote this row's lifecycle status; its own later events are never stale. */
+  lifecycleRunId?: string;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;

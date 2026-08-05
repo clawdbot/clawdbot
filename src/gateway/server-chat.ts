@@ -497,6 +497,8 @@ export function createAgentEventHandler({
       !isStaleLifecycleEventForSession({
         owningSessionId: evt.sessionId,
         currentSessionId: row?.sessionId,
+        eventRunId: evt.runId,
+        currentRunId: row?.lifecycleRunId,
         eventStartedAt: evt.data?.startedAt,
         currentStartedAt: row?.startedAt,
       })
@@ -506,6 +508,7 @@ export function createAgentEventHandler({
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
                   lastRunError: row.lastRunError,
+                  lifecycleRunId: row.lifecycleRunId,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,

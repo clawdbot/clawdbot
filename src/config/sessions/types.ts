@@ -422,6 +422,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     usageFamilySessionIds?: string[];
     /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
     lastInteractionAt?: number;
+    /** Run id that last wrote this row's lifecycle status; its own later events are never stale. */
+    lifecycleRunId?: string;
     /** Stable first-run start time for subagent sessions, persisted after completion. */
     startedAt?: number;
     /** Latest completed run end time for subagent sessions, persisted after completion. */

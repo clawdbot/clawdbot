@@ -41,7 +41,14 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
-  "updatedAt" | "status" | "lastRunError" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  | "updatedAt"
+  | "status"
+  | "lastRunError"
+  | "lifecycleRunId"
+  | "startedAt"
+  | "endedAt"
+  | "runtimeMs"
+  | "abortedLastRun"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
@@ -49,6 +56,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "updatedAt"
   | "status"
   | "lastRunError"
+  | "lifecycleRunId"
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
@@ -63,6 +71,11 @@ const SESSION_RUN_ERROR_MAX_CHARS = 160;
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function resolveLifecycleEventRunId(event: Pick<LifecycleEventLike, "runId">): string | undefined {
+  const runId = event.runId?.trim();
+  return runId ? runId : undefined;
 }
 
 function resolveLifecyclePhase(event: Pick<LifecycleEventLike, "data">): LifecyclePhase | null {
@@ -157,6 +170,7 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
       updatedAt,
       status: "running",
       lastRunError: undefined,
+      lifecycleRunId: resolveLifecycleEventRunId(params.event),
       startedAt,
       endedAt: undefined,
       runtimeMs: undefined,
@@ -185,6 +199,9 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     updatedAt,
     status,
     lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
+    // Terminal events keep the last known owner when they carry no run id so a
+    // same-run late duplicate cannot be re-matched against a cleared field.
+    lifecycleRunId: resolveLifecycleEventRunId(params.event) ?? existing?.lifecycleRunId,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({
@@ -240,18 +257,28 @@ export function isRestartRecoveryLifecycleEvent(params: {
 export function isStaleLifecycleEventForSession(params: {
   owningSessionId?: string;
   currentSessionId?: string;
+  eventRunId?: string;
+  currentRunId?: string;
   eventStartedAt?: unknown;
   currentStartedAt?: number;
 }): boolean {
+  if (
+    params.owningSessionId &&
+    params.currentSessionId &&
+    params.owningSessionId !== params.currentSessionId
+  ) {
+    return true;
+  }
+  // The row's own run is never stale: embedded runs stamp lifecycle start with
+  // a later clock than the attempt's terminal startedAt, so a timestamp-only
+  // compare would drop a successful run's end and leave the row running (#119407).
+  if (params.eventRunId && params.currentRunId && params.eventRunId === params.currentRunId) {
+    return false;
+  }
   return (
-    Boolean(
-      params.owningSessionId &&
-      params.currentSessionId &&
-      params.owningSessionId !== params.currentSessionId,
-    ) ||
-    (isFiniteTimestamp(params.eventStartedAt) &&
-      isFiniteTimestamp(params.currentStartedAt) &&
-      params.eventStartedAt < params.currentStartedAt)
+    isFiniteTimestamp(params.eventStartedAt) &&
+    isFiniteTimestamp(params.currentStartedAt) &&
+    params.eventStartedAt < params.currentStartedAt
   );
 }
 
@@ -308,6 +335,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         isStaleLifecycleEventForSession({
           owningSessionId,
           currentSessionId: entry.sessionId,
+          eventRunId: resolveLifecycleEventRunId(params.event),
+          currentRunId: entry.lifecycleRunId,
           eventStartedAt: params.event.data?.startedAt,
           currentStartedAt: entry.startedAt,
         })

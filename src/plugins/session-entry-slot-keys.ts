@@ -63,6 +63,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionStartedAt",
   "ambientTranscriptWatermarks",
   "lastInteractionAt",
+  "lifecycleRunId",
   "startedAt",
   "endedAt",
   "runtimeMs",
