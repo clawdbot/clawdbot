@@ -809,7 +809,10 @@ const SUPERVISION_SENSITIVE_KEY_RE = /authorization|password|secret|token|api[-_
 // shared helper, so the fix does not weaken existing coverage to partial
 // token hints (e.g. sk-abc…7890) for classes both paths recognize.
 const LEGACY_FULL_REDACT_RE =
-  /\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b|\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b|\bBearer\s+[-._~+/a-zA-Z0-9]+=*/g;
+  /\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b|\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b|\bBearer\s+([-._~+/a-zA-Z0-9]+=*)/g;
+
+const LEGACY_FULL_REDACT_REPLACE = (match: string, bearerToken?: string) =>
+  bearerToken ? "Bearer [redacted]" : "[redacted]";
 
 /**
  * Redacts secret-bearing fields before legacy tool results leave the plugin.
@@ -836,7 +839,7 @@ function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
     }
     // Legacy token classes first: full [redacted] so they are not weakened to
     // partial hints by the field-aware or text helpers that run afterwards.
-    const legacyRedacted = value.replace(LEGACY_FULL_REDACT_RE, "[redacted]");
+    const legacyRedacted = value.replace(LEGACY_FULL_REDACT_RE, LEGACY_FULL_REDACT_REPLACE);
     // Field-aware: let the shared helper apply key-specific masking for opaque
     // sensitive keys (cookie/session/jwt/credential/privateKey) the local regex
     // does not cover, then apply text patterns for credential shapes.
@@ -847,7 +850,11 @@ function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
     return redactToolPayloadText(legacyRedacted);
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => redactCodexSupervisionValue(entry));
+    // Carry the parent key so sensitive-key context propagates into array
+    // entries (e.g. cookie: ["secret"]) — the core structured redactor does
+    // the same. Without this, opaque values in sensitive-key arrays bypass
+    // both structured-key masking and pattern matching.
+    return value.map((entry) => redactCodexSupervisionValue(entry, key));
   }
   if (!isRecord(value)) {
     return value;
