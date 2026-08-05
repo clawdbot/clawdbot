@@ -127,7 +127,8 @@ flow:
                     await fs.rm(toggleStorePath, { force: true });
                     await fs.mkdir(path.dirname(toggleStorePath), { recursive: true });
                     await fs.writeFile(toggleStorePath, `${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\n`, "utf8");
-                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes"], {
+                    // This automation owns a safe state migration, so use doctor's non-interactive contract.
+                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes", "--non-interactive"], {
                       timeoutMs: liveTurnTimeoutMs(env, 60000),
                     });
                     await fs.writeFile(doctorOutputPath, doctorFixOutput, "utf8");
