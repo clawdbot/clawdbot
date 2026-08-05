@@ -466,7 +466,7 @@ function decodeResourceSpans(message: Uint8Array): OtlpResourceSpans {
   return { scopeSpans };
 }
 
-export function decodeTraceRequest(body: Buffer): CapturedSpan[] {
+function decodeTraceRequest(body: Buffer): CapturedSpan[] {
   const reader = new ProtoReader(body);
   const resourceSpans: OtlpResourceSpans[] = [];
   while (!reader.done()) {

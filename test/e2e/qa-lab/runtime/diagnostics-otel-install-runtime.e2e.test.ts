@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -406,14 +406,24 @@ describe("managed diagnostics-otel install runtime", () => {
       const tarball = await packPlugin(repoRoot, scratch);
       registry = await startRegistry(repoRoot, scratch, tarball);
       mock = await startQaMockOpenAiServer();
-      const preloadPath = path.join(scratch, `otel-preload-${randomUUID()}.mjs`);
-      const sdkModuleUrl = import.meta.resolve("@opentelemetry/sdk-node");
-      const exporterModuleUrl = import.meta.resolve("@opentelemetry/exporter-trace-otlp-proto");
+      const preloadRoot = path.join(scratch, `otel-preload-${randomUUID()}`);
+      const preloadModules = path.join(preloadRoot, "node_modules", "@opentelemetry");
+      await mkdir(preloadModules, { recursive: true });
+      // The scratch preload resolves the same hoisted packages declared by the
+      // diagnostics plugin without making them root test dependencies.
+      for (const packageName of ["sdk-node", "exporter-trace-otlp-proto"]) {
+        await symlink(
+          path.join(repoRoot, "node_modules", "@opentelemetry", packageName),
+          path.join(preloadModules, packageName),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      const preloadPath = path.join(preloadRoot, "preload.mjs");
       await writeFile(
         preloadPath,
         [
-          `import { NodeSDK } from ${JSON.stringify(sdkModuleUrl)};`,
-          `import { OTLPTraceExporter } from ${JSON.stringify(exporterModuleUrl)};`,
+          'import { NodeSDK } from "@opentelemetry/sdk-node";',
+          'import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";',
           `const sdk = new NodeSDK({ traceExporter: new OTLPTraceExporter({ url: ${JSON.stringify(`${receiver.baseUrl}/v1/traces`)} }) });`,
           "sdk.start();",
           "globalThis.__openclawQaPreloadedOtelSdk = sdk;",
