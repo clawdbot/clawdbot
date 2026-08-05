@@ -127,6 +127,48 @@ kill -0 "$BROWSER_PID"
 node --input-type=module -e 'const response=await fetch(`http://127.0.0.1:${process.argv[1]}/json/version`); const body=await response.json(); if (!response.ok || typeof body.webSocketDebuggerUrl !== "string") throw new Error("CDP /json/version unavailable")' \
   "$CDP_PORT"
 
+assert_device_state() {
+  node -e '
+    const fs = require("node:fs");
+    const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const state = payload.result;
+    const [width, height, dpr, screenWidth, screenHeight, touchPoints] = process.argv
+      .slice(3, 9)
+      .map(Number);
+    const expected = {
+      width,
+      height,
+      dpr,
+      screenWidth,
+      screenHeight,
+      touchPoints,
+      orientation: process.argv[9],
+    };
+    const actual = {
+      width: state?.width,
+      height: state?.height,
+      dpr: state?.dpr,
+      screenWidth: state?.screenWidth,
+      screenHeight: state?.screenHeight,
+      touchPoints: state?.touchPoints,
+      orientation: state?.orientation,
+    };
+    if (!state?.userAgent?.includes(process.argv[2]) || JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(`device state mismatch: ${JSON.stringify({ actual, expected })}`);
+    }
+  ' "$@"
+}
+
+profile set device "iPhone 14" >/tmp/profile-device-phone.json
+profile evaluate --fn '() => ({ userAgent: navigator.userAgent, width: innerWidth, height: innerHeight, dpr: devicePixelRatio, screenWidth: screen.width, screenHeight: screen.height, touchPoints: navigator.maxTouchPoints, orientation: screen.orientation.type })' \
+  >/tmp/profile-device-phone-state.json
+assert_device_state /tmp/profile-device-phone-state.json iPhone 390 664 3 390 844 1 portrait-primary
+
+profile set device "Desktop Chrome" >/tmp/profile-device-desktop.json
+profile evaluate --fn '() => ({ userAgent: navigator.userAgent, width: innerWidth, height: innerHeight, dpr: devicePixelRatio, screenWidth: screen.width, screenHeight: screen.height, touchPoints: navigator.maxTouchPoints, orientation: screen.orientation.type })' \
+  >/tmp/profile-device-desktop-state.json
+assert_device_state /tmp/profile-device-desktop-state.json Windows 1280 720 1 1920 1080 0 landscape-primary
+
 profile stop >/tmp/profile-stopped-final.json
 for _ in $(seq 1 80); do
   if ! kill -0 "$BROWSER_PID" 2>/dev/null &&
