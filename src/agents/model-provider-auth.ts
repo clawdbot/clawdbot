@@ -43,8 +43,10 @@ import {
   clearCurrentProviderAuthState,
   clearCurrentProviderAuthWarmWorker,
   getCurrentProviderAuthStates,
+  isProviderAuthWarmSnapshot,
   isCurrentProviderAuthStateGeneration,
   publishProviderAuthWarmSnapshot,
+  serializeProviderAuthStates,
   setCurrentProviderAuthWarmWorker,
   type PreparedProviderAuthState,
   type ProviderAuthWarmSnapshot,
@@ -346,24 +348,6 @@ export function createProviderAuthChecker(params: {
   );
 }
 
-function serializeProviderAuthStates(
-  states: ReadonlyMap<string, PreparedProviderAuthState>,
-): ProviderAuthWarmSnapshot {
-  return {
-    agents: [...states.values()].map((state) => {
-      const serialized: ProviderAuthWarmSnapshot["agents"][number] = {
-        agentId: state.agentId,
-        configFingerprint: state.configFingerprint,
-        providers: [...state.providers.entries()],
-      };
-      if (state.defaultModelRoute) {
-        serialized.defaultModelRoute = state.defaultModelRoute;
-      }
-      return serialized;
-    }),
-  };
-}
-
 function resolveProviderConfigApi(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -511,35 +495,6 @@ function resolveProviderAuthWarmWorkerUrl(currentModuleUrl: string): URL {
   }
   const extension = path.extname(currentPath) || ".js";
   return new URL(`./model-provider-auth.worker${extension}`, currentModuleUrl);
-}
-
-function isProviderAuthWarmSnapshot(value: unknown): value is ProviderAuthWarmSnapshot {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !Array.isArray((value as { agents?: unknown }).agents)
-  ) {
-    return false;
-  }
-  return (value as ProviderAuthWarmSnapshot).agents.every(
-    (agent) =>
-      typeof agent.agentId === "string" &&
-      typeof agent.configFingerprint === "string" &&
-      Array.isArray(agent.providers) &&
-      agent.providers.every(
-        (entry) =>
-          Array.isArray(entry) &&
-          entry.length === 2 &&
-          typeof entry[0] === "string" &&
-          typeof entry[1] === "boolean",
-      ) &&
-      (agent.defaultModelRoute === undefined ||
-        (agent.defaultModelRoute !== null &&
-          typeof agent.defaultModelRoute === "object" &&
-          typeof agent.defaultModelRoute.provider === "string" &&
-          typeof agent.defaultModelRoute.modelId === "string" &&
-          typeof agent.defaultModelRoute.available === "boolean")),
-  );
 }
 
 function isProviderAuthWarmWorkerResult(value: unknown): value is ProviderAuthWarmWorkerResult {
