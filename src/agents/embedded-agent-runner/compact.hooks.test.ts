@@ -813,6 +813,49 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("carries command inventory into compacted system prompt rebuilds", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      commandInventory: {
+        scope: "node-operator",
+        nodeCommands: [
+          {
+            id: "node:desk:camera.snap",
+            command: "camera.snap",
+            title: "camera.snap",
+            nodeId: "desk",
+            description: "Live command advertised by paired node Desk.",
+            argumentHints: [],
+            invocationHint: "openclaw nodes invoke --node desk --command camera.snap",
+            availability: "available",
+            approvalKind: "gateway-allowlist",
+            risk: "high",
+            confirmationRequired: true,
+            effectMode: "mixed",
+            effects: [],
+            trustBoundary: "paired-node",
+            sourceKind: "node-runtime",
+            sourceId: "desk:camera.snap",
+            discoveryMode: "runtime-node-query",
+            visibility: ["prompt", "audit", "operator"],
+          },
+        ],
+      },
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandInventory: expect.objectContaining({
+          scope: "node-operator",
+          nodeCommands: [expect.objectContaining({ id: "node:desk:camera.snap" })],
+        }),
+      }),
+    );
+  });
+
   it("passes resolved agent context to compacted system prompt rebuilds", async () => {
     resolveSessionAgentIdsMock.mockReturnValue({
       defaultAgentId: "main",

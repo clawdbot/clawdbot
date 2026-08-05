@@ -27,6 +27,14 @@ function modelFacingLiteral(value: string, maxChars = 160): string {
   return truncateUtf16Safe(singleLine, maxChars);
 }
 
+function isSafePromptIdentifier(value: string | undefined): value is string {
+  return typeof value === "string" && PROMPT_IDENTIFIER_PATTERN.test(value);
+}
+
+function safeArgumentHints(hints: readonly string[]): readonly string[] {
+  return hints.filter(isSafePromptIdentifier);
+}
+
 function listRoutedCommandSurfaces(
   operations: ReturnType<typeof buildCatalogList>["cli"]["routedOperations"],
 ): readonly CommandPromptSurface[] {
@@ -62,50 +70,48 @@ export function listCommandPromptSurfaces(
       kind: "plugin-command" as const,
       target: modelFacingLiteral(openClawCommand(command.commandPath), 240),
       commandHints: [modelFacingLiteral(openClawCommand(command.commandPath), 240)],
-      risk: command.risk ?? "unknown",
-      confirmationRequired: command.confirmationRequired ?? true,
+      risk: "unknown",
+      confirmationRequired: true,
     }));
   const nodeSurfaces =
     params.scope === "node-operator"
       ? catalog.cli.nodeCommands
           .filter(
             (command) =>
-              PROMPT_IDENTIFIER_PATTERN.test(command.command) &&
-              Boolean(command.nodeId && PROMPT_IDENTIFIER_PATTERN.test(command.nodeId)) &&
-              (command.sourceKind === "node-runtime" ||
-                command.availability === "approved" ||
-                command.availability === "available"),
+              isSafePromptIdentifier(command.command) &&
+              isSafePromptIdentifier(command.nodeId) &&
+              command.visibility.includes("prompt") &&
+              (command.availability === "approved" || command.availability === "available"),
           )
-          .map((command) => ({
-            id: `node:${command.nodeId}:${command.command}`,
-            kind: "node-command" as const,
-            target: modelFacingLiteral(command.command, 240),
-            commandHints: [
-              [
-                `nodes action=invoke node=${command.nodeId}`,
-                `invokeCommand=${command.command}`,
-                command.argumentHints.length > 0
-                  ? `invokeParamsJson=<JSON object with fields: ${command.argumentHints.join(", ")}>`
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" "),
-            ].map((hint) => modelFacingLiteral(hint, 240)),
-            risk: command.risk ?? "unknown",
-            confirmationRequired: command.confirmationRequired ?? true,
-          }))
+          .map((command) => {
+            const safeHints = safeArgumentHints(command.argumentHints);
+            return {
+              id: `node:${command.nodeId}:${command.command}`,
+              kind: "node-command" as const,
+              target: modelFacingLiteral(command.command, 240),
+              commandHints: [
+                [
+                  `nodes action=invoke node=${command.nodeId}`,
+                  `invokeCommand=${command.command}`,
+                  safeHints.length > 0
+                    ? `invokeParamsJson=<JSON object with fields: ${safeHints.join(", ")}>`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              ].map((hint) => modelFacingLiteral(hint, 240)),
+              risk: command.risk ?? "unknown",
+              confirmationRequired: command.confirmationRequired ?? true,
+            };
+          })
       : [];
   const sortById = (surfaces: readonly CommandPromptSurface[]) =>
     surfaces.toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
-  const dynamicSurfaces = (
+  const dynamicSurfaces =
     params.scope === "node-operator"
       ? [...sortById(nodeSurfaces), ...sortById(pluginSurfaces)]
-      : [...sortById(pluginSurfaces), ...sortById(nodeSurfaces)]
-  ).slice(0, MAX_DYNAMIC_PROMPT_SURFACES);
-  return [
-    ...(params.includeHostCli === false
-      ? []
-      : listRoutedCommandSurfaces(catalog.cli.routedOperations)),
-    ...dynamicSurfaces,
-  ];
+      : [...sortById(pluginSurfaces), ...sortById(nodeSurfaces)];
+  const routedSurfaces =
+    params.includeHostCli === false ? [] : listRoutedCommandSurfaces(catalog.cli.routedOperations);
+  return [...dynamicSurfaces, ...routedSurfaces].slice(0, MAX_DYNAMIC_PROMPT_SURFACES);
 }

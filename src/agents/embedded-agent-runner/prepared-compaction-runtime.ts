@@ -593,6 +593,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         preparedWatchedSessions,
         promptContribution,
         nativeCommandGuidanceLines,
+        commandInventory: params.commandInventory,
       });
       return transformProviderSystemPrompt({
         provider,

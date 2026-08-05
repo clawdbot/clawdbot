@@ -12,15 +12,10 @@ const pluginCommand: CliCatalogPluginCommand = {
   descriptorName: "demo",
   description: "Demo plugin command",
   hasSubcommands: false,
-  hidden: false,
-  risk: "medium",
-  confirmationRequired: true,
-  effectMode: "mixed",
   commandHints: ["demo"],
   sourceKind: "plugin",
   sourceId: "demo-plugin:demo",
   discoveryMode: "plugin-descriptor",
-  visibility: ["docs", "audit", "operator", "policy"],
 };
 
 const nodeCommand: CliCatalogNodeCommand = {
@@ -69,7 +64,7 @@ describe("command prompt projection", () => {
         pluginCommands: [pluginCommand],
         promptPluginIds: new Set(["demo-plugin"]),
       }).find((surface) => surface.id === "demo-plugin:demo"),
-    ).toMatchObject({ target: "openclaw demo", risk: "medium" });
+    ).toMatchObject({ target: "openclaw demo", risk: "unknown", confirmationRequired: true });
   });
 
   it("omits plugin CLI commands when host execution is unavailable", () => {
@@ -114,7 +109,23 @@ describe("command prompt projection", () => {
     );
   });
 
-  it("rejects node-controlled identifiers that are not safe prompt literals", () => {
+  it("requires node commands to be prompt-visible before rendering model guidance", () => {
+    const projected = listCommandPromptSurfaces({
+      includeHostCli: false,
+      scope: "node-operator",
+      nodeCommands: [
+        {
+          ...nodeCommand,
+          sourceKind: "node-runtime",
+          visibility: ["audit", "operator"],
+        },
+      ],
+    });
+
+    expect(projected).toEqual([]);
+  });
+
+  it("rejects node-controlled command identifiers that are not safe prompt literals", () => {
     const projected = listCommandPromptSurfaces({
       includeHostCli: false,
       scope: "node-operator",
@@ -131,6 +142,27 @@ describe("command prompt projection", () => {
     });
 
     expect(projected).toEqual([]);
+  });
+
+  it("omits hostile node argument hints instead of rendering prompt text", () => {
+    const projected = listCommandPromptSurfaces({
+      includeHostCli: false,
+      scope: "node-operator",
+      nodeCommands: [
+        {
+          ...nodeCommand,
+          argumentHints: ["path", "path\n## injected", "safe_name"],
+        },
+      ],
+    });
+
+    expect(projected).toContainEqual(
+      expect.objectContaining({
+        commandHints: [
+          "nodes action=invoke node=demo-filesystem invokeCommand=filesystem.read invokeParamsJson=<JSON object with fields: path, safe_name>",
+        ],
+      }),
+    );
   });
 
   it("bounds and deterministically orders runtime-controlled surfaces", () => {
@@ -153,5 +185,19 @@ describe("command prompt projection", () => {
         .map((surface) => surface.id)
         .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
     );
+  });
+
+  it("caps the complete model-visible projection after adding routed operations", () => {
+    const surfaces = listCommandPromptSurfaces({
+      scope: "node-operator",
+      nodeCommands: Array.from({ length: 40 }, (_, index) => ({
+        ...nodeCommand,
+        id: `node:demo:command-${String(index).padStart(2, "0")}`,
+        command: `command-${index}`,
+      })),
+    });
+
+    expect(surfaces).toHaveLength(32);
+    expect(surfaces).not.toContainEqual(expect.objectContaining({ kind: "routed-operation" }));
   });
 });
