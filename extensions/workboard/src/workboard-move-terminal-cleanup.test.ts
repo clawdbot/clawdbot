@@ -17,9 +17,13 @@
 // The fix mirrors `complete`/`block`: when the target status is terminal,
 // clear the claim, close running attempts, and mark a live execution terminal.
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore(): WorkboardKeyedStore {
@@ -164,5 +168,83 @@ describe("move to a terminal status cleans up claim, execution, and running atte
     expect(moved.metadata?.attempts ?? []).not.toContainEqual(
       expect.objectContaining({ status: "running" }),
     );
+  });
+
+  it("persists the terminal cleanup through a real sqlite-backed store and frees the dispatch slot", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-terminal-proof-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+
+      const holder = await store.create({
+        title: "Slot holder force-moved to done",
+        status: "ready",
+        agentId: "owner-sqlite",
+        workspaceAccess: { unrestricted: true },
+      });
+      const sibling = await store.create({
+        title: "Sibling of same owner",
+        status: "ready",
+        agentId: "owner-sqlite",
+        workspaceAccess: { unrestricted: true },
+      });
+
+      // Holder consumes owner-sqlite's single dispatch slot.
+      await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run: vi.fn().mockResolvedValue({ runId: "run-sqlite-holder" }) },
+        options: { now: 10, maxStarts: 2 },
+      });
+      expect(await store.get(holder.id)).toMatchObject({
+        status: "running",
+        execution: { status: "running" },
+      });
+      expect((await store.get(sibling.id))?.execution).toBeUndefined();
+
+      // Move holder to a terminal status: claim + running execution must be
+      // cleaned up and persisted, freeing the owner's dispatch slot.
+      const moved = await store.move(holder.id, "done", undefined, {
+        ownerId: "owner-sqlite",
+      });
+      expect(moved.status).toBe("done");
+      expect(moved.metadata?.claim).toBeUndefined();
+      expect(moved.execution?.status).not.toBe("running");
+
+      // Re-open the store from the same on-disk db to prove the cleanup is
+      // durable (not just in-memory state).
+      stores.close();
+      const reopenedStores = createWorkboardSqliteStores({ dbPath });
+      try {
+        const reopened = new WorkboardStore(reopenedStores.cards, {
+          boards: reopenedStores.boards,
+          subscriptions: reopenedStores.subscriptions,
+          attachments: reopenedStores.attachments,
+        });
+        const persisted = await reopened.get(holder.id);
+        expect(persisted?.status).toBe("done");
+        expect(persisted?.metadata?.claim).toBeUndefined();
+        expect(persisted?.execution?.status).not.toBe("running");
+
+        // With the phantom execution gone on disk, the sibling can finally start.
+        await dispatchAndStartWorkboardCards({
+          store: reopened,
+          subagent: { run: vi.fn().mockResolvedValue({ runId: "run-sqlite-sibling" }) },
+          options: { now: 20, maxStarts: 2 },
+        });
+        expect(await reopened.get(sibling.id)).toMatchObject({
+          status: "running",
+          execution: { status: "running" },
+        });
+      } finally {
+        reopenedStores.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
