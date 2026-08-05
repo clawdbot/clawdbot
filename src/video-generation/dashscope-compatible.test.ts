@@ -1,6 +1,9 @@
 // DashScope-compatible lifecycle, task status, and generated-video regressions.
 import { describe, expect, it, vi } from "vitest";
 import {
+  DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+  buildDashscopeVideoGenerationInput,
+  buildDashscopeVideoGenerationParameters,
   downloadDashscopeGeneratedVideos,
   pollDashscopeVideoTaskUntilComplete,
   runDashscopeVideoGenerationTask,
@@ -33,6 +36,138 @@ function neverChunkingVideoResponse(): Response {
     },
   );
 }
+
+describe("DashScope Wan request contracts", () => {
+  it("advertises only the modes supported by each bundled Wan model", () => {
+    expect(DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-t2v"]?.modes).toEqual(["generate"]);
+    expect(
+      DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-t2v"]?.capabilities?.generate
+        ?.supportsAspectRatio,
+    ).toBe(false);
+    expect(DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-i2v"]?.modes).toEqual(["imageToVideo"]);
+    expect(DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-r2v"]?.modes).toEqual([
+      "imageToVideo",
+      "videoToVideo",
+    ]);
+    expect(
+      DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.7-r2v"]?.capabilities?.videoToVideo?.supportsAudio,
+    ).toBe(false);
+    expect(
+      DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.7-r2v"]?.capabilities?.videoToVideo
+        ?.supportsAspectRatio,
+    ).toBe(true);
+  });
+
+  it("builds mode-specific image and reference inputs", () => {
+    expect(
+      buildDashscopeVideoGenerationInput({
+        providerLabel: "Qwen",
+        req: {
+          provider: "qwen",
+          model: "wan2.6-i2v",
+          prompt: "animate",
+          cfg: {},
+          inputImages: [{ url: "https://example.com/frame.png" }],
+        },
+      }),
+    ).toEqual({ prompt: "animate", img_url: "https://example.com/frame.png" });
+
+    expect(
+      buildDashscopeVideoGenerationInput({
+        providerLabel: "Qwen",
+        req: {
+          provider: "qwen",
+          model: "wan2.6-r2v",
+          prompt: "character1 waves",
+          cfg: {},
+          inputImages: [{ url: "https://example.com/character.png" }],
+        },
+      }),
+    ).toEqual({
+      prompt: "character1 waves",
+      reference_urls: ["https://example.com/character.png"],
+    });
+
+    expect(
+      buildDashscopeVideoGenerationInput({
+        providerLabel: "Alibaba Wan",
+        req: {
+          provider: "alibaba",
+          model: "wan2.7-r2v",
+          prompt: "Image 1 greets Video 1",
+          cfg: {},
+          inputImages: [{ url: "https://example.com/character.png" }],
+          inputVideos: [{ url: "https://example.com/action.mp4", role: "reference_video" }],
+        },
+      }),
+    ).toEqual({
+      prompt: "Image 1 greets Video 1",
+      media: [
+        { type: "reference_image", url: "https://example.com/character.png" },
+        { type: "reference_video", url: "https://example.com/action.mp4" },
+      ],
+    });
+  });
+
+  it("rejects model and reference mode mismatches before submission", () => {
+    expect(() =>
+      buildDashscopeVideoGenerationInput({
+        providerLabel: "Qwen",
+        req: {
+          provider: "qwen",
+          model: "wan2.6-t2v",
+          prompt: "animate",
+          cfg: {},
+          inputImages: [{ url: "https://example.com/frame.png" }],
+        },
+      }),
+    ).toThrow(/text-to-video.*does not accept reference media/u);
+  });
+
+  it.each([
+    {
+      name: "Wan 2.6 text-to-video",
+      req: {
+        provider: "qwen",
+        model: "wan2.6-t2v",
+        prompt: "video",
+        cfg: {},
+        resolution: "720P",
+        aspectRatio: "9:16",
+        audio: false,
+      },
+      expected: { size: "720*1280", audio: false },
+    },
+    {
+      name: "Wan 2.6 image-to-video",
+      req: {
+        provider: "qwen",
+        model: "wan2.6-i2v",
+        prompt: "video",
+        cfg: {},
+        resolution: "1080P",
+        inputImages: [{ url: "https://example.com/frame.png" }],
+        audio: true,
+      },
+      expected: { resolution: "1080P", audio: true },
+    },
+    {
+      name: "Wan 2.7 reference-to-video",
+      req: {
+        provider: "alibaba",
+        model: "wan2.7-r2v",
+        prompt: "video",
+        cfg: {},
+        size: "1920x1080",
+        inputVideos: [{ url: "https://example.com/reference.mp4" }],
+        audio: false,
+      },
+      expected: { resolution: "1080P", ratio: "16:9" },
+    },
+  ])("builds documented $name parameters", ({ req, expected }) => {
+    expect(buildDashscopeVideoGenerationParameters(req)).toEqual(expected);
+  });
+});
 
 describe("downloadDashscopeGeneratedVideos", () => {
   it.each(
