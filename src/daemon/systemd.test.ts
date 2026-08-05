@@ -1676,6 +1676,41 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("drops previously managed dotenv keys on restage while preserving operator entries", async () => {
+    await withStageFixture(async ({ env, unitPath, envFilePath, stateDir }) => {
+      const wrapperPath = path.join(stateDir, "openclaw-wrapper");
+      await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      await fs.writeFile(
+        envFilePath,
+        "OPENAI_API_KEY=stale-managed\nOPERATOR_API_KEY=operator-owned\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(
+        unitPath,
+        [
+          "[Service]",
+          `ExecStart=${wrapperPath} gateway run`,
+          `EnvironmentFile=-${envFilePath}`,
+          "Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=OPENAI_API_KEY",
+        ].join("\n"),
+        "utf8",
+      );
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: [wrapperPath, "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expect(await fs.readFile(envFilePath, "utf8")).toBe("OPERATOR_API_KEY=operator-owned\n");
+      expect(await fs.readFile(unitPath, "utf8")).toContain(`EnvironmentFile=-${envFilePath}`);
+    });
+  });
+
   it("round-trips file-managed secrets through parse, repair planning, and emit", async () => {
     await withStageFixture(async ({ env, unitPath, envFilePath, stateDir }) => {
       const wrapperPath = path.join(stateDir, "openclaw-wrapper");

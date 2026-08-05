@@ -248,6 +248,7 @@ async function guardGatewayRunSelectedConfig(
     { normalizeEnv },
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
+    { readManagedServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
     import("../../config/config-env-vars.js"),
@@ -255,6 +256,7 @@ async function guardGatewayRunSelectedConfig(
     import("../../infra/env.js"),
     import("../../config/paths.js"),
     import("../../utils.js"),
+    import("../../daemon/service-managed-env.js"),
   ]);
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
   if (params.environmentSelection) {
@@ -269,6 +271,7 @@ async function guardGatewayRunSelectedConfig(
     normalizeStateDirEnv(process.env);
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
+      overrideKeys: readManagedServiceEnvKeysFromEnvironment(process.env),
       quiet: true,
       ...resolveGatewayRunDotEnvPaths({
         env: process.env,
@@ -547,6 +550,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
     { normalizeEnv },
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
+    { readManagedServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
     import("../../config/env-vars.js"),
@@ -554,6 +558,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
     import("../../infra/env.js"),
     import("../../config/paths.js"),
     import("../../utils.js"),
+    import("../../daemon/service-managed-env.js"),
   ]);
   const envBeforeReload = { ...process.env };
   const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
@@ -561,6 +566,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
   normalizeStateDirEnv(process.env);
   loadGlobalRuntimeDotEnvFiles({
     ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
+    overrideKeys: readManagedServiceEnvKeysFromEnvironment(process.env),
     quiet: true,
     ...resolveGatewayRunDotEnvPaths({
       env: process.env,

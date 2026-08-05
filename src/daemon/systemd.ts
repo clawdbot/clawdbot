@@ -1105,6 +1105,9 @@ async function writeSystemdUnit({
   await assertNoSystemGatewayOwnership(env);
 
   const unitPath = resolveSystemdUnitPath(env);
+  const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
+    (await readSystemdServiceExecStart(env))?.environment,
+  );
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await assertSystemdManagedPathIsNotSymlink(unitPath);
   const fileManagedKeys = collectSystemdFileManagedKeys({
@@ -1157,6 +1160,7 @@ async function writeSystemdUnit({
     const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
       stateDir,
       stateDirDotEnvKeys: Object.keys(stateDirDotEnvVars),
+      priorManagedKeys,
       inlineManagedKeys,
       fileManagedKeys,
       skippedManagedKeys: skippedShellReferenceKeys,
@@ -1310,6 +1314,9 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   /** Keys loaded by the Gateway directly from the state-dir .env. They must be removed from
    *  generated files so a supervisor restart cannot shadow a later .env edit. */
   stateDirDotEnvKeys?: Iterable<string>;
+  /** Keys owned by the previously installed service. Preserve the prior ownership record so
+   *  deleting a managed dotenv key cannot reclassify its stale file value as operator-owned. */
+  priorManagedKeys?: Iterable<string>;
   /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
    *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
   inlineManagedKeys?: ReadonlySet<string>;
@@ -1368,6 +1375,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   const managedKeysToDrop = normalizeServiceEnvKeys([
     ...(params.inlineManagedKeys ?? []),
     ...(params.fileManagedKeys ?? []),
+    ...(params.priorManagedKeys ?? []),
     ...(params.stateDirDotEnvKeys ?? []),
     ...(params.skippedManagedKeys ?? []),
   ]);

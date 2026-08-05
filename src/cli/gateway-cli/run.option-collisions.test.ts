@@ -1572,6 +1572,24 @@ describe("gateway run option collisions", () => {
     expect(secondOptions.startupStartedAt).toBe(2000);
   });
 
+  it("lets gateway bootstrap refresh inherited service-managed dotenv keys", async () => {
+    await withEnvAsync(
+      { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY,ANTHROPIC_API_KEY" },
+      async () => {
+        const { prepareGatewayRunBootstrap, selectGatewayRunEnvironment } =
+          await import("./pre-bootstrap.js");
+        await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
+        await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
+      },
+    );
+
+    expect(loadGlobalRuntimeDotEnvFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        overrideKeys: new Set(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]),
+      }),
+    );
+  });
+
   it("re-inspects crash-loop breaker state for each boot iteration", async () => {
     runGatewayLoop.mockImplementationOnce(
       async ({
