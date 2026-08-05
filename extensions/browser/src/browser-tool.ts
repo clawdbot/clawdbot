@@ -854,11 +854,14 @@ export function createBrowserTool(opts?: {
                 body: {
                   url: targetUrl,
                   targetId,
+                  timeoutMs: requestedTimeoutMs,
                 },
+                timeoutMs: requestedTimeoutMs,
               })
             : await browserToolDeps.browserNavigate(baseUrl, {
                 url: targetUrl,
                 targetId,
+                timeoutMs: requestedTimeoutMs,
                 profile,
               });
           const navigatedTargetId =

@@ -79,6 +79,7 @@ export async function browserNavigate(
   opts: {
     url: string;
     targetId?: string;
+    timeoutMs?: number;
     profile?: string;
   },
 ): Promise<BrowserActionTabResult> {
@@ -86,8 +87,11 @@ export async function browserNavigate(
   return await fetchBrowserJson<BrowserActionTabResult>(withBaseUrl(baseUrl, `/navigate${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
-    timeoutMs: 20000,
+    body: JSON.stringify({ url: opts.url, targetId: opts.targetId, timeoutMs: opts.timeoutMs }),
+    timeoutMs:
+      opts.timeoutMs === undefined
+        ? 20_000
+        : resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
   });
 }
 

@@ -65,7 +65,7 @@ import {
   shouldUsePlaywrightForScreenshot,
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -329,6 +329,12 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
+    let timeoutMs: number | undefined;
+    try {
+      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+    }
     await withRouteTabContext({
       req,
       res,
@@ -343,6 +349,7 @@ export function registerBrowserAgentSnapshotRoutes(
             profile: profileCtx.profile,
             targetId: tab.targetId,
             url,
+            timeoutMs,
             signal,
           });
           await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
@@ -356,6 +363,7 @@ export function registerBrowserAgentSnapshotRoutes(
           cdpUrl,
           targetId: tab.targetId,
           url,
+          timeoutMs,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         const currentTargetId = await resolveTargetIdAfterNavigate({
