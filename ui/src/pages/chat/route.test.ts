@@ -227,7 +227,8 @@ describe("loadChatRoute", () => {
       context,
       {
         pathname: "/dashboard/ignored/deploy-12345678",
-        search: "?draft=ship&__openclawComposerFocus=1",
+        search:
+          "?draft=ship&__openclawComposerFocus=1&__openclawHistorySessionId=history-session&__openclawHistoryMessageId=history-message",
         hash: "",
       },
       "dashboard",
@@ -238,8 +239,8 @@ describe("loadChatRoute", () => {
       throw new Error("expected an ambiguous route");
     }
     expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
-      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
-      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
+      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1&__openclawHistorySessionId=history-session&__openclawHistoryMessageId=history-message",
+      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1&__openclawHistorySessionId=history-session&__openclawHistoryMessageId=history-message",
     ]);
 
     for (const [candidate, expectedRow] of ambiguous.candidates.map(
@@ -261,6 +262,10 @@ describe("loadChatRoute", () => {
         sessionKey: expectedRow?.key,
         draft: "ship",
         focusComposer: true,
+        historyAnchor: {
+          sessionId: "history-session",
+          messageId: "history-message",
+        },
         face: "dashboard",
         shortId: candidate.idPrefix,
       });

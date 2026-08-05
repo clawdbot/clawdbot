@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 
 function message(role: "assistant" | "user", text: string, id: string, seq: number) {
@@ -37,7 +38,7 @@ function createHistoryState(request: ReturnType<typeof vi.fn>): ChatState {
 }
 
 describe("historical transcript anchor isolation", () => {
-  it("keeps live events out of the anchored view until ordinary history succeeds", async () => {
+  it("keeps page events anchored until a terminal chat event restores ordinary history", async () => {
     const current = message("user", "current tail", "current-tail", 9);
     const historical = message("user", "historical hit", "historical-hit", 1);
     const final = message("assistant", "new live reply", "live-final", 10);
@@ -45,11 +46,22 @@ describe("historical transcript anchor isolation", () => {
     const ordinary = new Promise<ChatHistoryResult>((resolve) => {
       resolveOrdinary = resolve;
     });
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ messages: [historical], sessionId: "session-history" })
-      .mockReturnValueOnce(ordinary);
-    const state = createHistoryState(request);
+    let historyRequest = 0;
+    const request = vi.fn((method: string) => {
+      if (method !== "chat.history") {
+        return Promise.resolve(undefined);
+      }
+      historyRequest += 1;
+      return historyRequest === 1
+        ? Promise.resolve({ messages: [historical], sessionId: "session-history" })
+        : ordinary;
+    });
+    const state = createHistoryState(request) as ChatPageHost;
+    state.sessions = {
+      reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ChatPageHost["sessions"];
+    state.requestUpdate = vi.fn();
     state.chatMessages = [current];
     cacheChatSessionSnapshot(
       state.chatMessagesBySession ?? new Map(),
@@ -69,22 +81,40 @@ describe("historical transcript anchor isolation", () => {
     expect(state.chatHistoryAnchorActive).toBe(true);
     expect(state.chatMessages).toEqual([historical]);
 
-    expect(
-      handleChatGatewayEvent(state, {
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        message: message("user", "new live prompt", "live-user", 10),
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
         sessionKey: "main",
         runId: "live-run",
         state: "delta",
         deltaText: "streaming",
-      }),
-    ).toBe("delta");
-    expect(
-      handleChatGatewayEvent(state, {
+      },
+    });
+    await Promise.resolve();
+
+    expect(historyRequest).toBe(1);
+    expect(state.chatHistoryAnchorActive).toBe(true);
+    expect(state.chatMessages).toEqual([historical]);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
         sessionKey: "main",
         runId: "live-run",
         state: "final",
         message: final,
-      }),
-    ).toBe("final");
+      },
+    });
     expect(state.chatMessages).toEqual([historical]);
     expect(state.chatStream).toBeNull();
     expect(
@@ -93,10 +123,10 @@ describe("historical transcript anchor isolation", () => {
       }),
     ).toEqual([current, final]);
 
-    const refresh = loadChatHistory(state);
+    await vi.waitFor(() => expect(historyRequest).toBe(2));
     expect(state.chatHistoryAnchorActive).toBe(true);
     resolveOrdinary({ messages: [current, final], sessionId: "session-current" });
-    await refresh;
+    await vi.waitFor(() => expect(state.chatHistoryAnchorActive).toBe(false));
 
     expect(state.chatHistoryAnchorActive).toBe(false);
     expect(state.chatMessages).toEqual([current, final]);

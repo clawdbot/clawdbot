@@ -238,7 +238,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     });
     return;
   }
-  if (matchesChat) {
+  if (matchesChat && state.chatHistoryAnchorActive !== true) {
     state.pendingSessionMessageReloadSessionKey = null;
     void loadChatHistory(state).finally(() => state.requestUpdate?.());
   }
@@ -499,7 +499,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
-    if (isolatesHistoricalAnchor && !state.chatLoading) {
+    if (isolatesHistoricalAnchor && terminal && !state.chatLoading) {
       void loadChatHistory(state).finally(() => state.requestUpdate?.());
     }
     if (shouldCelebrateFirstReply && result === "final") {

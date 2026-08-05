@@ -1712,14 +1712,16 @@ class SessionsPage extends OpenClawLightDomElement {
           },
           onDeleteSelected: () => void this.deleteSelected(),
           onNavigateToChat: (sessionKey, historyAnchor) => {
-            const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+            const face = historyAnchor
+              ? "chat"
+              : resolveSessionPreferredFaceForKey(context, sessionKey);
             context.navigate(face, {
               ...sessionNavigationTarget({
                 context,
                 face,
                 sessionKey,
                 agentId: this.sessionPathAgentId(sessionKey, context),
-                preferenceDerivedFace: true,
+                preferenceDerivedFace: historyAnchor === undefined,
                 historyAnchor,
               }).options,
               hash: "",

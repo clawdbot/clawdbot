@@ -30,8 +30,10 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { draftSearchFromLocation } from "./route-draft.ts";
-import { sessionRouteDataFromLocation } from "./route-history-anchor.ts";
+import {
+  sessionRouteDataFromLocation,
+  sessionRouteSearchFromLocation,
+} from "./route-history-anchor.ts";
 import { findCachedShortSession, sessionKeyUuid } from "./route-loader-short-cache.ts";
 import {
   resolveShortSessionReference,
@@ -424,7 +426,7 @@ function candidatesForResolution(
           {
             agentId,
             displayName: row.displayName?.trim() || row.key,
-            href: `${href}${draftSearchFromLocation(location)}`,
+            href: `${href}${sessionRouteSearchFromLocation(location)}`,
             idPrefix: prefix,
           },
         ]

@@ -4,7 +4,7 @@ import {
   SESSION_HISTORY_SESSION_ID_PARAM,
   type SessionHistoryAnchor,
 } from "../../lib/sessions/route-navigation.ts";
-import { draftRouteDataFromLocation } from "./route-draft.ts";
+import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
 
 export function locationWithoutHistoryAnchor(location: RouteLocation): RouteLocation {
   const params = new URLSearchParams(location.search);
@@ -27,4 +27,14 @@ export function sessionRouteDataFromLocation(location: RouteLocation) {
     ...draftRouteDataFromLocation(location),
     ...(historyAnchor ? { historyAnchor } : {}),
   };
+}
+
+export function sessionRouteSearchFromLocation(location: RouteLocation): string {
+  const params = new URLSearchParams(draftSearchFromLocation(location));
+  const historyAnchor = historyAnchorFromLocation(location);
+  if (historyAnchor) {
+    params.set(SESSION_HISTORY_SESSION_ID_PARAM, historyAnchor.sessionId);
+    params.set(SESSION_HISTORY_MESSAGE_ID_PARAM, historyAnchor.messageId);
+  }
+  return params.size > 0 ? `?${params.toString()}` : "";
 }
