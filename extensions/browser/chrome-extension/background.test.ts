@@ -173,6 +173,8 @@ async function loadBackground({ deferSocketClose = false }: { deferSocketClose?:
     messageListener,
     setBadgeText,
     sockets,
+    storageRemove: chromeMock.storage.local.remove,
+    storageSet: chromeMock.storage.local.set,
     tabsGet: chromeMock.tabs.get,
   };
 }
@@ -307,6 +309,64 @@ describe("copilot panel messaging", () => {
       path: expect.stringMatching(/^sidepanel\.html\?binding=/),
     });
   });
+});
+
+describe("popup message failure responses", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("responds exactly once when a shared tab closes before it can be grouped", async () => {
+    const harness = await loadBackground();
+    harness.tabsGet.mockRejectedValueOnce(new Error("No tab with id: 44."));
+    const sendResponse = vi.fn();
+
+    expect(harness.messageListener({ type: "toggleShareTab", tabId: 44 }, {}, sendResponse)).toBe(
+      true,
+    );
+
+    await vi.waitFor(() => {
+      expect(sendResponse).toHaveBeenCalledExactlyOnceWith({
+        ok: false,
+        error: "No tab with id: 44.",
+      });
+    });
+    expect(harness.tabsGet).toHaveBeenCalledWith(44);
+  });
+
+  it.each([
+    {
+      message: {
+        type: "pair" as const,
+        pairingString: "ws://127.0.0.1:18798/extension#replacement-token-placeholder",
+      },
+      operation: "set" as const,
+      error: "Could not save browser pairing.",
+    },
+    {
+      message: { type: "unpair" as const },
+      operation: "remove" as const,
+      error: "Could not remove browser pairing.",
+    },
+  ])(
+    "responds exactly once when $message.type storage rejects",
+    async ({ message, operation, error }) => {
+      const harness = await loadBackground();
+      const storageOperation = operation === "set" ? harness.storageSet : harness.storageRemove;
+      storageOperation.mockRejectedValueOnce(new Error(error));
+      const sendResponse = vi.fn();
+
+      expect(harness.messageListener(message, {}, sendResponse)).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(sendResponse).toHaveBeenCalledExactlyOnceWith({ ok: false, error });
+      });
+    },
+  );
 });
 
 describe("page-share relay request lifecycle", () => {

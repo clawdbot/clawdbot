@@ -622,7 +622,15 @@ function sendErrorResponse(sendResponse, error) {
   sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  let settled = false;
+  const sendResponse = (response) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    reply(response);
+  };
   void (async () => {
     switch (msg?.type) {
       case "getStatus": {
@@ -715,7 +723,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       default:
         sendResponse({ ok: false, error: "unknown message" });
     }
-  })();
+  })().catch((error) => sendErrorResponse(sendResponse, error));
   return true; // keep sendResponse alive for the async path
 });
 

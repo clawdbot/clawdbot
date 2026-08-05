@@ -125,7 +125,11 @@ async function onPair() {
 }
 
 async function onUnpair() {
-  await chrome.runtime.sendMessage({ type: "unpair" });
+  const result = await chrome.runtime.sendMessage({ type: "unpair" });
+  if (result?.ok === false) {
+    statusLine.textContent = result.error ?? "Could not unpair this browser.";
+    return;
+  }
   settingsOpen = false;
   await refresh();
 }
@@ -133,7 +137,11 @@ async function onUnpair() {
 async function onToggleShare() {
   const tabId = Number.parseInt(shareButton.dataset.tabId ?? "", 10);
   if (Number.isFinite(tabId)) {
-    await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
+    const result = await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
+    if (result?.ok === false) {
+      statusLine.textContent = result.error ?? "Could not update browser tab sharing.";
+      return;
+    }
   }
   await refresh();
 }
