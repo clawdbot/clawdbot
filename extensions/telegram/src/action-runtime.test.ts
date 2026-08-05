@@ -1725,6 +1725,35 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/content required/i);
   });
 
+  it("rejects an empty-string content instead of sending an empty message", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123456",
+          content: "",
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/content required/i);
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+  });
+
+  it("still sends media with an empty caption", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "",
+        mediaUrl: "https://example.com/photo.jpg",
+      },
+      telegramConfig(),
+    );
+
+    expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
   it("maps video notes through the existing durable send action", async () => {
     await handleTelegramAction(
       {

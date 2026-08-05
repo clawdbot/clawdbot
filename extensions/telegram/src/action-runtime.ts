@@ -274,7 +274,12 @@ function readTelegramSendContent(params: {
       content = fallback;
     }
   }
-  if (content == null && !params.mediaUrl && !params.hasButtons && !params.hasLocation) {
+  if (
+    (content == null || content.trim().length === 0) &&
+    !params.mediaUrl &&
+    !params.hasButtons &&
+    !params.hasLocation
+  ) {
     throw new Error("content required.");
   }
   return {
