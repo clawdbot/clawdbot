@@ -41,9 +41,6 @@ const LIVE_GEMINI_EXCLUDED_PATHS = [
   "Service Worker/CacheStorage",
 ] as const;
 const requireFromHere = createRequire(import.meta.url);
-const LIVE_AUTH_STAGE_SCRIPT = fileURLToPath(
-  new URL("./helpers/stage-live-auth-profiles.ts", import.meta.url),
-);
 
 type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
 type ConfigValidationApi = typeof import("../src/config/validation.js");
@@ -402,11 +399,16 @@ function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void 
   if (!fs.existsSync(agentsDir)) {
     return;
   }
+  const liveAuthStageScript = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "helpers",
+    "stage-live-auth-profiles.ts",
+  );
   // Live workers need canonical SQLite auth without loading the database stack
   // into every hermetic Vitest worker.
   execFileSync(
     process.execPath,
-    ["--import", "tsx", LIVE_AUTH_STAGE_SCRIPT, realStateDir, tempStateDir],
+    ["--import", "tsx", liveAuthStageScript, realStateDir, tempStateDir],
     {
       env: { ...process.env, NODE_OPTIONS: undefined },
       stdio: "pipe",
