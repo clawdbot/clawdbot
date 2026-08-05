@@ -132,7 +132,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
-    !suppressImplicitThreadFeedback &&
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&

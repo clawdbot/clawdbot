@@ -1990,7 +1990,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         cfg: {
           messages: {
             groupChat: { visibleReplies: "automatic" },
-            statusReactions: { enabled: true },
           },
         },
         accountConfig: {
@@ -2013,6 +2012,45 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
     expect(startSlackStreamMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicitly enabled status reactions for quiet implicit thread follow-ups", async () => {
+    const setSlackThreadStatus = vi.fn(async () => undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedReplyOptionEvents = [
+      { kind: "reasoning", text: "Inspecting the thread" },
+      { kind: "tool_start", name: "web_search", phase: "start" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          messages: {
+            groupChat: { visibleReplies: "automatic" },
+            statusReactions: { enabled: true },
+          },
+        },
+        accountConfig: { streaming: { mode: "progress", progress: { commentary: true } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+        setSlackThreadStatus,
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressTyping).toBe(true);
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(capturedStatusReactionOptions?.enabled).toBe(true);
+    expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setThinking).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setTool).toHaveBeenCalledWith("web_search");
+    expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
+    expect(setSlackThreadStatus).not.toHaveBeenCalled();
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
   it("still delivers final replies to implicit thread follow-ups", async () => {
