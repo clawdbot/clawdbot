@@ -1291,15 +1291,18 @@ jobs:
             wait_checks
           fi
 
-          # The built local TUI lane owns a real Gateway fixture. Keep it
-          # exclusive so sibling artifact shards cannot starve its requests.
+          # The dedicated Node shard owns the full built-CLI PTY suite. Keep
+          # only the local roundtrip and Gateway-connect artifact canaries here.
           if [ "$RUN_TUI_PTY" = "true" ]; then
             start_check "tui-pty" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 \
               OPENCLAW_TUI_PTY_USE_BUILT_CLI=1 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+              node scripts/run-vitest.mjs run \
+                --config test/vitest/vitest.tui-pty.config.ts \
+                src/tui/tui-pty-local.e2e.test.ts \
+                --testNamePattern "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY"
             wait_checks
           fi
 
