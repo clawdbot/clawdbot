@@ -526,6 +526,7 @@ async function compactResolvedContextEngine(
   }
   const contextTokenBudget = resolveCompactionContextTokenBudget({
     config: params.config,
+    agentId: runtimePolicyAgentId,
     provider: ceContextConfigProvider,
     modelId: ceModelId,
     model: effectiveRuntimeModel,

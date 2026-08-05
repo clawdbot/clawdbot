@@ -202,6 +202,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
+      agentId: effectiveSkillAgentId,
       provider: contextConfigProvider,
       modelId,
       model: runtimeModelWithContext,

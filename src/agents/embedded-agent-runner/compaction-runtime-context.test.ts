@@ -9,6 +9,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionContextTokenBudget,
   resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
@@ -760,6 +761,26 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "claude-opus-4-5",
     });
     expect(result.provider).toBe("anthropic");
+  });
+});
+
+describe("resolveCompactionContextTokenBudget", () => {
+  it("keeps the selected agent cap for prepared and queued compaction", () => {
+    expect(
+      resolveCompactionContextTokenBudget({
+        config: {
+          agents: {
+            defaults: { contextTokens: 128_000 },
+            list: [{ id: "work", contextTokens: 200_000 }],
+          },
+        } as unknown as OpenClawConfig,
+        agentId: "work",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: { contextWindow: 272_000 },
+        requestedTokenBudget: 200_000,
+      }),
+    ).toBe(200_000);
   });
 });
 
