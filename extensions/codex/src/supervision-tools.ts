@@ -10,7 +10,7 @@ import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
@@ -814,21 +814,36 @@ const LEGACY_FULL_REDACT_RE =
 /**
  * Redacts secret-bearing fields before legacy tool results leave the plugin.
  *
- * Sensitive field names (authorization/password/secret/token/api[-_]?key) are
- * fully replaced with "[redacted]" to avoid any prefix/suffix disclosure.
- * Ordinary free-text values first get full [redacted] for the legacy token
- * classes current main already covered (sk-/glpat-/xox-/gh[opsu]_/Bearer),
- * then the shared core policy (redactToolPayloadText) layers on top to catch
- * the broader credential set (AIza, github_pat_, AKIA, ya29., …) plus any
- * exact-registered secret values — without weakening legacy matches to
- * partial token hints.
+ * Sensitive field names matching the local regex (authorization/password/
+ * secret/token/api[-_]?key) are fully replaced with "[redacted]" to preserve
+ * the existing supervision contract without prefix/suffix disclosure.
+ *
+ * Other field names are checked with the shared field-aware redactor
+ * (redactSensitiveFieldValue) so opaque sensitive keys that the local regex
+ * misses (cookie, session, jwt, credential, privateKey, …) are still masked
+ * via the core policy. This composes the same text + field-aware pattern the
+ * Codex context projection uses.
+ *
+ * Finally, ordinary free-text values get full [redacted] for legacy token
+ * classes (sk-/glpat-/xox-/gh[opsu]_/Bearer), then the shared core policy
+ * (redactToolPayloadText) layers on top to catch the broader credential set
+ * (AIza, github_pat_, AKIA, ya29., …) plus any exact-registered secrets.
  */
 function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
     if (SUPERVISION_SENSITIVE_KEY_RE.test(key)) {
       return "[redacted]";
     }
+    // Legacy token classes first: full [redacted] so they are not weakened to
+    // partial hints by the field-aware or text helpers that run afterwards.
     const legacyRedacted = value.replace(LEGACY_FULL_REDACT_RE, "[redacted]");
+    // Field-aware: let the shared helper apply key-specific masking for opaque
+    // sensitive keys (cookie/session/jwt/credential/privateKey) the local regex
+    // does not cover, then apply text patterns for credential shapes.
+    const fieldAware = redactSensitiveFieldValue(key, legacyRedacted);
+    if (fieldAware !== legacyRedacted) {
+      return fieldAware;
+    }
     return redactToolPayloadText(legacyRedacted);
   }
   if (Array.isArray(value)) {
