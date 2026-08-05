@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import { stableStringify } from "../agents/stable-stringify.js";
 import {
   createRecoveryPointAcceptance,
   createRecoveryPointManifest,
@@ -12,12 +12,15 @@ import {
   verifyRecoveryPointOwnerInventory,
   type RecoveryPointAcceptance,
   type RecoveryPointManifest,
-  type RecoveryPointOwnerInventory,
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
 import type { SnapshotManifest, SnapshotRef, SqliteSnapshotProvider } from "./snapshot-provider.js";
 
 const tempRoots: string[] = [];
+
+type RecoveryPointOwnerInventory = Parameters<
+  typeof createRecoveryPointManifest
+>[0]["ownerInventory"];
 
 afterEach(async () => {
   await Promise.all(
