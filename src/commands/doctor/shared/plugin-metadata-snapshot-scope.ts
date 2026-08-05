@@ -13,7 +13,7 @@ export type DoctorPluginMetadataSnapshotState = {
   current?: PluginMetadataSnapshot;
 };
 
-export type DoctorPluginMetadataSnapshotScope = {
+type DoctorPluginMetadataSnapshotScope = {
   run: PluginMetadataSnapshotScopeRunner;
   invalidate: () => void;
 };
