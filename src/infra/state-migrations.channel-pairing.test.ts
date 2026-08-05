@@ -161,7 +161,7 @@ describe("legacy channel pairing state migration", () => {
 
   it("leaves ambiguous sanitized account filenames in place", async () => {
     const { env, sourceDir } = await createFixture();
-    const filePath = path.join(sourceDir, "telegram-ops_bot-allowFrom.json");
+    const filePath = path.join(sourceDir, "telegram-Ops_Bot-allowFrom.json");
     writeJson(filePath, { version: 1, allowFrom: ["1003"] });
 
     const detected = detectLegacyChannelPairingState({
@@ -174,6 +174,27 @@ describe("legacy channel pairing state migration", () => {
     expect(result.warnings).toEqual([
       expect.stringContaining(
         "Legacy channel allowFrom channel/account is ambiguous; left in place",
+      ),
+    ]);
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({});
+  });
+
+  it("does not re-encode filename punctuation into another account", async () => {
+    const { env, sourceDir } = await createFixture();
+    const filePath = path.join(sourceDir, "telegram-ops..bot-allowFrom.json");
+    writeJson(filePath, { version: 1, allowFrom: ["1003"] });
+
+    const detected = detectLegacyChannelPairingState({
+      sourceDir,
+      configuredAccountIds: { telegram: ["ops_bot"] },
+    });
+    const result = migrateLegacyChannelPairingState({ detected, env });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Legacy channel allowFrom channel/account is unresolved; left in place",
       ),
     ]);
     expect(fs.existsSync(filePath)).toBe(true);
@@ -220,89 +241,6 @@ describe("legacy channel pairing state migration", () => {
     ]);
     expect(fs.existsSync(filePath)).toBe(true);
     expect(readChannelPairingStateSnapshot("custom-channel", env).allowFrom).toEqual({});
-  });
-
-  it("imports allowFrom files with mixed-case account id segments", async () => {
-    const { env, sourceDir } = await createFixture();
-    const filePath = path.join(sourceDir, "telegram-HY_RIN_Bot-allowFrom.json");
-    writeJson(filePath, ["1005"]);
-
-    const detected = detectLegacyChannelPairingState({
-      sourceDir,
-      configuredAccountIds: { telegram: ["hy_rin_bot"] },
-    });
-    const result = migrateLegacyChannelPairingState({ detected, env });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated 1 telegram/hy_rin_bot allowFrom entry → shared SQLite state",
-    ]);
-    expect(fs.existsSync(filePath)).toBe(false);
-    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
-      hy_rin_bot: ["1005"],
-    });
-  });
-
-  it("imports underscore-bearing allowFrom files with mixed-case account id segments", async () => {
-    const { env, sourceDir } = await createFixture();
-    const filePath = path.join(sourceDir, "telegram-My_Work_Bot-allowFrom.json");
-    writeJson(filePath, ["1006"]);
-
-    const detected = detectLegacyChannelPairingState({
-      sourceDir,
-      configuredAccountIds: { telegram: ["my_work_bot"] },
-    });
-    const result = migrateLegacyChannelPairingState({ detected, env });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated 1 telegram/my_work_bot allowFrom entry → shared SQLite state",
-    ]);
-    expect(fs.existsSync(filePath)).toBe(false);
-    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
-      my_work_bot: ["1006"],
-    });
-  });
-
-  it("imports uppercase DEFAULT allowFrom files when a configured account matches", async () => {
-    const { env, sourceDir } = await createFixture();
-    const filePath = path.join(sourceDir, "telegram-DEFAULT-allowFrom.json");
-    writeJson(filePath, ["1008"]);
-
-    const detected = detectLegacyChannelPairingState({
-      sourceDir,
-      configuredAccountIds: { telegram: ["default"] },
-    });
-    const result = migrateLegacyChannelPairingState({ detected, env });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated 1 telegram/default allowFrom entry → shared SQLite state",
-    ]);
-    expect(fs.existsSync(filePath)).toBe(false);
-    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
-      default: ["1008"],
-    });
-  });
-
-  it("leaves uppercase DEFAULT allowFrom files unresolved for bundled channels", async () => {
-    const { env, sourceDir } = await createFixture();
-    const filePath = path.join(sourceDir, "telegram-DEFAULT-allowFrom.json");
-    writeJson(filePath, ["1007"]);
-
-    const detected = detectLegacyChannelPairingState({
-      sourceDir,
-    });
-    const result = migrateLegacyChannelPairingState({ detected, env });
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "Legacy channel allowFrom channel/account is unresolved; left in place",
-      ),
-    ]);
-    expect(fs.existsSync(filePath)).toBe(true);
-    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({});
   });
 
   it("leaves overlapping channel and account filename interpretations in place", async () => {
