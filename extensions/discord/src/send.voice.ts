@@ -2,20 +2,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  buildOutboundMediaLoadOptions,
   extensionForMime,
   maxBytesForKind,
   unlinkIfExists,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import type { RequestClient } from "./internal/discord.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { DiscordReplyReference } from "./reply-reference.js";
+import type { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import { buildDiscordSendError, createDiscordClient, resolveChannelId } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -25,16 +25,20 @@ import {
   sendDiscordVoiceMessage,
 } from "./voice-message.js";
 
-type VoiceMessageOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  rest?: RequestClient;
-  reply?: DiscordReplyReference;
-  retry?: RetryConfig;
-  silent?: boolean;
-};
+type VoiceMessageOpts = Pick<
+  Parameters<typeof sendMessageDiscord>[2],
+  | "cfg"
+  | "token"
+  | "accountId"
+  | "verbose"
+  | "rest"
+  | "reply"
+  | "retry"
+  | "silent"
+  | "mediaAccess"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+>;
 
 function toDiscordSendResult(
   result: { id?: string | null; channel_id?: string | null },
@@ -51,10 +55,19 @@ function toDiscordSendResult(
 
 async function materializeVoiceMessageInput(
   mediaUrl: string,
+  opts: VoiceMessageOpts,
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
   // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
   // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
-  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  const media = await loadWebMediaRaw(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: maxBytesForKind("audio"),
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+    }),
+  );
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
@@ -85,7 +98,7 @@ export async function sendVoiceMessageDiscord(
   opts: VoiceMessageOpts,
 ): Promise<DiscordSendResult> {
   const { filePath: localInputPath, cleanup: cleanupLocalInput } =
-    await materializeVoiceMessageInput(audioPath);
+    await materializeVoiceMessageInput(audioPath, opts);
   let oggPath: string | null = null;
   let oggCleanup = false;
   let token: string | undefined;

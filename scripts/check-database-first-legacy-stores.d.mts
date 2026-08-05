@@ -18,7 +18,6 @@ export function collectDatabaseFirstNativeLegacyStoreViolations(
 export function collectDatabaseFirstLegacyStoreViolations(
   content: string,
   relativePath?: string,
-  scanOptions?: Record<string, unknown>,
 ): {
   kind: string;
   line: number;

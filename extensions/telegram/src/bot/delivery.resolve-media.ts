@@ -4,7 +4,7 @@ import { GrammyError } from "grammy";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { TelegramBotApiFileTooLargeError } from "../bot-handlers.media.js";
 import type { TelegramTransport } from "../fetch.js";
-import { readTelegramRetryAfterMs } from "../network-errors.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "../network-errors.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import {
   formatErrorMessage,
@@ -65,17 +65,21 @@ function isFileTooBigError(err: unknown): boolean {
   return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
 }
 
-/**
- * Returns true if the error is a transient network error that should be retried.
- * Returns false for permanent errors like "file is too big" (400 Bad Request).
- */
 function isRetryableGetFileError(err: unknown): boolean {
-  // Don't retry "file is too big" - it's a permanent 400 error
   if (isFileTooBigError(err)) {
     return false;
   }
-  // Retry all other errors (network issues, timeouts, etc.)
-  return true;
+  if (isRetryableTelegramApiError(err, { context: "polling" })) {
+    return true;
+  }
+  // Telegram reports pending file availability as a documented getFile 400.
+  return (
+    GrammyErrorCtor !== undefined &&
+    err instanceof GrammyErrorCtor &&
+    err.method === "getFile" &&
+    err.error_code === 400 &&
+    /\bfile is temporarily unavailable\b/i.test(err.description)
+  );
 }
 
 interface MediaMetadata {

@@ -254,20 +254,30 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
     return { actions: ["react"] };
   },
   supportsAction: ({ action }) => action === "react",
-  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+  handleAction: async ({ action, channel, params, cfg, accountId, toolContext }) => {
     if (action !== "react") {
       throw new Error(`Zalouser action ${action} not supported`);
     }
     const { sendReactionZalouser } = await loadZalouserChannelRuntime();
     const account = resolveZalouserAccountSync({ cfg, accountId });
-    const threadId =
+    const explicitTarget =
       (typeof params.threadId === "string" ? params.threadId.trim() : "") ||
       (typeof params.to === "string" ? params.to.trim() : "") ||
-      (typeof params.chatId === "string" ? params.chatId.trim() : "") ||
-      (toolContext?.currentChannelId?.trim() ?? "");
-    if (!threadId) {
+      (typeof params.chatId === "string" ? params.chatId.trim() : "");
+    const currentTarget = toolContext?.currentChannelId?.trim() ?? "";
+    const rawTarget = explicitTarget || currentTarget;
+    if (!rawTarget) {
       throw new Error("Zalouser react requires threadId (or to/chatId).");
     }
+    const target = parseZalouserOutboundTarget(rawTarget);
+    // Core may materialize the ambient ID into `to`; trust only the matching channel context.
+    const isGroup =
+      typeof params.isGroup === "boolean"
+        ? params.isGroup
+        : target.isGroup ||
+          (rawTarget === currentTarget &&
+            toolContext?.currentChannelProvider === channel &&
+            toolContext?.currentChatType === "group");
     const emoji = typeof params.emoji === "string" ? params.emoji.trim() : "";
     if (!emoji) {
       throw new Error("Zalouser react requires emoji.");
@@ -284,8 +294,8 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
     }
     const result = await sendReactionZalouser({
       profile: account.profile,
-      threadId,
-      isGroup: params.isGroup === true,
+      threadId: target.threadId,
+      isGroup,
       msgId: ids.msgId,
       cliMsgId: ids.cliMsgId,
       emoji,
@@ -307,7 +317,7 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
       details: {
         messageId: ids.msgId,
         cliMsgId: ids.cliMsgId,
-        threadId,
+        threadId: target.threadId,
       },
     };
   },

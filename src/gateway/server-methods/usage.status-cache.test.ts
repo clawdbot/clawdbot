@@ -83,6 +83,7 @@ describe("usage.status provider usage cache", () => {
   beforeEach(() => {
     now = 1_000;
     store = createStore();
+    vi.stubEnv("OPENAI_API_KEY", "");
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.clearAllMocks();
     clearModelAuthStatusUsageCache();
@@ -109,6 +110,7 @@ describe("usage.status provider usage cache", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 

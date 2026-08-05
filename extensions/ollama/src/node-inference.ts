@@ -24,6 +24,7 @@ import {
   buildOllamaBaseUrlSsrFPolicy,
   enrichOllamaCompletionModels,
   enrichOllamaModelsWithContext,
+  fetchLoadedOllamaModelNames,
   fetchOllamaModels,
   isOllamaCloudModel,
   resolveOllamaApiBase,
@@ -156,32 +157,6 @@ async function requestOllamaJson<T>(params: {
   }
 }
 
-async function fetchLoadedModelNames(baseUrl: string, signal?: AbortSignal): Promise<Set<string>> {
-  try {
-    const data = await requestOllamaJson<{ models?: Array<{ name?: unknown; model?: unknown }> }>({
-      baseUrl,
-      path: "/api/ps",
-      timeoutMs: 5000,
-      ...(signal ? { signal } : {}),
-    });
-    return new Set(
-      (data.models ?? [])
-        .map((model) =>
-          typeof model.name === "string"
-            ? model.name.trim()
-            : typeof model.model === "string"
-              ? model.model.trim()
-              : "",
-        )
-        .filter(Boolean),
-    );
-  } catch {
-    throwIfOllamaRequestAborted(signal);
-    // Model discovery still works against Ollama versions without /api/ps.
-    return new Set();
-  }
-}
-
 async function discoverOllamaNodeModels(
   baseUrl = OLLAMA_DEFAULT_BASE_URL,
   signal?: AbortSignal,
@@ -194,7 +169,9 @@ async function discoverOllamaNodeModels(
   const localModels = discovered.models.filter(
     (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
   );
-  const loadedNames = await fetchLoadedModelNames(apiBase, signal);
+  const loaded = await fetchLoadedOllamaModelNames(apiBase, signal ? { signal } : undefined);
+  // Model discovery still works against Ollama versions without /api/ps.
+  const loadedNames = new Set(loaded.models);
   // Probe loaded models before the bounded catalog can hide already-runnable node models.
   const prioritizedModels = localModels.toSorted(
     (left, right) => Number(loadedNames.has(right.name)) - Number(loadedNames.has(left.name)),

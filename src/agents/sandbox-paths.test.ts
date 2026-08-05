@@ -206,6 +206,30 @@ describe("assertSandboxPath", () => {
       await fs.rm(parent, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves final-symlink unlink policy through a root alias",
+    async () => {
+      await withSandboxRoot(async (parent) => {
+        const realRoot = path.join(parent, "real-workspace");
+        const linkedRoot = path.join(parent, "linked-workspace");
+        const outside = path.join(parent, "outside.txt");
+        await fs.mkdir(realRoot);
+        await fs.writeFile(outside, "outside", "utf8");
+        await fs.symlink(realRoot, linkedRoot);
+        await fs.symlink(outside, path.join(realRoot, "link"));
+
+        await expect(
+          assertSandboxPath({
+            filePath: "link",
+            cwd: linkedRoot,
+            root: linkedRoot,
+            allowFinalSymlinkForUnlink: true,
+          }),
+        ).resolves.toMatchObject({ relative: "link" });
+      });
+    },
+  );
 });
 
 describe("resolveSandboxedMediaSource", () => {

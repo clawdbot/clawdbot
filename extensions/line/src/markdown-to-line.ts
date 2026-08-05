@@ -74,7 +74,7 @@ function codeBlockSpans(ir: MarkdownIR): MarkdownStyleSpan[] {
 function toCodeBlock(ir: MarkdownIR, span: MarkdownStyleSpan): CodeBlock {
   return {
     ...(span.language ? { language: span.language } : {}),
-    code: ir.text.slice(span.start, span.end).trim(),
+    code: ir.text.slice(span.start, span.end).trimEnd(),
   };
 }
 
@@ -435,9 +435,17 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   let hasOversizedTable = false;
 
   for (const table of tables) {
-    const bubble = convertTableToFlexBubble(toMarkdownTable(table));
+    // Receipt cards keep 12 plain rows; generic and styled table layouts keep only 10.
+    const rowOverflow =
+      table.rowCells.length > 10 &&
+      (table.headers.length !== 2 ||
+        table.rowCells.length > 12 ||
+        [table.headerCells, ...table.rowCells].some((cells) =>
+          cells.some((cell) => renderTableCell(cell, "-").hasMarkup),
+        ));
+    const bubble = rowOverflow ? undefined : convertTableToFlexBubble(toMarkdownTable(table));
     // LINE rejects the whole push/reply when any bubble exceeds its 30 KB UTF-8 JSON limit.
-    if (Buffer.byteLength(JSON.stringify(bubble), "utf8") > LINE_FLEX_BUBBLE_MAX_BYTES) {
+    if (!bubble || Buffer.byteLength(JSON.stringify(bubble), "utf8") > LINE_FLEX_BUBBLE_MAX_BYTES) {
       hasOversizedTable = true;
       plainTextInsertions.push({
         position: table.placeholderOffset,

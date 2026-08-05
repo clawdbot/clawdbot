@@ -12,13 +12,13 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
 import type { ThinkLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
 import {
   createAgentLifecycleTerminalBackstop,
   type AgentLifecycleTerminalBackstop,
@@ -44,8 +44,8 @@ import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
   | "blockReplyHandler"
-  | "handlePartialForTyping"
-  | "preparePartialForTyping"
+  | "classifyStreamingPartial"
+  | "sanitizeStreamingText"
   | "startPresentationWhileTyping"
 >;
 
@@ -206,26 +206,28 @@ export async function runCliFallbackCandidate(params: {
               : undefined,
           preserveProgressCallbackStartOrder: params.preserveProgressCallbackStartOrder,
           onAssistantText: async (text) => {
-            if (!params.preserveProgressCallbackStartOrder) {
-              const textForTyping = await params.presentation.handlePartialForTyping({
-                text,
-              } as ReplyPayload);
-              if (textForTyping === undefined || !turn.opts?.onPartialReply) {
-                return;
-              }
-              await turn.opts.onPartialReply({ text: textForTyping });
+            const classified = params.presentation.classifyStreamingPartial({ text });
+            if (classified.skip || !classified.text) {
               return;
             }
-            const textForTyping = params.presentation.preparePartialForTyping({
-              text,
-            } as ReplyPayload);
-            if (textForTyping === undefined) {
+            const textForTyping = classified.text;
+            const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
+            if (!params.preserveProgressCallbackStartOrder) {
+              await turn.typingSignals.signalTextDelta(textForTyping);
+              if (sanitized.skip || !sanitized.text || !turn.opts?.onPartialReply) {
+                return;
+              }
+              await turn.opts.onPartialReply({ text: sanitized.text });
+              return;
+            }
+            if (sanitized.skip || !sanitized.text) {
+              await turn.typingSignals.signalTextDelta(textForTyping);
               return;
             }
             // Assistant and tool CLI bridges drain independently. Stage presentation first.
             await params.presentation.startPresentationWhileTyping(
               turn.typingSignals.signalTextDelta(textForTyping),
-              () => turn.opts?.onPartialReply?.({ text: textForTyping }),
+              () => turn.opts?.onPartialReply?.({ text: sanitized.text }),
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
@@ -321,6 +323,10 @@ export async function runCliFallbackCandidate(params: {
           runParams: {
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
+            chatType:
+              normalizeChatType(turn.followupRun.originatingChatType) ??
+              normalizeChatType(turn.sessionCtx.ChatType) ??
+              params.candidateRun.chatType,
             runtimePolicySessionKey:
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,

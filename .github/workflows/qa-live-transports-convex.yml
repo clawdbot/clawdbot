@@ -398,9 +398,9 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
-    if: github.event_name != 'workflow_call' || inputs.run_matrix
+    if: inputs.expected_sha == '' || inputs.run_matrix
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 60
+    timeout-minutes: 90
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
@@ -586,6 +586,13 @@ jobs:
           path: ${{ steps.resolve_buzz.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
+
+      - name: Require requested Buzz QA runner
+        if: always() && inputs.expected_sha == '' && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "::error::The selected ref does not declare the requested Buzz QA runner."
+          exit 1
 
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases

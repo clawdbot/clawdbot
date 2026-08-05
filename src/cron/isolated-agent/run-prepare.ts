@@ -3,12 +3,14 @@ import { isDeepStrictEqual } from "node:util";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -45,7 +47,6 @@ import {
   loadCronAuthProfileRuntime,
   loadCronExternalContentRuntime,
   loadCronModelPreflightRuntime,
-  loadRuntimePlugins,
   loadSessionAccessorRuntime,
   resolveCronAgentTurnMessage,
   retireRolledCronSessionMcpRuntime,
@@ -128,6 +129,7 @@ export type PreparedCronRunContext = {
    * the LLM idle watchdog can honor the cron's per-run choice.
    */
   runTimeoutOverrideMs?: number;
+  pluginRegistry?: PluginRegistry;
 };
 
 type CronPreparationResult =
@@ -171,11 +173,6 @@ export async function prepareCronRunContext(params: {
     defaults: runtimeCfg.agents?.defaults,
     agentConfigOverride,
   });
-  const requestedCfgWithAgentDefaults: OpenClawConfig = {
-    ...runtimeCfg,
-    agents: Object.assign({}, runtimeCfg.agents, { defaults: agentCfg }),
-  };
-
   const baseSessionKey = (input.sessionKey?.trim() || `cron:${input.job.id}`).trim();
   const currentBoundSourceKey =
     input.job.sessionTarget === "current" ? input.job.sessionKey?.trim() : undefined;
@@ -212,13 +209,6 @@ export async function prepareCronRunContext(params: {
     skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
   });
   const workspaceDir = workspace.dir;
-
-  const { ensureRuntimePluginsLoaded } = await loadRuntimePlugins();
-  ensureRuntimePluginsLoaded({
-    config: requestedCfgWithAgentDefaults,
-    workspaceDir,
-    allowGatewaySubagentBinding: true,
-  });
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
@@ -653,6 +643,25 @@ export async function prepareCronRunContext(params: {
         ? cronSession.sessionEntry.authProfileOverrideSource
         : undefined,
     };
+    const runtimePluginCandidates =
+      selectedPreflightCandidateIndex >= 0
+        ? preflightCandidates.slice(selectedPreflightCandidateIndex)
+        : preflightCandidates;
+    const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+      config: cfgWithAgentDefaults,
+      workspaceDir,
+      allowGatewaySubagentBinding: true,
+      selections: runtimePluginCandidates.map((candidate) => {
+        const runtime = resolveSessionRuntimeOverrideForProvider({
+          provider: candidate.provider,
+          entry: cronSession.sessionEntry,
+          cfg: cfgWithAgentDefaults,
+        });
+        return runtime
+          ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
+          : { provider: candidate.provider, modelId: candidate.model, agentId };
+      }),
+    });
     const runContinuationSession = usesExactRunSession
       ? createCronRunContinuationSession({
           cronSession,
@@ -709,6 +718,7 @@ export async function prepareCronRunContext(params: {
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,
+        ...(pluginRegistry ? { pluginRegistry } : {}),
       },
     };
   } catch (error) {

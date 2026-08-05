@@ -36,6 +36,8 @@ import type {
 import {
   createQaSuiteTransportAdapter,
   requireQaSuiteStartLab,
+  runQaSuiteCleanupSteps,
+  throwQaSuiteCleanupErrors,
   writeQaSuiteProgress,
 } from "./suite.js";
 
@@ -53,6 +55,7 @@ export async function runQaRuntimeParitySuite(params: {
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
+  controlUiEnabled?: boolean;
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
@@ -102,7 +105,16 @@ export async function runQaRuntimeParitySuite(params: {
     scenarios: [...liveScenarioOutcomes],
   });
 
+  let runFailed = false;
+  let runError: unknown;
+  let parentTransportCleaned = false;
   try {
+    if (params.channelDriver === "live") {
+      // The parent only contributes aggregate metadata; release its exclusive
+      // live credential before runtime cells acquire the same transport lease.
+      await transportFactoryResult.cleanupWithoutGateway();
+      parentTransportCleaned = true;
+    }
     const scenarios = await mapQaSuiteWithConcurrency(
       params.selectedScenarios,
       params.concurrency,
@@ -164,7 +176,7 @@ export async function runQaRuntimeParitySuite(params: {
               concurrency: 1,
               enabledPluginIds: params.enabledPluginIds,
               startLab,
-              controlUiEnabled: scenarioRequiresControlUi(scenario),
+              controlUiEnabled: params.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
               forcedRuntime: runtime,
               captureRuntimeParityCell: true,
               writeEvidenceFile: params.writeEvidenceFile,
@@ -283,10 +295,15 @@ export async function runQaRuntimeParitySuite(params: {
       scenarios,
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
+  } catch (error) {
+    runFailed = true;
+    runError = error;
+    throw error;
   } finally {
-    await transportFactoryResult.cleanupWithoutGateway();
-    if (ownsLab) {
-      await lab.stop();
-    }
+    const cleanupErrors = await runQaSuiteCleanupSteps([
+      ...(!parentTransportCleaned ? [() => transportFactoryResult.cleanupWithoutGateway()] : []),
+      ...(ownsLab ? [() => lab.stop()] : []),
+    ]);
+    throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
   }
 }

@@ -1,3 +1,5 @@
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { generateSecureToken } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -131,6 +133,7 @@ function restoreToolSearchCatalog(params: {
 }): void {
   const next = {
     entries: params.entries,
+    counterScope: generateSecureToken(12),
     searchCount: 0,
     describeCount: 0,
     callCount: 0,
@@ -151,13 +154,7 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
     reusableCatalogSnapshots.delete(key);
   }
   reusableCatalogSnapshots.set(key, { entries: catalog.entries, fingerprint });
-  while (reusableCatalogSnapshots.size > MAX_REUSABLE_CATALOG_SNAPSHOTS) {
-    const oldestKey = reusableCatalogSnapshots.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    reusableCatalogSnapshots.delete(oldestKey);
-  }
+  pruneMapToMaxSize(reusableCatalogSnapshots, MAX_REUSABLE_CATALOG_SNAPSHOTS);
 }
 
 function classifyTool(tool: CatalogTool): {
@@ -284,6 +281,9 @@ function registerToolSearchCatalog(params: {
   }
   const next = {
     entries: Array.from(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
+    // Appended client tools extend the same counter lifetime. A replacement
+    // gets a new scope so telemetry consumers never infer resets from values.
+    counterScope: prior?.counterScope ?? generateSecureToken(12),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,

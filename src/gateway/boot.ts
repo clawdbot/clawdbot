@@ -11,7 +11,7 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommand } from "../commands/agent.js";
+import { agentCommandFromSystem } from "../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -150,7 +150,7 @@ export async function runBootOnce(params: {
       // same session key. Refs #53732.
       setBootEchoContextForSession(sessionKey, message);
       try {
-        await agentCommand(
+        await agentCommandFromSystem(
           {
             message,
             sessionKey,
@@ -158,6 +158,7 @@ export async function runBootOnce(params: {
             deliver: false,
             suppressPromptPersistence: true,
           },
+          { boundary: "gateway.boot" },
           bootRuntime,
           params.deps,
         );

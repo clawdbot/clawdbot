@@ -216,7 +216,9 @@ describe("scripts/pr wrappers", () => {
     const classifications = parseSubcommandClassifications(script);
     const dispatched = parseDispatchedSubcommands(script);
 
-    expect([...classifications.keys()].sort()).toEqual([...dispatched, "lock-recover"].sort());
+    expect([...classifications.keys()].toSorted()).toEqual(
+      [...dispatched, "lock-recover"].toSorted(),
+    );
     expect(classifications.get("ls")).toBe("advisory");
     expect(classifications.get("ci-dispatch")).toBe("advisory");
     for (const command of dispatched.filter((value) => !["ls", "ci-dispatch"].includes(value))) {

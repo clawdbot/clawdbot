@@ -186,6 +186,23 @@ describe("readGatewayServiceState", () => {
     );
   });
 
+  it("preserves runtime probe failures as an explicit unknown state", async () => {
+    const service = createService({
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => {
+        throw new Error("systemctl show timed out");
+      }),
+    });
+
+    const state = await readGatewayServiceState(service, { timeoutMs: 100 });
+
+    expect(state.running).toBe(false);
+    expect(state.runtime).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl show timed out",
+    });
+  });
+
   it("validates merged service env before native status probes", async () => {
     const isLoaded = vi.fn(async () => true);
     const readRuntime = vi.fn(async () => ({ status: "running" as const }));

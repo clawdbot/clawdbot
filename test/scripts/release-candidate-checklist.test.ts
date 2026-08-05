@@ -79,14 +79,12 @@ describe("release candidate checklist", () => {
       toolingSha: "b".repeat(40),
     });
     const resumed = reconcileReleaseCandidateState(
-      JSON.parse(
-        JSON.stringify({
-          ...expected,
-          phase: "waiting",
-          fullReleaseRunId: "111",
-          npmPreflightRunId: "222",
-        }),
-      ),
+      structuredClone({
+        ...expected,
+        phase: "waiting",
+        fullReleaseRunId: "111",
+        npmPreflightRunId: "222",
+      }),
       expected,
     );
 

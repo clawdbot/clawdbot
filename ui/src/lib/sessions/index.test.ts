@@ -625,7 +625,7 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
-  it("rolls back an optimistic model patch when its connection epoch retires", async () => {
+  it("clears optimistic and settled model overrides when its connection epoch retires", async () => {
     const stalePatch = deferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
@@ -643,18 +643,20 @@ describe("createSessionCapability", () => {
     const { gateway, publish } = createGatewayHarness(client);
     const sessions = createSessionCapability(gateway);
     const key = "agent:main:main";
+    const inactiveKey = "agent:main:inactive";
     sessions.setModelOverride(key, "openai/gpt-old");
+    sessions.setModelOverride(inactiveKey, "openai/gpt-old-account");
 
     const operation = sessions.patch(key, { model: "openai/gpt-new" });
     expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
 
     publish(false);
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides).toEqual({});
     publish(true);
     stalePatch.resolve({});
 
     await expect(operation).resolves.toBeNull();
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides).toEqual({});
     sessions.dispose();
   });
 
@@ -683,7 +685,7 @@ describe("createSessionCapability", () => {
       { model: "openai/gpt-new" },
       { waitFor: priorPatch.promise },
     );
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
 
     publish(false);
@@ -692,7 +694,7 @@ describe("createSessionCapability", () => {
 
     await expect(operation).resolves.toBeNull();
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides[key]).toBeUndefined();
     sessions.dispose();
   });
 

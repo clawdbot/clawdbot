@@ -106,6 +106,9 @@ export async function sendDiscordOutboundPayload(params: {
       const voiceUrl = expectDefined(mediaUrls.at(0), "non-empty Discord voice media URLs");
       lastResult = await sendContext.sendVoice(sendContext.target, voiceUrl, {
         ...resolveDiscordDeliveryOptions(ctx, sendContext, voiceReply),
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
       });
       deliveredVoice = true;
     } catch (err) {

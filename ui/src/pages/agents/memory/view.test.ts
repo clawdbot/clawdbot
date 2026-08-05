@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
+import { fullDreamingViewAccess } from "./view.test-helpers.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
@@ -12,9 +14,8 @@ type DreamingProps = Parameters<typeof renderDreaming>[0];
 let viewState = createDreamingViewState();
 let restoreTranslations = () => {};
 
-function asTranslationMap(value: string | TranslationMap | undefined): TranslationMap {
-  return value && typeof value === "object" ? value : {};
-}
+const asTranslationMap = (value: string | TranslationMap | undefined): TranslationMap =>
+  value && typeof value === "object" ? value : {};
 
 beforeAll(() => {
   const dreaming = asTranslationMap(en.dreaming);
@@ -88,9 +89,7 @@ afterAll(() => {
   restoreTranslations();
 });
 
-function setDreamSubTab(tab: DreamingViewState["activeSubTab"]) {
-  viewState.activeSubTab = tab;
-}
+const setDreamSubTab = (tab: DreamingViewState["activeSubTab"]) => (viewState.activeSubTab = tab);
 
 function setDreamDiarySubTab(tab: DreamingViewState["activeDiarySubTab"]) {
   viewState.activeDiarySubTab = tab;
@@ -102,12 +101,11 @@ function setDreamAdvancedWaitingSort(sort: DreamingViewState["advancedWaitingSor
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   const props: DreamingProps = {
+    access: fullDreamingViewAccess,
     viewState,
     active: true,
     selectedAgentId: "main",
     shortTermCount: 47,
-    groundedSignalCount: 9,
-    totalSignalCount: 182,
     promotedCount: 12,
     phases: {
       light: { enabled: true, cron: "0 * * * *", nextRunAtMs: Date.parse("2026-04-05T11:30:00Z") },
@@ -150,7 +148,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
-    statusLoading: false,
     statusError: null,
     modeSaving: false,
     dreamDiaryLoading: false,
@@ -158,7 +155,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
     dreamDiaryError: null,
-    dreamDiaryPath: "DREAMS.md",
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
     memoryWikiEnabled: true,
@@ -275,7 +271,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         },
       ],
     },
-    onRefresh: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},
@@ -838,6 +833,50 @@ describe("dreaming view", () => {
     expect(container.querySelector(".dreams-diary__heatmap-cell")).toBeNull();
     expect(container.querySelector(".dreams-diary__timeline-month")).toBeNull();
     setDreamSubTab("scene");
+  });
+
+  it.each([
+    { tab: "dreams", labels: ["1/2", "1/1"] },
+    { tab: "insights", labels: ["Travel", "Health"] },
+    { tab: "wiki", labels: ["Syntheses", "Concepts"] },
+  ] as const)("keeps $tab navigation inside the sticky diary controls", ({ tab, labels }) => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab(tab);
+    const props = buildProps({
+      dreamDiaryContent: [
+        "# Dream Diary",
+        "---",
+        "*January 1, 2026*",
+        "An earlier dream.",
+        "---",
+        "*January 2, 2026*",
+        ...Array.from({ length: 12 }, (_, index) => `Long diary paragraph ${index + 1}.`),
+      ].join("\n\n"),
+      onViewStateChange: vi.fn(),
+    });
+    const wikiOverview = props.wikiOverview;
+    if (wikiOverview) {
+      const firstCluster = expectDefined(wikiOverview.clusters[0], "first memory wiki cluster");
+      props.wikiOverview = {
+        ...wikiOverview,
+        clusters: [
+          ...wikiOverview.clusters,
+          { ...firstCluster, key: "concept", label: "Concepts" },
+        ],
+      };
+    }
+
+    const container = renderInto(props);
+    const stickyChrome = expectElement(container, ".dreams-diary__chrome");
+    const navigation = expectElement(stickyChrome, ".dreams-diary__daychips");
+    const buttons = [...navigation.querySelectorAll<HTMLButtonElement>(".dreams-diary__day-chip")];
+
+    expect(buttons.map((button) => compactText(button))).toEqual(labels);
+    expect(container.querySelector("#dream-diary-panel .dreams-diary__daychips")).toBeNull();
+
+    buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(viewState.diaryPage).toBe(1);
+    expect(props.onViewStateChange).toHaveBeenCalledOnce();
   });
 
   it("renders diary empty, error, and removed-navigation states", () => {

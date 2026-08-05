@@ -23,6 +23,7 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
+import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -43,9 +44,9 @@ import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.j
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
+  | "classifyStreamingPartial"
+  | "sanitizeStreamingText"
   | "normalizeStreamingText"
-  | "preparePartialForTyping"
-  | "handlePartialForTyping"
   | "startPresentationWhileTyping"
   | "blockReplyHandler"
 >;
@@ -260,22 +261,35 @@ export async function runEmbeddedFallbackCandidate(params: {
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
         onPartialReply: async (payload) => {
-          if (!params.preserveProgressCallbackStartOrder) {
-            const textForTyping = await params.presentation.handlePartialForTyping(payload);
-            if (!turn.opts?.onPartialReply || textForTyping === undefined) {
-              return;
-            }
-            await turn.opts.onPartialReply({ text: textForTyping, mediaUrls: payload.mediaUrls });
+          const classified = params.presentation.classifyStreamingPartial(payload);
+          if (classified.skip || !classified.text) {
             return;
           }
-          const textForTyping = params.presentation.preparePartialForTyping(payload);
-          if (textForTyping === undefined) {
+          const textForTyping = classified.text;
+          let didMaterialize = false;
+          let materializedText: string | undefined;
+          const partialPayload: PartialReplyPayload = {
+            get text() {
+              if (!didMaterialize) {
+                const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
+                materializedText = sanitized.skip ? undefined : sanitized.text;
+                didMaterialize = true;
+              }
+              return materializedText;
+            },
+            mediaUrls: payload.mediaUrls,
+          };
+          if (!params.preserveProgressCallbackStartOrder) {
+            await turn.typingSignals.signalTextDelta(textForTyping);
+            if (!turn.opts?.onPartialReply) {
+              return;
+            }
+            await turn.opts.onPartialReply(partialPayload);
             return;
           }
           await params.presentation.startPresentationWhileTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            () =>
-              turn.opts?.onPartialReply?.({ text: textForTyping, mediaUrls: payload.mediaUrls }),
+            () => turn.opts?.onPartialReply?.(partialPayload),
           );
         },
         onAssistantMessageStart: async () => {

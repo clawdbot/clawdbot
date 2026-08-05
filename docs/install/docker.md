@@ -287,7 +287,7 @@ The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the 
 Authenticated deep health snapshot:
 
 ```bash
-docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
+docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'
 ```
 
 ### LAN vs loopback

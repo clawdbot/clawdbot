@@ -114,12 +114,18 @@ async function runPluginUninstallCommandUnlocked(
     runtime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
   }
 
-  const { plugin, pluginId } = resolvePluginUninstallId({
+  const selection = resolvePluginUninstallId({
     rawId: id,
     config: cfg,
     plugins: report.plugins,
   });
-  const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+  if (!selection.ok) {
+    runtime.error(selection.error);
+    runtime.exit(1);
+    return;
+  }
+  const { plugin, pluginId } = selection.value;
+  const channelIds = plugin?.channelIds;
   const initialPlan = planPluginUninstall({
     config: cfg,
     pluginId,

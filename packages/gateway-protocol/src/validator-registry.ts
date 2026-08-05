@@ -1,317 +1,21 @@
-import { lazyCompile } from "./protocol-validator.js";
-import {
-  CommandsListParamsSchema,
-  ConnectParamsSchema,
-  WorkerAdmissionHandshakeSchema,
-  WorkerConnectRequestFrameSchema,
-  WorkerHeartbeatParamsSchema,
-  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
-  WorkerTranscriptCommitParamsSchema,
-  WorkerLiveEventParamsSchema,
-  GatewaySuspendPrepareParamsSchema,
-  GatewaySuspendStatusParamsSchema,
-  GatewaySuspendResumeParamsSchema,
-  RequestFrameSchema,
-  MessageActionParamsSchema,
-  SendParamsSchema,
-  ConversationListParamsSchema,
-  ConversationSendParamsSchema,
-  ConversationTurnCancelParamsSchema,
-  ConversationTurnParamsSchema,
-  PollParamsSchema,
-  AgentParamsSchema,
-  type AuditActivityListParams,
-  AuditActivityListParamsSchema,
-  AuditListParamsSchema,
-  UsersListParamsSchema,
-  UsersSelfParamsSchema,
-  UsersSelfResultSchema,
-  UsersLinkEmailParamsSchema,
-  UsersLinkEmailResultSchema,
-  UsersSetDisplayNameParamsSchema,
-  UsersSetDisplayNameResultSchema,
-  UsersSetAvatarParamsSchema,
-  UsersSetAvatarResultSchema,
-  AgentIdentityParamsSchema,
-  AgentWaitParamsSchema,
-  WakeParamsSchema,
-  AgentsListParamsSchema,
-  WorktreesListParamsSchema,
-  BoardGetParamsSchema,
-  BoardUpdateParamsSchema,
-  BoardWidgetContentSchema,
-  BoardWidgetAppViewParamsSchema,
-  BoardWidgetPutParamsSchema,
-  BoardWidgetGrantParamsSchema,
-  BoardEventParamsSchema,
-  BoardPromptAuthorizeParamsSchema,
-  BoardDataReadParamsSchema,
-  BoardActionParamsSchema,
-  WorktreesCreateParamsSchema,
-  WorktreesRemoveParamsSchema,
-  WorktreesRestoreParamsSchema,
-  WorktreesGcParamsSchema,
-  WorktreesBranchesParamsSchema,
-  FsListDirParamsSchema,
-  FsListDirResultSchema,
-  AgentsCreateParamsSchema,
-  AgentsUpdateParamsSchema,
-  AgentsDeleteParamsSchema,
-  AgentsFilesListParamsSchema,
-  AgentsFilesGetParamsSchema,
-  AgentsFilesSetParamsSchema,
-  AgentsWorkspaceListParamsSchema,
-  AgentsWorkspaceGetParamsSchema,
-  ArtifactsListParamsSchema,
-  ArtifactsGetParamsSchema,
-  ArtifactsDownloadParamsSchema,
-  NodePairListParamsSchema,
-  NodePairApproveParamsSchema,
-  NodePairRejectParamsSchema,
-  NodePairRemoveParamsSchema,
-  NodeRenameParamsSchema,
-  NodeListParamsSchema,
-  NodePluginToolsUpdateParamsSchema,
-  NodeSkillsUpdateParamsSchema,
-  EnvironmentsCreateParamsSchema,
-  EnvironmentsDestroyParamsSchema,
-  EnvironmentsListParamsSchema,
-  EnvironmentsStatusParamsSchema,
-  SystemInfoParamsSchema,
-  SystemInfoResultSchema,
-  NodePendingAckParamsSchema,
-  NodeDescribeParamsSchema,
-  NodeInvokeParamsSchema,
-  NodeInvokeResultParamsSchema,
-  NodeInvokeProgressParamsSchema,
-  NodeEventParamsSchema,
-  NodePresenceActivityPayloadSchema,
-  NodePendingDrainParamsSchema,
-  NodePendingEnqueueParamsSchema,
-  PushTestParamsSchema,
-  type WebPushVapidPublicKeyParams,
-  WebPushVapidPublicKeyParamsSchema,
-  type WebPushSubscribeParams,
-  WebPushSubscribeParamsSchema,
-  type WebPushUnsubscribeParams,
-  WebPushUnsubscribeParamsSchema,
-  type WebPushTestParams,
-  WebPushTestParamsSchema,
-  SecretsResolveParamsSchema,
-  SecretsResolveResultSchema,
-  SessionsListParamsSchema,
-  SessionsCatalogListParamsSchema,
-  SessionsCatalogReadParamsSchema,
-  SessionsCatalogContinueParamsSchema,
-  SessionsCatalogArchiveParamsSchema,
-  SessionsSearchParamsSchema,
-  SessionsCleanupParamsSchema,
-  SessionsPreviewParamsSchema,
-  SessionsDescribeParamsSchema,
-  SessionsResolveParamsSchema,
-  SessionsFilesListParamsSchema,
-  SessionsFilesGetParamsSchema,
-  SessionsFilesSetParamsSchema,
-  SessionsFilesRevealParamsSchema,
-  SessionsDiffParamsSchema,
-  SessionsCompanionAskParamsSchema,
-  SessionsCompanionStateParamsSchema,
-  SessionsCompanionResetParamsSchema,
-  SessionsObserverVisibilityParamsSchema,
-  SessionVisibilitySetParamsSchema,
-  SessionMembersListParamsSchema,
-  SessionMemberAddParamsSchema,
-  SessionMemberRemoveParamsSchema,
-  SessionSuggestionsAddParamsSchema,
-  SessionSuggestionsListParamsSchema,
-  SessionSuggestionsResolveParamsSchema,
-  SessionTypingParamsSchema,
-  SessionsCreateParamsSchema,
-  SessionsSendParamsSchema,
-  SessionsDispatchParamsSchema,
-  SessionsReclaimParamsSchema,
-  SessionsMessagesSubscribeParamsSchema,
-  SessionsMessagesUnsubscribeParamsSchema,
-  SessionsViewerPresenceSetParamsSchema,
-  SessionsAbortParamsSchema,
-  SessionsPatchParamsSchema,
-  SessionsPluginPatchParamsSchema,
-  SessionsResetParamsSchema,
-  SessionsDeleteParamsSchema,
-  SessionsGroupsListParamsSchema,
-  SessionsGroupsListResultSchema,
-  SessionsGroupsPutParamsSchema,
-  SessionsGroupsRenameParamsSchema,
-  SessionsGroupsDeleteParamsSchema,
-  SessionsGroupsMutationResultSchema,
-  SessionsCompactParamsSchema,
-  SessionsCompactionListParamsSchema,
-  SessionsCompactionGetParamsSchema,
-  SessionsCompactionBranchParamsSchema,
-  SessionsCompactionRestoreParamsSchema,
-  SessionsBranchesListParamsSchema,
-  SessionsBranchesSwitchParamsSchema,
-  SessionsRewindParamsSchema,
-  SessionsForkParamsSchema,
-  SessionsUsageParamsSchema,
-  SessionDiscussionInfoParamsSchema,
-  SessionDiscussionInfoResultSchema,
-  SessionDiscussionOpenParamsSchema,
-  SessionDiscussionOpenResultSchema,
-  TaskSuggestionsListParamsSchema,
-  TaskSuggestionsCreateParamsSchema,
-  TaskSuggestionsAcceptParamsSchema,
-  TaskSuggestionsDismissParamsSchema,
-  TasksListParamsSchema,
-  TasksGetParamsSchema,
-  TasksCancelParamsSchema,
-  ConfigGetParamsSchema,
-  ConfigSetParamsSchema,
-  ConfigApplyParamsSchema,
-  ConfigPatchParamsSchema,
-  ConfigSchemaParamsSchema,
-  ConfigSchemaLookupParamsSchema,
-  ConfigSchemaLookupResultSchema,
-  SystemAgentChatParamsSchema,
-  SystemAgentChatHistoryParamsSchema,
-  SystemChangesListParamsSchema,
-  SystemAgentSetupDetectParamsSchema,
-  SystemAgentSetupVerifyParamsSchema,
-  SystemAgentSetupActivateParamsSchema,
-  SystemAgentSetupAuthStartParamsSchema,
-  WizardStartParamsSchema,
-  WizardNextParamsSchema,
-  WizardCancelParamsSchema,
-  WizardStatusParamsSchema,
-  TalkModeParamsSchema,
-  TalkCatalogParamsSchema,
-  TalkConfigParamsSchema,
-  TalkConfigResultSchema,
-  TalkClientCreateParamsSchema,
-  TalkClientCreateResultSchema,
-  TalkClientCloseParamsSchema,
-  TalkClientMutationResultSchema,
-  TalkClientToolCallParamsSchema,
-  TalkClientToolCallResultSchema,
-  TalkClientTranscriptParamsSchema,
-  TalkClientSteerParamsSchema,
-  TalkSessionCreateParamsSchema,
-  TalkSessionJoinParamsSchema,
-  TalkSessionAppendAudioParamsSchema,
-  TalkSessionAcknowledgeMarkParamsSchema,
-  TalkSessionTurnParamsSchema,
-  TalkSessionCancelTurnParamsSchema,
-  TalkSessionCancelOutputParamsSchema,
-  TalkSessionSteerParamsSchema,
-  TalkSessionSubmitToolResultParamsSchema,
-  TalkSessionCloseParamsSchema,
-  TalkSpeakParamsSchema,
-  TtsSpeakParamsSchema,
-  ChannelsStatusParamsSchema,
-  ChannelsPairingListParamsSchema,
-  ChannelsPairingApproveParamsSchema,
-  ChannelsPairingDismissParamsSchema,
-  ChannelsStartParamsSchema,
-  ChannelsStopParamsSchema,
-  ChannelsLogoutParamsSchema,
-  ModelsAuthLogoutParamsSchema,
-  ModelsAuthStatusParamsSchema,
-  ModelsListParamsSchema,
-  SkillsStatusParamsSchema,
-  ToolsCatalogParamsSchema,
-  ToolsEffectiveParamsSchema,
-  ToolsInvokeParamsSchema,
-  SkillsBinsParamsSchema,
-  SkillsInstallParamsSchema,
-  SkillsUploadBeginParamsSchema,
-  SkillsUploadChunkParamsSchema,
-  SkillsUploadCommitParamsSchema,
-  SkillsUpdateParamsSchema,
-  SkillsSearchParamsSchema,
-  SkillsDetailParamsSchema,
-  SkillsCuratorStatusParamsSchema,
-  SkillsCuratorActionParamsSchema,
-  SkillsProposalsListParamsSchema,
-  SkillsProposalInspectParamsSchema,
-  SkillsProposalCreateParamsSchema,
-  SkillsProposalUpdateParamsSchema,
-  SkillsProposalReviseParamsSchema,
-  SkillsProposalRequestRevisionParamsSchema,
-  SkillsProposalActionParamsSchema,
-  SkillsProposalEvaluateParamsSchema,
-  SkillsProposalEventsListParamsSchema,
-  SkillsSecurityVerdictsParamsSchema,
-  SkillsSkillCardParamsSchema,
-  CronListParamsSchema,
-  CronStatusParamsSchema,
-  CronGetParamsSchema,
-  CronAddParamsSchema,
-  CronUpdateParamsSchema,
-  CronRemoveParamsSchema,
-  CronRunParamsSchema,
-  CronRunsParamsSchema,
-  CronScratchGetParamsSchema,
-  CronScratchSetParamsSchema,
-  DevicePairListParamsSchema,
-  DevicePairApproveParamsSchema,
-  DevicePairRejectParamsSchema,
-  DevicePairRemoveParamsSchema,
-  DevicePairSetupCodeParamsSchema,
-  DevicePairRenameParamsSchema,
-  DeviceTokenRotateParamsSchema,
-  DeviceTokenRevokeParamsSchema,
-  ApprovalPresentationSchema,
-  ApprovalGetParamsSchema,
-  ApprovalHistoryParamsSchema,
-  ApprovalResolveParamsSchema,
-  ExecApprovalsGetParamsSchema,
-  ExecApprovalsSetParamsSchema,
-  ExecApprovalGetParamsSchema,
-  ExecApprovalRequestParamsSchema,
-  ExecApprovalResolveParamsSchema,
-  QuestionRequestParamsSchema,
-  QuestionWaitAnswerParamsSchema,
-  QuestionResolveParamsSchema,
-  QuestionGetParamsSchema,
-  QuestionListParamsSchema,
-  PluginApprovalRequestParamsSchema,
-  PluginApprovalResolveParamsSchema,
-  PluginsListParamsSchema,
-  PluginsRefreshParamsSchema,
-  PluginsSearchParamsSchema,
-  PluginsInstallParamsSchema,
-  PluginsSetEnabledParamsSchema,
-  PluginsUninstallParamsSchema,
-  PluginsUiDescriptorsParamsSchema,
-  PluginsUiDescriptorsResultSchema,
-  PluginsSessionActionParamsSchema,
-  PluginsSessionActionResultSchema,
-  ExecApprovalsNodeGetParamsSchema,
-  ExecApprovalsNodeSetParamsSchema,
-  ExecApprovalsNodeSnapshotSchema,
-  LogsTailParamsSchema,
-  ModelsProbeParamsSchema,
-  ChatHistoryParamsSchema,
-  ChatMetadataParamsSchema,
-  ChatMessageGetParamsSchema,
-  ChatToolTitlesParamsSchema,
-  ChatSendParamsSchema,
-  ChatAbortParamsSchema,
-  ChatInjectParamsSchema,
-  UpdateStatusParamsSchema,
-  UpdateRunParamsSchema,
-  UiCommandParamsSchema,
-  WebLoginStartParamsSchema,
-  WebLoginWaitParamsSchema,
+import { lazyCompile as compile } from "./protocol-validator.js";
+import * as S from "./schema-modules.js";
+import type {
+  AuditActivityListParams,
+  AuditRunInspectParams,
+  WebPushSubscribeParams,
+  WebPushTestParams,
+  WebPushUnsubscribeParams,
+  WebPushVapidPublicKeyParams,
 } from "./schema-modules.js";
 import type { ValidationError } from "./validation-errors.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
-export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
-export const validateConnectParams = lazyCompile(ConnectParamsSchema);
-export const validateWorkerAdmissionHandshake = lazyCompile(WorkerAdmissionHandshakeSchema);
-export const validateWorkerConnectRequestFrame = lazyCompile(WorkerConnectRequestFrameSchema);
-export const validateWorkerHeartbeatParams = lazyCompile(WorkerHeartbeatParamsSchema);
+export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
+export const validateConnectParams = compile(S.ConnectParamsSchema);
+export const validateWorkerAdmissionHandshake = compile(S.WorkerAdmissionHandshakeSchema);
+export const validateWorkerConnectRequestFrame = compile(S.WorkerConnectRequestFrameSchema);
+export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSchema);
 
 function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
@@ -321,11 +25,11 @@ function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
     if (!current) {
       break;
     }
-    if (current.depth > WORKER_TRANSCRIPT_MAX_JSON_DEPTH) {
+    if (current.depth > S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH) {
       return {
         keyword: "maxDepth",
-        params: { limit: WORKER_TRANSCRIPT_MAX_JSON_DEPTH },
-        message: `must not exceed JSON nesting depth ${WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
+        params: { limit: S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH },
+        message: `must not exceed JSON nesting depth ${S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
       };
     }
     if (
@@ -358,339 +62,341 @@ function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   return undefined;
 }
 
-export const validateWorkerTranscriptCommitParams = lazyCompile(
-  WorkerTranscriptCommitParamsSchema,
+export const validateWorkerTranscriptCommitParams = compile(
+  S.WorkerTranscriptCommitParamsSchema,
   checkWorkerProtocolJson,
 );
-export const validateWorkerLiveEventParams = lazyCompile(
-  WorkerLiveEventParamsSchema,
+export const validateWorkerLiveEventParams = compile(
+  S.WorkerLiveEventParamsSchema,
   checkWorkerProtocolJson,
 );
-export const validateGatewaySuspendPrepareParams = lazyCompile(GatewaySuspendPrepareParamsSchema);
-export const validateGatewaySuspendStatusParams = lazyCompile(GatewaySuspendStatusParamsSchema);
-export const validateGatewaySuspendResumeParams = lazyCompile(GatewaySuspendResumeParamsSchema);
-export const validateRequestFrame = lazyCompile(RequestFrameSchema);
-export const validateMessageActionParams = lazyCompile(MessageActionParamsSchema);
-export const validateSendParams = lazyCompile(SendParamsSchema);
-export const validateConversationListParams = lazyCompile(ConversationListParamsSchema);
-export const validateConversationSendParams = lazyCompile(ConversationSendParamsSchema);
-export const validateConversationTurnCancelParams = lazyCompile(ConversationTurnCancelParamsSchema);
-export const validateConversationTurnParams = lazyCompile(ConversationTurnParamsSchema);
-export const validatePollParams = lazyCompile(PollParamsSchema);
-export const validateAgentParams = lazyCompile(AgentParamsSchema);
-export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
-  AuditActivityListParamsSchema,
+export const validateGatewaySuspendPrepareParams = compile(S.GatewaySuspendPrepareParamsSchema);
+export const validateGatewaySuspendStatusParams = compile(S.GatewaySuspendStatusParamsSchema);
+export const validateGatewaySuspendResumeParams = compile(S.GatewaySuspendResumeParamsSchema);
+export const validateRequestFrame = compile(S.RequestFrameSchema);
+export const validateMessageActionParams = compile(S.MessageActionParamsSchema);
+export const validateSendParams = compile(S.SendParamsSchema);
+export const validateConversationListParams = compile(S.ConversationListParamsSchema);
+export const validateConversationSendParams = compile(S.ConversationSendParamsSchema);
+export const validateConversationTurnCancelParams = compile(S.ConversationTurnCancelParamsSchema);
+export const validateConversationTurnParams = compile(S.ConversationTurnParamsSchema);
+export const validatePollParams = compile(S.PollParamsSchema);
+export const validateAgentParams = compile(S.AgentParamsSchema);
+export const validateAuditActivityListParams = compile<AuditActivityListParams>(
+  S.AuditActivityListParamsSchema,
 );
-export const validateAuditListParams = lazyCompile(AuditListParamsSchema);
-export const validateUsersListParams = lazyCompile(UsersListParamsSchema);
-export const validateUsersSelfParams = lazyCompile(UsersSelfParamsSchema);
-export const validateUsersSelfResult = lazyCompile(UsersSelfResultSchema);
-export const validateUsersLinkEmailParams = lazyCompile(UsersLinkEmailParamsSchema);
-export const validateUsersLinkEmailResult = lazyCompile(UsersLinkEmailResultSchema);
-export const validateUsersSetDisplayNameParams = lazyCompile(UsersSetDisplayNameParamsSchema);
-export const validateUsersSetDisplayNameResult = lazyCompile(UsersSetDisplayNameResultSchema);
-export const validateUsersSetAvatarParams = lazyCompile(UsersSetAvatarParamsSchema);
-export const validateUsersSetAvatarResult = lazyCompile(UsersSetAvatarResultSchema);
-export const validateAgentIdentityParams = lazyCompile(AgentIdentityParamsSchema);
-export const validateAgentWaitParams = lazyCompile(AgentWaitParamsSchema);
-export const validateWakeParams = lazyCompile(WakeParamsSchema);
-export const validateAgentsListParams = lazyCompile(AgentsListParamsSchema);
-export const validateWorktreesListParams = lazyCompile(WorktreesListParamsSchema);
-export const validateBoardGetParams = lazyCompile(BoardGetParamsSchema);
-export const validateBoardUpdateParams = lazyCompile(BoardUpdateParamsSchema);
-export const validateBoardWidgetContent = lazyCompile(BoardWidgetContentSchema);
-export const validateBoardWidgetAppViewParams = lazyCompile(BoardWidgetAppViewParamsSchema);
-export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
-export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
-export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);
-export const validateBoardPromptAuthorizeParams = lazyCompile(BoardPromptAuthorizeParamsSchema);
-export const validateBoardDataReadParams = lazyCompile(BoardDataReadParamsSchema);
-export const validateBoardActionParams = lazyCompile(BoardActionParamsSchema);
-export const validateWorktreesCreateParams = lazyCompile(WorktreesCreateParamsSchema);
-export const validateWorktreesRemoveParams = lazyCompile(WorktreesRemoveParamsSchema);
-export const validateWorktreesRestoreParams = lazyCompile(WorktreesRestoreParamsSchema);
-export const validateWorktreesGcParams = lazyCompile(WorktreesGcParamsSchema);
-export const validateWorktreesBranchesParams = lazyCompile(WorktreesBranchesParamsSchema);
-export const validateFsListDirParams = lazyCompile(FsListDirParamsSchema);
-export const validateFsListDirResult = lazyCompile(FsListDirResultSchema);
-export const validateAgentsCreateParams = lazyCompile(AgentsCreateParamsSchema);
-export const validateAgentsUpdateParams = lazyCompile(AgentsUpdateParamsSchema);
-export const validateAgentsDeleteParams = lazyCompile(AgentsDeleteParamsSchema);
-export const validateAgentsFilesListParams = lazyCompile(AgentsFilesListParamsSchema);
-export const validateAgentsFilesGetParams = lazyCompile(AgentsFilesGetParamsSchema);
-export const validateAgentsFilesSetParams = lazyCompile(AgentsFilesSetParamsSchema);
-export const validateAgentsWorkspaceListParams = lazyCompile(AgentsWorkspaceListParamsSchema);
-export const validateAgentsWorkspaceGetParams = lazyCompile(AgentsWorkspaceGetParamsSchema);
-export const validateArtifactsListParams = lazyCompile(ArtifactsListParamsSchema);
-export const validateArtifactsGetParams = lazyCompile(ArtifactsGetParamsSchema);
-export const validateArtifactsDownloadParams = lazyCompile(ArtifactsDownloadParamsSchema);
-export const validateNodePairListParams = lazyCompile(NodePairListParamsSchema);
-export const validateNodePairApproveParams = lazyCompile(NodePairApproveParamsSchema);
-export const validateNodePairRejectParams = lazyCompile(NodePairRejectParamsSchema);
-export const validateNodePairRemoveParams = lazyCompile(NodePairRemoveParamsSchema);
-export const validateNodeRenameParams = lazyCompile(NodeRenameParamsSchema);
-export const validateNodeListParams = lazyCompile(NodeListParamsSchema);
-export const validateNodePluginToolsUpdateParams = lazyCompile(NodePluginToolsUpdateParamsSchema);
-export const validateNodeSkillsUpdateParams = lazyCompile(NodeSkillsUpdateParamsSchema);
-export const validateEnvironmentsCreateParams = lazyCompile(EnvironmentsCreateParamsSchema);
-export const validateEnvironmentsDestroyParams = lazyCompile(EnvironmentsDestroyParamsSchema);
-export const validateEnvironmentsListParams = lazyCompile(EnvironmentsListParamsSchema);
-export const validateEnvironmentsStatusParams = lazyCompile(EnvironmentsStatusParamsSchema);
-export const validateSystemInfoParams = lazyCompile(SystemInfoParamsSchema);
-export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
-export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
-export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
-export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
-export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
-export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
-export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
-export const validateNodePresenceActivityPayload = lazyCompile(NodePresenceActivityPayloadSchema);
-export const validateNodePendingDrainParams = lazyCompile(NodePendingDrainParamsSchema);
-export const validateNodePendingEnqueueParams = lazyCompile(NodePendingEnqueueParamsSchema);
-export const validatePushTestParams = lazyCompile(PushTestParamsSchema);
-export const validateWebPushVapidPublicKeyParams = lazyCompile<WebPushVapidPublicKeyParams>(
-  WebPushVapidPublicKeyParamsSchema,
+export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
+  S.AuditRunInspectParamsSchema,
 );
-export const validateWebPushSubscribeParams = lazyCompile<WebPushSubscribeParams>(
-  WebPushSubscribeParamsSchema,
+export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
+export const validateAuditListParams = compile(S.AuditListParamsSchema);
+export const validateUsersListParams = compile(S.UsersListParamsSchema);
+export const validateUsersSelfParams = compile(S.UsersSelfParamsSchema);
+export const validateUsersSelfResult = compile(S.UsersSelfResultSchema);
+export const validateUsersLinkEmailParams = compile(S.UsersLinkEmailParamsSchema);
+export const validateUsersLinkEmailResult = compile(S.UsersLinkEmailResultSchema);
+export const validateUsersSetDisplayNameParams = compile(S.UsersSetDisplayNameParamsSchema);
+export const validateUsersSetDisplayNameResult = compile(S.UsersSetDisplayNameResultSchema);
+export const validateUsersSetAvatarParams = compile(S.UsersSetAvatarParamsSchema);
+export const validateUsersSetAvatarResult = compile(S.UsersSetAvatarResultSchema);
+export const validateAgentIdentityParams = compile(S.AgentIdentityParamsSchema);
+export const validateAgentWaitParams = compile(S.AgentWaitParamsSchema);
+export const validateWakeParams = compile(S.WakeParamsSchema);
+export const validateAgentsListParams = compile(S.AgentsListParamsSchema);
+export const validateWorktreesListParams = compile(S.WorktreesListParamsSchema);
+export const validateBoardGetParams = compile(S.BoardGetParamsSchema);
+export const validateBoardUpdateParams = compile(S.BoardUpdateParamsSchema);
+export const validateBoardWidgetContent = compile(S.BoardWidgetContentSchema);
+export const validateBoardWidgetAppViewParams = compile(S.BoardWidgetAppViewParamsSchema);
+export const validateBoardWidgetPutParams = compile(S.BoardWidgetPutParamsSchema);
+export const validateBoardWidgetGrantParams = compile(S.BoardWidgetGrantParamsSchema);
+export const validateBoardEventParams = compile(S.BoardEventParamsSchema);
+export const validateBoardPromptAuthorizeParams = compile(S.BoardPromptAuthorizeParamsSchema);
+export const validateBoardDataReadParams = compile(S.BoardDataReadParamsSchema);
+export const validateBoardActionParams = compile(S.BoardActionParamsSchema);
+export const validateWorktreesCreateParams = compile(S.WorktreesCreateParamsSchema);
+export const validateWorktreesRemoveParams = compile(S.WorktreesRemoveParamsSchema);
+export const validateWorktreesRestoreParams = compile(S.WorktreesRestoreParamsSchema);
+export const validateWorktreesGcParams = compile(S.WorktreesGcParamsSchema);
+export const validateWorktreesBranchesParams = compile(S.WorktreesBranchesParamsSchema);
+export const validateFsListDirParams = compile(S.FsListDirParamsSchema);
+export const validateFsListDirResult = compile(S.FsListDirResultSchema);
+export const validateAgentsCreateParams = compile(S.AgentsCreateParamsSchema);
+export const validateAgentsUpdateParams = compile(S.AgentsUpdateParamsSchema);
+export const validateAgentsDeleteParams = compile(S.AgentsDeleteParamsSchema);
+export const validateAgentsFilesListParams = compile(S.AgentsFilesListParamsSchema);
+export const validateAgentsFilesGetParams = compile(S.AgentsFilesGetParamsSchema);
+export const validateAgentsFilesSetParams = compile(S.AgentsFilesSetParamsSchema);
+export const validateAgentsWorkspaceListParams = compile(S.AgentsWorkspaceListParamsSchema);
+export const validateAgentsWorkspaceGetParams = compile(S.AgentsWorkspaceGetParamsSchema);
+export const validateArtifactsListParams = compile(S.ArtifactsListParamsSchema);
+export const validateArtifactsGetParams = compile(S.ArtifactsGetParamsSchema);
+export const validateArtifactsDownloadParams = compile(S.ArtifactsDownloadParamsSchema);
+export const validateNodePairListParams = compile(S.NodePairListParamsSchema);
+export const validateNodePairApproveParams = compile(S.NodePairApproveParamsSchema);
+export const validateNodePairRejectParams = compile(S.NodePairRejectParamsSchema);
+export const validateNodePairRemoveParams = compile(S.NodePairRemoveParamsSchema);
+export const validateNodeRenameParams = compile(S.NodeRenameParamsSchema);
+export const validateNodeListParams = compile(S.NodeListParamsSchema);
+export const validateNodePluginToolsUpdateParams = compile(S.NodePluginToolsUpdateParamsSchema);
+export const validateNodeSkillsUpdateParams = compile(S.NodeSkillsUpdateParamsSchema);
+export const validateEnvironmentsCreateParams = compile(S.EnvironmentsCreateParamsSchema);
+export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);
+export const validateEnvironmentsListParams = compile(S.EnvironmentsListParamsSchema);
+export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusParamsSchema);
+export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
+export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
+export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
+export const validateNodeDescribeParams = compile(S.NodeDescribeParamsSchema);
+export const validateNodeInvokeParams = compile(S.NodeInvokeParamsSchema);
+export const validateNodeInvokeResultParams = compile(S.NodeInvokeResultParamsSchema);
+export const validateNodeInvokeProgressParams = compile(S.NodeInvokeProgressParamsSchema);
+export const validateNodeEventParams = compile(S.NodeEventParamsSchema);
+export const validateNodePresenceActivityPayload = compile(S.NodePresenceActivityPayloadSchema);
+export const validateNodePendingDrainParams = compile(S.NodePendingDrainParamsSchema);
+export const validateNodePendingEnqueueParams = compile(S.NodePendingEnqueueParamsSchema);
+export const validatePushTestParams = compile(S.PushTestParamsSchema);
+export const validateWebPushVapidPublicKeyParams = compile<WebPushVapidPublicKeyParams>(
+  S.WebPushVapidPublicKeyParamsSchema,
 );
-export const validateWebPushUnsubscribeParams = lazyCompile<WebPushUnsubscribeParams>(
-  WebPushUnsubscribeParamsSchema,
+export const validateWebPushSubscribeParams = compile<WebPushSubscribeParams>(
+  S.WebPushSubscribeParamsSchema,
 );
-export const validateWebPushTestParams = lazyCompile<WebPushTestParams>(WebPushTestParamsSchema);
-export const validateSecretsResolveParams = lazyCompile(SecretsResolveParamsSchema);
-export const validateSecretsResolveResult = lazyCompile(SecretsResolveResultSchema);
-export const validateSessionsListParams = lazyCompile(SessionsListParamsSchema);
-export const validateSessionsCatalogListParams = lazyCompile(SessionsCatalogListParamsSchema);
-export const validateSessionsCatalogReadParams = lazyCompile(SessionsCatalogReadParamsSchema);
-export const validateSessionsCatalogContinueParams = lazyCompile(
-  SessionsCatalogContinueParamsSchema,
+export const validateWebPushUnsubscribeParams = compile<WebPushUnsubscribeParams>(
+  S.WebPushUnsubscribeParamsSchema,
 );
-export const validateSessionsCatalogArchiveParams = lazyCompile(SessionsCatalogArchiveParamsSchema);
-export const validateSessionsSearchParams = lazyCompile(SessionsSearchParamsSchema);
-export const validateSessionsCleanupParams = lazyCompile(SessionsCleanupParamsSchema);
-export const validateSessionsPreviewParams = lazyCompile(SessionsPreviewParamsSchema);
-export const validateSessionsDescribeParams = lazyCompile(SessionsDescribeParamsSchema);
-export const validateSessionsResolveParams = lazyCompile(SessionsResolveParamsSchema);
-export const validateSessionsFilesListParams = lazyCompile(SessionsFilesListParamsSchema);
-export const validateSessionsFilesGetParams = lazyCompile(SessionsFilesGetParamsSchema);
-export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParamsSchema);
-export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
-export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
-export const validateSessionsCompanionAskParams = lazyCompile(SessionsCompanionAskParamsSchema);
-export const validateSessionsCompanionStateParams = lazyCompile(SessionsCompanionStateParamsSchema);
-export const validateSessionsCompanionResetParams = lazyCompile(SessionsCompanionResetParamsSchema);
-export const validateSessionsObserverVisibilityParams = lazyCompile(
-  SessionsObserverVisibilityParamsSchema,
+export const validateWebPushTestParams = compile<WebPushTestParams>(S.WebPushTestParamsSchema);
+export const validateSecretsResolveParams = compile(S.SecretsResolveParamsSchema);
+export const validateSecretsResolveResult = compile(S.SecretsResolveResultSchema);
+export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
+export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
+export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
+export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
+export const validateSessionsCatalogArchiveParams = compile(S.SessionsCatalogArchiveParamsSchema);
+export const validateSessionsSearchParams = compile(S.SessionsSearchParamsSchema);
+export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSchema);
+export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);
+export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSchema);
+export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
+export const validateSessionsFilesListParams = compile(S.SessionsFilesListParamsSchema);
+export const validateSessionsFilesGetParams = compile(S.SessionsFilesGetParamsSchema);
+export const validateSessionsFilesSetParams = compile(S.SessionsFilesSetParamsSchema);
+export const validateSessionsFilesRevealParams = compile(S.SessionsFilesRevealParamsSchema);
+export const validateSessionsDiffParams = compile(S.SessionsDiffParamsSchema);
+export const validateSessionsCompanionAskParams = compile(S.SessionsCompanionAskParamsSchema);
+export const validateSessionsCompanionStateParams = compile(S.SessionsCompanionStateParamsSchema);
+export const validateSessionsCompanionResetParams = compile(S.SessionsCompanionResetParamsSchema);
+export const validateSessionsObserverVisibilityParams = compile(
+  S.SessionsObserverVisibilityParamsSchema,
 );
-export const validateSessionVisibilitySetParams = lazyCompile(SessionVisibilitySetParamsSchema);
-export const validateSessionMembersListParams = lazyCompile(SessionMembersListParamsSchema);
-export const validateSessionMemberAddParams = lazyCompile(SessionMemberAddParamsSchema);
-export const validateSessionMemberRemoveParams = lazyCompile(SessionMemberRemoveParamsSchema);
-export const validateSessionSuggestionsAddParams = lazyCompile(SessionSuggestionsAddParamsSchema);
-export const validateSessionSuggestionsListParams = lazyCompile(SessionSuggestionsListParamsSchema);
-export const validateSessionSuggestionsResolveParams = lazyCompile(
-  SessionSuggestionsResolveParamsSchema,
+export const validateSessionVisibilitySetParams = compile(S.SessionVisibilitySetParamsSchema);
+export const validateSessionMembersListParams = compile(S.SessionMembersListParamsSchema);
+export const validateSessionMemberAddParams = compile(S.SessionMemberAddParamsSchema);
+export const validateSessionMemberRemoveParams = compile(S.SessionMemberRemoveParamsSchema);
+export const validateSessionSuggestionsAddParams = compile(S.SessionSuggestionsAddParamsSchema);
+export const validateSessionSuggestionsListParams = compile(S.SessionSuggestionsListParamsSchema);
+export const validateSessionSuggestionsResolveParams = compile(
+  S.SessionSuggestionsResolveParamsSchema,
 );
-export const validateSessionTypingParams = lazyCompile(SessionTypingParamsSchema);
-export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
-export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
-export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
-export const validateSessionsReclaimParams = lazyCompile(SessionsReclaimParamsSchema);
-export const validateSessionsMessagesSubscribeParams = lazyCompile(
-  SessionsMessagesSubscribeParamsSchema,
+export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
+export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
+export const validateSessionsSendParams = compile(S.SessionsSendParamsSchema);
+export const validateSessionsDispatchParams = compile(S.SessionsDispatchParamsSchema);
+export const validateSessionsReclaimParams = compile(S.SessionsReclaimParamsSchema);
+export const validateSessionsMessagesSubscribeParams = compile(
+  S.SessionsMessagesSubscribeParamsSchema,
 );
-export const validateSessionsMessagesUnsubscribeParams = lazyCompile(
-  SessionsMessagesUnsubscribeParamsSchema,
+export const validateSessionsMessagesUnsubscribeParams = compile(
+  S.SessionsMessagesUnsubscribeParamsSchema,
 );
-export const validateSessionsViewerPresenceSetParams = lazyCompile(
-  SessionsViewerPresenceSetParamsSchema,
+export const validateSessionsViewerPresenceSetParams = compile(
+  S.SessionsViewerPresenceSetParamsSchema,
 );
-export const validateSessionsAbortParams = lazyCompile(SessionsAbortParamsSchema);
-export const validateSessionsPatchParams = lazyCompile(SessionsPatchParamsSchema);
-export const validateSessionsPluginPatchParams = lazyCompile(SessionsPluginPatchParamsSchema);
-export const validateSessionsResetParams = lazyCompile(SessionsResetParamsSchema);
-export const validateSessionsDeleteParams = lazyCompile(SessionsDeleteParamsSchema);
-export const validateSessionsGroupsListParams = lazyCompile(SessionsGroupsListParamsSchema);
-export const validateSessionsGroupsListResult = lazyCompile(SessionsGroupsListResultSchema);
-export const validateSessionsGroupsPutParams = lazyCompile(SessionsGroupsPutParamsSchema);
-export const validateSessionsGroupsRenameParams = lazyCompile(SessionsGroupsRenameParamsSchema);
-export const validateSessionsGroupsDeleteParams = lazyCompile(SessionsGroupsDeleteParamsSchema);
-export const validateSessionsGroupsMutationResult = lazyCompile(SessionsGroupsMutationResultSchema);
-export const validateSessionsCompactParams = lazyCompile(SessionsCompactParamsSchema);
-export const validateSessionsCompactionListParams = lazyCompile(SessionsCompactionListParamsSchema);
-export const validateSessionsCompactionGetParams = lazyCompile(SessionsCompactionGetParamsSchema);
-export const validateSessionsCompactionBranchParams = lazyCompile(
-  SessionsCompactionBranchParamsSchema,
+export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
+export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
+export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
+export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
+export const validateSessionsDeleteParams = compile(S.SessionsDeleteParamsSchema);
+export const validateSessionsGroupsListParams = compile(S.SessionsGroupsListParamsSchema);
+export const validateSessionsGroupsListResult = compile(S.SessionsGroupsListResultSchema);
+export const validateSessionsGroupsPutParams = compile(S.SessionsGroupsPutParamsSchema);
+export const validateSessionsGroupsRenameParams = compile(S.SessionsGroupsRenameParamsSchema);
+export const validateSessionsGroupsDeleteParams = compile(S.SessionsGroupsDeleteParamsSchema);
+export const validateSessionsGroupsMutationResult = compile(S.SessionsGroupsMutationResultSchema);
+export const validateSessionsCompactParams = compile(S.SessionsCompactParamsSchema);
+export const validateSessionsCompactionListParams = compile(S.SessionsCompactionListParamsSchema);
+export const validateSessionsCompactionGetParams = compile(S.SessionsCompactionGetParamsSchema);
+export const validateSessionsCompactionBranchParams = compile(
+  S.SessionsCompactionBranchParamsSchema,
 );
-export const validateSessionsCompactionRestoreParams = lazyCompile(
-  SessionsCompactionRestoreParamsSchema,
+export const validateSessionsCompactionRestoreParams = compile(
+  S.SessionsCompactionRestoreParamsSchema,
 );
-export const validateSessionsBranchesListParams = lazyCompile(SessionsBranchesListParamsSchema);
-export const validateSessionsBranchesSwitchParams = lazyCompile(SessionsBranchesSwitchParamsSchema);
-export const validateSessionsRewindParams = lazyCompile(SessionsRewindParamsSchema);
-export const validateSessionsForkParams = lazyCompile(SessionsForkParamsSchema);
-export const validateSessionsUsageParams = lazyCompile(SessionsUsageParamsSchema);
-export const validateSessionDiscussionInfoParams = lazyCompile(SessionDiscussionInfoParamsSchema);
-export const validateSessionDiscussionInfoResult = lazyCompile(SessionDiscussionInfoResultSchema);
-export const validateSessionDiscussionOpenParams = lazyCompile(SessionDiscussionOpenParamsSchema);
-export const validateSessionDiscussionOpenResult = lazyCompile(SessionDiscussionOpenResultSchema);
-export const validateTaskSuggestionsListParams = lazyCompile(TaskSuggestionsListParamsSchema);
-export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCreateParamsSchema);
-export const validateTaskSuggestionsAcceptParams = lazyCompile(TaskSuggestionsAcceptParamsSchema);
-export const validateTaskSuggestionsDismissParams = lazyCompile(TaskSuggestionsDismissParamsSchema);
-export const validateTasksListParams = lazyCompile(TasksListParamsSchema);
-export const validateTasksGetParams = lazyCompile(TasksGetParamsSchema);
-export const validateTasksCancelParams = lazyCompile(TasksCancelParamsSchema);
-export const validateConfigGetParams = lazyCompile(ConfigGetParamsSchema);
-export const validateConfigSetParams = lazyCompile(ConfigSetParamsSchema);
-export const validateConfigApplyParams = lazyCompile(ConfigApplyParamsSchema);
-export const validateConfigPatchParams = lazyCompile(ConfigPatchParamsSchema);
-export const validateConfigSchemaParams = lazyCompile(ConfigSchemaParamsSchema);
-export const validateConfigSchemaLookupParams = lazyCompile(ConfigSchemaLookupParamsSchema);
-export const validateConfigSchemaLookupResult = lazyCompile(ConfigSchemaLookupResultSchema);
-export const validateSystemAgentChatParams = lazyCompile(SystemAgentChatParamsSchema);
-export const validateSystemAgentChatHistoryParams = lazyCompile(SystemAgentChatHistoryParamsSchema);
-export const validateSystemChangesListParams = lazyCompile(SystemChangesListParamsSchema);
-export const validateSystemAgentSetupDetectParams = lazyCompile(SystemAgentSetupDetectParamsSchema);
-export const validateSystemAgentSetupVerifyParams = lazyCompile(SystemAgentSetupVerifyParamsSchema);
-export const validateSystemAgentSetupActivateParams = lazyCompile(
-  SystemAgentSetupActivateParamsSchema,
+export const validateSessionsBranchesListParams = compile(S.SessionsBranchesListParamsSchema);
+export const validateSessionsBranchesSwitchParams = compile(S.SessionsBranchesSwitchParamsSchema);
+export const validateSessionsRewindParams = compile(S.SessionsRewindParamsSchema);
+export const validateSessionsForkParams = compile(S.SessionsForkParamsSchema);
+export const validateSessionsUsageParams = compile(S.SessionsUsageParamsSchema);
+export const validateSessionDiscussionInfoParams = compile(S.SessionDiscussionInfoParamsSchema);
+export const validateSessionDiscussionInfoResult = compile(S.SessionDiscussionInfoResultSchema);
+export const validateSessionDiscussionOpenParams = compile(S.SessionDiscussionOpenParamsSchema);
+export const validateSessionDiscussionOpenResult = compile(S.SessionDiscussionOpenResultSchema);
+export const validateTaskSuggestionsListParams = compile(S.TaskSuggestionsListParamsSchema);
+export const validateTaskSuggestionsCreateParams = compile(S.TaskSuggestionsCreateParamsSchema);
+export const validateTaskSuggestionsAcceptParams = compile(S.TaskSuggestionsAcceptParamsSchema);
+export const validateTaskSuggestionsDismissParams = compile(S.TaskSuggestionsDismissParamsSchema);
+export const validateTasksListParams = compile(S.TasksListParamsSchema);
+export const validateTasksGetParams = compile(S.TasksGetParamsSchema);
+export const validateTasksCancelParams = compile(S.TasksCancelParamsSchema);
+export const validateTasksRecoveryParams = compile(S.TasksRecoveryParamsSchema);
+export const validateConfigGetParams = compile(S.ConfigGetParamsSchema);
+export const validateConfigSetParams = compile(S.ConfigSetParamsSchema);
+export const validateConfigApplyParams = compile(S.ConfigApplyParamsSchema);
+export const validateConfigPatchParams = compile(S.ConfigPatchParamsSchema);
+export const validateConfigSchemaParams = compile(S.ConfigSchemaParamsSchema);
+export const validateConfigSchemaLookupParams = compile(S.ConfigSchemaLookupParamsSchema);
+export const validateConfigSchemaLookupResult = compile(S.ConfigSchemaLookupResultSchema);
+export const validateSystemAgentChatParams = compile(S.SystemAgentChatParamsSchema);
+export const validateSystemAgentChatHistoryParams = compile(S.SystemAgentChatHistoryParamsSchema);
+export const validateSystemChangesListParams = compile(S.SystemChangesListParamsSchema);
+export const validateSystemAgentSetupDetectParams = compile(S.SystemAgentSetupDetectParamsSchema);
+export const validateSystemAgentSetupVerifyParams = compile(S.SystemAgentSetupVerifyParamsSchema);
+export const validateSystemAgentSetupActivateParams = compile(
+  S.SystemAgentSetupActivateParamsSchema,
 );
-export const validateSystemAgentSetupAuthStartParams = lazyCompile(
-  SystemAgentSetupAuthStartParamsSchema,
+export const validateSystemAgentSetupAuthStartParams = compile(
+  S.SystemAgentSetupAuthStartParamsSchema,
 );
-export const validateWizardStartParams = lazyCompile(WizardStartParamsSchema);
-export const validateWizardNextParams = lazyCompile(WizardNextParamsSchema);
-export const validateWizardCancelParams = lazyCompile(WizardCancelParamsSchema);
-export const validateWizardStatusParams = lazyCompile(WizardStatusParamsSchema);
-export const validateTalkModeParams = lazyCompile(TalkModeParamsSchema);
-export const validateTalkCatalogParams = lazyCompile(TalkCatalogParamsSchema);
-export const validateTalkConfigParams = lazyCompile(TalkConfigParamsSchema);
-export const validateTalkConfigResult = lazyCompile(TalkConfigResultSchema);
-export const validateTalkClientCreateParams = lazyCompile(TalkClientCreateParamsSchema);
-export const validateTalkClientCreateResult = lazyCompile(TalkClientCreateResultSchema);
-export const validateTalkClientCloseParams = lazyCompile(TalkClientCloseParamsSchema);
-export const validateTalkClientMutationResult = lazyCompile(TalkClientMutationResultSchema);
-export const validateTalkClientToolCallParams = lazyCompile(TalkClientToolCallParamsSchema);
-export const validateTalkClientToolCallResult = lazyCompile(TalkClientToolCallResultSchema);
-export const validateTalkClientTranscriptParams = lazyCompile(TalkClientTranscriptParamsSchema);
-export const validateTalkClientSteerParams = lazyCompile(TalkClientSteerParamsSchema);
-export const validateTalkSessionCreateParams = lazyCompile(TalkSessionCreateParamsSchema);
-export const validateTalkSessionJoinParams = lazyCompile(TalkSessionJoinParamsSchema);
-export const validateTalkSessionAppendAudioParams = lazyCompile(TalkSessionAppendAudioParamsSchema);
-export const validateTalkSessionAcknowledgeMarkParams = lazyCompile(
-  TalkSessionAcknowledgeMarkParamsSchema,
+export const validateWizardStartParams = compile(S.WizardStartParamsSchema);
+export const validateWizardNextParams = compile(S.WizardNextParamsSchema);
+export const validateWizardCancelParams = compile(S.WizardCancelParamsSchema);
+export const validateWizardStatusParams = compile(S.WizardStatusParamsSchema);
+export const validateTalkModeParams = compile(S.TalkModeParamsSchema);
+export const validateTalkCatalogParams = compile(S.TalkCatalogParamsSchema);
+export const validateTalkConfigParams = compile(S.TalkConfigParamsSchema);
+export const validateTalkConfigResult = compile(S.TalkConfigResultSchema);
+export const validateTalkClientCreateParams = compile(S.TalkClientCreateParamsSchema);
+export const validateTalkClientCreateResult = compile(S.TalkClientCreateResultSchema);
+export const validateTalkClientCloseParams = compile(S.TalkClientCloseParamsSchema);
+export const validateTalkClientMutationResult = compile(S.TalkClientMutationResultSchema);
+export const validateTalkClientToolCallParams = compile(S.TalkClientToolCallParamsSchema);
+export const validateTalkClientToolCallResult = compile(S.TalkClientToolCallResultSchema);
+export const validateTalkClientTranscriptParams = compile(S.TalkClientTranscriptParamsSchema);
+export const validateTalkClientSteerParams = compile(S.TalkClientSteerParamsSchema);
+export const validateTalkSessionCreateParams = compile(S.TalkSessionCreateParamsSchema);
+export const validateTalkSessionJoinParams = compile(S.TalkSessionJoinParamsSchema);
+export const validateTalkSessionAppendAudioParams = compile(S.TalkSessionAppendAudioParamsSchema);
+export const validateTalkSessionAcknowledgeMarkParams = compile(
+  S.TalkSessionAcknowledgeMarkParamsSchema,
 );
-export const validateTalkSessionTurnParams = lazyCompile(TalkSessionTurnParamsSchema);
-export const validateTalkSessionCancelTurnParams = lazyCompile(TalkSessionCancelTurnParamsSchema);
-export const validateTalkSessionCancelOutputParams = lazyCompile(
-  TalkSessionCancelOutputParamsSchema,
+export const validateTalkSessionTurnParams = compile(S.TalkSessionTurnParamsSchema);
+export const validateTalkSessionCancelTurnParams = compile(S.TalkSessionCancelTurnParamsSchema);
+export const validateTalkSessionCancelOutputParams = compile(S.TalkSessionCancelOutputParamsSchema);
+export const validateTalkSessionSteerParams = compile(S.TalkSessionSteerParamsSchema);
+export const validateTalkSessionSubmitToolResultParams = compile(
+  S.TalkSessionSubmitToolResultParamsSchema,
 );
-export const validateTalkSessionSteerParams = lazyCompile(TalkSessionSteerParamsSchema);
-export const validateTalkSessionSubmitToolResultParams = lazyCompile(
-  TalkSessionSubmitToolResultParamsSchema,
+export const validateTalkSessionCloseParams = compile(S.TalkSessionCloseParamsSchema);
+export const validateTalkSpeakParams = compile(S.TalkSpeakParamsSchema);
+export const validateTtsSpeakParams = compile(S.TtsSpeakParamsSchema);
+export const validateChannelsStatusParams = compile(S.ChannelsStatusParamsSchema);
+export const validateChannelsPairingListParams = compile(S.ChannelsPairingListParamsSchema);
+export const validateChannelsPairingApproveParams = compile(S.ChannelsPairingApproveParamsSchema);
+export const validateChannelsPairingDismissParams = compile(S.ChannelsPairingDismissParamsSchema);
+export const validateChannelsStartParams = compile(S.ChannelsStartParamsSchema);
+export const validateChannelsStopParams = compile(S.ChannelsStopParamsSchema);
+export const validateChannelsLogoutParams = compile(S.ChannelsLogoutParamsSchema);
+export const validateModelsAuthLogoutParams = compile(S.ModelsAuthLogoutParamsSchema);
+export const validateModelsAuthStatusParams = compile(S.ModelsAuthStatusParamsSchema);
+export const validateModelsListParams = compile(S.ModelsListParamsSchema);
+export const validateSkillsStatusParams = compile(S.SkillsStatusParamsSchema);
+export const validateHooksStatusParams = compile(S.HooksStatusParamsSchema);
+export const validateToolsCatalogParams = compile(S.ToolsCatalogParamsSchema);
+export const validateToolsEffectiveParams = compile(S.ToolsEffectiveParamsSchema);
+export const validateToolsInvokeParams = compile(S.ToolsInvokeParamsSchema);
+export const validateSkillsBinsParams = compile(S.SkillsBinsParamsSchema);
+export const validateSkillsInstallParams = compile(S.SkillsInstallParamsSchema);
+export const validateSkillsUploadBeginParams = compile(S.SkillsUploadBeginParamsSchema);
+export const validateSkillsUploadChunkParams = compile(S.SkillsUploadChunkParamsSchema);
+export const validateSkillsUploadCommitParams = compile(S.SkillsUploadCommitParamsSchema);
+export const validateSkillsUpdateParams = compile(S.SkillsUpdateParamsSchema);
+export const validateSkillsSearchParams = compile(S.SkillsSearchParamsSchema);
+export const validateSkillsDetailParams = compile(S.SkillsDetailParamsSchema);
+export const validateSkillsCuratorStatusParams = compile(S.SkillsCuratorStatusParamsSchema);
+export const validateSkillsCuratorActionParams = compile(S.SkillsCuratorActionParamsSchema);
+export const validateSkillsProposalsListParams = compile(S.SkillsProposalsListParamsSchema);
+export const validateSkillsProposalInspectParams = compile(S.SkillsProposalInspectParamsSchema);
+export const validateSkillsProposalCreateParams = compile(S.SkillsProposalCreateParamsSchema);
+export const validateSkillsProposalUpdateParams = compile(S.SkillsProposalUpdateParamsSchema);
+export const validateSkillsProposalReviseParams = compile(S.SkillsProposalReviseParamsSchema);
+export const validateSkillsProposalRequestRevisionParams = compile(
+  S.SkillsProposalRequestRevisionParamsSchema,
 );
-export const validateTalkSessionCloseParams = lazyCompile(TalkSessionCloseParamsSchema);
-export const validateTalkSpeakParams = lazyCompile(TalkSpeakParamsSchema);
-export const validateTtsSpeakParams = lazyCompile(TtsSpeakParamsSchema);
-export const validateChannelsStatusParams = lazyCompile(ChannelsStatusParamsSchema);
-export const validateChannelsPairingListParams = lazyCompile(ChannelsPairingListParamsSchema);
-export const validateChannelsPairingApproveParams = lazyCompile(ChannelsPairingApproveParamsSchema);
-export const validateChannelsPairingDismissParams = lazyCompile(ChannelsPairingDismissParamsSchema);
-export const validateChannelsStartParams = lazyCompile(ChannelsStartParamsSchema);
-export const validateChannelsStopParams = lazyCompile(ChannelsStopParamsSchema);
-export const validateChannelsLogoutParams = lazyCompile(ChannelsLogoutParamsSchema);
-export const validateModelsAuthLogoutParams = lazyCompile(ModelsAuthLogoutParamsSchema);
-export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParamsSchema);
-export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
-export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
-export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);
-export const validateToolsEffectiveParams = lazyCompile(ToolsEffectiveParamsSchema);
-export const validateToolsInvokeParams = lazyCompile(ToolsInvokeParamsSchema);
-export const validateSkillsBinsParams = lazyCompile(SkillsBinsParamsSchema);
-export const validateSkillsInstallParams = lazyCompile(SkillsInstallParamsSchema);
-export const validateSkillsUploadBeginParams = lazyCompile(SkillsUploadBeginParamsSchema);
-export const validateSkillsUploadChunkParams = lazyCompile(SkillsUploadChunkParamsSchema);
-export const validateSkillsUploadCommitParams = lazyCompile(SkillsUploadCommitParamsSchema);
-export const validateSkillsUpdateParams = lazyCompile(SkillsUpdateParamsSchema);
-export const validateSkillsSearchParams = lazyCompile(SkillsSearchParamsSchema);
-export const validateSkillsDetailParams = lazyCompile(SkillsDetailParamsSchema);
-export const validateSkillsCuratorStatusParams = lazyCompile(SkillsCuratorStatusParamsSchema);
-export const validateSkillsCuratorActionParams = lazyCompile(SkillsCuratorActionParamsSchema);
-export const validateSkillsProposalsListParams = lazyCompile(SkillsProposalsListParamsSchema);
-export const validateSkillsProposalInspectParams = lazyCompile(SkillsProposalInspectParamsSchema);
-export const validateSkillsProposalCreateParams = lazyCompile(SkillsProposalCreateParamsSchema);
-export const validateSkillsProposalUpdateParams = lazyCompile(SkillsProposalUpdateParamsSchema);
-export const validateSkillsProposalReviseParams = lazyCompile(SkillsProposalReviseParamsSchema);
-export const validateSkillsProposalRequestRevisionParams = lazyCompile(
-  SkillsProposalRequestRevisionParamsSchema,
+export const validateSkillsProposalActionParams = compile(S.SkillsProposalActionParamsSchema);
+export const validateSkillsProposalEvaluateParams = compile(S.SkillsProposalEvaluateParamsSchema);
+export const validateSkillsProposalEventsListParams = compile(
+  S.SkillsProposalEventsListParamsSchema,
 );
-export const validateSkillsProposalActionParams = lazyCompile(SkillsProposalActionParamsSchema);
-export const validateSkillsProposalEvaluateParams = lazyCompile(SkillsProposalEvaluateParamsSchema);
-export const validateSkillsProposalEventsListParams = lazyCompile(
-  SkillsProposalEventsListParamsSchema,
-);
-export const validateSkillsSecurityVerdictsParams = lazyCompile(SkillsSecurityVerdictsParamsSchema);
-export const validateSkillsSkillCardParams = lazyCompile(SkillsSkillCardParamsSchema);
-export const validateCronListParams = lazyCompile(CronListParamsSchema);
-export const validateCronStatusParams = lazyCompile(CronStatusParamsSchema);
-export const validateCronGetParams = lazyCompile(CronGetParamsSchema);
-export const validateCronAddParams = lazyCompile(CronAddParamsSchema);
-export const validateCronUpdateParams = lazyCompile(CronUpdateParamsSchema);
-export const validateCronRemoveParams = lazyCompile(CronRemoveParamsSchema);
-export const validateCronRunParams = lazyCompile(CronRunParamsSchema);
-export const validateCronRunsParams = lazyCompile(CronRunsParamsSchema);
-export const validateCronScratchGetParams = lazyCompile(CronScratchGetParamsSchema);
-export const validateCronScratchSetParams = lazyCompile(CronScratchSetParamsSchema);
-export const validateDevicePairListParams = lazyCompile(DevicePairListParamsSchema);
-export const validateDevicePairApproveParams = lazyCompile(DevicePairApproveParamsSchema);
-export const validateDevicePairRejectParams = lazyCompile(DevicePairRejectParamsSchema);
-export const validateDevicePairRemoveParams = lazyCompile(DevicePairRemoveParamsSchema);
-export const validateDevicePairSetupCodeParams = lazyCompile(DevicePairSetupCodeParamsSchema);
-export const validateDevicePairRenameParams = lazyCompile(DevicePairRenameParamsSchema);
-export const validateDeviceTokenRotateParams = lazyCompile(DeviceTokenRotateParamsSchema);
-export const validateDeviceTokenRevokeParams = lazyCompile(DeviceTokenRevokeParamsSchema);
-export const validateApprovalPresentation = lazyCompile(ApprovalPresentationSchema);
-export const validateApprovalGetParams = lazyCompile(ApprovalGetParamsSchema);
-export const validateApprovalHistoryParams = lazyCompile(ApprovalHistoryParamsSchema);
-export const validateApprovalResolveParams = lazyCompile(ApprovalResolveParamsSchema);
-export const validateExecApprovalsGetParams = lazyCompile(ExecApprovalsGetParamsSchema);
-export const validateExecApprovalsSetParams = lazyCompile(ExecApprovalsSetParamsSchema);
-export const validateExecApprovalGetParams = lazyCompile(ExecApprovalGetParamsSchema);
-export const validateExecApprovalRequestParams = lazyCompile(ExecApprovalRequestParamsSchema);
-export const validateExecApprovalResolveParams = lazyCompile(ExecApprovalResolveParamsSchema);
-export const validateQuestionRequestParams = lazyCompile(QuestionRequestParamsSchema);
-export const validateQuestionWaitAnswerParams = lazyCompile(QuestionWaitAnswerParamsSchema);
-export const validateQuestionResolveParams = lazyCompile(QuestionResolveParamsSchema);
-export const validateQuestionGetParams = lazyCompile(QuestionGetParamsSchema);
-export const validateQuestionListParams = lazyCompile(QuestionListParamsSchema);
-export const validatePluginApprovalRequestParams = lazyCompile(PluginApprovalRequestParamsSchema);
-export const validatePluginApprovalResolveParams = lazyCompile(PluginApprovalResolveParamsSchema);
-export const validatePluginsListParams = lazyCompile(PluginsListParamsSchema);
-export const validatePluginsRefreshParams = lazyCompile(PluginsRefreshParamsSchema);
-export const validatePluginsSearchParams = lazyCompile(PluginsSearchParamsSchema);
-export const validatePluginsInstallParams = lazyCompile(PluginsInstallParamsSchema);
-export const validatePluginsSetEnabledParams = lazyCompile(PluginsSetEnabledParamsSchema);
-export const validatePluginsUninstallParams = lazyCompile(PluginsUninstallParamsSchema);
-export const validatePluginsUiDescriptorsParams = lazyCompile(PluginsUiDescriptorsParamsSchema);
-export const validatePluginsUiDescriptorsResult = lazyCompile(PluginsUiDescriptorsResultSchema);
-export const validatePluginsSessionActionParams = lazyCompile(PluginsSessionActionParamsSchema);
-export const validatePluginsSessionActionResult = lazyCompile(PluginsSessionActionResultSchema);
-export const validateExecApprovalsNodeGetParams = lazyCompile(ExecApprovalsNodeGetParamsSchema);
-export const validateExecApprovalsNodeSetParams = lazyCompile(ExecApprovalsNodeSetParamsSchema);
-export const validateExecApprovalsNodeSnapshot = lazyCompile(ExecApprovalsNodeSnapshotSchema);
-export const validateLogsTailParams = lazyCompile(LogsTailParamsSchema);
-export const validateModelsProbeParams = lazyCompile(ModelsProbeParamsSchema);
-export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
-export const validateChatMetadataParams = lazyCompile(ChatMetadataParamsSchema);
-export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
-export const validateChatToolTitlesParams = lazyCompile(ChatToolTitlesParamsSchema);
-export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
-export const validateChatAbortParams = lazyCompile(ChatAbortParamsSchema);
-export const validateChatInjectParams = lazyCompile(ChatInjectParamsSchema);
-export const validateUpdateStatusParams = lazyCompile(UpdateStatusParamsSchema);
-export const validateUpdateRunParams = lazyCompile(UpdateRunParamsSchema);
-export const validateUiCommandParams = lazyCompile(UiCommandParamsSchema);
-export const validateWebLoginStartParams = lazyCompile(WebLoginStartParamsSchema);
-export const validateWebLoginWaitParams = lazyCompile(WebLoginWaitParamsSchema);
+export const validateSkillsSecurityVerdictsParams = compile(S.SkillsSecurityVerdictsParamsSchema);
+export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSchema);
+export const validateCronListParams = compile(S.CronListParamsSchema);
+export const validateCronStatusParams = compile(S.CronStatusParamsSchema);
+export const validateCronGetParams = compile(S.CronGetParamsSchema);
+export const validateCronAddParams = compile(S.CronAddParamsSchema);
+export const validateCronUpdateParams = compile(S.CronUpdateParamsSchema);
+export const validateCronRemoveParams = compile(S.CronRemoveParamsSchema);
+export const validateCronRunParams = compile(S.CronRunParamsSchema);
+export const validateCronRunsParams = compile(S.CronRunsParamsSchema);
+export const validateCronScratchGetParams = compile(S.CronScratchGetParamsSchema);
+export const validateCronScratchSetParams = compile(S.CronScratchSetParamsSchema);
+export const validateDevicePairListParams = compile(S.DevicePairListParamsSchema);
+export const validateDevicePairApproveParams = compile(S.DevicePairApproveParamsSchema);
+export const validateDevicePairRejectParams = compile(S.DevicePairRejectParamsSchema);
+export const validateDevicePairRemoveParams = compile(S.DevicePairRemoveParamsSchema);
+export const validateDevicePairSetupCodeParams = compile(S.DevicePairSetupCodeParamsSchema);
+export const validateDevicePairRenameParams = compile(S.DevicePairRenameParamsSchema);
+export const validateDeviceTokenRotateParams = compile(S.DeviceTokenRotateParamsSchema);
+export const validateDeviceTokenRevokeParams = compile(S.DeviceTokenRevokeParamsSchema);
+export const validateApprovalPresentation = compile(S.ApprovalPresentationSchema);
+export const validateApprovalGetParams = compile(S.ApprovalGetParamsSchema);
+export const validateApprovalHistoryParams = compile(S.ApprovalHistoryParamsSchema);
+export const validateApprovalResolveParams = compile(S.ApprovalResolveParamsSchema);
+export const validateExecApprovalsGetParams = compile(S.ExecApprovalsGetParamsSchema);
+export const validateExecApprovalsSetParams = compile(S.ExecApprovalsSetParamsSchema);
+export const validateExecApprovalGetParams = compile(S.ExecApprovalGetParamsSchema);
+export const validateExecApprovalRequestParams = compile(S.ExecApprovalRequestParamsSchema);
+export const validateExecApprovalResolveParams = compile(S.ExecApprovalResolveParamsSchema);
+export const validateQuestionRequestParams = compile(S.QuestionRequestParamsSchema);
+export const validateQuestionWaitAnswerParams = compile(S.QuestionWaitAnswerParamsSchema);
+export const validateQuestionResolveParams = compile(S.QuestionResolveParamsSchema);
+export const validateQuestionGetParams = compile(S.QuestionGetParamsSchema);
+export const validateQuestionListParams = compile(S.QuestionListParamsSchema);
+export const validatePluginApprovalRequestParams = compile(S.PluginApprovalRequestParamsSchema);
+export const validatePluginApprovalResolveParams = compile(S.PluginApprovalResolveParamsSchema);
+export const validatePluginsListParams = compile(S.PluginsListParamsSchema);
+export const validatePluginsRefreshParams = compile(S.PluginsRefreshParamsSchema);
+export const validatePluginsSearchParams = compile(S.PluginsSearchParamsSchema);
+export const validatePluginsInstallParams = compile(S.PluginsInstallParamsSchema);
+export const validatePluginsSetEnabledParams = compile(S.PluginsSetEnabledParamsSchema);
+export const validatePluginsUninstallParams = compile(S.PluginsUninstallParamsSchema);
+export const validatePluginsUiDescriptorsParams = compile(S.PluginsUiDescriptorsParamsSchema);
+export const validatePluginsUiDescriptorsResult = compile(S.PluginsUiDescriptorsResultSchema);
+export const validatePluginsSessionActionParams = compile(S.PluginsSessionActionParamsSchema);
+export const validatePluginsSessionActionResult = compile(S.PluginsSessionActionResultSchema);
+export const validateExecApprovalsNodeGetParams = compile(S.ExecApprovalsNodeGetParamsSchema);
+export const validateExecApprovalsNodeSetParams = compile(S.ExecApprovalsNodeSetParamsSchema);
+export const validateExecApprovalsNodeSnapshot = compile(S.ExecApprovalsNodeSnapshotSchema);
+export const validateLogsTailParams = compile(S.LogsTailParamsSchema);
+export const validateModelsProbeParams = compile(S.ModelsProbeParamsSchema);
+export const validateChatHistoryParams = compile(S.ChatHistoryParamsSchema);
+export const validateChatMetadataParams = compile(S.ChatMetadataParamsSchema);
+export const validateChatMessageGetParams = compile(S.ChatMessageGetParamsSchema);
+export const validateChatToolTitlesParams = compile(S.ChatToolTitlesParamsSchema);
+export const validateChatSendParams = compile(S.ChatSendParamsSchema);
+export const validateChatAbortParams = compile(S.ChatAbortParamsSchema);
+export const validateChatInjectParams = compile(S.ChatInjectParamsSchema);
+export const validateUpdateStatusParams = compile(S.UpdateStatusParamsSchema);
+export const validateUpdateRunParams = compile(S.UpdateRunParamsSchema);
+export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
+export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);
+export const validateWebLoginWaitParams = compile(S.WebLoginWaitParamsSchema);

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -24,7 +25,10 @@ import {
   readLatestSessionUsageFromTranscriptAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+import {
+  readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptBatch,
+} from "./session-transcript-title-reader.js";
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -32,6 +36,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     ...actual,
     readSessionTranscriptMessageEventPage: vi.fn(actual.readSessionTranscriptMessageEventPage),
     readSessionTranscriptMessageEvents: vi.fn(actual.readSessionTranscriptMessageEvents),
+    readSessionTranscriptTitleProbeBatch: vi.fn(actual.readSessionTranscriptTitleProbeBatch),
+    readSessionTranscriptWatermark: vi.fn(actual.readSessionTranscriptWatermark),
+    readSessionTranscriptWatermarkBatch: vi.fn(actual.readSessionTranscriptWatermarkBatch),
   };
 });
 
@@ -400,6 +407,46 @@ describe("session transcript reader facade", () => {
     expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
   });
 
+  test("falls back to the canonical visible window for reset transcripts", async () => {
+    const sessionId = "reader-title-reset-window";
+    const scope = await writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "old",
+        parentId: null,
+        message: { role: "user", content: "hidden old prompt" },
+      },
+      {
+        type: "message",
+        id: "kept-user",
+        parentId: "old",
+        message: { role: "user", content: "kept prompt" },
+      },
+      {
+        type: "message",
+        id: "kept-assistant",
+        parentId: "kept-user",
+        message: { role: "assistant", content: "kept answer" },
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "kept-assistant",
+        firstKeptEntryId: "kept-user",
+      },
+      {
+        type: "message",
+        id: "post-reset",
+        parentId: "reset-boundary",
+        message: { role: "assistant", content: "newest answer" },
+      },
+    ]);
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
+      { firstUserMessage: "kept prompt", lastMessagePreview: "newest answer" },
+    ]);
+  });
+
   test("bounds title probe reads independently of transcript length", async () => {
     const probeReadCount = async (sessionId: string, messageCount: number) => {
       const scope = await writeSqliteMessages(
@@ -440,6 +487,81 @@ describe("session transcript reader facade", () => {
       firstUserMessage: "cached prompt",
       lastMessagePreview: "cached reply",
     });
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
+  });
+
+  test("skips batch title probes while every cached transcript watermark is unchanged", async () => {
+    const scope = await writeSqliteMessages("reader-title-batch-cache-warm", [
+      { role: "user", content: "cached batch prompt" },
+      { role: "assistant", content: "cached batch reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
+      { firstUserMessage: "cached batch prompt", lastMessagePreview: "cached batch reply" },
+    ]);
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
+      { firstUserMessage: "cached batch prompt", lastMessagePreview: "cached batch reply" },
+    ]);
+    expect(sessionAccessor.readSessionTranscriptWatermarkBatch).toHaveBeenCalledOnce();
+    expect(sessionAccessor.readSessionTranscriptWatermark).not.toHaveBeenCalled();
+    expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).not.toHaveBeenCalled();
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
+  });
+
+  test("resolves SQLite store ownership once for a multi-row transcript batch", async () => {
+    const scopes: SessionTranscriptReadScope[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      scopes.push(
+        await writeSqliteMessages(`reader-title-target-batch-${index}`, [
+          { role: "user", content: `prompt ${index}` },
+          { role: "assistant", content: `reply ${index}` },
+        ]),
+      );
+    }
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      expect(sessionAccessor.readSessionTranscriptTitleProbeBatch(scopes)).toHaveLength(30);
+      const titleSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
+        sql.toLowerCase().includes("pragma user_version"),
+      );
+      expect(titleSchemaReads).toHaveLength(1);
+
+      prepareSpy.mockClear();
+      expect(sessionAccessor.readSessionTranscriptWatermarkBatch(scopes)).toHaveLength(30);
+      const watermarkSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
+        sql.toLowerCase().includes("pragma user_version"),
+      );
+      expect(watermarkSchemaReads).toHaveLength(1);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
+
+  test("reprobes cached batch title fields after an append advances max seq", async () => {
+    const sessionId = "reader-title-batch-cache-append";
+    const scope = await writeSqliteMessages(sessionId, [
+      { role: "user", content: "batch append prompt" },
+      { role: "assistant", content: "first batch reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
+      "first batch reply",
+    );
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "appended batch reply" } }],
+        touchSessionEntry: false,
+      },
+    );
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
+      "appended batch reply",
+    );
+    expect(sessionAccessor.readSessionTranscriptWatermarkBatch).toHaveBeenCalledOnce();
+    expect(sessionAccessor.readSessionTranscriptWatermark).not.toHaveBeenCalled();
+    expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).toHaveBeenCalledOnce();
     expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
   });
 

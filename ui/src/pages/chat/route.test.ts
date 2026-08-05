@@ -293,7 +293,11 @@ describe("loadChatRoute", () => {
     const { context } = contextFor(result(rows));
     const ambiguous = await loadChatRoute(
       context,
-      { pathname: "/dashboard/ignored/deploy-12345678", search: "?draft=ship", hash: "" },
+      {
+        pathname: "/dashboard/ignored/deploy-12345678",
+        search: "?draft=ship&__openclawComposerFocus=1",
+        hash: "",
+      },
       "dashboard",
       new AbortController().signal,
     );
@@ -302,8 +306,8 @@ describe("loadChatRoute", () => {
       throw new Error("expected an ambiguous route");
     }
     expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
-      "/dashboard/main/deploy-monitor-123456780a?draft=ship",
-      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship",
+      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
+      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
     ]);
 
     for (const [candidate, expectedRow] of ambiguous.candidates.map(
@@ -324,6 +328,7 @@ describe("loadChatRoute", () => {
         kind: "session",
         sessionKey: expectedRow?.key,
         draft: "ship",
+        focusComposer: true,
         face: "dashboard",
         shortId: candidate.idPrefix,
       });

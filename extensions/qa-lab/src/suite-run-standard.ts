@@ -15,7 +15,11 @@ import {
   type QaSuiteGatewayRssSample,
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
-import { applyQaMergePatch, collectQaSuiteTransportPolicy } from "./suite-planning.js";
+import {
+  applyQaMergePatch,
+  collectQaSuiteTransportPolicy,
+  scenarioRequiresControlUi,
+} from "./suite-planning.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import {
@@ -68,6 +72,8 @@ export async function runQaFlowSuiteStandard(
   } = context;
   const ownsLab = !params?.lab;
   const startLab = params?.startLab;
+  const controlUiEnabled =
+    params?.controlUiEnabled ?? selectedScenarios.some(scenarioRequiresControlUi);
   writeQaSuiteProgress(progressEnabled, "lab start");
   const lab =
     params?.lab ??
@@ -126,7 +132,7 @@ export async function runQaFlowSuiteStandard(
       thinkingDefault: params?.thinkingDefault,
       forcedRuntime: params?.forcedRuntime,
       claudeCliAuthMode: params?.claudeCliAuthMode,
-      controlUiEnabled: params?.controlUiEnabled ?? true,
+      controlUiEnabled,
       enabledPluginIds,
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
@@ -144,14 +150,17 @@ export async function runQaFlowSuiteStandard(
       progressEnabled,
       `gateway ready: ${sanitizeQaSuiteProgressValue(activeGateway.baseUrl)}`,
     );
-    lab.setControlUi({
-      controlUiProxyTarget: activeGateway.baseUrl,
-      controlUiProxyToken: activeGateway.token,
-    });
+    if (controlUiEnabled) {
+      lab.setControlUi({
+        controlUiProxyTarget: activeGateway.baseUrl,
+        controlUiProxyToken: activeGateway.token,
+      });
+    }
     const activeEnv: QaSuiteEnvironment = {
       lab,
       mock: activeMock,
       gateway: activeGateway,
+      runtimeId: params?.forcedRuntime ?? "openclaw",
       outputDir,
       // YAML scenarios should see the full staged gateway config, not just
       // the transport fragment. Routing/session/plugin assertions depend on it.
@@ -165,16 +174,20 @@ export async function runQaFlowSuiteStandard(
     };
     env = activeEnv;
 
-    const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
-      params?.transportReadyTimeoutMs,
-    );
-    // The gateway child already waits for /readyz before returning, but the
-    // selected transport can still be finishing account startup. Pay that
-    // readiness cost once here so the first scenario does not race bootstrap.
-    await waitForTransportReady(activeEnv, transportReadyTimeoutMs).catch(async () => {
-      await waitForGatewayHealthy(activeEnv, transportReadyTimeoutMs);
-      await waitForTransportReady(activeEnv, transportReadyTimeoutMs);
-    });
+    // Lifecycle scenarios deliberately start a blocked channel. Waiting for
+    // connected-channel readiness here would prevent those scenarios from running.
+    if (!gatewayRuntimeOptions?.allowUnhealthyStartup) {
+      const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
+        params?.transportReadyTimeoutMs,
+      );
+      // The gateway child already waits for /readyz before returning, but the
+      // selected transport can still be finishing account startup. Pay that
+      // readiness cost once here so the first scenario does not race bootstrap.
+      await waitForTransportReady(activeEnv, transportReadyTimeoutMs).catch(async () => {
+        await waitForGatewayHealthy(activeEnv, transportReadyTimeoutMs);
+        await waitForTransportReady(activeEnv, transportReadyTimeoutMs);
+      });
+    }
     const scenarios: QaSuiteScenarioResult[] = [];
     let runtimeParityCellTiming: QaRuntimeParityCellTiming | undefined;
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({
@@ -436,10 +449,12 @@ export async function runQaFlowSuiteStandard(
       finishLab: ownsLab
         ? () => lab.stop()
         : async () => {
-            lab.setControlUi({
-              controlUiUrl: null,
-              controlUiProxyTarget: null,
-            });
+            if (controlUiEnabled) {
+              lab.setControlUi({
+                controlUiUrl: null,
+                controlUiProxyTarget: null,
+              });
+            }
           },
     });
     throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });

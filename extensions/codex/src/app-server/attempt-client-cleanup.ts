@@ -76,6 +76,29 @@ export async function closeCodexStartupClientBestEffort(
   }
 }
 
+/** Retires an unsafe turn client without replacing an already-authoritative failure. */
+export async function retireUnsafeCodexTurnClientBestEffort(
+  client: CodexAppServerClient,
+  operation: string,
+): Promise<void> {
+  try {
+    await closeCodexStartupClientBestEffort(client);
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server unsafe turn client retirement failed", {
+      operation,
+      error,
+    });
+    try {
+      client.close();
+    } catch (closeError) {
+      embeddedAgentLog.debug("codex app-server unsafe turn client close failed", {
+        operation,
+        error: closeError,
+      });
+    }
+  }
+}
+
 /** Sends a bounded turn interrupt and waits for Codex to confirm terminal abort handling. */
 export async function interruptCodexTurnAndWaitBestEffort(
   client: CodexAppServerClient,

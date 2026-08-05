@@ -91,6 +91,7 @@ async function writeListToolsMcpServer(params: {
   await writeExecutable(
     params.filePath,
     `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 
 const logPath = ${JSON.stringify(params.logPath)};
@@ -156,7 +157,7 @@ if (hangToolCallsUntilRestartMarkerPath) {
   }
 }
 function log(line) {
-  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+  appendFileSync(logPath, line + "\\n", "utf8");
 }
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\\n");

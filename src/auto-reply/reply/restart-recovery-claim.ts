@@ -34,6 +34,7 @@ type ReplyRestartRecoveryClaimController = {
     };
   }) => Promise<void>;
   clear: () => Promise<void>;
+  confirmRestartRecoveryArmedAfterLeaseLoss: () => Promise<boolean>;
   isArmed: () => boolean;
 };
 
@@ -129,6 +130,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   let recoveryRunId: string = randomUUID();
   let recoverySourceRunId: string | undefined;
   let tracked = false;
+  let leaseLossRestartHandoffConfirmed = false;
 
   const persistAdmissionPatch = async (options: {
     entry: SessionEntry;
@@ -436,8 +438,43 @@ export function createReplyRestartRecoveryClaimController(params: {
       return true;
     };
 
+  const confirmRestartRecoveryArmedAfterLeaseLoss = async (): Promise<boolean> => {
+    if (!tracked || !params.sessionKey || !params.storePath || !recoverySourceRunId) {
+      return false;
+    }
+    // Lease loss means the replacement may have advanced the authoritative row
+    // past this process's cache. This cold error path performs one latest read.
+    const persisted = loadSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      clone: false,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    });
+    if (!persisted || persisted.sessionId !== params.getSessionId()) {
+      return false;
+    }
+    params.setEntry(persisted);
+    const activeHandoff =
+      persisted.abortedLastRun === true &&
+      normalizeOptionalString(persisted.restartRecoveryDeliveryRunId) === recoveryRunId &&
+      hasRestartRecoverySourceClaim(persisted, recoverySourceRunId);
+    // The replacement may finish and clear the active claim before the old
+    // owner observes lease loss. Its terminal source marker proves completion.
+    const completedHandoff = hasRestartRecoveryTerminalRun(persisted, recoverySourceRunId);
+    const armed = activeHandoff || completedHandoff;
+    leaseLossRestartHandoffConfirmed ||= armed;
+    return armed;
+  };
+
   const clear = async (): Promise<void> => {
-    if (!tracked || !params.sessionKey || !params.storePath || params.isRestartAbort()) {
+    if (
+      !tracked ||
+      !params.sessionKey ||
+      !params.storePath ||
+      params.isRestartAbort() ||
+      leaseLossRestartHandoffConfirmed
+    ) {
       return;
     }
     const persisted = await updateSessionEntry(
@@ -524,5 +561,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     return persisted?.abortedLastRun === true || params.getEntry()?.abortedLastRun === true;
   };
 
-  return { admitUserTurn, beginBeforeAgentReply, checkpointBeforeAgentReply, clear, isArmed };
+  return {
+    admitUserTurn,
+    beginBeforeAgentReply,
+    checkpointBeforeAgentReply,
+    clear,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
+    isArmed,
+  };
 }

@@ -5,6 +5,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { withTimeout } from "../../node-host/with-timeout.js";
 import { getReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -79,27 +80,6 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
   });
 }
 
-const withTimeout = async <T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutError: Error,
-): Promise<T> => {
-  if (!timeoutMs || timeoutMs <= 0) {
-    return promise;
-  }
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(timeoutError), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-};
-
 function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
   return clampPositiveTimerTimeoutMs(timeoutMs) ?? 0;
 }
@@ -158,22 +138,23 @@ export function createBlockReplyPipeline(params: {
     pendingKeys.add(payloadKey);
 
     // Preserve outbound order by chaining sends; abort after timeout to avoid stale blocks.
-    const timeoutError = new Error(`block reply delivery timed out after ${timeoutMs}ms`);
-    const abortController = new AbortController();
+    const fallbackAbortController = new AbortController();
+    let timeoutSignal: AbortSignal | undefined;
     sendChain = sendChain
       .then(async () => {
         if (aborted) {
           return false;
         }
         await withTimeout(
-          Promise.resolve(
-            onBlockReply(payload, {
-              abortSignal: abortController.signal,
+          async (signal) => {
+            timeoutSignal = signal;
+            await onBlockReply(payload, {
+              abortSignal: signal ?? fallbackAbortController.signal,
               timeoutMs,
-            }),
-          ),
-          timeoutMs,
-          timeoutError,
+            });
+          },
+          timeoutMs || undefined,
+          "block reply delivery",
         );
         return true;
       })
@@ -208,8 +189,7 @@ export function createBlockReplyPipeline(params: {
         }
       })
       .catch((err: unknown) => {
-        if (err === timeoutError) {
-          abortController.abort();
+        if (timeoutSignal?.aborted) {
           aborted = true;
           if (!didLogTimeout) {
             didLogTimeout = true;

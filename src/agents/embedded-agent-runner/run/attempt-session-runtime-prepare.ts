@@ -133,6 +133,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionManager,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
   const boundary = prepareEmbeddedAttemptSessionBoundary({
     activeSession,
     attempt,
@@ -238,6 +239,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         1,
         Math.floor(attempt.contextTokenBudget ?? attempt.model.contextWindow),
       ),
+      ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },
   });
   promptCacheRetentionRef.current = transport.effectivePromptCacheRetention;

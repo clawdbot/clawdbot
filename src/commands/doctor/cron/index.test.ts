@@ -732,6 +732,58 @@ describe("maybeRepairLegacyCronStore", () => {
 
       expectNoNoteContaining("runs in a row", "Cron");
     });
+
+    it("lists auto-disabled jobs with their recorded reasons and recovery commands", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "run-failure-job",
+          name: "Run failure job",
+          enabled: false,
+          state: {
+            consecutiveErrors: 10,
+            autoDisabled: {
+              reason: "consecutive-failures",
+              atMs: Date.parse("2026-08-01T10:00:00.000Z"),
+              consecutiveErrors: 10,
+            },
+          },
+        }),
+        createCurrentCronJob({
+          id: "schedule-error-job",
+          name: "Schedule error job",
+          enabled: false,
+          state: {
+            scheduleErrorCount: 3,
+            autoDisabled: {
+              reason: "schedule-errors",
+              atMs: Date.parse("2026-08-01T11:00:00.000Z"),
+              consecutiveErrors: 3,
+            },
+          },
+        }),
+        createCurrentCronJob({
+          id: "disabled-one-shot",
+          enabled: false,
+          state: { lastRunStatus: "error", consecutiveErrors: 9 },
+        }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoteContaining("2 automations are auto-disabled", "Cron");
+      expectNoteContaining("Run failure job (run-failure-job)", "Cron");
+      expectNoteContaining("recorded reason `consecutive-failures` after 10", "Cron");
+      expectNoteContaining("openclaw automations enable run-failure-job", "Cron");
+      expectNoteContaining("Schedule error job (schedule-error-job)", "Cron");
+      expectNoteContaining("recorded reason `schedule-errors` after 3", "Cron");
+      expectNoteContaining("openclaw automations enable schedule-error-job", "Cron");
+      expectNoNoteContaining("disabled-one-shot", "Cron");
+    });
   });
 
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {

@@ -117,6 +117,7 @@ export function createNativeCommandTestParams(
       return bot.api.setMyCommands(commandsToRegister);
     }) as TelegramNativeCommandDeps["syncTelegramMenuCommands"],
     editMessageTelegram,
+    sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
   };
   return createBaseNativeCommandTestParams({
     cfg,

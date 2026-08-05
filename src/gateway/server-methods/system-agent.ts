@@ -20,9 +20,13 @@ import {
 } from "../../infra/system-agent-approvals.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
-import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import {
+  SystemAgentChatEngine,
+  SystemAgentWizardAnswerError,
+} from "../../system-agent/chat-engine.js";
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import {
   acknowledgeSystemAgentGreetingDelivery,
@@ -47,6 +51,11 @@ import {
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
+import {
+  buildSystemAgentChatResult,
+  getSystemAgentChatInputError,
+  runSystemAgentChatInput,
+} from "./system-agent-chat-turn.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -237,15 +246,19 @@ function queueDelegatedApproval(params: {
     deliverRequest: () => false,
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
-    afterDecision: async (decision) => {
-      if (params.sessions.get(params.sessionId) !== params.session) {
-        return;
-      }
-      if (params.session.pendingApproval?.id === record.id) {
-        params.session.pendingApproval = undefined;
-      }
-      await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
-    },
+    afterDecision: async (decision) =>
+      await runWithGatewayIndependentRootWorkContinuation(() =>
+        runSystemAgentGatewayTask(async () => {
+          // The original request has returned; keep approval, audit, and restart drain-visible.
+          if (params.sessions.get(params.sessionId) !== params.session) {
+            return;
+          }
+          if (params.session.pendingApproval?.id === record.id) {
+            params.session.pendingApproval = undefined;
+          }
+          await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
+        }),
+      ),
     afterDecisionErrorLabel: "OpenClaw approval apply failed",
   });
   return record.id;
@@ -432,6 +445,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
               migrationBaseConfig: baseConfig,
             });
+            if (applied.agentModelOverride) {
+              session.setPreparedModelRef(applied.agentModelOverride);
+            }
           }),
         );
       },
@@ -498,6 +514,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
+    const inputError = getSystemAgentChatInputError(params);
+    if (inputError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, inputError));
+      return;
+    }
     await runSystemAgentGatewayTask(async () => {
       const sessions = context.systemAgentSessions;
       const sessionId = params.sessionId;
@@ -528,6 +549,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         if (params.reset) {
           const existing = sessions.get(sessionId);
+          // Persist the reset first; a failed write must leave the live session intact.
+          appendTranscriptReset();
           sessions.delete(sessionId);
           if (existing?.pendingApproval) {
             context.systemAgentApprovalManager?.expire(
@@ -538,8 +561,22 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
+        if (params.wizardAnswer !== undefined && !session) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "No active OpenClaw chat session is awaiting that wizard answer.",
+              { details: buildSystemAgentSessionInvalidatedErrorDetails() },
+            ),
+          );
+          return;
+        }
         let greetingAuditSequence: number | undefined;
-        const welcomeOnly = params.message === undefined || !params.message.trim();
+        const welcomeOnly =
+          params.wizardAnswer === undefined &&
+          (params.message === undefined || !params.message.trim());
         if (!session) {
           const inference = params.delegation
             ? await import("../../system-agent/inference-fallback.js").then(
@@ -616,9 +653,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
-          if (params.reset) {
-            appendTranscriptReset();
-          }
           persistEngineHistory(engine, welcomeHistoryStart);
           await evictOldestSession(sessions, context);
           session = {
@@ -649,7 +683,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         session.lastUsedAt = Date.now();
         // Inline check (not `welcomeOnly`) so TS narrows params.message below.
-        if (params.message === undefined || !params.message.trim()) {
+        if (
+          params.wizardAnswer === undefined &&
+          (params.message === undefined || !params.message.trim())
+        ) {
           respond(
             true,
             {
@@ -666,12 +703,25 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
-          reply =
-            params.delegation === undefined && params.context
-              ? await session.engine.handle(params.message, { uiContext: params.context })
-              : await session.engine.handle(params.message);
+          const turnReply = await runSystemAgentChatInput({
+            engine: session.engine,
+            input: params,
+          });
+          if (!turnReply) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw chat input is missing."),
+            );
+            return;
+          }
+          reply = turnReply;
         } catch (error) {
           persistEngineHistory(session.engine, historyStart);
+          if (error instanceof SystemAgentWizardAnswerError) {
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+            return;
+          }
           if (!isSystemAgentInferenceUnavailableError(error)) {
             throw error;
           }
@@ -697,14 +747,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           return;
         }
         persistEngineHistory(session.engine, historyStart);
-        // The TUI-only "open-tui" handoff becomes a client-visible "open-agent"
-        // signal: the app should move the user to their normal agent chat.
-        const action =
-          reply.action === "open-tui"
-            ? "open-agent"
-            : reply.action === "open-setup"
-              ? "none"
-              : reply.action;
         const delegation = params.delegation;
         let proposalId: string | undefined;
         if (delegation) {
@@ -720,31 +762,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             });
           }
         }
-        respond(
-          true,
-          {
-            sessionId,
-            reply:
-              reply.text ||
-              (action === "open-agent"
-                ? "Setup here is done — continue with your agent."
-                : "Nothing to change."),
-            action,
-            ...(action === "open-agent" && reply.agentDraft
-              ? { agentDraft: reply.agentDraft }
-              : {}),
-            ...(action === "open-agent" &&
-            reply.handoff?.kind === "open-tui" &&
-            reply.handoff.agentId
-              ? { agentId: reply.handoff.agentId }
-              : {}),
-            ...(reply.sensitive === true ? { sensitive: true } : {}),
-            ...(reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
-            ...(reply.question ? { question: reply.question } : {}),
-            ...(proposalId ? { needsApproval: true, proposalId } : {}),
-          },
-          undefined,
-        );
+        respond(true, buildSystemAgentChatResult({ sessionId, reply, proposalId }), undefined);
       });
     });
   },

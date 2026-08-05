@@ -423,13 +423,18 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       dynamicTools: [],
       ephemeral: true,
       config: {
+        "agents.enabled": false,
         "features.hooks": false,
         "features.multi_agent": false,
+        "features.multi_agent_v2": false,
         "skills.include_instructions": false,
         include_environment_context: false,
         mcp_servers: { inherited: { enabled: false } },
       },
     });
+    const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(turnParams).not.toHaveProperty("cwd");
+    expect(turnParams).not.toHaveProperty("environments");
     expect(fake.request).toHaveBeenCalledWith(
       "thread/inject_items",
       { threadId: "thread-finalizer", items: historyItems },

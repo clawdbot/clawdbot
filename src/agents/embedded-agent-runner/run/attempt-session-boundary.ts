@@ -57,12 +57,16 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
         prompt: attempt.prompt,
         trigger: attempt.trigger,
       });
+  // Admission can persist the turn before prompt preparation intentionally omits it.
+  // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.
+  const currentUserTurnMessage =
+    attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ?? input.preparedUserTurnMessage;
   const reconciledCurrentUser =
     !preserveExactPrompt &&
     reconcilePrePersistedCurrentUserTurn({
       activeSession,
+      currentUserTurnMessage,
       durableUserTurnMessage: orphanRepairCandidate?.messageEntry.message,
-      preparedUserTurnMessage: input.preparedUserTurnMessage,
       userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
     });
   const orphanRepair = reconciledCurrentUser ? undefined : orphanRepairCandidate;

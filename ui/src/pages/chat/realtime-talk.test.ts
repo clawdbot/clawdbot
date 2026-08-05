@@ -325,6 +325,7 @@ describe("RealtimeTalkSession", () => {
           voiceSessionId: "voice-stale",
         },
         {
+          signal: expect.any(AbortSignal),
           timeoutMs: 30_000,
         },
       ),

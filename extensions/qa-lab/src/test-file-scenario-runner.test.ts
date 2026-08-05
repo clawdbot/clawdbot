@@ -165,6 +165,7 @@ async function writeNativeVitestReport(
 
 async function writeScriptProducerEvidence(params: {
   outputDir: string;
+  producerId?: string;
   scenarioId?: string;
   status: "blocked" | "fail" | "pass";
   failureReason?: string;
@@ -184,7 +185,7 @@ async function writeScriptProducerEvidence(params: {
           {
             test: {
               kind: "script-producer-check",
-              id: "script-producer.web-ui.smoke",
+              id: params.producerId ?? "script-producer.web-ui.smoke",
               title: "Script producer: web-ui smoke",
               source: { path: "scripts/evidence-producer.ts" },
             },
@@ -261,7 +262,7 @@ describe("qa test file scenario runner", () => {
 
     expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
-      ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+      ["scripts/ensure-playwright-chromium.mjs"],
       [
         "scripts/run-vitest.mjs",
         "run",
@@ -1405,6 +1406,35 @@ describe("qa test file scenario runner", () => {
           reason: "node exited with 1",
         },
       },
+    });
+  });
+
+  it("suppresses a failed-script fallback row already owned by producer scenario evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-script-duplicate-scenario-evidence-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-duplicate");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async () => {
+        await writeScriptProducerEvidence({
+          outputDir,
+          producerId: "scenario-script",
+          status: "fail",
+          failureReason: "producer recorded the script failure",
+        });
+        return { exitCode: 1, stdout: "", stderr: "script failed\n" };
+      },
+      env: { OPENCLAW_QA_REF: "scenario-ref" } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.results[0]).toMatchObject({ status: "fail" });
+    expect(result.evidence.entries).toHaveLength(1);
+    expect(result.evidence.entries[0]).toMatchObject({
+      test: { id: "scenario-script" },
+      result: { failure: { reason: "producer recorded the script failure" }, status: "fail" },
     });
   });
 

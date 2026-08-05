@@ -12,6 +12,7 @@ import {
   isReplyPayloadStatusNotice,
   type ReplyPayload,
 } from "../reply-payload.js";
+import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
@@ -31,6 +32,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ctx,
     deliveryChannel,
     dispatcher,
+    failDispatchReplyOperation,
     flushPendingCommentaryProgress,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
@@ -41,7 +43,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     markProgress,
     markVisibleToolErrorProgress,
     maybeApplyTtsWithFinalizationLease,
-    maybeSendWorkingStatus,
     normalizeReplyMediaPayload,
     notifySessionMetadataChanges,
     onToolResultFromReplyOptions,
@@ -65,6 +66,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     wrapProgressCallback,
   } = state;
   let deliberateSilentTerminalReply = false;
+  let pendingContinuation = false;
+  let didDeliverVisiblePartialReply = false;
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
       await runWithDispatchAbortSignal(
@@ -82,6 +85,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   onDeliberateSilentTerminalReply: () => {
                     deliberateSilentTerminalReply = true;
                   },
+                  onPendingContinuation: () => {
+                    pendingContinuation = true;
+                  },
                   onSessionMetadataChanges: notifySessionMetadataChanges,
                   onSessionPrepared: state.notePreparedSession,
                 } satisfies InternalReplyResolverOptions),
@@ -90,7 +96,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 shouldSuppressToolErrorWarnings: state.shouldSuppressToolErrorWarnings,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
-                onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
+                onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply, {
+                  onVisible: (payload) => {
+                    if (hasOutboundReplyContent(payload, { trimText: true })) {
+                      didDeliverVisiblePartialReply = true;
+                    }
+                  },
+                }),
                 onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
                 streamReasoningInNonStreamModes:
                   params.replyOptions?.streamReasoningInNonStreamModes,
@@ -339,24 +351,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ) {
                     await state.onApprovalEventFromReplyOptions?.(payload);
                   }
-                  if (isDispatchOperationAborted()) {
-                    return;
-                  }
-                  if (
-                    payload.phase !== "requested" ||
-                    shouldSuppressDefaultToolProgressMessages()
-                  ) {
-                    return;
-                  }
-                  const label = state.summarizeApprovalLabel({
-                    status: payload.status,
-                    command: payload.command,
-                    message: payload.message,
-                  });
-                  if (!label) {
-                    return;
-                  }
-                  await maybeSendWorkingStatus(label);
                 },
                 onPatchSummary: async (payload) => {
                   if (isDispatchOperationAborted()) {
@@ -378,20 +372,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ) {
                     await state.onPatchSummaryFromReplyOptions?.(payload);
                   }
-                  if (isDispatchOperationAborted()) {
-                    return;
-                  }
-                  if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
-                    return;
-                  }
-                  const label = state.summarizePatchLabel({
-                    summary: payload.summary,
-                    title: payload.title,
-                  });
-                  if (!label) {
-                    return;
-                  }
-                  await maybeSendWorkingStatus(label);
                 },
                 onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
                   markProgress();
@@ -524,7 +504,21 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
           ),
         trackDispatchLifecycleWork,
       ),
-  );
+  ).catch((error: unknown) => {
+    if (
+      params.replyOptions?.isHeartbeat === true ||
+      !didDeliverVisiblePartialReply ||
+      isDispatchOperationAborted()
+    ) {
+      throw error;
+    }
+    failDispatchReplyOperation(error);
+    return buildTerminalAgentRunFailureReplyPayload({
+      visibleReplyDelivered: true,
+      sessionCtx: ctx,
+      cfg: replyConfig,
+    });
+  });
   const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
   notifySessionMetadataChanges(sessionMetadataChanges);
   const finalDispatchAcquisition = await state.ensureDispatchReplyOperation("dispatch");
@@ -607,6 +601,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   }
   const nextState = extendPreparedDispatchState(state, {
     deliberateSilentTerminalReply,
+    pendingContinuation,
     replyResult,
   });
   return { status: "ready" as const, state: nextState };

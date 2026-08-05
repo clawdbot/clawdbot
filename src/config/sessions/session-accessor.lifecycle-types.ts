@@ -8,6 +8,8 @@ export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
   storePath: string;
   archiveRemovedEntryTranscripts?: boolean;
+  /** Preserve explicitly foreign plugin-owned state while retaining ownerless legacy rows. */
+  pluginOwnerId?: string;
   sessionKeySegmentPrefix: string;
   transcriptContentMarker: string;
   orphanTranscriptMinAgeMs: number;

@@ -1111,16 +1111,9 @@ extension OpenClawChatView {
     }
 
     private func primaryText(in message: OpenClawChatMessage) -> String {
-        let parts = message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return nil }
-            return content.text
-        }
-        return OpenClawChatMessage.displayText(
-            contentText: parts.joined(separator: "\n"),
-            role: message.role,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+        ChatMessageVisibleText.displayText(
+            in: message,
+            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {

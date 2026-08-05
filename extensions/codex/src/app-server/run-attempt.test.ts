@@ -1623,10 +1623,13 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(withoutMessageToolInstructions).not.toContain("message(action=send)");
     expect(withoutMessageToolInstructions).not.toContain("Use `message`");
+    expect(withoutMessageToolInstructions).not.toContain("reacting to its current message");
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
     expect(automaticInstructions).toContain("reply normally in your final assistant message");
     expect(automaticInstructions).not.toContain("message(action=send)");
+    expect(automaticInstructions).toContain("reacting to its current message");
+    expect(automaticInstructions).toContain("Reactions are not delivered automatically.");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -3996,7 +3999,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("waits for an already-active native turn before starting a resumed thread turn", async () => {
+  it("waits for the exact active native turn before starting a resumed thread turn", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const harness = createAppServerHarness(async (method) => {
@@ -4020,6 +4023,24 @@ describe("runCodexAppServerAttempt", () => {
     await harness.waitForMethod("thread/resume");
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
+    });
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
+        turn: { id: "stale-turn", status: "completed" },
+      },
+    });
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-existing",
+        turnId: "compact-turn",
+        error: { message: "native turn has not completed" },
+        willRetry: false,
+      },
     });
     expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
     await harness.notify({

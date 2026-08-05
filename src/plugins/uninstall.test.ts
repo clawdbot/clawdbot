@@ -148,6 +148,15 @@ function createGitInstallRecord(pluginId = "my-plugin", installPath?: string): P
   };
 }
 
+function createMarketplaceInstallRecord(installPath: string): PluginInstallRecord {
+  return {
+    source: "marketplace",
+    installPath,
+    marketplaceSource: "release-fixtures",
+    marketplacePlugin: "my-plugin",
+  };
+}
+
 function createPathInstallRecord(
   installPath = "/path/to/plugin",
   sourcePath = installPath,
@@ -382,6 +391,76 @@ describe("removePluginFromConfig", () => {
 
     expect(result.plugins?.load?.paths).toEqual(expectedPaths);
     expect(actions.loadPath).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "marketplace install path",
+      installRecord: createMarketplaceInstallRecord("/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin", "/managed/my-plugin/child", "/other/path"],
+      expectedPaths: ["/managed/my-plugin/child", "/other/path"],
+      expectedChanged: true,
+    },
+    {
+      name: "npm install path",
+      installRecord: createNpmInstallRecord("my-plugin", "/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin", "/managed/my-plugin/child", "/other/path"],
+      expectedPaths: ["/managed/my-plugin/child", "/other/path"],
+      expectedChanged: true,
+    },
+    {
+      name: "absent load paths",
+      installRecord: createMarketplaceInstallRecord("/managed/my-plugin"),
+      loadPaths: undefined,
+      expectedPaths: undefined,
+      expectedChanged: false,
+    },
+    {
+      name: "mismatched and child paths",
+      installRecord: createNpmInstallRecord("my-plugin", "/managed/my-plugin"),
+      loadPaths: ["/managed/my-plugin-other", "/managed/my-plugin/child"],
+      expectedPaths: ["/managed/my-plugin-other", "/managed/my-plugin/child"],
+      expectedChanged: false,
+    },
+  ])(
+    "cleans only the exact $name from load.paths",
+    ({ installRecord, loadPaths, expectedPaths, expectedChanged }) => {
+      const config = createPluginConfig({
+        installs: { "my-plugin": installRecord },
+        loadPaths,
+      });
+
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual(expectedPaths);
+      expect(actions.loadPath).toBe(expectedChanged);
+    },
+  );
+
+  it("removes a canonical marketplace install path without removing siblings", async () => {
+    const tempRoot = path.join(process.cwd(), ".tmp");
+    await fs.mkdir(tempRoot, { recursive: true });
+    const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-uninstall-marketplace-path-"));
+    try {
+      const installPath = path.join(tempDir, "managed", "my-plugin");
+      const linkedPath = path.join(tempDir, "my-plugin-link");
+      const siblingPath = path.join(tempDir, "managed", "my-plugin-other");
+      await fs.mkdir(installPath, { recursive: true });
+      await fs.symlink(installPath, linkedPath, "dir");
+      const config = createPluginConfig({
+        installs: {
+          "my-plugin": createMarketplaceInstallRecord(installPath),
+        },
+        loadPaths: [linkedPath, siblingPath],
+      });
+
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual([siblingPath]);
+      expect(actions.loadPath).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("removes absolute load path for a workspace-relative install source path", async () => {

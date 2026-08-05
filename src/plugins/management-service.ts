@@ -1532,10 +1532,8 @@ export async function uninstallManagedPlugin(params: {
         `bundled plugin cannot be uninstalled: ${pluginId}; disable it instead`,
       );
     }
-    const manifest = metadata.byPluginId.get(pluginId);
-    // Mirror the CLI cold path: pass channel ownership only when declared so
-    // planPluginUninstall keeps its plugin-id fallback for channel config keys.
-    const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
+    // Preserve manifest ownership exactly; only missing metadata uses the plugin-id fallback.
+    const channelIds = metadata.byPluginId.get(pluginId)?.channels;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
     const initialPlan = planPluginUninstall({
       config: configWithRecords,

@@ -356,6 +356,9 @@
       "openclaw/plugin-sdk/realtime-bootstrap-context": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-bootstrap-context.d.ts"
       ],
+      "openclaw/plugin-sdk/realtime-voice-audio-queue": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-audio-queue.d.ts"
+      ],
       "openclaw/plugin-sdk/realtime-voice": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice.d.ts"
       ],
@@ -553,6 +556,9 @@
       ],
       "@openclaw/qa-channel/api.js": [
         "../dist/plugin-sdk/extensions/qa-channel/api.d.ts"
+      ],
+      "@openclaw/memory-core/api.js": [
+        "../dist/plugin-sdk/extensions/memory-core/api.d.ts"
       ],
       "@openclaw/matrix/test-api.js": [
         "../dist/plugin-sdk/extensions/matrix/test-api.d.ts"

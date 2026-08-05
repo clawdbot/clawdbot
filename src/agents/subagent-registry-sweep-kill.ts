@@ -1,3 +1,8 @@
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import { finalizeTaskRunByRunId, findDetachedTaskRun } from "../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
@@ -8,6 +13,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import {
@@ -77,6 +83,179 @@ export function resolveSubagentTaskForRun(
     entry,
     findNextSubagentRunCreatedAt(candidates, entry),
   );
+}
+
+export async function reconcileDurableSubagentKillIntent(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  runs: Map<string, SubagentRunRecord>;
+  loadKillRuntime: () => Promise<typeof import("./subagent-control.runtime.js")>;
+  completeSubagentRunWithRecovery: (
+    completion: SubagentCompletionRequest,
+    source: string,
+  ) => Promise<void>;
+  retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+}): Promise<boolean> {
+  const killIntent = params.entry.killIntent;
+  if (!killIntent) {
+    return false;
+  }
+  if (params.runs.get(params.runId) !== params.entry) {
+    return false;
+  }
+  const latest = getLatestSubagentRunByChildSessionKeyFromRuns(
+    params.runs,
+    params.entry.childSessionKey,
+  );
+  if (latest !== params.entry) {
+    try {
+      const taskResolution = resolveSubagentTaskForRun(params.runs.values(), params.entry);
+      const task = taskResolution.task;
+      if (taskResolution.lookup === "unavailable" || isUnstableTask(task)) {
+        const finalized = finalizeTaskRunByRunId({
+          runId: task?.runId ?? params.entry.taskRunId ?? params.runId,
+          runtime: "subagent",
+          sessionKey: task?.childSessionKey ?? params.entry.childSessionKey,
+          status: "cancelled",
+          endedAt: killIntent.requestedAt,
+          lastEventAt: killIntent.requestedAt,
+          error: "Superseded subagent cancellation finalized.",
+          suppressDelivery: true,
+        });
+        if (taskResolution.lookup === "available" && finalized.length === 0) {
+          params.warn("could not stabilize superseded durable kill task", {
+            runId: params.runId,
+            childSessionKey: params.entry.childSessionKey,
+          });
+          return false;
+        }
+      }
+      if (
+        params.runs.get(params.runId) !== params.entry ||
+        getLatestSubagentRunByChildSessionKeyFromRuns(params.runs, params.entry.childSessionKey) ===
+          params.entry
+      ) {
+        return false;
+      }
+      await params.retireSupersededRun(params.runId, params.entry);
+      return true;
+    } catch (error) {
+      params.warn("failed to retire superseded durable kill intent", {
+        error,
+        runId: params.runId,
+        childSessionKey: params.entry.childSessionKey,
+      });
+      return false;
+    }
+  }
+  const ownsCurrentGeneration = () =>
+    params.runs.get(params.runId) === params.entry &&
+    params.entry.killIntent === killIntent &&
+    killIntent.lifecycleGeneration !== undefined &&
+    isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration) &&
+    getLatestSubagentRunByChildSessionKeyFromRuns(params.runs, params.entry.childSessionKey) ===
+      params.entry;
+  const cfg = getRuntimeConfig();
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: resolveAgentIdFromSessionKey(params.entry.childSessionKey),
+  });
+  const ownsSessionIncarnation = () => {
+    const current = loadSubagentSessionEntry({
+      childSessionKey: params.entry.childSessionKey,
+      cfg,
+    });
+    return (
+      current?.sessionId === killIntent.sessionId &&
+      current?.lifecycleRevision === killIntent.sessionLifecycleRevision
+    );
+  };
+  const completeRetiredKill = async () => {
+    await params.completeSubagentRunWithRecovery(
+      {
+        runId: params.runId,
+        expectedEntry: params.entry,
+        endedAt: killIntent.requestedAt,
+        outcome: { status: "error", error: killIntent.reason },
+        reason: SUBAGENT_ENDED_REASON_KILLED,
+        sendFarewell: true,
+        accountId: params.entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+        suppressSessionEffects: true,
+      },
+      "sweeper-retired-kill-intent",
+    );
+    return true;
+  };
+  if (
+    killIntent.lifecycleGeneration === undefined ||
+    !isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration)
+  ) {
+    return await completeRetiredKill();
+  }
+  try {
+    const runtime = await params.loadKillRuntime();
+    if (!ownsCurrentGeneration()) {
+      return false;
+    }
+    if (!ownsSessionIncarnation()) {
+      return await completeRetiredKill();
+    }
+    return await runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [params.entry.childSessionKey, killIntent.sessionId],
+      run: async () => {
+        if (!ownsCurrentGeneration()) {
+          return false;
+        }
+        if (!ownsSessionIncarnation()) {
+          return await completeRetiredKill();
+        }
+        const hasLiveRunContext = Boolean(getAgentRunContext(params.runId));
+        const active = killIntent.sessionId
+          ? runtime.isEmbeddedAgentRunActive(killIntent.sessionId)
+          : false;
+        const aborted =
+          killIntent.sessionId && active
+            ? runtime.abortEmbeddedAgentRun(killIntent.sessionId)
+            : false;
+        if (!ownsSessionIncarnation()) {
+          return await completeRetiredKill();
+        }
+        runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
+        if ((active || hasLiveRunContext) && !aborted) {
+          return false;
+        }
+        if (!ownsCurrentGeneration()) {
+          return false;
+        }
+        if (!ownsSessionIncarnation()) {
+          return await completeRetiredKill();
+        }
+        await params.completeSubagentRunWithRecovery(
+          {
+            runId: params.runId,
+            expectedEntry: params.entry,
+            endedAt: killIntent.requestedAt,
+            outcome: { status: "error", error: killIntent.reason },
+            reason: SUBAGENT_ENDED_REASON_KILLED,
+            sendFarewell: true,
+            accountId: params.entry.requesterOrigin?.accountId,
+            triggerCleanup: true,
+          },
+          "sweeper-pending-kill-intent",
+        );
+        return true;
+      },
+    });
+  } catch (error) {
+    params.warn("failed to finish durable subagent kill intent", {
+      error,
+      runId: params.runId,
+      childSessionKey: params.entry.childSessionKey,
+    });
+    return false;
+  }
 }
 
 function resolveCompletionFromTerminalTask(task: TaskRecord | undefined, entry: SubagentRunRecord) {

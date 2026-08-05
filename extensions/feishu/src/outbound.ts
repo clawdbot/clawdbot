@@ -749,7 +749,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             to: ctx.to,
             mediaUrl,
             accountId: ctx.accountId ?? undefined,
+            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             replyToMessageId,
             replyInThread,
             ...(payload.audioAsVoice === true || ctx.audioAsVoice === true
@@ -782,7 +784,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToIdSource,
       replyToMode,
       threadId,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
       identity,
       onDeliveryResult,
     }) => {
@@ -805,7 +809,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: accountId ?? undefined,
             replyToMessageId,
             replyInThread,
+            mediaAccess,
             mediaLocalRoots,
+            mediaReadFile,
           });
         } catch (err) {
           if (isChannelPartialDeliveryError(err)) {
@@ -894,7 +900,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       mediaUrl,
       audioAsVoice,
       accountId,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
       replyToId,
       replyToIdSource,
       replyToMode,
@@ -974,7 +982,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           mediaUrl,
           accountId: accountId ?? undefined,
+          mediaAccess,
           mediaLocalRoots,
+          mediaReadFile,
           ...mediaReplyMode,
           ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
         });

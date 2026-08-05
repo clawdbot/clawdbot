@@ -83,6 +83,35 @@ describe("matrix qa config", () => {
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
+  it("preserves the scenario provider plugin without enabling unrelated plugins", () => {
+    const next = buildMatrixQaConfig(
+      {
+        plugins: {
+          allow: ["acpx", "memory-core", "qa-lab", "openai"],
+          entries: {
+            openai: { enabled: true },
+            unrelated: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        driverUserId: "@driver:matrix-qa.test",
+        homeserver: "http://127.0.0.1:28008/",
+        observerUserId: "@observer:matrix-qa.test",
+        sutAccessToken: "sut-token",
+        sutAccountId: "sut",
+        sutUserId: "@sut:matrix-qa.test",
+        topology,
+      },
+    );
+
+    expect(next.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "matrix"]);
+    expect(next.plugins?.allow).not.toContain("unrelated");
+    expect(next.plugins?.allow).not.toContain("anthropic");
+    expect(next.plugins?.entries?.matrix).toEqual({ enabled: true });
+    expect(next.plugins?.entries?.openai).toEqual({ enabled: true });
+  });
+
   it("honors an explicit DM disable with a provisioned DM room", () => {
     const next = buildMatrixQaConfig({} as OpenClawConfig, {
       driverUserId: "@driver:matrix-qa.test",

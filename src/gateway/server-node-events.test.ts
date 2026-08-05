@@ -1898,6 +1898,25 @@ describe("agent request events", () => {
     expect(optsRecord.runId).toBe(optsRecord.sessionId);
   });
 
+  it("preserves session-scoped routing across two distinct agent.request turns", async () => {
+    loadSessionEntryMock.mockReturnValue(
+      buildSessionLookup("agent:main:node-repeat", { sessionId: "node-session-1" }),
+    );
+
+    for (const message of ["first turn", "second turn"]) {
+      await handleNodeEvent(buildCtx(), "node-repeat", {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({ message, sessionKey: "agent:main:node-repeat" }),
+      });
+    }
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    const calls = agentCommandMock.mock.calls.map(([opts]) => opts as Record<string, unknown>);
+    expect(calls.map((opts) => opts.message)).toEqual(["first turn", "second turn"]);
+    expect(calls.map((opts) => opts.runId)).toEqual(["node-session-1", "node-session-1"]);
+    expect(calls.map((opts) => opts.sessionId)).toEqual(["node-session-1", "node-session-1"]);
+  });
+
   it("passes supportsInlineImages false for text-only node-session models", async () => {
     const ctx = buildCtx();
     ctx.loadGatewayModelCatalog = async () => [

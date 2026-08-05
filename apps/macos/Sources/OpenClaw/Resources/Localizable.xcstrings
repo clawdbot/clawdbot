@@ -14689,6 +14689,142 @@
         }
       }
     },
+    "Authenticate with your Gateway": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authenticate with your Gateway"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用您的 Gateway 进行身份验证"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用您的 Gateway 進行驗證"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentique-se com seu Gateway"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Ihrem Gateway authentifizieren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentícate con tu Gateway"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gatewayで認証"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway로 인증"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentifiez-vous avec votre Gateway"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अपने Gateway से प्रमाणित करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "المصادقة باستخدام Gateway الخاص بك"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticati con il tuo Gateway"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway ile kimlik doğrulaması yapın"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автентифікуйтеся через свій Gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentikasi dengan Gateway Anda"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uwierzytelnij się w Gateway"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ยืนยันตัวตนด้วย Gateway ของคุณ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xác thực với Gateway của bạn"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifieer met je Gateway"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "احراز هویت با Gateway خود"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аутентификация через Gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentisera med din Gateway"
+          }
+        }
+      }
+    },
     "Auto": {
       "localizations": {
         "en": {
@@ -16997,142 +17133,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Grenar"
-          }
-        }
-      }
-    },
-    "Bring your memories along": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bring your memories along"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "带上你的记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "帶上你的記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leve suas memórias com você"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nehmen Sie Ihre Erinnerungen mit"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Llévate tus recuerdos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出を引き継ぐ"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 함께 가져오세요"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Emportez vos souvenirs"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अपनी यादें साथ लाएँ"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اصطحب ذكرياتك معك"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Porta con te i tuoi ricordi"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılarınızı yanınızda getirin"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перенесіть свої спогади"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bawa serta memori Anda"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zabierz swoje wspomnienia ze sobą"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "นำความทรงจำของคุณมาด้วย"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mang theo những ký ức của bạn"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Neem je herinneringen mee"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "خاطراتتان را همراه بیاورید"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перенесите свои воспоминания"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ta med dina minnen"
           }
         }
       }
@@ -22033,142 +22033,6 @@
         }
       }
     },
-    "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查 Gateway 主机上的 `gateway.auth.token` 或 `OPENCLAW_GATEWAY_TOKEN`，然后重试。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "檢查 Gateway 主機上的 `gateway.auth.token` 或 `OPENCLAW_GATEWAY_TOKEN`，然後再試一次。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifique `gateway.auth.token` ou `OPENCLAW_GATEWAY_TOKEN` no host do gateway e tente novamente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prüfe `gateway.auth.token` oder `OPENCLAW_GATEWAY_TOKEN` auf dem Gateway-Host und versuche es erneut."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Revisa `gateway.auth.token` u `OPENCLAW_GATEWAY_TOKEN` en el host del gateway e inténtalo de nuevo."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ホストで `gateway.auth.token` または `OPENCLAW_GATEWAY_TOKEN` を確認して、もう一度お試しください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 호스트에서 `gateway.auth.token` 또는 `OPENCLAW_GATEWAY_TOKEN`을 확인하고 다시 시도하세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vérifiez `gateway.auth.token` ou `OPENCLAW_GATEWAY_TOKEN` sur l’hôte Gateway, puis réessayez."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "gateway host पर `gateway.auth.token` या `OPENCLAW_GATEWAY_TOKEN` जाँचें और फिर से प्रयास करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تحقق من `gateway.auth.token` أو `OPENCLAW_GATEWAY_TOKEN` على مضيف Gateway ثم حاول مرة أخرى."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controlla `gateway.auth.token` o `OPENCLAW_GATEWAY_TOKEN` sull'host gateway e riprova."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ana makinesinde `gateway.auth.token` veya `OPENCLAW_GATEWAY_TOKEN` değerini kontrol edip tekrar deneyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перевірте `gateway.auth.token` або `OPENCLAW_GATEWAY_TOKEN` на хості gateway і повторіть спробу."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Periksa `gateway.auth.token` atau `OPENCLAW_GATEWAY_TOKEN` di host gateway lalu coba lagi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprawdź `gateway.auth.token` lub `OPENCLAW_GATEWAY_TOKEN` na hoście gateway i spróbuj ponownie."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ตรวจสอบ `gateway.auth.token` หรือ `OPENCLAW_GATEWAY_TOKEN` บนโฮสต์ Gateway แล้วลองอีกครั้ง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kiểm tra `gateway.auth.token` hoặc `OPENCLAW_GATEWAY_TOKEN` trên máy chủ Gateway rồi thử lại."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controleer `gateway.auth.token` of `OPENCLAW_GATEWAY_TOKEN` op de gatewayhost en probeer het opnieuw."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "`gateway.auth.token` یا `OPENCLAW_GATEWAY_TOKEN` را روی میزبان Gateway بررسی کنید و دوباره تلاش کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверьте `gateway.auth.token` или `OPENCLAW_GATEWAY_TOKEN` на хосте gateway и повторите попытку."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kontrollera `gateway.auth.token` eller `OPENCLAW_GATEWAY_TOKEN` på Gateway-värden och försök igen."
-          }
-        }
-      }
-    },
     "Check again": {
       "localizations": {
         "en": {
@@ -23121,142 +22985,6 @@
         }
       }
     },
-    "Checking supported AI tools on this Mac.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking supported AI tools on this Mac."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在检查此 Mac 上支持的 AI 工具。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在檢查這台 Mac 上支援的 AI 工具。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verificando as ferramentas de IA compatíveis neste Mac."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unterstützte KI-Tools auf diesem Mac werden überprüft."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Comprobando las herramientas de IA compatibles en este Mac."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この Mac でサポートされている AI ツールを確認しています。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 Mac에서 지원되는 AI 도구를 확인하는 중입니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vérification des outils d’IA pris en charge sur ce Mac."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "इस Mac पर समर्थित AI टूल्स की जाँच की जा रही है।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جارٍ التحقق من أدوات الذكاء الاصطناعي المدعومة على جهاز Mac هذا."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifica degli strumenti di IA supportati su questo Mac."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu Mac'te desteklenen yapay zekâ araçları kontrol ediliyor."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перевірка підтримуваних інструментів ШІ на цьому Mac."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Memeriksa alat AI yang didukung di Mac ini."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprawdzanie obsługiwanych narzędzi AI na tym Macu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "กำลังตรวจสอบเครื่องมือ AI ที่รองรับบน Mac เครื่องนี้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đang kiểm tra các công cụ AI được hỗ trợ trên máy Mac này."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ondersteunde AI-tools op deze Mac controleren."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "در حال بررسی ابزارهای هوش مصنوعی پشتیبانی‌شده در این Mac."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверка поддерживаемых инструментов ИИ на этом Mac."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kontrollerar AI-verktyg som stöds på denna Mac."
-          }
-        }
-      }
-    },
     "Checking the Mac app and Gateway…": {
       "localizations": {
         "en": {
@@ -23661,6 +23389,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Välj mediafil"
+          }
+        }
+      }
+    },
+    "Choose a different AI…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a different AI…"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择其他 AI…"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選擇其他 AI…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolher uma IA diferente…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Andere KI auswählen…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elegir una IA diferente…"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "別のAIを選択…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 AI 선택…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir une autre IA…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "कोई दूसरा AI चुनें…"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اختر ذكاءً اصطناعيًا مختلفًا…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli un'altra IA…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Farklı bir yapay zeka seç…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Виберіть інший ШІ…"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pilih AI lain…"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wybierz inną AI…"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เลือก AI อื่น…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chọn AI khác…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kies een andere AI…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "انتخاب یک هوش مصنوعی دیگر…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать другой ИИ…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Välj en annan AI…"
           }
         }
       }
@@ -29377,6 +29241,142 @@
         }
       }
     },
+    "Connected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已连接"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已連線"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbunden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続済み"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecté"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "कनेक्ट किया गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "متصل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connesso"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlandı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Підключено"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terhubung"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Połączono"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เชื่อมต่อแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã kết nối"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbonden"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "متصل شد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключено"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ansluten"
+          }
+        }
+      }
+    },
     "Connected Instances": {
       "localizations": {
         "en": {
@@ -29513,138 +29513,138 @@
         }
       }
     },
-    "Connected to a remote Gateway configuration.": {
+    "Connected to your remote Gateway.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connected to a remote Gateway configuration."
+            "value": "Connected to your remote Gateway."
           }
         },
         "zh-CN": {
           "stringUnit": {
             "state": "translated",
-            "value": "已连接到远程 Gateway 配置。"
+            "value": "已连接到你的远程 Gateway。"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "translated",
-            "value": "已連線至遠端 Gateway 設定。"
+            "value": "已連線至您的遠端 Gateway。"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Conectado a uma configuração de Gateway remoto."
+            "value": "Conectado ao seu Gateway remoto."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mit einer Remote-Gateway-Konfiguration verbunden."
+            "value": "Mit deinem Remote-Gateway verbunden."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Conectado a una configuración de Gateway remoto."
+            "value": "Conectado a tu Gateway remoto."
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "translated",
-            "value": "リモート Gateway 構成に接続されています。"
+            "value": "リモート Gateway に接続しました。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "원격 Gateway 구성에 연결되었습니다."
+            "value": "원격 Gateway에 연결되었습니다."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connecté à une configuration Gateway distante."
+            "value": "Connecté à votre Gateway distant."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "किसी रिमोट Gateway कॉन्फ़िगरेशन से कनेक्टेड।"
+            "value": "आपके remote Gateway से कनेक्ट किया गया।"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "متصل بتكوين Gateway بعيد."
+            "value": "متصل بالـ Gateway البعيد الخاص بك."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connesso a una configurazione Gateway remota."
+            "value": "Connesso al Gateway remoto."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uzak bir Gateway yapılandırmasına bağlandı."
+            "value": "Uzak Gateway'inize bağlandı."
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Підключено до віддаленої конфігурації Gateway."
+            "value": "Підключено до вашого віддаленого Gateway."
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Terhubung ke konfigurasi Gateway jarak jauh."
+            "value": "Terhubung ke Gateway jarak jauh Anda."
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Połączono ze zdalną konfiguracją Gateway."
+            "value": "Połączono ze zdalnym Gateway."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "เชื่อมต่อกับการกำหนดค่า Gateway ระยะไกลแล้ว"
+            "value": "เชื่อมต่อกับ Gateway ระยะไกลของคุณแล้ว"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Đã kết nối với cấu hình Gateway từ xa."
+            "value": "Đã kết nối tới Gateway từ xa của bạn."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verbonden met een externe Gateway-configuratie."
+            "value": "Verbonden met je externe Gateway."
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "به پیکربندی Gateway راه‌دور متصل شد."
+            "value": "به Gateway راه دور شما متصل شد."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Подключено к удаленной конфигурации Gateway."
+            "value": "Подключено к вашему удалённому Gateway."
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ansluten till en fjärrkonfiguration för Gateway."
+            "value": "Ansluten till din fjärr-Gateway."
           }
         }
       }
@@ -30189,6 +30189,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ansluten med installationskod"
+          }
+        }
+      }
+    },
+    "Connecting to your remote Gateway…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在连接到你的远程 Gateway…"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在連線至您的遠端 Gateway…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectando ao seu Gateway remoto…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung zu deinem Remote-Gateway wird hergestellt…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectando a tu Gateway remoto…"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート Gateway に接続中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 Gateway에 연결하는 중…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion à votre Gateway distant…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आपके remote Gateway से कनेक्ट हो रहा है…"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "جارٍ الاتصال بالـ Gateway البعيد الخاص بك…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione al Gateway remoto in corso…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzak Gateway'inize bağlanılıyor…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Підключення до вашого віддаленого Gateway…"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menghubungkan ke Gateway jarak jauh Anda…"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Łączenie ze zdalnym Gateway…"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "กำลังเชื่อมต่อกับ Gateway ระยะไกลของคุณ…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đang kết nối tới Gateway từ xa của bạn…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden met je externe Gateway…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در حال اتصال به Gateway راه دور شما…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключение к вашему удалённому Gateway…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ansluter till din fjärr-Gateway…"
           }
         }
       }
@@ -35901,142 +36037,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Det gick inte att starta dikteringen."
-          }
-        }
-      }
-    },
-    "Couldn’t check for memories": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t check for memories"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法检查记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無法檢查記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Não foi possível verificar se há memórias"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen konnten nicht überprüft werden"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No se pudo comprobar si hay recuerdos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出を確認できませんでした"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 확인할 수 없습니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impossible de rechercher des souvenirs"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादों की जाँच नहीं की जा सकी"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تعذّر التحقق من وجود ذكريات"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impossibile verificare la presenza di ricordi"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılar kontrol edilemedi"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не вдалося перевірити наявність спогадів"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tidak dapat memeriksa memori"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nie udało się sprawdzić wspomnień"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ไม่สามารถตรวจสอบความทรงจำได้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Không thể kiểm tra ký ức"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kan niet controleren op herinneringen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "بررسی خاطرات امکان‌پذیر نبود"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось проверить наличие воспоминаний"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Det gick inte att söka efter minnen"
           }
         }
       }
@@ -43249,6 +43249,142 @@
         }
       }
     },
+    "Disconnected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已断开连接"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已中斷連線"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Getrennt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切断済み"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 끊김"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déconnecté"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "डिस्कनेक्ट किया गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "غير متصل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnesso"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlantı kesildi"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відключено"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terputus"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rozłączono"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ตัดการเชื่อมต่อแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã ngắt kết nối"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinding verbroken"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "قطع شد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отключено"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frånkopplad"
+          }
+        }
+      }
+    },
     "Disconnected (using System default)": {
       "localizations": {
         "en": {
@@ -43381,6 +43517,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Frånkopplad (använder systemstandard)"
+          }
+        }
+      }
+    },
+    "Disconnected from your remote Gateway. Open Connection settings to fix it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已与你的远程 Gateway 断开连接。打开连接设置进行修复。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已與您的遠端 Gateway 中斷連線。開啟連線設定以修復。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectado do seu Gateway remoto. Abra as configurações de Conexão para corrigir."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung zu deinem Remote-Gateway getrennt. Öffne die Verbindungseinstellungen, um das Problem zu beheben."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectado de tu Gateway remoto. Abre los ajustes de Conexión para solucionarlo."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート Gateway から切断されました。接続設定を開いて修正してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 Gateway와의 연결이 끊겼습니다. 연결 설정을 열어 문제를 해결하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déconnecté de votre Gateway distant. Ouvrez les réglages de connexion pour corriger le problème."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आपके remote Gateway से डिस्कनेक्ट हो गया। इसे ठीक करने के लिए Connection settings खोलें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "انقطع الاتصال بالـ Gateway البعيد الخاص بك. افتح إعدادات الاتصال لإصلاح ذلك."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnesso dal Gateway remoto. Apri le impostazioni di Connessione per risolvere il problema."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzak Gateway'inizle bağlantı kesildi. Düzeltmek için Bağlantı ayarlarını açın."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відключено від вашого віддаленого Gateway. Відкрийте налаштування підключення, щоб виправити це."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terputus dari Gateway jarak jauh Anda. Buka pengaturan Koneksi untuk memperbaikinya."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rozłączono ze zdalnym Gateway. Otwórz ustawienia połączenia, aby to naprawić."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ตัดการเชื่อมต่อจาก Gateway ระยะไกลของคุณแล้ว เปิดการตั้งค่าการเชื่อมต่อเพื่อแก้ไข"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã ngắt kết nối khỏi Gateway từ xa của bạn. Mở cài đặt Kết nối để khắc phục."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinding met je externe Gateway verbroken. Open de verbindingsinstellingen om dit op te lossen."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصال به Gateway راه دور شما قطع شد. برای رفع آن تنظیمات اتصال را باز کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отключено от вашего удалённого Gateway. Откройте настройки подключения, чтобы исправить это."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frånkopplad från din fjärr-Gateway. Öppna anslutningsinställningarna för att åtgärda det."
           }
         }
       }
@@ -54537,6 +54809,142 @@
         }
       }
     },
+    "Gateway connection failed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway connection failed."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 连接失败。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 連線失敗。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na conexão com o Gateway."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway-Verbindung fehlgeschlagen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falló la conexión con el Gateway."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 接続に失敗しました。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 연결에 실패했습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la connexion au Gateway."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway कनेक्शन विफल रहा।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فشل الاتصال بالـ Gateway."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione al Gateway non riuscita."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway bağlantısı başarısız oldu."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося підключитися до Gateway."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koneksi Gateway gagal."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Połączenie z Gateway nie powiodło się."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การเชื่อมต่อ Gateway ล้มเหลว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối Gateway thất bại."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway-verbinding mislukt."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصال Gateway ناموفق بود."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подключиться к Gateway."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway-anslutningen misslyckades."
+          }
+        }
+      }
+    },
     "Gateway location": {
       "localizations": {
         "en": {
@@ -54961,8 +55369,8 @@
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Gateway token"
+            "state": "translated",
+            "value": "Gateway 權杖"
           }
         },
         "pt-BR": {
@@ -55081,138 +55489,138 @@
         }
       }
     },
-    "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.": {
+    "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host."
+            "value": "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host."
           }
         },
         "zh-CN": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway 令牌不匹配。请检查 Gateway 主机上的 gateway.auth.token 或 OPENCLAW_GATEWAY_TOKEN。"
+            "value": "Gateway 令牌不匹配。请在 gateway 主机上运行 openclaw gateway auth-token --show。"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway 權杖不相符。請檢查 Gateway 主機上的 gateway.auth.token 或 OPENCLAW_GATEWAY_TOKEN。"
+            "value": "Gateway 權杖不符。請在 gateway 主機上執行 openclaw gateway auth-token --show。"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Incompatibilidade no token do gateway. Verifique gateway.auth.token ou OPENCLAW_GATEWAY_TOKEN no host do gateway."
+            "value": "Incompatibilidade de token do Gateway. Execute openclaw gateway auth-token --show no host do gateway."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway-Token stimmt nicht überein. Prüfe gateway.auth.token oder OPENCLAW_GATEWAY_TOKEN auf dem Gateway-Host."
+            "value": "Gateway-Token stimmt nicht überein. Führen Sie openclaw gateway auth-token --show auf dem Gateway-Host aus."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El token del gateway no coincide. Revisa gateway.auth.token u OPENCLAW_GATEWAY_TOKEN en el host del gateway."
+            "value": "El token del Gateway no coincide. Ejecuta openclaw gateway auth-token --show en el host del Gateway."
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway トークンが一致しません。Gateway ホストで gateway.auth.token または OPENCLAW_GATEWAY_TOKEN を確認してください。"
+            "value": "Gatewayトークンが一致しません。Gatewayホストで openclaw gateway auth-token --show を実行してください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway 토큰이 일치하지 않습니다. Gateway 호스트에서 gateway.auth.token 또는 OPENCLAW_GATEWAY_TOKEN을 확인하세요."
+            "value": "Gateway 토큰이 일치하지 않습니다. gateway 호스트에서 openclaw gateway auth-token --show를 실행하세요."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Incompatibilité du jeton du Gateway. Vérifiez gateway.auth.token ou OPENCLAW_GATEWAY_TOKEN sur l’hôte Gateway."
+            "value": "Le jeton du Gateway ne correspond pas. Exécutez openclaw gateway auth-token --show sur l'hôte du gateway."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway token mismatch. gateway host पर gateway.auth.token या OPENCLAW_GATEWAY_TOKEN जाँचें।"
+            "value": "Gateway token मेल नहीं खाता। gateway host पर openclaw gateway auth-token --show चलाएँ।"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "عدم تطابق رمز Gateway. تحقق من gateway.auth.token أو OPENCLAW_GATEWAY_TOKEN على مضيف Gateway."
+            "value": "عدم تطابق رمز Gateway. شغّل openclaw gateway auth-token --show على مضيف Gateway."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mancata corrispondenza del token del gateway. Controlla gateway.auth.token o OPENCLAW_GATEWAY_TOKEN sull'host gateway."
+            "value": "Il token del Gateway non corrisponde. Esegui openclaw gateway auth-token --show sull'host del gateway."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway token'ı eşleşmiyor. Gateway ana makinesinde gateway.auth.token veya OPENCLAW_GATEWAY_TOKEN değerini kontrol edin."
+            "value": "Gateway belirteci uyuşmuyor. Gateway ana bilgisayarında openclaw gateway auth-token --show komutunu çalıştırın."
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Невідповідність токена gateway. Перевірте gateway.auth.token або OPENCLAW_GATEWAY_TOKEN на хості gateway."
+            "value": "Невідповідність токена Gateway. Виконайте openclaw gateway auth-token --show на хості Gateway."
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Token gateway tidak cocok. Periksa gateway.auth.token atau OPENCLAW_GATEWAY_TOKEN di host gateway."
+            "value": "Token Gateway tidak cocok. Jalankan openclaw gateway auth-token --show di host gateway."
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Niezgodność tokena gateway. Sprawdź gateway.auth.token lub OPENCLAW_GATEWAY_TOKEN na hoście gateway."
+            "value": "Niezgodność tokenu Gateway. Uruchom openclaw gateway auth-token --show na hoście gateway."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "โทเค็น Gateway ไม่ตรงกัน ตรวจสอบ gateway.auth.token หรือ OPENCLAW_GATEWAY_TOKEN บนโฮสต์ Gateway"
+            "value": "โทเคนของ Gateway ไม่ตรงกัน รัน openclaw gateway auth-token --show บนโฮสต์ Gateway"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mã Gateway không khớp. Kiểm tra gateway.auth.token hoặc OPENCLAW_GATEWAY_TOKEN trên máy chủ Gateway."
+            "value": "Token Gateway không khớp. Chạy openclaw gateway auth-token --show trên máy chủ gateway."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway-token komt niet overeen. Controleer gateway.auth.token of OPENCLAW_GATEWAY_TOKEN op de gatewayhost."
+            "value": "Gateway-token komt niet overeen. Voer openclaw gateway auth-token --show uit op de gateway-host."
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "توکن Gateway مطابقت ندارد. gateway.auth.token یا OPENCLAW_GATEWAY_TOKEN را روی میزبان Gateway بررسی کنید."
+            "value": "عدم تطابق توکن Gateway. دستور openclaw gateway auth-token --show را روی میزبان Gateway اجرا کنید."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Несоответствие токена gateway. Проверьте gateway.auth.token или OPENCLAW_GATEWAY_TOKEN на хосте gateway."
+            "value": "Несоответствие токена Gateway. Выполните openclaw gateway auth-token --show на хосте Gateway."
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway-token matchar inte. Kontrollera gateway.auth.token eller OPENCLAW_GATEWAY_TOKEN på Gateway-värden."
+            "value": "Gateway-token stämmer inte. Kör openclaw gateway auth-token --show på gateway-värden."
           }
         }
       }
@@ -56029,6 +56437,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gateway-varning"
+          }
+        }
+      }
+    },
+    "Gateway work is paused; incoming messages will wait.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 工作已暂停；收到的消息将等待处理。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 工作已暫停；傳入的訊息將會等待。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O trabalho do Gateway está pausado; as mensagens recebidas aguardarão."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Gateway-Verarbeitung ist pausiert; eingehende Nachrichten warten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El trabajo del Gateway está en pausa; los mensajes entrantes esperarán."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway の処理が一時停止しています。受信メッセージは待機します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 작업이 일시 중지되었습니다. 수신 메시지는 대기합니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le travail du Gateway est en pause ; les messages entrants attendront."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway का काम रोका गया है; आने वाले संदेश प्रतीक्षा करेंगे।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "عمل الـ Gateway متوقف مؤقتًا؛ ستنتظر الرسائل الواردة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il lavoro del Gateway è in pausa; i messaggi in arrivo attenderanno."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway işi duraklatıldı; gelen mesajlar bekleyecek."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Робота Gateway призупинена; вхідні повідомлення чекатимуть."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pekerjaan Gateway dijeda; pesan masuk akan menunggu."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Praca Gateway jest wstrzymana; przychodzące wiadomości będą oczekiwać."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "งานของ Gateway ถูกหยุดชั่วคราว ข้อความที่เข้ามาจะรอไว้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Công việc của Gateway đang tạm dừng; các tin nhắn đến sẽ chờ."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway-werk is gepauzeerd; binnenkomende berichten wachten."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "کار Gateway متوقف شده است؛ پیام‌های ورودی منتظر می‌مانند."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Работа Gateway приостановлена; входящие сообщения будут ожидать."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway-arbetet är pausat; inkommande meddelanden väntar."
           }
         }
       }
@@ -59899,8 +60443,8 @@
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Identity file"
+            "state": "translated",
+            "value": "Identity फ़ाइल"
           }
         },
         "ar": {
@@ -60521,142 +61065,6 @@
         }
       }
     },
-    "Import memories": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Import memories"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "导入记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "匯入記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importar memórias"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen importieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importar recuerdos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出をインポート"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억 가져오기"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importer des souvenirs"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादें आयात करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "استيراد الذكريات"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importa ricordi"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anıları içe aktar"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Імпортувати спогади"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impor memori"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importuj wspomnienia"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "นำเข้าความทรงจำ"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nhập ký ức"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Herinneringen importeren"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "وارد کردن خاطرات"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Импортировать воспоминания"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importera minnen"
-          }
-        }
-      }
-    },
     "Importing browser cookies…": {
       "localizations": {
         "en": {
@@ -60789,142 +61197,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Importerar webbläsarcookies…"
-          }
-        }
-      }
-    },
-    "Importing memories…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importing memories…"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在导入记忆…"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在匯入記憶…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importando memórias…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen werden importiert…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importando recuerdos…"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出をインポート中…"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 가져오는 중…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importation des souvenirs…"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादें आयात की जा रही हैं…"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جارٍ استيراد الذكريات…"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importazione dei ricordi…"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılar içe aktarılıyor…"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Імпортування спогадів…"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mengimpor memori…"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importowanie wspomnień…"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "กำลังนำเข้าความทรงจำ…"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đang nhập ký ức…"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Herinneringen importeren…"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "در حال وارد کردن خاطرات…"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Импорт воспоминаний…"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importerar minnen…"
           }
         }
       }
@@ -62829,6 +63101,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Håll OpenClaw synligt i Dock. När det är av visas fortfarande Dock-symbolen för fönster medan de är öppna."
+          }
+        }
+      }
+    },
+    "Keep my edits": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep my edits"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留我的编辑"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留我的編輯"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manter minhas edições"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meine Änderungen behalten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conservar mis cambios"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自分の編集内容を保持"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "내 편집 유지"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conserver mes modifications"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "मेरे संपादन रखें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الاحتفاظ بتعديلاتي"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mantieni le mie modifiche"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenlemelerimi koru"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зберегти мої зміни"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pertahankan editan saya"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zachowaj moje zmiany"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เก็บการแก้ไขของฉัน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Giữ chỉnh sửa của tôi"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mijn bewerkingen behouden"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "حفظ ویرایش‌های من"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранить мои изменения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behåll mina ändringar"
           }
         }
       }
@@ -70037,142 +70445,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Letar efter AI du redan använder…"
-          }
-        }
-      }
-    },
-    "Looking for memories…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Looking for memories…"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在查找记忆…"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在尋找記憶…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Procurando memórias…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen werden gesucht…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Buscando recuerdos…"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出を検索中…"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 찾는 중…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recherche de souvenirs…"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादें खोजी जा रही हैं…"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جارٍ البحث عن ذكريات…"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ricerca dei ricordi…"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılar aranıyor…"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пошук спогадів…"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mencari memori…"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wyszukiwanie wspomnień…"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "กำลังค้นหาความทรงจำ…"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đang tìm ký ức…"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zoeken naar herinneringen…"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "در حال جست‌وجوی خاطرات…"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Поиск воспоминаний…"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Söker efter minnen…"
           }
         }
       }
@@ -79697,142 +79969,6 @@
         }
       }
     },
-    "No memories to import": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No memories to import"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "没有可导入的记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "沒有可匯入的記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhuma memória para importar"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keine Erinnerungen zum Importieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No hay recuerdos que importar"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "インポートする思い出はありません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "가져올 추억이 없습니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucun souvenir à importer"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आयात करने के लिए कोई यादें नहीं हैं"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "لا توجد ذكريات لاستيرادها"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessun ricordo da importare"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İçe aktarılacak anı yok"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Немає спогадів для імпорту"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tidak ada memori untuk diimpor"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Brak wspomnień do zaimportowania"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ไม่มีความทรงจำให้นำเข้า"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Không có ký ức để nhập"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Geen herinneringen om te importeren"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "خاطره‌ای برای وارد کردن وجود ندارد"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Нет воспоминаний для импорта"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inga minnen att importera"
-          }
-        }
-      }
-    },
     "No quick settings for this channel.": {
       "localizations": {
         "en": {
@@ -83777,6 +83913,142 @@
         }
       }
     },
+    "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 gateway 主机上，于交互式终端中运行 `openclaw gateway auth-token --show`，然后替换令牌并重试。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 gateway 主機上，於互動式終端機中執行 `openclaw gateway auth-token --show`，然後替換權杖並再試一次。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No host do gateway, execute `openclaw gateway auth-token --show` em um terminal interativo, substitua o token e tente novamente."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Führen Sie auf dem Gateway-Host `openclaw gateway auth-token --show` in einem interaktiven Terminal aus, ersetzen Sie dann das Token und versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En el host del Gateway, ejecuta `openclaw gateway auth-token --show` en una terminal interactiva, luego reemplaza el token e inténtalo de nuevo."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gatewayホストで、対話型ターミナルで `openclaw gateway auth-token --show` を実行し、トークンを置き換えてから再試行してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gateway 호스트에서 대화형 터미널로 `openclaw gateway auth-token --show`를 실행한 다음 토큰을 교체하고 다시 시도하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sur l'hôte du gateway, exécutez `openclaw gateway auth-token --show` dans un terminal interactif, puis remplacez le jeton et réessayez."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gateway host पर, एक इंटरैक्टिव टर्मिनल में `openclaw gateway auth-token --show` चलाएँ, फिर token बदलें और पुनः प्रयास करें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "على مضيف Gateway، شغّل `openclaw gateway auth-token --show` في طرفية تفاعلية، ثم استبدل الرمز وأعد المحاولة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sull'host del gateway, esegui `openclaw gateway auth-token --show` in un terminale interattivo, quindi sostituisci il token e riprova."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway ana bilgisayarında, etkileşimli bir terminalde `openclaw gateway auth-token --show` komutunu çalıştırın, ardından belirteci değiştirip yeniden deneyin."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На хості Gateway виконайте `openclaw gateway auth-token --show` в інтерактивному терміналі, потім замініть токен і спробуйте ще раз."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Di host gateway, jalankan `openclaw gateway auth-token --show` di terminal interaktif, lalu ganti token dan coba lagi."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Na hoście gateway uruchom `openclaw gateway auth-token --show` w interaktywnym terminalu, następnie zastąp token i spróbuj ponownie."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "บนโฮสต์ Gateway ให้รัน `openclaw gateway auth-token --show` ในเทอร์มินัลแบบโต้ตอบ จากนั้นแทนที่โทเคนแล้วลองอีกครั้ง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trên máy chủ gateway, chạy `openclaw gateway auth-token --show` trong terminal tương tác, sau đó thay thế token và thử lại."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voer op de gateway-host `openclaw gateway auth-token --show` uit in een interactieve terminal, vervang vervolgens het token en probeer het opnieuw."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "روی میزبان Gateway، دستور `openclaw gateway auth-token --show` را در یک ترمینال تعاملی اجرا کنید، سپس توکن را جایگزین کرده و دوباره تلاش کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На хосте Gateway выполните `openclaw gateway auth-token --show` в интерактивном терминале, затем замените токен и повторите попытку."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "På gateway-värden kör du `openclaw gateway auth-token --show` i en interaktiv terminal, ersätter sedan token och försöker igen."
+          }
+        }
+      }
+    },
     "On this Mac": {
       "localizations": {
         "en": {
@@ -85813,6 +86085,278 @@
           "stringUnit": {
             "state": "translated",
             "value": "Öppna konfigurationsmappen"
+          }
+        }
+      }
+    },
+    "Open Connection Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Connection Settings"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开连接设置"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開啟連線設定"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir configurações de conexão"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindungseinstellungen öffnen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir configuración de conexión"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続設定を開く"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 설정 열기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir les paramètres de connexion"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "कनेक्शन सेटिंग्स खोलें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فتح إعدادات الاتصال"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri impostazioni di connessione"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlantı Ayarlarını Aç"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відкрити налаштування з'єднання"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buka Pengaturan Koneksi"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otwórz ustawienia połączenia"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เปิดการตั้งค่าการเชื่อมต่อ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mở Cài đặt Kết nối"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindingsinstellingen openen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "باز کردن تنظیمات اتصال"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть настройки подключения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öppna anslutningsinställningar"
+          }
+        }
+      }
+    },
+    "Open Connection settings to fix it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开连接设置进行修复。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開啟連線設定以修復。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abra as configurações de Conexão para corrigir."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffne die Verbindungseinstellungen, um das Problem zu beheben."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre los ajustes de Conexión para solucionarlo."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続設定を開いて修正してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 설정을 열어 문제를 해결하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrez les réglages de connexion pour corriger le problème."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इसे ठीक करने के लिए Connection settings खोलें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "افتح إعدادات الاتصال لإصلاح ذلك."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri le impostazioni di Connessione per risolvere il problema."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzeltmek için Bağlantı ayarlarını açın."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відкрийте налаштування підключення, щоб виправити це."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buka pengaturan Koneksi untuk memperbaikinya."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otwórz ustawienia połączenia, aby to naprawić."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เปิดการตั้งค่าการเชื่อมต่อเพื่อแก้ไข"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mở cài đặt Kết nối để khắc phục."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open de verbindingsinstellingen om dit op te lossen."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "برای رفع آن تنظیمات اتصال را باز کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откройте настройки подключения, чтобы исправить это."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öppna anslutningsinställningarna för att åtgärda det."
           }
         }
       }
@@ -88809,138 +89353,138 @@
         }
       }
     },
-    "OpenClaw can bring useful context from AI tools you already use into your new assistant.": {
+    "OpenClaw connecting": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw can bring useful context from AI tools you already use into your new assistant."
+            "value": "OpenClaw connecting"
           }
         },
         "zh-CN": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw 可以将你已在使用的 AI 工具中的有用上下文导入新助手。"
+            "value": "OpenClaw 正在连接"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw 可以將你已在使用的 AI 工具中的實用脈絡帶入新助理。"
+            "value": "OpenClaw 連線中"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O OpenClaw pode trazer para seu novo assistente contextos úteis de ferramentas de IA que você já usa."
+            "value": "OpenClaw conectando"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw kann nützlichen Kontext aus bereits verwendeten KI-Tools in Ihren neuen Assistenten übernehmen."
+            "value": "OpenClaw wird verbunden"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw puede incorporar contexto útil de las herramientas de IA que ya utilizas a tu nuevo asistente."
+            "value": "OpenClaw conectando"
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw では、すでに使用している AI ツールから役立つコンテキストを新しいアシスタントに引き継ぐことができます。"
+            "value": "OpenClaw に接続中"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw는 이미 사용 중인 AI 도구에서 유용한 컨텍스트를 새 어시스턴트로 가져올 수 있습니다."
+            "value": "OpenClaw 연결 중"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw peut intégrer à votre nouvel assistant du contexte utile provenant des outils d’IA que vous utilisez déjà."
+            "value": "Connexion d'OpenClaw"
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw आपके पहले से उपयोग किए जा रहे AI टूल्स से उपयोगी संदर्भ आपके नए सहायक में ला सकता है।"
+            "value": "OpenClaw कनेक्ट हो रहा है"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "يمكن لـ OpenClaw نقل سياق مفيد من أدوات الذكاء الاصطناعي التي تستخدمها بالفعل إلى مساعدك الجديد."
+            "value": "OpenClaw قيد الاتصال"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw può importare nel tuo nuovo assistente informazioni contestuali utili dagli strumenti di IA che già utilizzi."
+            "value": "OpenClaw in connessione"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw, hâlihazırda kullandığınız yapay zekâ araçlarındaki yararlı bağlamı yeni asistanınıza aktarabilir."
+            "value": "OpenClaw bağlanıyor"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw може перенести корисний контекст з інструментів ШІ, якими ви вже користуєтеся, до вашого нового асистента."
+            "value": "OpenClaw підключається"
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw dapat membawa konteks berguna dari alat AI yang sudah Anda gunakan ke asisten baru Anda."
+            "value": "OpenClaw menghubungkan"
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw może przenieść do nowego asystenta przydatny kontekst z narzędzi AI, których już używasz."
+            "value": "Łączenie OpenClaw"
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw สามารถนำบริบทที่เป็นประโยชน์จากเครื่องมือ AI ที่คุณใช้อยู่มาไว้ในผู้ช่วยใหม่ของคุณได้"
+            "value": "OpenClaw กำลังเชื่อมต่อ"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw có thể đưa ngữ cảnh hữu ích từ các công cụ AI mà bạn đang sử dụng vào trợ lý mới."
+            "value": "OpenClaw đang kết nối"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw kan nuttige context uit AI-tools die je al gebruikt meenemen naar je nieuwe assistent."
+            "value": "OpenClaw verbindt"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw می‌تواند زمینه مفیدی را از ابزارهای هوش مصنوعی که از قبل استفاده می‌کنید، به دستیار جدیدتان منتقل کند."
+            "value": "در حال اتصال OpenClaw"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw может перенести полезный контекст из уже используемых вами инструментов ИИ в нового помощника."
+            "value": "OpenClaw подключается"
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenClaw kan överföra användbar kontext från AI-verktyg som du redan använder till din nya assistent."
+            "value": "OpenClaw ansluter"
           }
         }
       }
@@ -90709,6 +91253,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "OpenClaw arbetar…"
+          }
+        }
+      }
+    },
+    "OpenClaw needs attention": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw 需要注意"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw 需要注意"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw precisa de atenção"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw erfordert Aufmerksamkeit"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw necesita atención"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw に対応が必要です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw 주의 필요"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw requiert votre attention"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw को ध्यान देने की आवश्यकता है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw يحتاج إلى انتباه"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw richiede attenzione"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw dikkat gerektiriyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw потребує уваги"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw perlu perhatian"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw wymaga uwagi"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw ต้องการการดูแล"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw cần chú ý"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw vereist aandacht"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw نیاز به توجه دارد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw требует внимания"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw behöver åtgärd"
           }
         }
       }
@@ -94793,138 +95473,138 @@
         }
       }
     },
-    "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.": {
+    "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output."
           }
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "粘贴在 gateway 主机上配置的令牌。在 gateway 主机上，于交互式终端中运行 `openclaw gateway auth-token --show`，然后粘贴其输出。"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "貼上在 gateway 主機上設定的權杖。在 gateway 主機上，於互動式終端機中執行 `openclaw gateway auth-token --show`，然後貼上其輸出。"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Cole o token configurado no host do gateway. No host do gateway, execute `openclaw gateway auth-token --show` em um terminal interativo e cole a saída."
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Fügen Sie das auf dem Gateway-Host konfigurierte Token ein. Führen Sie auf dem Gateway-Host `openclaw gateway auth-token --show` in einem interaktiven Terminal aus und fügen Sie dann dessen Ausgabe ein."
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Pega el token configurado en el host del Gateway. En el host del Gateway, ejecuta `openclaw gateway auth-token --show` en una terminal interactiva y luego pega su salida."
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Gatewayホストで設定されたトークンを貼り付けてください。Gatewayホストで、対話型ターミナルで `openclaw gateway auth-token --show` を実行し、その出力を貼り付けてください。"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "gateway 호스트에 구성된 토큰을 붙여넣으세요. gateway 호스트에서 대화형 터미널로 `openclaw gateway auth-token --show`를 실행한 다음 그 출력을 붙여넣으세요."
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Collez le jeton configuré sur l'hôte du gateway. Sur l'hôte du gateway, exécutez `openclaw gateway auth-token --show` dans un terminal interactif, puis collez sa sortie."
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "gateway host पर कॉन्फ़िगर किया गया token पेस्ट करें। gateway host पर, एक इंटरैक्टिव टर्मिनल में `openclaw gateway auth-token --show` चलाएँ, फिर उसका आउटपुट पेस्ट करें।"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "الصق الرمز المُهيأ على مضيف Gateway. على مضيف Gateway، شغّل `openclaw gateway auth-token --show` في طرفية تفاعلية، ثم الصق مخرجاته."
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Incolla il token configurato sull'host del gateway. Sull'host del gateway, esegui `openclaw gateway auth-token --show` in un terminale interattivo, quindi incolla il suo output."
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Gateway ana bilgisayarında yapılandırılan belirteci yapıştırın. Gateway ana bilgisayarında, etkileşimli bir terminalde `openclaw gateway auth-token --show` komutunu çalıştırın, ardından çıktısını yapıştırın."
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Вставте токен, налаштований на хості Gateway. На хості Gateway виконайте `openclaw gateway auth-token --show` в інтерактивному терміналі, потім вставте його вивід."
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Tempelkan token yang dikonfigurasi di host gateway. Di host gateway, jalankan `openclaw gateway auth-token --show` di terminal interaktif, lalu tempelkan outputnya."
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Wklej token skonfigurowany na hoście gateway. Na hoście gateway uruchom `openclaw gateway auth-token --show` w interaktywnym terminalu, a następnie wklej jego wynik."
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "วางโทเคนที่กำหนดค่าไว้บนโฮสต์ Gateway บนโฮสต์ Gateway ให้รัน `openclaw gateway auth-token --show` ในเทอร์มินัลแบบโต้ตอบ แล้ววางผลลัพธ์ที่ได้"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Dán token được cấu hình trên máy chủ gateway. Trên máy chủ gateway, chạy `openclaw gateway auth-token --show` trong terminal tương tác, sau đó dán kết quả của nó."
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Plak het token dat op de gateway-host is geconfigureerd. Voer op de gateway-host `openclaw gateway auth-token --show` uit in een interactieve terminal en plak vervolgens de uitvoer."
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "توکن پیکربندی‌شده روی میزبان Gateway را جای‌گذاری کنید. روی میزبان Gateway، دستور `openclaw gateway auth-token --show` را در یک ترمینال تعاملی اجرا کنید، سپس خروجی آن را جای‌گذاری کنید."
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Вставьте токен, настроенный на хосте Gateway. На хосте Gateway выполните `openclaw gateway auth-token --show` в интерактивном терминале, затем вставьте вывод."
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "state": "translated",
+            "value": "Klistra in token som är konfigurerad på gateway-värden. På gateway-värden kör du `openclaw gateway auth-token --show` i en interaktiv terminal och klistrar sedan in dess utdata."
           }
         }
       }
@@ -104993,142 +105673,6 @@
         }
       }
     },
-    "Refresh plan": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Refresh plan"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "刷新计划"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "重新整理計畫"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Atualizar plano"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Plan aktualisieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Actualizar plan"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プランを更新"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "계획 새로 고침"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Actualiser le plan"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "योजना रीफ़्रेश करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تحديث الخطة"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aggiorna piano"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Planı yenile"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Оновити план"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Segarkan rencana"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Odśwież plan"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "รีเฟรชแผน"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Làm mới kế hoạch"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Plan vernieuwen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تازه‌سازی طرح"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Обновить план"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uppdatera planen"
-          }
-        }
-      }
-    },
     "Refresh status": {
       "localizations": {
         "en": {
@@ -106621,6 +107165,278 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fjärr-OpenClaw aktivt"
+          }
+        }
+      }
+    },
+    "Remote OpenClaw Connecting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "远程 OpenClaw 正在连接"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "遠端 OpenClaw 連線中"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw Remoto Conectando"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw wird verbunden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectando OpenClaw remoto"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート OpenClaw に接続中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 OpenClaw 연결 중"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion OpenClaw distant"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw कनेक्ट हो रहा है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw عن بُعد قيد الاتصال"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw remoto in connessione"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzak OpenClaw Bağlanıyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Віддалений OpenClaw підключається"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw Menghubungkan"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Łączenie zdalnego OpenClaw"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw กำลังเชื่อมต่อ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw từ xa đang kết nối"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Externe OpenClaw verbindt"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در حال اتصال OpenClaw راه دور"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключение удалённого OpenClaw"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fjärr-OpenClaw ansluter"
+          }
+        }
+      }
+    },
+    "Remote OpenClaw Needs Attention": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "远程 OpenClaw 需要注意"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "遠端 OpenClaw 需要注意"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw Remoto Precisa de Atenção"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw erfordert Aufmerksamkeit"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw remoto necesita atención"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート OpenClaw に対応が必要です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 OpenClaw 주의 필요"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw distant requiert votre attention"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw को ध्यान देने की आवश्यकता है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw عن بُعد يحتاج إلى انتباه"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw remoto richiede attenzione"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzak OpenClaw Dikkat Gerektiriyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Віддалений OpenClaw потребує уваги"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw Perlu Perhatian"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zdalny OpenClaw wymaga uwagi"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw ต้องการการดูแล"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw từ xa cần chú ý"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Externe OpenClaw vereist aandacht"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw راه دور نیاز به توجه دارد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалённый OpenClaw требует внимания"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fjärr-OpenClaw behöver åtgärd"
           }
         }
       }
@@ -113289,142 +114105,6 @@
         }
       }
     },
-    "Retry pending imports before refreshing the plan.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Retry pending imports before refreshing the plan."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "刷新计划前，请重试待处理的导入。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "請先重試待處理的匯入，再重新整理計畫。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tente novamente as importações pendentes antes de atualizar o plano."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wiederholen Sie ausstehende Importe, bevor Sie den Plan aktualisieren."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reintenta las importaciones pendientes antes de actualizar el plan."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プランを更新する前に、保留中のインポートを再試行してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "계획을 새로 고치기 전에 보류 중인 가져오기를 다시 시도하세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Réessayez les importations en attente avant d’actualiser le plan."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "योजना रीफ़्रेश करने से पहले लंबित आयातों का फिर से प्रयास करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "أعِد محاولة عمليات الاستيراد المعلّقة قبل تحديث الخطة."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Riprova le importazioni in sospeso prima di aggiornare il piano."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Planı yenilemeden önce bekleyen içe aktarma işlemlerini yeniden deneyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Повторіть імпорт елементів, що очікують, перш ніж оновлювати план."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Coba lagi impor yang tertunda sebelum menyegarkan rencana."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Przed odświeżeniem planu ponów oczekujące importy."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ลองนำเข้ารายการที่รอดำเนินการอีกครั้งก่อนรีเฟรชแผน"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hãy thử lại các lượt nhập đang chờ trước khi làm mới kế hoạch."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Probeer importbewerkingen die nog in behandeling zijn opnieuw voordat je het plan vernieuwt."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "پیش از تازه‌سازی طرح، وارد کردن‌های در انتظار را دوباره امتحان کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перед обновлением плана повторите попытку незавершённого импорта."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Försök importera väntande objekt igen innan du uppdaterar planen."
-          }
-        }
-      }
-    },
     "Retry thread groups": {
       "localizations": {
         "en": {
@@ -116281,6 +116961,142 @@
         }
       }
     },
+    "SSH host key policy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH host key policy"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 主机密钥策略"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 主機金鑰政策"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Política de chave de host SSH"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH-Hostschlüssel-Richtlinie"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Política de claves de host SSH"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSHホストキーポリシー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 호스트 키 정책"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Politique de clé d'hôte SSH"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH host key नीति"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سياسة مفتاح مضيف SSH"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Criterio della chiave host SSH"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH ana bilgisayar anahtarı politikası"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Політика ключів хоста SSH"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kebijakan host key SSH"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zasady klucza hosta SSH"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "นโยบายคีย์โฮสต์ SSH"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chính sách khóa máy chủ SSH"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH-hostsleutelbeleid"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سیاست کلید میزبان SSH"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Политика ключей хоста SSH"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Policy för SSH-värdnyckel"
+          }
+        }
+      }
+    },
     "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.": {
       "localizations": {
         "en": {
@@ -116433,8 +117249,8 @@
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "SSH target"
+            "state": "translated",
+            "value": "SSH 目標"
           }
         },
         "pt-BR": {
@@ -139129,142 +139945,6 @@
         }
       }
     },
-    "The Gateway did not return a usable import plan. Try planning again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Gateway did not return a usable import plan. Try planning again."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 未返回可用的导入计划。请尝试重新规划。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 未傳回可用的匯入計畫。請重新規劃。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Gateway não retornou um plano de importação utilizável. Tente planejar novamente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das Gateway hat keinen verwendbaren Importplan zurückgegeben. Versuchen Sie die Planung erneut."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El Gateway no devolvió un plan de importación válido. Intenta planificar de nuevo."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway から使用可能なインポートプランが返されませんでした。もう一度プランを作成してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway에서 사용할 수 있는 가져오기 계획을 반환하지 않았습니다. 다시 계획해 보세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le Gateway n’a pas renvoyé de plan d’importation utilisable. Essayez de planifier à nouveau."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ने उपयोग योग्य आयात योजना नहीं लौटाई। फिर से योजना बनाने की कोशिश करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "لم يُعِد Gateway خطة استيراد قابلة للاستخدام. حاول التخطيط مجددًا."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il Gateway non ha restituito un piano di importazione utilizzabile. Prova a pianificare di nuovo."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway kullanılabilir bir içe aktarma planı döndürmedi. Yeniden planlamayı deneyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway не повернув придатний план імпорту. Спробуйте створити план ще раз."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway tidak mengembalikan rencana impor yang dapat digunakan. Coba buat rencana lagi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway nie zwrócił użytecznego planu importu. Spróbuj zaplanować ponownie."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ไม่ได้ส่งคืนแผนการนำเข้าที่ใช้งานได้ โปรดลองวางแผนอีกครั้ง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway không trả về kế hoạch nhập có thể sử dụng. Hãy thử lập kế hoạch lại."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "De Gateway heeft geen bruikbaar importplan geretourneerd. Probeer opnieuw een plan te maken."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway طرح وارد کردن قابل‌استفاده‌ای برنگرداند. دوباره برنامه‌ریزی کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway не вернул пригодный план импорта. Попробуйте составить план ещё раз."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway returnerade ingen användbar importplan. Försök planera igen."
-          }
-        }
-      }
-    },
     "The Gateway did not start.": {
       "localizations": {
         "en": {
@@ -139669,142 +140349,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gateway är fortfarande pausad, så OpenClaw väckte inte din agent."
-          }
-        }
-      }
-    },
-    "The Gateway returned an inconsistent provider plan. Try planning again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Gateway returned an inconsistent provider plan. Try planning again."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 返回的提供商计划不一致。请尝试重新规划。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 傳回的供應商計畫不一致。請重新規劃。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Gateway retornou um plano de provedor inconsistente. Tente planejar novamente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das Gateway hat einen inkonsistenten Anbieterplan zurückgegeben. Versuchen Sie die Planung erneut."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El Gateway devolvió un plan de proveedor incoherente. Intenta planificar de nuevo."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway から一貫性のないプロバイダープランが返されました。もう一度プランを作成してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway에서 일관되지 않은 제공업체 계획을 반환했습니다. 다시 계획해 보세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le Gateway a renvoyé un plan de fournisseur incohérent. Essayez de planifier à nouveau."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ने एक असंगत प्रदाता योजना लौटाई। फिर से योजना बनाने की कोशिश करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "أعاد Gateway خطة موفّر غير متسقة. حاول التخطيط مجددًا."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il Gateway ha restituito un piano del provider incoerente. Prova a pianificare di nuovo."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway tutarsız bir sağlayıcı planı döndürdü. Yeniden planlamayı deneyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway повернув неузгоджений план постачальника. Спробуйте створити план ще раз."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway mengembalikan rencana penyedia yang tidak konsisten. Coba buat rencana lagi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway zwrócił niespójny plan dostawcy. Spróbuj zaplanować ponownie."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ส่งคืนแผนของผู้ให้บริการที่ไม่สอดคล้องกัน โปรดลองวางแผนอีกครั้ง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway đã trả về một kế hoạch nhà cung cấp không nhất quán. Hãy thử lập kế hoạch lại."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "De Gateway heeft een inconsistent providerplan geretourneerd. Probeer opnieuw een plan te maken."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway یک طرح ارائه‌دهنده ناسازگار برگرداند. دوباره برنامه‌ریزی کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway вернул несогласованный план провайдера. Попробуйте составить план ещё раз."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway returnerade en inkonsekvent leverantörsplan. Försök planera igen."
           }
         }
       }
@@ -145385,138 +145929,138 @@
         }
       }
     },
-    "This gateway requires an auth token from the gateway host.": {
+    "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This gateway requires an auth token from the gateway host."
+            "value": "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host."
           }
         },
         "zh-CN": {
           "stringUnit": {
             "state": "translated",
-            "value": "此 Gateway 需要来自 Gateway 主机的身份验证令牌。"
+            "value": "此 gateway 需要身份验证令牌。请在 gateway 主机上运行 openclaw gateway auth-token --show。"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "translated",
-            "value": "此 Gateway 需要來自 Gateway 主機的驗證權杖。"
+            "value": "此 gateway 需要驗證權杖。請在 gateway 主機上執行 openclaw gateway auth-token --show。"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Este gateway requer um token de autenticação do host do gateway."
+            "value": "Este gateway requer um token de autenticação. Execute openclaw gateway auth-token --show no host do gateway."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Diese Gateway erfordert ein Authentifizierungstoken vom Gateway-Host."
+            "value": "Dieses Gateway erfordert ein Auth-Token. Führen Sie openclaw gateway auth-token --show auf dem Gateway-Host aus."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Este gateway requiere un token de autenticación del host del gateway."
+            "value": "Este Gateway requiere un token de autenticación. Ejecuta openclaw gateway auth-token --show en el host del Gateway."
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "translated",
-            "value": "この Gateway には Gateway ホストからの認証トークンが必要です。"
+            "value": "このGatewayには認証トークンが必要です。Gatewayホストで openclaw gateway auth-token --show を実行してください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이 Gateway에는 Gateway 호스트의 인증 토큰이 필요합니다."
+            "value": "이 gateway에는 인증 토큰이 필요합니다. gateway 호스트에서 openclaw gateway auth-token --show를 실행하세요."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ce Gateway nécessite un jeton d’authentification provenant de l’hôte Gateway."
+            "value": "Ce gateway nécessite un jeton d'authentification. Exécutez openclaw gateway auth-token --show sur l'hôte du gateway."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "इस gateway को gateway host से एक auth token की आवश्यकता है।"
+            "value": "इस gateway को एक auth token की आवश्यकता है। gateway host पर openclaw gateway auth-token --show चलाएँ।"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "يتطلب هذا Gateway رمز مصادقة من مضيف Gateway."
+            "value": "يتطلب Gateway هذا رمز مصادقة. شغّل openclaw gateway auth-token --show على مضيف Gateway."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Questo gateway richiede un token di autenticazione dall'host gateway."
+            "value": "Questo gateway richiede un token di autenticazione. Esegui openclaw gateway auth-token --show sull'host del gateway."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bu gateway, gateway ana makinesinden bir kimlik doğrulama token'ı gerektirir."
+            "value": "Bu gateway bir kimlik doğrulama belirteci gerektiriyor. Gateway ana bilgisayarında openclaw gateway auth-token --show komutunu çalıştırın."
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Цей gateway вимагає токен автентифікації з хоста gateway."
+            "value": "Цей Gateway потребує токен автентифікації. Виконайте openclaw gateway auth-token --show на хості Gateway."
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway ini memerlukan token autentikasi dari host gateway."
+            "value": "Gateway ini memerlukan token autentikasi. Jalankan openclaw gateway auth-token --show di host gateway."
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ten gateway wymaga tokena uwierzytelniania z hosta gateway."
+            "value": "Ten gateway wymaga tokenu uwierzytelniania. Uruchom openclaw gateway auth-token --show na hoście gateway."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway นี้ต้องใช้โทเค็นการยืนยันตัวตนจากโฮสต์ Gateway"
+            "value": "Gateway นี้ต้องใช้โทเคนการยืนยันตัวตน รัน openclaw gateway auth-token --show บนโฮสต์ Gateway"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gateway này yêu cầu mã xác thực từ máy chủ Gateway."
+            "value": "Gateway này yêu cầu token xác thực. Chạy openclaw gateway auth-token --show trên máy chủ gateway."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Deze gateway vereist een auth-token van de gatewayhost."
+            "value": "Deze gateway vereist een auth-token. Voer openclaw gateway auth-token --show uit op de gateway-host."
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "این Gateway به یک توکن احراز هویت از میزبان Gateway نیاز دارد."
+            "value": "این Gateway به یک توکن احراز هویت نیاز دارد. دستور openclaw gateway auth-token --show را روی میزبان Gateway اجرا کنید."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Для этого gateway требуется токен аутентификации с хоста gateway."
+            "value": "Для этого Gateway требуется токен аутентификации. Выполните openclaw gateway auth-token --show на хосте Gateway."
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "Denna Gateway kräver en autentiseringstoken från Gateway-värden."
+            "value": "Denna gateway kräver en auth-token. Kör openclaw gateway auth-token --show på gateway-värden."
           }
         }
       }
@@ -154633,6 +155177,142 @@
         }
       }
     },
+    "Use file version": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use file version"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用文件版本"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用檔案版本"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usar versão do arquivo"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dateiversion verwenden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usar versión del archivo"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルのバージョンを使用"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일 버전 사용"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiliser la version du fichier"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "फ़ाइल संस्करण का उपयोग करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "استخدام نسخة الملف"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa la versione del file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya sürümünü kullan"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Використати версію файлу"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gunakan versi file"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Użyj wersji z pliku"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ใช้เวอร์ชันจากไฟล์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dùng phiên bản tệp"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestandsversie gebruiken"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "استفاده از نسخه فایل"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать версию из файла"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Använd filversion"
+          }
+        }
+      }
+    },
     "Use the panel + Canvas": {
       "localizations": {
         "en": {
@@ -163473,550 +164153,6 @@
         }
       }
     },
-    "You can do this later from the dashboard’s Memory import page.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can do this later from the dashboard’s Memory import page."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以稍后从仪表板的记忆导入页面执行此操作。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你稍後可以從儀表板的「記憶匯入」頁面執行此操作。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode fazer isso mais tarde pela página de importação de memórias do painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sie können dies später über die Seite „Erinnerungen importieren“ im Dashboard erledigen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes hacerlo más tarde desde la página de importación de recuerdos del panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "後でダッシュボードの「思い出のインポート」ページから実行できます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "나중에 대시보드의 추억 가져오기 페이지에서 이 작업을 수행할 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pourrez le faire plus tard depuis la page d’importation des souvenirs du tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप यह बाद में डैशबोर्ड के यादें आयात करें पेज से कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك إجراء ذلك لاحقًا من صفحة استيراد الذكريات في لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi farlo in seguito dalla pagina di importazione dei ricordi della dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bunu daha sonra kontrol panelindeki Anı içe aktarma sayfasından yapabilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Це можна зробити пізніше на сторінці імпорту пам’яті в панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat melakukannya nanti dari halaman Impor memori di dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Możesz zrobić to później na stronie Import pamięci w panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถดำเนินการนี้ภายหลังได้จากหน้าการนำเข้าความทรงจำของแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể thực hiện việc này sau từ trang Nhập ký ức trên bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt dit later doen via de pagina Geheugenimport in het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید این کار را بعداً از صفحه وارد کردن خاطرات در داشبورد انجام دهید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Это можно сделать позже на странице «Импорт воспоминаний» панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan göra detta senare från sidan Minnesimport på kontrollpanelen."
-          }
-        }
-      }
-    },
-    "You can import memories later from the dashboard.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can import memories later from the dashboard."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以稍后从仪表板导入记忆。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你稍後可以從儀表板匯入記憶。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode importar memórias mais tarde pelo painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sie können Erinnerungen später über das Dashboard importieren."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes importar recuerdos más tarde desde el panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出は後でダッシュボードからインポートできます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "나중에 대시보드에서 추억을 가져올 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pourrez importer des souvenirs plus tard depuis le tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप बाद में डैशबोर्ड से यादें आयात कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك استيراد الذكريات لاحقًا من لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi importare i ricordi in seguito dalla dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anıları daha sonra kontrol panelinden içe aktarabilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ви зможете імпортувати спогади пізніше з панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat mengimpor memori nanti dari dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wspomnienia możesz zaimportować później z panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถนำเข้าความทรงจำภายหลังได้จากแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể nhập ký ức sau từ bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt herinneringen later importeren via het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید بعداً خاطرات را از داشبورد وارد کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Воспоминания можно импортировать позже с панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan importera minnen senare från kontrollpanelen."
-          }
-        }
-      }
-    },
-    "You can manage imported memories anytime from the dashboard.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can manage imported memories anytime from the dashboard."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以随时从仪表板管理已导入的记忆。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你隨時可以從儀表板管理已匯入的記憶。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode gerenciar as memórias importadas a qualquer momento pelo painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kannst importierte Erinnerungen jederzeit über das Dashboard verwalten."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes gestionar los recuerdos importados en cualquier momento desde el panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "インポートしたメモリは、ダッシュボードからいつでも管理できます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "가져온 메모리는 언제든지 대시보드에서 관리할 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pouvez gérer les souvenirs importés à tout moment depuis le tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप आयात की गई यादों को डैशबोर्ड से कभी भी प्रबंधित कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك إدارة الذكريات المستوردة في أي وقت من لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi gestire i ricordi importati in qualsiasi momento dalla dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İçe aktarılan anıları istediğiniz zaman kontrol panelinden yönetebilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ви можете будь-коли керувати імпортованими спогадами на панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat mengelola memori yang diimpor kapan saja dari dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zaimportowanymi wspomnieniami możesz w każdej chwili zarządzać z poziomu panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถจัดการความทรงจำที่นำเข้าได้ทุกเมื่อจากแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể quản lý các ký ức đã nhập bất cứ lúc nào từ bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt geïmporteerde herinneringen op elk moment beheren via het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید خاطرات واردشده را هر زمان از داشبورد مدیریت کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Импортированными воспоминаниями можно управлять в любое время на панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan när som helst hantera importerade minnen från instrumentpanelen."
-          }
-        }
-      }
-    },
-    "You can skip this and import later from the dashboard’s Memory import page.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can skip this and import later from the dashboard’s Memory import page."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以跳过此步骤，稍后从仪表板的记忆导入页面进行导入。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以略過此步驟，稍後再從儀表板的「記憶匯入」頁面匯入。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode pular esta etapa e importar mais tarde pela página de importação de memórias do painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sie können diesen Schritt überspringen und den Import später über die Seite „Erinnerungen importieren“ im Dashboard durchführen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes omitir este paso e importar más tarde desde la página de importación de recuerdos del panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ここではスキップして、後でダッシュボードの「思い出のインポート」ページからインポートできます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 단계를 건너뛰고 나중에 대시보드의 추억 가져오기 페이지에서 가져올 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pouvez ignorer cette étape et effectuer l’importation plus tard depuis la page d’importation des souvenirs du tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप इसे छोड़ सकते हैं और बाद में डैशबोर्ड के यादें आयात करें पेज से आयात कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك تخطي هذه الخطوة والاستيراد لاحقًا من صفحة استيراد الذكريات في لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi saltare questo passaggio e importare in seguito dalla pagina di importazione dei ricordi della dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu adımı atlayabilir ve daha sonra kontrol panelindeki Anı içe aktarma sayfasından içe aktarabilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Цей крок можна пропустити й імпортувати спогади пізніше на сторінці імпорту пам’яті в панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat melewati langkah ini dan mengimpor nanti dari halaman Impor memori di dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Możesz pominąć ten krok i zaimportować wspomnienia później na stronie Import pamięci w panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถข้ามขั้นตอนนี้และนำเข้าในภายหลังได้จากหน้าการนำเข้าความทรงจำของแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể bỏ qua bước này và nhập sau từ trang Nhập ký ức trên bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt dit overslaan en later importeren via de pagina Geheugenimport in het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید از این مرحله بگذرید و بعداً از صفحه وارد کردن خاطرات در داشبورد، آن‌ها را وارد کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Этот шаг можно пропустить и выполнить импорт позже на странице «Импорт воспоминаний» панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan hoppa över detta och importera senare från sidan Minnesimport på kontrollpanelen."
-          }
-        }
-      }
-    },
     "Your AI is ready": {
       "localizations": {
         "en": {
@@ -164421,142 +164557,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Din agent kunde inte meddelas ännu. OpenClaw försöker igen nästa gång appen startas."
-          }
-        }
-      }
-    },
-    "Your memories are ready": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your memories are ready"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你的记忆已准备就绪"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你的記憶已準備就緒"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Suas memórias estão prontas"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deine Erinnerungen sind bereit"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tus recuerdos están listos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "メモリの準備ができました"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "메모리가 준비되었습니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vos souvenirs sont prêts"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आपकी यादें तैयार हैं"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ذكرياتك جاهزة"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "I tuoi ricordi sono pronti"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılarınız hazır"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ваші спогади готові"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Memori Anda sudah siap"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Twoje wspomnienia są gotowe"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ความทรงจำของคุณพร้อมแล้ว"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ký ức của bạn đã sẵn sàng"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je herinneringen zijn klaar"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "خاطرات شما آماده‌اند"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ваши воспоминания готовы"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dina minnen är klara"
           }
         }
       }

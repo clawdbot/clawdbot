@@ -328,6 +328,9 @@ function withOpenedRootFileSync<T>(
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
     boundaryLabel: params.boundaryLabel,
+    // Operator hook dirs are commonly symlinked; fs-safe still rejects hops
+    // whose canonical target escapes the hook root.
+    rejectSymlinks: false,
   });
   if (!opened.ok) {
     return null;

@@ -1,10 +1,10 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   listAgentEntries,
   listAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope-config.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import {
   applyClawAddPlan,
   CLAW_ADD_RESULT_SCHEMA_VERSION,

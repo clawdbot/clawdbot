@@ -5,16 +5,19 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
-  claimAgentRunContext,
-  consumeCronNextCheckProposal,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
-  releaseAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  consumeCronNextCheckProposal,
+  getAgentRunContext,
+  releaseAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -247,10 +250,13 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      pluginRegistry: prepared.context.pluginRegistry,
     };
     const execution = await prepared.context.sessionWorkAdmission.run(() =>
       withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
-        executeCronRun(executionParams),
+        withPluginRuntimeRegistryScope(prepared.context.pluginRegistry, () =>
+          executeCronRun(executionParams),
+        ),
       ),
     );
     const finalized = await finalizeCronRun({

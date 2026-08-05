@@ -83,6 +83,7 @@ describe("Codex ring-zero thread config", () => {
     expect(start.environments).toEqual([]);
     expect(start.baseInstructions).toBe("");
     for (const config of [start.config, resume.config]) {
+      expect(config?.["agents.enabled"]).toBe(false);
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
       expect(config?.["features.multi_agent"]).toBe(false);
       expect(config?.["features.multi_agent_v2"]).toBe(false);
@@ -134,6 +135,7 @@ describe("Codex delegation capability", () => {
     });
 
     for (const request of [start, resume]) {
+      expect(request.config?.["agents.enabled"]).toBe(false);
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
       expect(request.config?.["features.goals"]).toBe(false);
@@ -190,6 +192,7 @@ describe("Codex delegation capability", () => {
 
     for (const request of [start, resume]) {
       for (const disabledFeature of [
+        "agents.enabled",
         "features.apps",
         "features.current_time_reminder",
         "features.deferred_executor",

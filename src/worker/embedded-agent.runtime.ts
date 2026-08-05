@@ -8,8 +8,10 @@ import type {
   WorkerInferenceOptions,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
+import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.js";
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
+import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
@@ -18,9 +20,12 @@ import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
+import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
@@ -78,6 +83,8 @@ type RunWorkerEmbeddedTurnResult = {
   messages: WorkerTranscriptMessage[];
 };
 
+const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
+
 export async function runWorkerEmbeddedTurn(
   params: RunWorkerEmbeddedTurnParams,
 ): Promise<RunWorkerEmbeddedTurnResult> {
@@ -123,30 +130,54 @@ export async function runWorkerEmbeddedTurn(
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
   const activeToolNames = WORKER_LOCAL_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
-  const localTools = createOpenClawCodingTools({
-    cwd: params.cwd,
-    workspaceDir: params.cwd,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    runSessionKey: params.sessionKey,
-    runId: params.runId,
-    oneShotCliRun: true,
-    senderIsOwner: true,
-    disableMessageTool: true,
-    runtimeToolAllowlist: [...WORKER_LOCAL_TOOL_NAMES],
+  const coreTools = createCoreCodingTools({
+    codingRoot: params.cwd,
+    includeBaseCodingTools: true,
+    includeShellTools: true,
+    workspaceOnly: false,
+    modelContextWindowTokens: model.contextWindow,
+    imageSanitization: {},
+    applyPatchEnabled: isApplyPatchAllowedForModel({
+      modelProvider: params.modelRef.provider,
+      modelId: params.modelRef.model,
+    }),
+    applyPatchWorkspaceOnly: true,
+    execDefaults: {
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      config: WORKER_TOOL_CONFIG,
+      commandHighlighting: false,
+      agentId: DEFAULT_AGENT_ID,
+      allowBackground: true,
+      scopeKey: params.sessionKey,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      notifySessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      eventRouting: { preserveSessionKey: false },
+    },
+    processDefaults: { scopeKey: params.sessionKey },
+  });
+  const localTools = finalizeAgentTools({
+    tools: coreTools,
     modelProvider: params.modelRef.provider,
     modelId: params.modelRef.model,
-    modelApi: model.api,
-    modelContextWindowTokens: model.contextWindow,
-    config: { plugins: { enabled: false } },
-    exec: { host: "gateway", security: "full", ask: "off" },
-    toolConstructionPlan: {
-      includeBaseCodingTools: true,
-      includeShellTools: true,
-      includeChannelTools: false,
-      includeOpenClawTools: false,
-      includePluginTools: false,
+    hookContext: {
+      agentId: DEFAULT_AGENT_ID,
+      config: WORKER_TOOL_CONFIG,
+      cwd: params.cwd,
+      workspaceDir: params.cwd,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      requester: { senderIsOwner: true },
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: WORKER_TOOL_CONFIG,
+        agentId: DEFAULT_AGENT_ID,
+      }),
     },
+    agentId: DEFAULT_AGENT_ID,
   }).filter((tool) => localToolNameSet.has(tool.name));
   const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
   for (const toolName of WORKER_LOCAL_TOOL_NAMES) {

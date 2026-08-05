@@ -75,6 +75,10 @@ async function uploadToSharePoint(params: {
 
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  // Graph's default conflictBehavior=replace overwrites a same-named file in place. Bot assets
+  // reuse names (image-1.png each generation) and Teams caches file cards by driveItem URL, so
+  // replace clobbers history and shows stale images; "rename" mints a unique driveItem instead.
+  const uploadUrl = `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content?@microsoft.graph.conflictBehavior=rename`;
   const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length);
 
   const data = await withMSTeamsAbortableRequestTimeout({
@@ -82,19 +86,16 @@ async function uploadToSharePoint(params: {
     timeoutMs,
     work: async (signal) => {
       const token = await getGraphAccessToken(params.tokenProvider);
-      const res = await fetchFn(
-        `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-        {
-          method: "PUT",
-          headers: {
-            "User-Agent": buildUserAgent(),
-            Authorization: `Bearer ${token}`,
-            "Content-Type": params.contentType ?? "application/octet-stream",
-          },
-          body: new Uint8Array(params.buffer),
-          signal,
+      const res = await fetchFn(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "User-Agent": buildUserAgent(),
+          Authorization: `Bearer ${token}`,
+          "Content-Type": params.contentType ?? "application/octet-stream",
         },
-      );
+        body: new Uint8Array(params.buffer),
+        signal,
+      });
 
       if (!res.ok) {
         throw await createMSTeamsHttpError(res, "SharePoint upload failed");

@@ -82,9 +82,10 @@ vi.mock("../../plugins/bundled-sources.js", () => ({
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSources(...args),
 }));
 
-vi.mock("../../plugins/loader.js", () => ({
-  loadOpenClawPlugins: vi.fn(),
-}));
+vi.mock("../../plugins/loader.js", () => {
+  const load = vi.fn();
+  return { loadOpenClawPlugins: load, loadPluginRegistryHandle: load };
+});
 
 const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({
   candidates: [] as PluginCandidate[],
@@ -751,7 +752,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
       config: autoEnabledConfig,
       activationSourceConfig: cfg,
       autoEnabledReasons: {},
-      activate: false,
     });
   });
 
@@ -775,7 +775,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["@vendor/external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
-      activate: false,
+      channelPluginLoadIntent: "setup",
     });
     expect(getChannelPluginCatalogEntry).toHaveBeenCalledWith("external-chat", {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -879,7 +879,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["custom-external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
-      activate: false,
+      channelPluginLoadIntent: "setup",
     });
   });
 
@@ -1088,7 +1088,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["@vendor/external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
-      activate: false,
+      channelPluginLoadIntent: "setup",
     });
   });
 });

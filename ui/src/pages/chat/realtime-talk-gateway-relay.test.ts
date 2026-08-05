@@ -4,6 +4,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   type RealtimeTalkEvent,
   type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkTransportContext,
@@ -612,6 +613,25 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
     expect(onInputLevel).toHaveBeenLastCalledWith(0);
+  });
+
+  it("reclaims the input meter when its first level update stops the transport", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    const onInputLevel = vi.fn((level: number) => {
+      if (level > 0) {
+        transport.stop();
+      }
+    });
+    const transport = createTransport({ client, callbacks: { onInputLevel } });
+
+    await expect(transport.start()).resolves.toBe("ready");
+    transport.stop();
+    transport.stop();
+    vi.advanceTimersByTime(1_000);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
   it("bounds stalled microphone appends and aborts every owner on stop", async () => {
@@ -1395,6 +1415,94 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         sessionKey: "main",
         runId: "run-1",
       }),
+    );
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+    transport.stop();
+  });
+
+  it("aborts an active consult and suppresses its late result after provider cancellation", async () => {
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const transport = createTransport({ client });
+
+    await startTransport(transport);
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "toolCall",
+      callId: "call-1",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: { question: "status?" },
+    });
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
+
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "toolCallCancelled",
+      callId: "call-1",
+    });
+
+    await waitForFast(() =>
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
+        sessionKey: "main",
+        runId: "run-1",
+      }),
+    );
+    emitGatewayFrame({
+      event: "chat",
+      payload: { runId: "run-1", state: "final", message: { text: "late answer" } },
+    });
+    await Promise.resolve();
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+    transport.stop();
+  });
+
+  it("suppresses a late control result after provider cancellation", async () => {
+    let resolveSteer!: (value: unknown) => void;
+    const pendingSteer = new Promise((resolve) => {
+      resolveSteer = resolve;
+    });
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method, _params, options) => {
+      if (method !== "talk.session.steer") {
+        return {};
+      }
+      expect(options).toBeUndefined();
+      return await pendingSteer;
+    });
+    const transport = createTransport({ client });
+
+    await startTransport(transport);
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "toolCall",
+      callId: "control-1",
+      name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+      args: { mode: "status", text: "status" },
+    });
+    await waitForFast(() => expect(requestCallsFor(client, "talk.session.steer")).toHaveLength(1));
+
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "toolCallCancelled",
+      callId: "control-1",
+    });
+
+    resolveSteer({
+      ok: true,
+      mode: "status",
+      active: true,
+      sessionKey: "main",
+      message: "late",
+    });
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0),
     );
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
     transport.stop();

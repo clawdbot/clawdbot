@@ -26,8 +26,10 @@ type RegistryTestApi = {
   addSubagentRunForTests(entry: SubagentRunRecord): void;
   finalizeInterruptedSubagentRun(params: {
     runId: string;
+    expectedEntry?: SubagentRunRecord;
     error: string;
     endedAt?: number;
+    suppressSessionEffects?: boolean;
   }): Promise<number>;
   releaseSubagentRun(runId: string): void;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
@@ -56,7 +58,7 @@ type RegistryDeps = {
   runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
   maybeWakeRequesterAfterAllChildrenSettled: typeof import("./subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
   ensureContextEnginesInitialized?: () => void;
-  ensureRuntimePluginsLoaded?: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
+  loadAgentRuntimePluginRegistryHandle?: import("./subagent-registry-deps.js").SubagentRegistryDeps["loadAgentRuntimePluginRegistryHandle"];
   resolveContextEngine?: typeof import("../context-engine/registry.js").resolveContextEngine;
 };
 
@@ -86,6 +88,7 @@ export function releaseSubagentRun(runId: string) {
 
 export async function finalizeInterruptedSubagentRun(params: {
   runId: string;
+  expectedEntry?: SubagentRunRecord;
   error: string;
   endedAt?: number;
 }) {

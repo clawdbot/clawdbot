@@ -9,16 +9,18 @@ import type {
 import * as sessions from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig as Config } from "../../config/types.openclaw.js";
 import {
-  claimAgentRunContext,
-  clearAgentRunContext,
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
   onAgentRuntimeEvent,
-  releaseAgentRunContext,
-  sweepStaleRunContexts,
   type AgentEventRuntimePayload as Event,
 } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  releaseAgentRunContext,
+  sweepStaleRunContexts,
+} from "../../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../../trajectory/runtime-store.sqlite.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";

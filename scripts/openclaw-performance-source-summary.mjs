@@ -255,6 +255,12 @@ function validateExtensionMemoryArtifact(extensionMemory, filePath) {
   if (!Array.isArray(extensionMemory?.topByDeltaMb) || extensionMemory.topByDeltaMb.length === 0) {
     throw new Error(`[source-performance] missing extension memory rows: ${filePath}`);
   }
+  if (
+    !finiteNumber(extensionMemory?.baseline?.maxRssMb) ||
+    !finiteNumber(extensionMemory?.combined?.maxRssMb)
+  ) {
+    throw new Error(`[source-performance] incomplete extension memory context: ${filePath}`);
+  }
   for (const entry of extensionMemory.topByDeltaMb) {
     if (!finiteNumber(entry?.maxRssMb) || !finiteNumber(entry?.deltaFromBaselineMb)) {
       throw new Error(
@@ -510,6 +516,30 @@ function buildExtensionMemoryRows(extensionMemory) {
     ]);
 }
 
+function buildExtensionMemoryContextRows(extensionMemory) {
+  const baselineMb = extensionMemory?.baseline?.maxRssMb;
+  const combinedMb = extensionMemory?.combined?.maxRssMb;
+  const totalEntries = extensionMemory?.counts?.totalEntries;
+  return [
+    [
+      "empty Node process",
+      formatMb(baselineMb),
+      formatMb(0),
+      extensionMemory?.baseline?.status ?? "unknown",
+    ],
+    [
+      finiteNumber(totalEntries)
+        ? `all ${totalEntries} bundled plugins`
+        : "all selected bundled plugins",
+      formatMb(combinedMb),
+      finiteNumber(baselineMb) && finiteNumber(combinedMb)
+        ? formatMb(combinedMb - baselineMb)
+        : "n/a",
+      extensionMemory?.combined?.status ?? "unknown",
+    ],
+  ];
+}
+
 function buildSqlitePerfRows(sqlitePerf) {
   if (!sqlitePerf) {
     return [];
@@ -606,8 +636,14 @@ export function buildMarkdown(sourceDir, baselineSourceDir) {
     ),
     "## Bundled Plugin Import Memory",
     "",
+    "Per-plugin rows are isolated cold imports and are not additive. The combined row measures all selected bundled-plugin entrypoints in one process.",
+    "",
     ...table(
-      ["plugin", "max RSS", "delta from empty process", "status"],
+      ["measurement", "max RSS", "delta from empty process", "status"],
+      buildExtensionMemoryContextRows(current.extensionMemory),
+    ),
+    ...table(
+      ["plugin", "isolated max RSS", "isolated delta from empty process", "status"],
       buildExtensionMemoryRows(current.extensionMemory),
     ),
     "## Startup Hotspots",

@@ -279,7 +279,8 @@ const stageSandboxMediaMocks = vi.hoisted(() => ({
   ),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
+  pluginRegistry: { plugins: [], tools: [], diagnostics: [] },
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
 }));
 const conversationBindingMocks = vi.hoisted(() => {
   type BindingMsgContext = {
@@ -635,8 +636,8 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
 vi.mock("./stage-sandbox-media.runtime.js", () => ({
   stageSandboxMedia: (params: unknown) => stageSandboxMediaMocks.stageSandboxMedia(params),
 }));
-vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
+vi.mock("../../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
 }));
 vi.mock("./conversation-binding-input.js", () => ({
   resolveConversationBindingAccountIdFromMessage:

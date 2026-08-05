@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { execGhJson } from "./lib/plain-gh.mjs";
 
 const USAGE =
   "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120]";
@@ -15,6 +15,10 @@ const FAILURE_CONCLUSIONS = new Set([
   "TIMED_OUT",
 ]);
 const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{workflowRun{databaseId workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
+const GH_READ_OPTIONS = {
+  stdio: ["ignore", "pipe", "pipe"],
+  timeout: 60_000,
+};
 // Adapted from Node's MIT-licensed util.stripVTControlCharacters implementation.
 const ANSI_ESCAPE_SEQUENCE = new RegExp(
   "[\\u001B\\u009B][[\\]()#;?]*" +
@@ -207,18 +211,11 @@ export function classifyRollup(rollup) {
   return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
 }
 
-function ghJson(...args) {
-  return JSON.parse(
-    execFileSync("gh", args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 60_000,
-    }),
-  );
-}
-
 const readPr = (pr, repo) =>
-  ghJson(...`pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "));
+  execGhJson(
+    `pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "),
+    GH_READ_OPTIONS,
+  );
 export const buildFindRunArgs = (repo, sha) => [
   "run",
   "list",
@@ -237,9 +234,13 @@ export const buildFindRunArgs = (repo, sha) => [
 ];
 export const selectRunAfter = (runs, after) =>
   runs.find((run) => after === undefined || run.databaseId > after);
-const findRun = (repo, sha, after) => selectRunAfter(ghJson(...buildFindRunArgs(repo, sha)), after);
+const findRun = (repo, sha, after) =>
+  selectRunAfter(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS), after);
 const readRun = (repo, runId) =>
-  ghJson(...`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "));
+  execGhJson(
+    `run view ${runId} --repo ${repo} --json status,conclusion`.split(" "),
+    GH_READ_OPTIONS,
+  );
 
 export function classifyRunAttachment(runId, run, after) {
   if (run.conclusion === "skipped") {
@@ -317,7 +318,7 @@ function readRollup(pr, repo) {
     if (cursor !== null) {
       queryArgs.push("-f", `cursor=${cursor}`);
     }
-    return ghJson(...queryArgs).data?.repository?.pullRequest;
+    return execGhJson(queryArgs, GH_READ_OPTIONS).data?.repository?.pullRequest;
   });
 }
 

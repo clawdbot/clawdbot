@@ -1,6 +1,7 @@
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type PluginVersionDriftReport =
@@ -22,6 +23,9 @@ export async function runActiveToolSchemaWarningsHealth(
   const warnings = await collectActiveToolSchemaProjectionWarnings({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
   });
   if (warnings.length === 0) {
     return;
@@ -106,12 +110,23 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
     options: ctx.options,
   });
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-  noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
+  noteWorkspaceStatus(ctx.cfg, {
+    pluginVersionDrift,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  });
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
-  ctx.cfg = await maybeRepairSkillReadiness({ cfg: ctx.cfg, prompter: ctx.prompter });
+  ctx.cfg = await maybeRepairSkillReadiness({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  });
 }
 
 export async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -230,15 +245,20 @@ export async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext
   if (ctx.options.workspaceSuggestions === false) {
     return;
   }
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
-  const { noteWorkspaceBackupTip } = await loadDoctorStateIntegrityModule();
+  const { collectWorkspaceBackupTip } = await loadDoctorStateIntegrityModule();
   const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
     await import("../commands/doctor-workspace.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
-  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-  noteWorkspaceBackupTip(workspaceDir);
-  if (await shouldSuggestMemorySystem(workspaceDir)) {
-    note(MEMORY_SYSTEM_PROMPT, "Workspace");
+  for (const { agentId, workspaceDir, labelAgent } of resolveDoctorWorkspaceSuggestionScopes(
+    ctx.cfg,
+  )) {
+    const prefix = labelAgent ? `Agent "${agentId}": ` : "";
+    const backupTip = collectWorkspaceBackupTip(workspaceDir);
+    if (backupTip) {
+      note(`${prefix}${backupTip}`, "Workspace");
+    }
+    if (await shouldSuggestMemorySystem(workspaceDir)) {
+      note(`${prefix}${MEMORY_SYSTEM_PROMPT}`, "Workspace");
+    }
   }
 }

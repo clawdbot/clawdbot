@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
@@ -27,6 +28,7 @@ import {
   wsClients,
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
@@ -253,17 +255,18 @@ export async function monitorWebSocket({
       };
       const publishWsConnected = () => {
         const connectedAt = Date.now();
-        statusSink?.({
-          connected: true,
-          lastConnectedAt: connectedAt,
-          lastEventAt: connectedAt,
-          lastError: null,
-        });
+        statusSink?.(
+          channelReadyPatch({
+            lastConnectedAt: connectedAt,
+            lastEventAt: connectedAt,
+          }),
+        );
       };
       const publishWsReconnecting = () => {
         const reconnectingAt = Date.now();
         statusSink?.({
           connected: false,
+          lifecycle: "recovering",
           lastEventAt: reconnectingAt,
         });
       };
@@ -300,10 +303,12 @@ export async function monitorWebSocket({
       // WS cycle ended via terminal error (not abort) — publish disconnected
       // so the health monitor can flag the channel before the next reconnect.
       const disconnectedAt = Date.now();
-      statusSink?.({
-        connected: false,
-        lastEventAt: disconnectedAt,
-      });
+      statusSink?.(
+        channelBlockedPatch(formatFeishuWsErrorForLog(cycleEnd), {
+          connected: false,
+          lastEventAt: disconnectedAt,
+        }),
+      );
 
       attempt += 1;
       const delayMs = getFeishuWsReconnectDelayMs(attempt);
@@ -323,9 +328,15 @@ export async function monitorWebSocket({
 
       // WS start failed (e.g. handshake / auth) — publish disconnected.
       const failedAt = Date.now();
+      // The SDK classifier is the only terminal contract here. App-secret/auth refinement is
+      // deferred until Feishu exposes a structured authentication failure at this boundary.
+      const terminal = err instanceof Error && isFeishuWsTerminalError(err);
       statusSink?.({
         connected: false,
+        lifecycle: terminal ? "blocked" : "recovering",
+        ...(terminal ? { terminalDisconnect: true } : {}),
         lastEventAt: failedAt,
+        lastError: formatFeishuWsErrorForLog(err),
       });
 
       attempt += 1;
@@ -360,7 +371,13 @@ export async function monitorWebhook({
   }
 
   const port = account.config.webhookPort ?? 3000;
-  const path = account.config.webhookPath ?? "/feishu/events";
+  const path = account.config.webhookPath ?? DEFAULT_FEISHU_WEBHOOK_PATH;
+  if (normalizeFeishuWebhookPath(path) !== path) {
+    throw new Error(
+      `Feishu account "${accountId}" webhookPath must be a canonical HTTP request path; ` +
+        'run "openclaw doctor --fix" to repair it',
+    );
+  }
   const host = account.config.webhookHost ?? "127.0.0.1";
 
   log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);
@@ -368,6 +385,16 @@ export async function monitorWebhook({
   const server = http.createServer();
 
   server.on("request", (req, res) => {
+    const requestUrl = req.url ?? "/";
+    const requestPath = requestUrl.split("?", 1)[0];
+    // Explicit query routes retain Lark's exact raw-target contract; path-only
+    // routes accept queries without normalizing attacker-controlled targets.
+    const requestRoute = path.includes("?") ? requestUrl : requestPath;
+    if (!requestPath?.startsWith("/") || requestUrl.includes("#") || requestRoute !== path) {
+      respondText(res, 404, "Not Found");
+      return;
+    }
+
     res.on("finish", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
       // Refresh lastEventAt / lastTransportActivityAt on every successful 2xx
@@ -392,6 +419,7 @@ export async function monitorWebhook({
       !applyBasicWebhookRequestGuards({
         req,
         res,
+        allowMethods: ["POST"],
         rateLimiter: feishuWebhookRateLimiter,
         rateLimitKey,
         nowMs: Date.now(),
@@ -513,16 +541,21 @@ export async function monitorWebhook({
       // this, the gateway health monitor has no transport signal for webhook
       // mode and will not detect a server crash. See PROPOSAL.md.
       const webhookConnectedAt = Date.now();
-      statusSink?.({
-        connected: true,
-        lastConnectedAt: webhookConnectedAt,
-        lastEventAt: webhookConnectedAt,
-        lastError: null,
-      });
+      statusSink?.(
+        channelReadyPatch({
+          lastConnectedAt: webhookConnectedAt,
+          lastEventAt: webhookConnectedAt,
+        }),
+      );
     });
 
     server.on("error", (err) => {
       error(`feishu[${accountId}]: Webhook server error: ${err}`);
+      statusSink?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: formatFeishuWsErrorForLog(err),
+      });
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     });

@@ -12,13 +12,14 @@ import {
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
 
 type PersistOptions = {
   stateOnly?: boolean;
   suppressScheduledJobId?: string;
+  postPersistNotifications?: DeferredCronNotifications;
 };
 
 export type CronRollbackSnapshot = {
@@ -293,6 +294,9 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
     stateOnly,
     suppressScheduledJobId: opts?.suppressScheduledJobId,
   });
+  for (const notify of opts?.postPersistNotifications ?? []) {
+    notify();
+  }
   return true;
 }
 
@@ -309,27 +313,27 @@ export function snapshotStoreForRollback(state: CronServiceState): CronRollbackS
 export async function persistOrRestore(
   state: CronServiceState,
   snapshot: CronRollbackSnapshot,
-  opts: {
-    postPersistAutoDisableNotifications?: Array<() => void>;
-    suppressScheduledJobId?: string;
-  } = {},
+  opts: Omit<PersistOptions, "stateOnly"> = {},
 ) {
+  let writeCompleted = false;
+  const postPersistNotifications = opts.postPersistNotifications?.map((notify) => () => {
+    // Notification failures happen after commit and must not restore the
+    // speculative snapshot over rows that are already durable.
+    writeCompleted = true;
+    notify();
+  });
   try {
-    const persisted = await persist(
-      state,
-      opts.suppressScheduledJobId === undefined
-        ? undefined
-        : { suppressScheduledJobId: opts.suppressScheduledJobId },
-    );
+    const persisted = await persist(state, { ...opts, postPersistNotifications });
     if (!persisted) {
       throw new Error("cron: durable store write did not complete");
     }
+    writeCompleted = true;
   } catch (err) {
+    if (writeCompleted) {
+      throw err;
+    }
     state.store = snapshot.store;
     state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
     throw err;
-  }
-  for (const notify of opts.postPersistAutoDisableNotifications ?? []) {
-    notify();
   }
 }

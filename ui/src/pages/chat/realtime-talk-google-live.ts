@@ -1,5 +1,4 @@
 // Control UI chat module implements realtime talk google live behavior.
-import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import {
   bytesToBase64,
   estimateBase64DecodedByteLength,
@@ -15,16 +14,16 @@ import {
   GOOGLE_LIVE_SETUP_TIMEOUT_MS,
   runRealtimeTalkCleanup,
 } from "./realtime-talk-google-live-lifecycle.ts";
+import {
+  GoogleLiveToolOwner,
+  type GoogleLiveFunctionCall,
+} from "./realtime-talk-google-live-tools.ts";
 import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkJsonPcmWebSocketSessionResult } from "./realtime-talk-shared.ts";
 import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
-  submitRealtimeTalkAgentControl,
-  submitRealtimeTalkConsult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
   type RealtimeTalkTransportStartResult,
@@ -50,22 +49,15 @@ type GoogleLiveMessage = {
     turnComplete?: boolean;
   };
   toolCall?: {
-    functionCalls?: Array<{
-      id?: string;
-      name?: string;
-      args?: unknown;
-    }>;
+    functionCalls?: GoogleLiveFunctionCall[];
   };
-};
-
-type PendingFunctionCall = {
-  name: string;
-  args: unknown;
+  toolCallCancellation?: {
+    ids?: string[];
+  };
 };
 
 const GOOGLE_LIVE_VIDEO_FRAME_INTERVAL_MS = 1_000;
 const GOOGLE_LIVE_VIDEO_MESSAGE_MAX_BYTES = 512 * 1024;
-
 function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
   return {
     realtimeInput: {
@@ -100,16 +92,31 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private videoFramesActive = false;
   private hasSentVideoFrame = false;
   private videoFrameTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private pendingCalls = new Map<string, PendingFunctionCall>();
-  private readonly consultAbortControllers = new Set<AbortController>();
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
+  private readonly toolOwner: GoogleLiveToolOwner;
 
   constructor(
     private readonly session: RealtimeTalkJsonPcmWebSocketSessionResult,
     private readonly ctx: RealtimeTalkTransportContext,
   ) {
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
+    this.toolOwner = new GoogleLiveToolOwner({
+      ctx,
+      emitTalkEvent: this.emitTalkEvent,
+      isClosed: () => this.closed,
+      failConnection: (detail) => {
+        const ws = this.ws;
+        if (ws) {
+          this.failConnection(ws, detail);
+        }
+      },
+      isDescribeViewActive: () =>
+        this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack(),
+      sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
+      sendControlSpeechMessage: (message) => this.sendControlSpeechMessage(message),
+      stopOutputForSuppressedControl: (result) => this.stopOutputForSuppressedControl(result),
+    });
     this.camera = new RealtimeTalkCameraController({
       acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
       getDeviceId: () => this.ctx.videoDeviceId,
@@ -216,11 +223,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         const inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
         this.inputMeter = inputMeter;
         inputMeter.start(this.media, this.inputContext);
-        if (this.closed || !this.lifecycle.isActive || this.inputMeter !== inputMeter) {
-          // start() publishes synchronously before installing its interval. A
-          // reentrant stop must reclaim the interval that start() installs next.
-          inputMeter.stop(false);
-        }
         this.assertActivationCurrent();
       }
       this.startMicrophonePump();
@@ -272,9 +274,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const mediaSetupController = this.mediaSetupController;
     this.mediaSetupController = null;
     this.clearSetupTimeout();
-    const consultAbortControllers = [...this.consultAbortControllers];
-    this.consultAbortControllers.clear();
-    this.pendingCalls.clear();
     const inputMeter = this.inputMeter;
     this.inputMeter = null;
     const media = this.media;
@@ -287,7 +286,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.ws = null;
     runRealtimeTalkCleanup([
       () => mediaSetupController?.abort(),
-      ...consultAbortControllers.map((controller) => () => controller.abort()),
+      () => this.toolOwner.release(),
       () => this.inputPump.stop(),
       () => inputMeter?.stop(),
       ...(media?.getTracks() ?? []).map((track) => () => track.stop()),
@@ -406,7 +405,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       });
       if (
         content.inputTranscription.finished &&
-        this.consultAbortControllers.size > 0 &&
+        this.toolOwner.hasPendingConsult() &&
         shouldAutoControlRealtimeVoiceAgentText(content.inputTranscription.text)
       ) {
         void steerRealtimeTalkActiveConsult({
@@ -467,10 +466,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.emitTalkEvent({ type: "turn.ended", final: true });
     }
     for (const call of message.toolCall?.functionCalls ?? []) {
-      void this.handleToolCall(call).catch((error: unknown) => {
+      void this.toolOwner.handleCall(call).catch((error: unknown) => {
         this.reportToolResultSubmissionError(error);
       });
     }
+    this.toolOwner.cancel(message.toolCallCancellation?.ids);
   }
 
   private playPcm16(base64: string): void {
@@ -504,103 +504,13 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.outputQueue.stop(this.outputContext);
   }
 
-  private async handleToolCall(call: {
-    id?: string;
-    name?: string;
-    args?: unknown;
-  }): Promise<void> {
-    const name = call.name?.trim();
-    const callId = call.id?.trim();
-    if (!name || !callId) {
-      return;
-    }
-    this.pendingCalls.set(callId, { name, args: call.args ?? {} });
-    this.emitTalkEvent({
-      type: "tool.call",
-      callId,
-      payload: { name, args: call.args ?? {} },
-    });
-    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
-      await submitRealtimeTalkAgentControl({
-        ctx: this.createActiveContext(),
-        callId,
-        args: call.args ?? {},
-        emitTalkEvent: this.emitTalkEvent,
-        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
-      });
-      return;
-    }
-    if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
-      const active =
-        this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack();
-      this.submitToolResult(
-        callId,
-        active ? { ok: true, cameraStreamActive: true } : { ok: false, error: "camera is off" },
-      );
-      this.emitTalkEvent({
-        type: active ? "tool.result" : "tool.error",
-        callId,
-        final: true,
-        payload: {
-          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-          cameraStreamActive: active,
-        },
-      });
-      return;
-    }
-    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      return;
-    }
-    const abortController = new AbortController();
-    this.consultAbortControllers.add(abortController);
-    try {
-      await submitRealtimeTalkConsult({
-        ctx: this.createActiveContext(),
-        callId,
-        args: call.args ?? {},
-        signal: abortController.signal,
-        emitTalkEvent: this.emitTalkEvent,
-        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
-      });
-    } finally {
-      this.consultAbortControllers.delete(abortController);
-    }
-  }
-
-  private createActiveContext(): RealtimeTalkTransportContext {
-    return {
-      ...this.ctx,
-      callbacks: {
-        onStatus: (status, detail) => {
-          if (!this.closed) {
-            this.ctx.callbacks.onStatus?.(status, detail);
-          }
-        },
-        onTranscript: (entry) => {
-          if (!this.closed) {
-            this.ctx.callbacks.onTranscript?.(entry);
-          }
-        },
-        onTalkEvent: (event) => {
-          if (!this.closed) {
-            this.ctx.callbacks.onTalkEvent?.(event);
-          }
-        },
-      },
-    };
-  }
-
-  private submitToolResult(callId: string, result: unknown): void {
-    const pending = this.pendingCalls.get(callId);
-    if (!pending) {
-      throw new Error(`Google Live has no pending tool call for ${callId}`);
-    }
+  private sendToolResult(callId: string, name: string, result: unknown): void {
     const sent = this.send({
       toolResponse: {
         functionResponses: [
           {
             id: callId,
-            name: pending.name,
+            name,
             ...(!isGemini31LiveModel(this.session.model) ? { scheduling: "WHEN_IDLE" } : {}),
             response:
               result && typeof result === "object" && !Array.isArray(result)
@@ -613,7 +523,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (!sent) {
       throw new Error("Google Live socket is not open");
     }
-    this.pendingCalls.delete(callId);
   }
 
   private reportToolResultSubmissionError(error: unknown): void {

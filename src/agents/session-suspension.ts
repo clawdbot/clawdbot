@@ -451,6 +451,9 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
 
 function resetSessionSuspensionStateForTest(): void {
   const state = getSessionSuspensionState();
+  // Invalidate in-flight writes before clearing test state. Rewinding to a
+  // reused generation lets a fire-and-forget suspension regain ownership.
+  state.cleanupGeneration += 1;
   for (const entry of state.laneResumeTimers.values()) {
     clearTimeout(entry.timer);
   }
@@ -459,7 +462,6 @@ function resetSessionSuspensionStateForTest(): void {
   state.gatewayLaneResumeConcurrencies.clear();
   state.pendingSuspensionWrites.clear();
   state.suspensionWriteChain = Promise.resolve();
-  state.cleanupGeneration = 0;
   state.cleanupActive = false;
 }
 

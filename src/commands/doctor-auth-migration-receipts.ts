@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { acquireLockSyncWithRetry } from "../agents/sessions/storage-lock.js";
+import { acquireFileLockSyncWithRetry } from "../infra/file-lock-sync.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -239,7 +239,7 @@ export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly str
     for (const sourcePath of [
       ...new Set(sourcePaths.map((entry) => path.resolve(entry))),
     ].toSorted()) {
-      releases.push(acquireLockSyncWithRetry(sourcePath));
+      releases.push(acquireFileLockSyncWithRetry(sourcePath));
     }
   } catch (error) {
     for (const release of releases.toReversed()) {
@@ -301,7 +301,9 @@ export function finalizeAuthProfileMigrationSource(
   options: { sourceLocked?: boolean } = {},
 ): void {
   receipt.completionStatus = status;
-  const release = options.sourceLocked ? undefined : acquireLockSyncWithRetry(receipt.sourcePath);
+  const release = options.sourceLocked
+    ? undefined
+    : acquireFileLockSyncWithRetry(receipt.sourcePath);
   try {
     recordAuthProfileMigrationImported(receipt);
     verifyAuthProfileMigrationTarget(receipt);
@@ -371,7 +373,7 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
       throw new Error("pending auth profile migration has neither source nor archive");
     }
     const lockTarget = fs.existsSync(receipt.sourcePath) ? receipt.sourcePath : receipt.archivePath;
-    const release = acquireLockSyncWithRetry(lockTarget);
+    const release = acquireFileLockSyncWithRetry(lockTarget);
     try {
       const sourceExists = fs.existsSync(receipt.sourcePath);
       if (sourceExists) {

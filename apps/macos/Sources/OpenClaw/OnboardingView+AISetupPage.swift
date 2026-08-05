@@ -1,14 +1,28 @@
 import SwiftUI
 
+struct GatewayAuthenticationReturnDecision: Equatable {
+    let connectionPage: Int
+    let authIssue: RemoteGatewayAuthIssue
+    let probeState: RemoteOnboardingProbeState
+    let showRemoteChoices: Bool
+    let showAdvancedConnection: Bool
+}
+
 extension OnboardingView {
-    /// Structured AI setup: detect what's already on this machine, test the
+    /// Structured AI setup: detect what's already available on the Gateway, test the
     /// best option live, fall through automatically, offer an API-key form
     /// when nothing works. OpenClaw becomes available only after inference
     /// has completed a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
-            Text("Connect your AI")
-                .font(.largeTitle.weight(.semibold))
+            Group {
+                if self.aiSetup.configuredGatewayAuthIssue != nil {
+                    Text("Authenticate with your Gateway")
+                } else {
+                    Text("Connect your AI")
+                }
+            }
+            .font(.largeTitle.weight(.semibold))
             Text(self.aiSetupSubtitle)
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -21,6 +35,7 @@ extension OnboardingView {
                     model: self.aiSetup,
                     systemAgentChat: self.systemAgentState.chat,
                     showSystemAgentChat: self.$systemAgentState.isPresented,
+                    returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
                     retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
                     .padding(.vertical, 4)
                     .padding(.trailing, 12)
@@ -33,8 +48,14 @@ extension OnboardingView {
     }
 
     private var aiSetupSubtitle: String {
+        if self.aiSetup.configuredGatewayAuthIssue != nil {
+            return "Finish the remote Gateway connection before continuing."
+        }
         if aiSetup.connected {
             return "All good — your assistant has a working AI connection."
+        }
+        if state.connectionMode == .remote {
+            return "AI access is configured on the remote Gateway. OpenClaw will use that existing setup."
         }
         return "OpenClaw needs an AI account to think. " +
             "It reuses what you already have — nothing new to sign up for if " +
@@ -114,6 +135,40 @@ extension OnboardingView {
             startAISetupWhenMissing: true,
             knownVisible: true,
             knownAISetupPage: true)
+    }
+
+    func returnToGatewayAuthentication() {
+        guard let decision = Self.gatewayAuthenticationReturnDecision(
+            connectionMode: state.connectionMode,
+            authIssue: aiSetup.configuredGatewayAuthIssue,
+            pageOrder: pageOrder,
+            connectionPageIndex: connectionPageIndex,
+            probeInput: remoteGatewayProbeInput)
+        else { return }
+        remoteAuthIssue = decision.authIssue
+        remoteProbeState = decision.probeState
+        showRemoteChoices = decision.showRemoteChoices
+        showAdvancedConnection = decision.showAdvancedConnection
+        withAnimation { currentPage = decision.connectionPage }
+    }
+
+    static func gatewayAuthenticationReturnDecision(
+        connectionMode: AppState.ConnectionMode,
+        authIssue: RemoteGatewayAuthIssue?,
+        pageOrder: [Int],
+        connectionPageIndex: Int,
+        probeInput: RemoteGatewayProbeInput) -> GatewayAuthenticationReturnDecision?
+    {
+        guard connectionMode == .remote,
+              let authIssue,
+              let connectionPage = pageOrder.firstIndex(of: connectionPageIndex)
+        else { return nil }
+        return GatewayAuthenticationReturnDecision(
+            connectionPage: connectionPage,
+            authIssue: authIssue,
+            probeState: .failed(probeInput, authIssue.statusMessage),
+            showRemoteChoices: true,
+            showAdvancedConnection: true)
     }
 
     func resumePendingInferenceSetup() {

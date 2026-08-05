@@ -421,7 +421,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     const configPath = path.join(stateDir, "openclaw.json");
     const fixturePath = path.join(tempRoot, "fixture-server.mjs");
     await fs.mkdir(path.join(tempRoot, "empty-plugins"), { recursive: true });
-    controlUiServer = await startControlUiE2eServer();
+    controlUiServer = await startControlUiE2eServer(undefined, { source: true });
     const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
     const appModuleSource = await fs.readFile(appEntryPath, "utf8");
     const appAssetPort = await getFreeGatewayPort();
