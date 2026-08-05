@@ -1,9 +1,10 @@
 // QA Lab suite selection keeps scenario requirements on their declared provider lane.
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
+import { runQaSuite } from "./suite-launch.runtime.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -95,6 +96,65 @@ describe("qa suite provider selection", () => {
         }),
       ).rejects.toThrow("selected provider lane reached lab startup");
       expect(startLab).toHaveBeenCalledOnce();
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("adopts a single runtime-partitioned flow scenario's required provider", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-unified-provider-"));
+    const startLab = vi.fn(async () => {
+      throw new Error("selected unified provider lane reached lab startup");
+    });
+
+    try {
+      const result = await runQaSuite({
+        repoRoot,
+        scenarioIds: ["long-context-progress-watchdog"],
+        startLab,
+      });
+
+      expect(result.executionKind).toBe("suite");
+      expect(startLab).toHaveBeenCalledOnce();
+      expect(result.result.scenarios).toEqual([
+        expect.objectContaining({
+          status: "fail",
+          details: expect.stringContaining("selected unified provider lane reached lab startup"),
+        }),
+      ]);
+      const summary = JSON.parse(await readFile(result.result.summaryPath, "utf8")) as {
+        run: { providerMode: string; primaryModel: string; alternateModel: string };
+      };
+      expect(summary.run).toMatchObject({
+        providerMode: "live-frontier",
+        primaryModel: expect.stringMatching(/^openai\//),
+        alternateModel: expect.stringMatching(/^openai\//),
+      });
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an explicit unified provider override ahead of a scenario requirement", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-unified-override-"));
+    const startLab = vi.fn();
+
+    try {
+      const result = await runQaSuite({
+        repoRoot,
+        providerMode: "mock-openai",
+        scenarioIds: ["long-context-progress-watchdog"],
+        startLab,
+      });
+
+      expect(result.executionKind).toBe("suite");
+      expect(startLab).not.toHaveBeenCalled();
+      expect(result.result.scenarios).toEqual([
+        expect.objectContaining({
+          status: "fail",
+          details: expect.stringContaining("providerMode=live-frontier"),
+        }),
+      ]);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
