@@ -2,8 +2,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
+export {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
 import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -124,19 +130,20 @@ export function hasLegacyAutoFallbackWithoutOrigin(
 }
 
 /** Kinds of stale auto-fallback origin repair.
- *  Only self-referential origins are repaired now; the canonical #92776 three-distinct state is
- *  indistinguishable from a legitimate primary-model change without a provenance/migration
- *  contract, so it is left untouched to preserve the changed-primary guard. */
+ *  Only genuine fallbacks (origin differs from override per hasSessionActiveAutoModelFallback)
+ *  whose recorded origin no longer matches the current primary are repaired. Self-referential
+ *  origins (origin == override) are preserved because configured subagent selections use the
+ *  same pattern. The canonical #92776 three-distinct state remains untouched until a
+ *  provenance/migration contract can distinguish it from a legitimate primary-model change. */
 export type StaleAutoFallbackOriginRepairKind = "clear-override";
 
 /** Classifies an auto-fallback override origin for repair.
- *  - `"clear-override"`: the recorded origin equals the current fallback override itself, which
- *    is provably polluted (a fallback can never originate from the model it fell back to). The
- *    override is cleared so this turn retries the configured primary.
+ *  - `"clear-override"`: a genuine fallback (origin differs from override) whose origin no
+ *    longer matches the current primary. The override is cleared so this turn retries
+ *    the configured primary.
  *  - `null`: no repair needed (user override, missing origin, origin already matches primary,
- *    or the origin differs from primary because the primary legitimately changed). The latter
- *    case deliberately preserves the existing changed-primary mismatch guard; a migration or
- *    provenance contract is required before rewriting three-distinct origins. */
+ *    self-referential origin that could be a configured subagent selection, or the origin
+ *    differs from primary because the primary legitimately changed). */
 export function classifyStaleAutoFallbackOriginOverride(
   entry:
     | Pick<
@@ -175,21 +182,32 @@ export function classifyStaleAutoFallbackOriginOverride(
   if (!normalizedPrimaryProvider || !normalizedPrimaryModel) {
     return null;
   }
+  // Only repair genuine fallbacks (origin differs from override). Self-referential
+  // origins (origin == override) are preserved because configured subagent selections
+  // deliberately use the same pattern to prevent cleanup from discarding them.
+  // The existing hasSessionActiveAutoModelFallback contract explicitly documents this.
+  if (!hasSessionActiveAutoModelFallback(entry)) {
+    return null;
+  }
   const originMatchesPrimary =
     originProvider === normalizedPrimaryProvider && originModel === normalizedPrimaryModel;
   if (originMatchesPrimary) {
     return null;
   }
-  if (originProvider === overrideProvider && originModel === overrideModel) {
-    return "clear-override";
-  }
+  // Genuine fallback whose recorded origin differs from the current primary. The origin
+  // could be stale (primary changed → snap-back should fire) or the primary could have
+  // legitimately changed since this fallback was created — the two are indistinguishable
+  // without durable provenance. Return null to preserve the existing changed-primary guard
+  // until a provenance/migration contract can distinguish them.
   return null;
 }
 
 /** Detects auto-fallback overrides whose recorded origin needs repair.
- *  Returns true only for provably polluted self-referential origins (origin equals the fallback
- *  override itself). The canonical #92776 three-distinct state is intentionally not treated as
- *  stale until a provenance/migration contract can distinguish it from a legitimate primary change. */
+ *  Returns true only for genuine fallbacks (origin differs from override per
+ *  hasSessionActiveAutoModelFallback) whose recorded origin no longer matches the current
+ *  primary. Self-referential origins are preserved to protect configured subagent selections;
+ *  the canonical #92776 three-distinct state is intentionally not treated as stale until a
+ *  provenance/migration contract can distinguish it from a legitimate primary change. */
 export function isStaleAutoFallbackOriginOverride(
   entry:
     | Pick<

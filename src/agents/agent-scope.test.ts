@@ -538,28 +538,52 @@ describe("resolveAgentConfig", () => {
     ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
-  it("detects provably polluted auto-fallback origins that equal the override", () => {
+  it("does not repair genuine auto-fallback origins without durable provenance", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      // Origin differs from override: a genuine provider fallback occurred.
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus-4-7",
+    };
+
+    // Origin ≠ override (genuine fallback) and origin ≠ primary. Without durable
+    // provenance this is indistinguishable from a legitimate primary change.
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(false);
+    expect(
+      classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8"),
+    ).toBeNull();
+    expect(isStaleAutoFallbackOriginOverride(entry, "openai", "gpt-5.5")).toBe(false);
+    expect(classifyStaleAutoFallbackOriginOverride(entry, "openai", "gpt-5.5")).toBeNull();
+    // Origin already matches the primary → nothing to repair.
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7")).toBe(false);
+    expect(
+      classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7"),
+    ).toBeNull();
+  });
+
+  it("does not repair self-referential origins (preserves configured selections)", () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-7",
       modelOverrideSource: "auto",
+      // Self-referential: origin equals override. Configured subagent selections use this
+      // pattern deliberately; the hasSessionActiveAutoModelFallback contract preserves them.
       modelOverrideFallbackOriginProvider: "anthropic",
       modelOverrideFallbackOriginModel: "claude-opus-4-7",
     };
 
-    // Origin equals the override and differs from the current primary → clear override.
-    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(true);
-    expect(isStaleAutoFallbackOriginOverride(entry, "openai", "gpt-5.5")).toBe(true);
-    expect(classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(
-      "clear-override",
-    );
-    // Origin already matches the primary → nothing to repair.
-    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7")).toBe(false);
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(false);
     expect(
-      classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7"),
+      classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8"),
     ).toBeNull();
+    expect(isStaleAutoFallbackOriginOverride(entry, "openai", "gpt-5.5")).toBe(false);
+    expect(classifyStaleAutoFallbackOriginOverride(entry, "openai", "gpt-5.5")).toBeNull();
   });
 
   it("does not repair the canonical three-distinct origin state without provenance", () => {
@@ -587,18 +611,19 @@ describe("resolveAgentConfig", () => {
     ).toBeNull();
   });
 
-  it("does not treat user overrides, missing origins, or origin-matching primaries as stale", () => {
-    const pollutedEntry: SessionEntry = {
+  it("does not treat user overrides, missing origins, self-referential origins, or origin-matching primaries as stale", () => {
+    const selfReferentialEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-7",
       modelOverrideSource: "auto",
+      // Origin equals override → configured selection, not a fallback.
       modelOverrideFallbackOriginProvider: "anthropic",
       modelOverrideFallbackOriginModel: "claude-opus-4-7",
     };
     const userEntry: SessionEntry = {
-      ...pollutedEntry,
+      ...selfReferentialEntry,
       modelOverrideSource: "user",
     };
     const missingOriginEntry: SessionEntry = {
@@ -616,6 +641,13 @@ describe("resolveAgentConfig", () => {
     );
     expect(
       classifyStaleAutoFallbackOriginOverride(missingOriginEntry, "anthropic", "gpt-5.5"),
+    ).toBeNull();
+    // Self-referential origin is not a genuine fallback → not stale.
+    expect(isStaleAutoFallbackOriginOverride(selfReferentialEntry, "openai", "gpt-5.5")).toBe(
+      false,
+    );
+    expect(
+      classifyStaleAutoFallbackOriginOverride(selfReferentialEntry, "openai", "gpt-5.5"),
     ).toBeNull();
   });
 

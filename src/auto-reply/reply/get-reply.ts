@@ -1222,8 +1222,9 @@ export async function getReplyFromConfig(
 }
 
 function prepareRepairedReplySessionEntry(): Partial<SessionEntry> {
-  // The only repair shape we apply in the reply path is a self-referential (provably
-  // polluted) origin, which is fixed by clearing the override and retrying the primary.
+  // The only repair shape we apply in the reply path is a genuine fallback (origin differs
+  // from override) whose recorded origin no longer matches the current primary. The override,
+  // origin metadata, and automatic auth state are cleared so this turn retries the primary.
   // Fields must be explicitly set to undefined (not deleted) because the reply path uses
   // a non-replacing merge that would otherwise keep the existing override values.
   return {
@@ -1233,6 +1234,7 @@ function prepareRepairedReplySessionEntry(): Partial<SessionEntry> {
     modelOverrideRouteResolution: undefined,
     modelOverrideFallbackOriginProvider: undefined,
     modelOverrideFallbackOriginModel: undefined,
+    authProfileOverride: undefined,
   };
 }
 
