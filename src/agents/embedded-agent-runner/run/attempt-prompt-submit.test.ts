@@ -357,7 +357,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     activeSession.agent.state.messages = [
-      { role: "user", content: "first turn", idempotencyKey: "turn-1", timestamp: 1 },
+      {
+        role: "user",
+        content: "first turn",
+        idempotencyKey: "turn-1",
+        timestamp: 1,
+      } as AgentMessage,
     ] as AgentMessage[];
     activeSession.agent.streamFn = wrapProviderBoundary((async (
       _model: unknown,
@@ -389,7 +394,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     activeSession.agent.state.messages = [
-      { role: "user", content: "first turn", idempotencyKey: "turn-1", timestamp: 1 },
+      {
+        role: "user",
+        content: "first turn",
+        idempotencyKey: "turn-1",
+        timestamp: 1,
+      } as AgentMessage,
     ] as AgentMessage[];
     const dispatchSettled = vi.fn();
     activeSession.agent.streamFn = wrapProviderBoundary((async (
@@ -430,7 +440,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     activeSession.agent.state.messages = [
-      { role: "user", content: "first turn", idempotencyKey: "turn-1", timestamp: 1 },
+      {
+        role: "user",
+        content: "first turn",
+        idempotencyKey: "turn-1",
+        timestamp: 1,
+      } as AgentMessage,
     ] as AgentMessage[];
     const silentDispatch = vi.fn(() => undefined as never);
     activeSession.agent.streamFn = wrapProviderBoundary(silentDispatch as unknown as StreamFn);
@@ -461,7 +476,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     activeSession.agent.state.messages = [
-      { role: "user", content: "only turn", idempotencyKey: "turn-final", timestamp: 1 },
+      {
+        role: "user",
+        content: "only turn",
+        idempotencyKey: "turn-final",
+        timestamp: 1,
+      } as AgentMessage,
     ] as AgentMessage[];
     const silentDispatch = vi.fn(() => undefined as never);
     activeSession.agent.streamFn = wrapProviderBoundary(silentDispatch as unknown as StreamFn);
