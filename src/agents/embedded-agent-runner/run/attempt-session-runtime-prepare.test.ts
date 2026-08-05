@@ -53,7 +53,7 @@ function createFixture() {
     messages: [{ role: "user" }, { role: "assistant" }],
     sessionId: "active-session",
   };
-  const settingsManager = { kind: "settings" };
+  const settingsManager = { kind: "settings", getCompactionReserveTokens: () => 0 };
   const setActiveSessionSystemPrompt = vi.fn();
   const agentSession = {
     activeSession,
