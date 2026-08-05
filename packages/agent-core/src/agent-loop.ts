@@ -619,6 +619,12 @@ async function executeToolCalls(
   const validatedToolCalls = new Map<AgentToolCall, ValidatedToolCallOutcome>();
   if (config.beforeToolBatch) {
     for (const toolCall of toolCalls) {
+      if (signal?.aborted) {
+        // Cancellation during an early async resolver must not stall behind
+        // the remaining resolvers. Skipped calls stay uncached and complete
+        // through the executors' normal aborted-call lifecycle.
+        break;
+      }
       validatedToolCalls.set(
         toolCall,
         await validateToolCallForBatchAdmission(
@@ -661,6 +667,9 @@ async function executeToolCalls(
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {
     for (const toolCall of toolCalls) {
+      if (signal?.aborted) {
+        break;
+      }
       const resolution = await resolveToolCallTool(
         currentContext,
         assistantMessage,
@@ -671,9 +680,6 @@ async function executeToolCalls(
       );
       if (resolution.kind === "resolved" && resolution.tool?.executionMode === "sequential") {
         hasSequentialToolCall = true;
-        break;
-      }
-      if (signal?.aborted) {
         break;
       }
     }
@@ -1065,8 +1071,18 @@ async function prepareToolCall(
   resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
   validatedToolCalls: Map<AgentToolCall, ValidatedToolCallOutcome>,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+  const cachedValidation = validatedToolCalls.get(toolCall);
+  if (signal?.aborted && !cachedValidation) {
+    // Execution cannot start after cancellation, so never begin validation
+    // work (including deferred tool resolvers) for an uncached call.
+    return {
+      kind: "immediate",
+      result: createErrorToolResult("Operation aborted"),
+      isError: true,
+    };
+  }
   const validation =
-    validatedToolCalls.get(toolCall) ??
+    cachedValidation ??
     (await validateToolCallForBatchAdmission(
       currentContext,
       assistantMessage,
@@ -1392,6 +1408,7 @@ async function completeToolLoopInterventionBatch(params: {
   terminal: boolean;
 }): Promise<ExecutedToolCallBatch> {
   const messages: ToolResultMessage[] = [];
+  const finalizedCalls: FinalizedToolCallOutcome[] = [];
   for (const toolCall of params.toolCalls) {
     const hideFromChannelProgress = hidesToolCallFromChannelProgress(
       params.currentContext,
@@ -1414,7 +1431,9 @@ async function completeToolLoopInterventionBatch(params: {
         ? `${params.intervention.reason}\n\nDo not repeat this exact tool action. Reassess the task. You may answer the user, ask for clarification, or continue with a different tool or different arguments.`
         : "This tool was not executed because another call in the batch triggered critical tool-loop recovery. Reassess the task before choosing the next action.";
     const validation = params.validatedToolCalls.get(toolCall);
-    const resolution = params.resolvedToolCalls.get(toolCall);
+    // Rejected calls never start executing, so they must not inherit the
+    // resolved tool's result content source; that metadata is only truthful
+    // after execution starts and would otherwise taint the recovery turn.
     const finalized = await finalizeToolCallOutcome(
       params.currentContext,
       params.assistantMessage,
@@ -1432,9 +1451,6 @@ async function completeToolLoopInterventionBatch(params: {
         isError: true,
         executionStarted: false,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-        ...(resolution?.kind === "resolved" && resolution.tool?.resultContentSource
-          ? { resultContentSource: resolution.tool.resultContentSource }
-          : {}),
       },
       validation?.kind === "validated" ? validation.prepared.args : toolCall.arguments,
       params.config,
@@ -1444,10 +1460,14 @@ async function completeToolLoopInterventionBatch(params: {
     const message = createToolResultMessage(finalized);
     await emitToolResultMessage(message, params.emit);
     messages.push(message);
+    finalizedCalls.push(finalized);
   }
   return {
     messages,
-    terminate: params.terminal,
+    // A later critical loop always forces termination. During first recovery,
+    // honor the outcome hooks: if every finalized outcome says terminate, the
+    // batch ends without another provider turn.
+    terminate: params.terminal || shouldTerminateToolBatch(finalizedCalls),
     terminateRun: params.terminal,
     intervention: params.intervention,
   };

@@ -1066,6 +1066,206 @@ describe("agentLoop tool termination", () => {
     });
   });
 
+  it("does not taint the recovery turn with an unexecuted network tool source", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "loop-1", name: "fetch", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "recovered" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const networkTool: AgentTool = {
+      ...makeTool("fetch", executed),
+      resultContentSource: "network",
+    };
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [networkTool] },
+        {
+          ...config,
+          beforeToolBatch: async ({ calls }) => {
+            const first = calls[0];
+            return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
+          },
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(turn).toBe(2);
+    expect(executed).toEqual([]);
+    const readTaint = (message: unknown) =>
+      (message as Record<string, unknown>)["__openclaw"] as
+        | { resultContentSource?: string; turnTainted?: boolean }
+        | undefined;
+    const toolResultMessage = events.find(
+      (
+        event,
+      ): event is Extract<AgentEvent, { type: "message_end" }> & {
+        message: { role: "toolResult" };
+      } => event.type === "message_end" && event.message.role === "toolResult",
+    )?.message;
+    // The rejected call never executed, so it carries no network source metadata.
+    expect(readTaint(toolResultMessage)?.resultContentSource).toBeUndefined();
+    const recoveryAssistantMessage = events.findLast(
+      (
+        event,
+      ): event is Extract<AgentEvent, { type: "message_end" }> & {
+        message: { role: "assistant" };
+      } => event.type === "message_end" && event.message.role === "assistant",
+    )?.message;
+    expect(recoveryAssistantMessage).toMatchObject({ stopReason: "stop" });
+    expect(readTaint(recoveryAssistantMessage)?.turnTainted).not.toBe(true);
+  });
+
+  it("honors outcome-hook termination during the first recovery turn", async () => {
+    const executed: string[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after outcome-hook termination");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [makeTool("read", executed)] },
+        {
+          ...config,
+          beforeToolBatch: async ({ calls }) => {
+            const first = calls[0];
+            return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
+          },
+          afterToolOutcome: async () => ({ terminate: true }),
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(streamCalls).toBe(1);
+    expect(executed).toEqual([]);
+    // The run ends normally after the terminated batch: no forced
+    // tool-loop-recovery failure message, which is reserved for later loops.
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+    expect(
+      events.find(
+        (
+          event,
+        ): event is Extract<AgentEvent, { type: "message_end" }> & {
+          message: { role: "assistant" };
+        } =>
+          event.type === "message_end" &&
+          event.message.role === "assistant" &&
+          event.message.stopReason === "error",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("stops pre-admission validation after cancellation and aborts the untouched tail", async () => {
+    const controller = new AbortController();
+    const executed: string[] = [];
+    const resolverCalls: string[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "d-first", name: "d_first_tool", arguments: {} },
+          { type: "toolCall", id: "d-second", name: "d_second_tool", arguments: {} },
+          { type: "toolCall", id: "d-third", name: "d_third_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const deferredTool = (name: string): AgentTool => ({
+      name,
+      label: name,
+      description: name,
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        executed.push(name);
+        return {
+          content: [{ type: "text", text: `${name} result` }],
+          details: { name },
+        };
+      },
+    });
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "abort mid-admission", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [] },
+        {
+          ...config,
+          resolveDeferredTool: async ({ toolCall }) => {
+            resolverCalls.push(toolCall.name);
+            if (toolCall.name === "d_first_tool") {
+              // The run is cancelled while the first async resolver is in
+              // flight; later resolvers must never be awaited.
+              controller.abort(new Error("user aborted"));
+            }
+            return deferredTool(toolCall.name);
+          },
+          beforeToolBatch: async () => undefined,
+        },
+        controller.signal,
+        streamFn,
+      ),
+    );
+
+    expect(streamCalls).toBe(1);
+    expect(resolverCalls).toEqual(["d_first_tool"]);
+    expect(executed).toEqual([]);
+    const toolResults = events
+      .filter(
+        (
+          event,
+        ): event is Extract<AgentEvent, { type: "message_end" }> & {
+          message: { role: "toolResult" };
+        } => event.type === "message_end" && event.message.role === "toolResult",
+      )
+      .map((event) => event.message);
+    expect(toolResults).toHaveLength(3);
+    for (const toolResult of toolResults) {
+      expect(toolResult).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: "Operation aborted" }],
+      });
+    }
+  });
+
   it("executes a different recovery action and keeps the one-shot budget spent", async () => {
     const executed: string[] = [];
     let turn = 0;
