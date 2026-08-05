@@ -217,6 +217,74 @@ describe("gateway chat metadata runtime", () => {
     });
   });
 
+  test("retries a session projection invalidated while it is awaiting", async () => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+    const releaseProjection = createDeferred();
+    harness.buildModels.mockImplementationOnce(async ({ facts }) => {
+      await releaseProjection.promise;
+      return { models: facts.owner.modelCatalog.entries };
+    });
+
+    const read = harness.runtime.read({
+      agentId: "main",
+      sessionEntry: {
+        authProfileOverride: "test:session",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await vi.waitFor(() => expect(harness.buildModels).toHaveBeenCalledTimes(2));
+
+    const nextConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { swarm: { enabled: true } },
+    };
+    harness.setConfig(nextConfig);
+    harness.setOwner(createOwner(nextConfig, "replacement"));
+    harness.runtime.invalidate();
+    await harness.runtime.refresh();
+
+    releaseProjection.resolve();
+    await expect(read).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "replacement" })],
+      swarmEnabled: true,
+    });
+  });
+
+  test("discards a projection failure from an invalidated generation", async () => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+    const releaseProjection = createDeferred();
+    harness.buildModels.mockImplementationOnce(async () => {
+      await releaseProjection.promise;
+      throw new Error("obsolete projection failed");
+    });
+
+    const read = harness.runtime.read({
+      agentId: "main",
+      sessionEntry: {
+        authProfileOverride: "test:session",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await vi.waitFor(() => expect(harness.buildModels).toHaveBeenCalledTimes(2));
+
+    const nextConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { swarm: { enabled: true } },
+    };
+    harness.setConfig(nextConfig);
+    harness.setOwner(createOwner(nextConfig, "replacement"));
+    harness.runtime.invalidate();
+    await harness.runtime.refresh();
+
+    releaseProjection.resolve();
+    await expect(read).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "replacement" })],
+      swarmEnabled: true,
+    });
+  });
+
   test("resolves the replacement gate after a coalesced second invalidation", async () => {
     const harness = createHarness();
     await harness.runtime.refresh();

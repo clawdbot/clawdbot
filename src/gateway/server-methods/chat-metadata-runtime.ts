@@ -427,51 +427,61 @@ export function createGatewayChatMetadataRuntime(params: {
         await refreshPromise;
         continue;
       }
-      break;
-    }
-    let generation = current;
-    if (!generation && params.refreshOnRead) {
-      await refresh();
-      generation = current;
-    }
-    if (!generation) {
-      if (lastError) {
-        throw lastError;
-      }
-      throw new ChatMetadataSnapshotUnavailableError();
-    }
-    if (params.refreshOnRead) {
-      let latest: PreparedGenerationFacts | undefined;
-      try {
-        latest = captureGenerationFacts(deps);
-      } catch {
+      let generation = current;
+      if (!generation && params.refreshOnRead) {
         await refresh();
         generation = current;
       }
-      if (latest && generation && !generationFactsMatch(generation.facts, latest)) {
-        await refresh();
-        generation = current;
+      if (!generation) {
+        if (lastError) {
+          throw lastError;
+        }
+        throw new ChatMetadataSnapshotUnavailableError();
       }
-    }
-    if (!generation) {
-      throw new ChatMetadataSnapshotUnavailableError();
-    }
-    if (params.refreshOnRead) {
-      const latest = captureGenerationFacts(deps);
-      if (!generationFactsMatch(generation.facts, latest)) {
+      if (params.refreshOnRead) {
+        let latest: PreparedGenerationFacts | undefined;
+        try {
+          latest = captureGenerationFacts(deps);
+        } catch {
+          await refresh();
+          generation = current;
+        }
+        if (latest && generation && !generationFactsMatch(generation.facts, latest)) {
+          await refresh();
+          generation = current;
+        }
+      }
+      if (!generation) {
+        throw new ChatMetadataSnapshotUnavailableError();
+      }
+      if (params.refreshOnRead) {
+        const latest = captureGenerationFacts(deps);
+        if (!generationFactsMatch(generation.facts, latest)) {
+          throw new ChatMetadataSnapshotUnavailableError(
+            "prepared chat metadata snapshot is stale while its replacement is publishing",
+          );
+        }
+      }
+      const agentId = normalizeAgentId(readParams.agentId);
+      const agent = generation.agentsById.get(agentId);
+      if (!agent) {
         throw new ChatMetadataSnapshotUnavailableError(
-          "prepared chat metadata snapshot is stale while its replacement is publishing",
+          `prepared chat metadata is unavailable for agent "${agentId}"`,
         );
       }
+      try {
+        const result = await projectMetadata(generation, agent, readParams.sessionEntry);
+        // Lazy projections may outlive their generation. Never return an obsolete success after
+        // invalidation; retry through the replacement gate so the caller sees one coherent epoch.
+        if (current === generation && generation.epoch === invalidationEpoch) {
+          return result;
+        }
+      } catch (error) {
+        if (current === generation && generation.epoch === invalidationEpoch) {
+          throw error;
+        }
+      }
     }
-    const agentId = normalizeAgentId(readParams.agentId);
-    const agent = generation.agentsById.get(agentId);
-    if (!agent) {
-      throw new ChatMetadataSnapshotUnavailableError(
-        `prepared chat metadata is unavailable for agent "${agentId}"`,
-      );
-    }
-    return await projectMetadata(generation, agent, readParams.sessionEntry);
   };
 
   const invalidate = () => {
