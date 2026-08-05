@@ -162,6 +162,7 @@ export function createPageState(
     sessionKey: settings.sessionKey,
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
+    chatHistoryAnchorActive: false,
     chatSending: false,
     chatMessage: "",
     chatMessages: [],

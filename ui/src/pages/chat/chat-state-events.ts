@@ -197,11 +197,13 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
-    // A previous run can persist its final after the next local run starts.
-    // Admit that sequenced row now so the later unsequenced chat.final replay
-    // replaces it in place instead of appending below the newer user turn.
-    applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
-    retirePersistedSteeredChips(state);
+    if (state.chatHistoryAnchorActive !== true) {
+      // A previous run can persist its final after the next local run starts.
+      // Admit that sequenced row now so the later unsequenced chat.final replay
+      // replaces it in place instead of appending below the newer user turn.
+      applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
+      retirePersistedSteeredChips(state);
+    }
   }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
@@ -462,6 +464,11 @@ function observerDigestMatchesAuthoritativeRun(
 export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventFrame) {
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
+    const isolatesHistoricalAnchor = Boolean(
+      state.chatHistoryAnchorActive === true &&
+      payload &&
+      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
+    );
     if (
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
@@ -486,12 +493,15 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     const terminal =
       payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
     const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
-    if (delivered) {
+    if (delivered && !isolatesHistoricalAnchor) {
       // The queued projection is the only local copy until history catches up.
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
+    if (isolatesHistoricalAnchor && !state.chatLoading) {
+      void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    }
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
     }

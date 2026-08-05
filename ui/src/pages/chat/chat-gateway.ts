@@ -495,6 +495,22 @@ function handleChatEvent(
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
+  if (
+    state.chatHistoryAnchorActive === true &&
+    payload &&
+    chatEventSessionMatches(state, payload)
+  ) {
+    if (payload.state === "final") {
+      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
+          ? (payload.agentId ?? resolveUiDefaultAgentId(state))
+          : payload.agentId;
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
+      }
+    }
+    return payload.state ?? null;
+  }
   const activeRunIdBeforeEvent = state.chatRunId;
   let terminalKeyedStreamStartIndex: number | undefined;
   const terminalEventMatchesChat =
