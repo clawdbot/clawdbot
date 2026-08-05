@@ -13,6 +13,7 @@ export const FIRST_USE_STATE_INDEXES = ["execution_identity_contexts_run_created
 // lazy ensures run; fold them into the next natural schema-version bump.
 export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
+  "audit_event_source_adoptions",
   "model_catalog_remote",
   "sidebar_sections",
   "skill_workshop_proposal_events",

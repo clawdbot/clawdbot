@@ -582,6 +582,7 @@ vi.mock("../../bindings/records.js", () => ({
     sessionBindingMocks.touch(...args),
 }));
 vi.mock("../../infra/agent-events.js", () => ({
+  captureAgentRunLifecycleGeneration: () => "test-generation",
   emitAgentAuditEvent: (params: unknown) => agentEventMocks.emitAgentAuditEvent(params),
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
   getAgentEventLifecycleGeneration: () => "test-generation",
