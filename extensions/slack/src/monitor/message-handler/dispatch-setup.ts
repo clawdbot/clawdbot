@@ -384,6 +384,9 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     };
     turnLifecycle.onAdopted = async () => {
       await onAdopted();
+      if (!queuedStatusOwner && !didSetStatus) {
+        rearmQueuedThreadStatus(true);
+      }
       if (queuedStatusOwner && !startsTypingImmediately) {
         // The newest runner can own the controller while an older queued turn runs.
         const target = ensureStatusTarget();
@@ -507,9 +510,9 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     },
   });
 
-  const rearmQueuedThreadStatus = () => {
+  const rearmQueuedThreadStatus = (includeActiveOwner = false) => {
     const target = statusTargetKey ? threadStatusOwners?.get(statusTargetKey) : undefined;
-    if (target?.visible && target.queuedOwners > 0) {
+    if (target?.visible && (target.queuedOwners > 0 || (includeActiveOwner && target.owners > 0))) {
       void updateThreadStatus("is typing...").catch((error: unknown) => {
         logVerbose(`slack queued status rearm failed: ${formatSlackError(error)}`);
       });

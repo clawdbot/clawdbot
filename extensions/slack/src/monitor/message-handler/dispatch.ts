@@ -373,7 +373,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deliver: async (payload, info) => {
           const result = await deliverSlackPayload(payload, info);
           if (result?.visibleReplySent !== false) {
-            rearmQueuedThreadStatus();
+            rearmQueuedThreadStatus(info.kind !== "final");
           }
           return result;
         },
