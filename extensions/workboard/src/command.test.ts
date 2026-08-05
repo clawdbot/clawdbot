@@ -318,10 +318,10 @@ describe("handleWorkboardCommand", () => {
         context: { gatewayClientScopes: ["operator.write"] },
       }),
     ).resolves.toEqual(expect.objectContaining({ text: expect.stringContaining("review") }));
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "review",
-      metadata: { claim: { ownerId: "worker", token: "secret-token" } },
-    });
+    const movedCard = await store.get(card.id);
+    expect(movedCard).toMatchObject({ status: "review" });
+    // The terminal move (review) clears the claim. (issue #119592)
+    expect(movedCard?.metadata?.claim).toBeUndefined();
   });
 
   it("rejects invalid slash-command move statuses", async () => {

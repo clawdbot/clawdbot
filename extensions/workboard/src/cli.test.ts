@@ -308,7 +308,9 @@ describe("registerWorkboardCli", () => {
 
     const parsed = JSON.parse(output);
     expect(parsed).toMatchObject({ card: { id: card.id, status: "review" } });
-    expect(parsed.card.metadata.claim.token).toBe("[redacted]");
+    // The terminal move (review) clears the claim, so there is no token to
+    // redact. The secret must still not appear in the output. (issue #119592)
+    expect(parsed.card.metadata?.claim).toBeUndefined();
     expect(output).not.toContain("secret-token");
   });
 
