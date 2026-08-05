@@ -48,7 +48,7 @@ import {
   createWriteTool,
   type ReadToolDetails,
   type ReadToolTruncationDetails,
-} from "./sessions/index.js";
+} from "./sessions/tools/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
