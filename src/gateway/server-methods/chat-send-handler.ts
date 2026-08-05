@@ -105,6 +105,7 @@ export async function handleChatSend(
     finishAbortedChatSend,
     gatewayWorkAdmission,
     lifecycleGeneration,
+    retainGatewayWorkAdmission,
     restartSafeAdmission,
     setReleaseGatewayRootContinuation,
   } = admitted.value;
@@ -305,6 +306,7 @@ export async function handleChatSend(
       userTurnRecorder,
     });
     let queuedFollowupEnqueued = false;
+    let releaseQueuedFollowupWorkAdmission: (() => void) | undefined;
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
       context,
@@ -426,6 +428,11 @@ export async function handleChatSend(
                       ownerConnId: normalizeOptionalText(client?.connId),
                       ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
                     });
+                    if (queuedFollowupEnqueued && !releaseQueuedFollowupWorkAdmission) {
+                      // The detached dispatch can finish before this queued turn is
+                      // adopted. Retain the session fence across that ownership gap.
+                      releaseQueuedFollowupWorkAdmission = retainGatewayWorkAdmission();
+                    }
                     return queuedFollowupEnqueued;
                   },
                   onCancellationRetired: () => {
@@ -441,6 +448,8 @@ export async function handleChatSend(
                       clientRunId,
                       activeRunAbort.controller,
                     );
+                    releaseQueuedFollowupWorkAdmission?.();
+                    releaseQueuedFollowupWorkAdmission = undefined;
                   },
                 },
                 images: replyOptionImages,

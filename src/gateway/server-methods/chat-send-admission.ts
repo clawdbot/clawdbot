@@ -402,10 +402,42 @@ export async function admitChatSend(params: {
     }
   }
 
+  let gatewayWorkAdmissionRetains = 1;
+  const releaseGatewayWorkAdmission = () => {
+    if (gatewayWorkAdmissionRetains === 0) {
+      return;
+    }
+    gatewayWorkAdmissionRetains -= 1;
+    if (gatewayWorkAdmissionRetains === 0) {
+      gatewayWorkAdmission.release();
+    }
+  };
+  let initialGatewayWorkAdmissionReleased = false;
+  const releaseInitialGatewayWorkAdmission = () => {
+    if (initialGatewayWorkAdmissionReleased) {
+      return;
+    }
+    initialGatewayWorkAdmissionReleased = true;
+    releaseGatewayWorkAdmission();
+  };
+  const retainGatewayWorkAdmission = () => {
+    if (gatewayWorkAdmissionRetains === 0) {
+      throw new Error("cannot retain a released chat work admission");
+    }
+    gatewayWorkAdmissionRetains += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      releaseGatewayWorkAdmission();
+    };
+  };
   let releaseGatewayRootContinuation: (() => void) | undefined;
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
     activeRunAbort.cleanup(options);
-    gatewayWorkAdmission?.release();
+    releaseInitialGatewayWorkAdmission();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
   };
@@ -439,6 +471,7 @@ export async function admitChatSend(params: {
       gatewayWorkAdmission,
       lifecycleGeneration,
       originatingRoute,
+      retainGatewayWorkAdmission,
       restartSafeAdmission,
       setReleaseGatewayRootContinuation: (release: (() => void) | undefined) => {
         releaseGatewayRootContinuation = release;
