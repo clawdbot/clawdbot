@@ -614,6 +614,19 @@ describe("compaction-safeguard summary budgets", () => {
     }
   });
 
+  it("never exceeds the cap, down to a one-character budget", () => {
+    const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
+    const suffix =
+      "\n\n<workspace-critical-rules>\n## Session Startup\n</workspace-critical-rules>";
+
+    // The reserved share rounds to zero below two characters, so the body gets
+    // no allocation and the suffix must still not overrun the budget.
+    for (const maxChars of [1, 2, 3, 10, 50]) {
+      const out = capCompactionSummaryPreservingSuffix(body, suffix, maxChars);
+      expect(out.length, `length at maxChars=${maxChars}`).toBeLessThanOrEqual(maxChars);
+    }
+  });
+
   it("keeps a long body's reserved share even against an oversized suffix", () => {
     const max = MAX_COMPACTION_SUMMARY_CHARS;
     const body = "## Decisions\n".padEnd(max, "b");

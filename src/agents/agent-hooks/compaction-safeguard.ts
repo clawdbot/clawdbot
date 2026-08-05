@@ -599,8 +599,11 @@ function capCompactionSummaryPreservingSuffix(
   // summary the compaction existed to produce. Reserving first makes the sliver
   // and the total-loss cases the same code path rather than adjacent branches.
   const reservedForBody = Math.min(summaryBody.length, Math.floor(maxChars / 2));
-  const bodyBudget = Math.max(reservedForBody, maxChars - suffix.length);
-  const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
+  const bodyBudget = Math.max(0, reservedForBody, maxChars - suffix.length);
+  // A zero budget must yield nothing. capCompactionSummary passes its input
+  // through when the budget is non-positive, which would put the whole body
+  // back and overrun maxChars once the suffix is appended.
+  const cappedBody = bodyBudget > 0 ? capCompactionSummary(summaryBody, bodyBudget) : "";
   const suffixBudget = maxChars - cappedBody.length;
   if (suffix.length <= suffixBudget) {
     return `${cappedBody}${suffix}`;
