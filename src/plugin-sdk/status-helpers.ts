@@ -304,6 +304,21 @@ export function buildComputedAccountStatusSnapshot<TExtra extends StatusSnapshot
   );
 }
 
+function buildResolvedComputedAccountStatusSnapshot<
+  ResolvedAccount,
+  Probe,
+  Audit,
+  TExtra extends StatusSnapshotExtra,
+>(
+  params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
+  { extra, ...snapshot }: ComputedAccountStatusSnapshot<TExtra>,
+) {
+  return buildComputedAccountStatusSnapshot(
+    { ...snapshot, runtime: params.runtime, probe: params.probe },
+    extra,
+  );
+}
+
 /** Build a full status adapter when only configured/extras vary per account. */
 export function createComputedAccountStatusAdapter<
   ResolvedAccount,
@@ -319,22 +334,8 @@ export function createComputedAccountStatusAdapter<
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
     ...buildComputedAccountStatusAdapterBase(options),
-    buildAccountSnapshot: (params) => {
-      const typedParams = params as ComputedAccountStatusAdapterParams<
-        ResolvedAccount,
-        Probe,
-        Audit
-      >;
-      const { extra, ...snapshot } = options.resolveAccountSnapshot(typedParams);
-      return buildComputedAccountStatusSnapshot(
-        {
-          ...snapshot,
-          runtime: typedParams.runtime,
-          probe: typedParams.probe,
-        },
-        extra,
-      );
-    },
+    buildAccountSnapshot: (params) =>
+      buildResolvedComputedAccountStatusSnapshot(params, options.resolveAccountSnapshot(params)),
   };
 }
 
@@ -353,22 +354,11 @@ export function createAsyncComputedAccountStatusAdapter<
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
     ...buildComputedAccountStatusAdapterBase(options),
-    buildAccountSnapshot: async (params) => {
-      const typedParams = params as ComputedAccountStatusAdapterParams<
-        ResolvedAccount,
-        Probe,
-        Audit
-      >;
-      const { extra, ...snapshot } = await options.resolveAccountSnapshot(typedParams);
-      return buildComputedAccountStatusSnapshot(
-        {
-          ...snapshot,
-          runtime: typedParams.runtime,
-          probe: typedParams.probe,
-        },
-        extra,
-      );
-    },
+    buildAccountSnapshot: async (params) =>
+      buildResolvedComputedAccountStatusSnapshot(
+        params,
+        await options.resolveAccountSnapshot(params),
+      ),
   };
 }
 
