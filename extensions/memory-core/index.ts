@@ -57,6 +57,8 @@ const loadRuntimeProviderModule = createLazyRuntimeModule(
   () => import("./src/runtime-provider.js"),
 );
 
+const MEMORY_MANAGER_WARMUP_DELAY_MS = 5_000;
+
 function getToolConfig(options: MemoryToolOptions): OpenClawConfig | undefined {
   return options.getConfig?.() ?? options.config;
 }
@@ -279,35 +281,66 @@ function registerMemoryManagerWarmup(
   api: OpenClawPluginApi,
   memoryRuntime: MemoryPluginRuntime,
 ): void {
+  let lifecycleGeneration = 0;
+  let warmupTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const cancelWarmup = () => {
+    lifecycleGeneration += 1;
+    if (warmupTimer) {
+      clearTimeout(warmupTimer);
+      warmupTimer = null;
+    }
+  };
+
   api.on("gateway_start", (_event, ctx) => {
+    cancelWarmup();
+    const generation = lifecycleGeneration;
     const config = (api.runtime.config?.current?.() ?? ctx.config ?? api.config) as OpenClawConfig;
     if (normalizePluginsConfig(config.plugins).slots.memory !== "memory-core") {
       return;
     }
-    for (const agentId of listAgentIds(config)) {
-      const backend = memoryRuntime.resolveMemoryBackendConfig({ cfg: config, agentId });
-      void memoryRuntime
-        .getMemorySearchManager({ cfg: config, agentId })
-        .then(async ({ manager, error }) => {
-          if (!manager) {
-            if (error) {
-              api.logger.debug?.(`memory-core: startup index warmup unavailable: ${error}`);
+
+    // Leave a bounded idle window for initial post-ready RPCs before loading the manager.
+    const timer = setTimeout(() => {
+      if (warmupTimer !== timer || generation !== lifecycleGeneration) {
+        return;
+      }
+      warmupTimer = null;
+      for (const agentId of listAgentIds(config)) {
+        const backend = memoryRuntime.resolveMemoryBackendConfig({ cfg: config, agentId });
+        void memoryRuntime
+          .getMemorySearchManager({ cfg: config, agentId })
+          .then(async ({ manager, error }) => {
+            if (generation !== lifecycleGeneration) {
+              return;
             }
-            return;
-          }
-          if (backend.backend === "builtin") {
-            await manager.sync?.({ reason: "startup-warmup" });
-          }
-        })
-        .catch((error: unknown) => {
-          api.logger.debug?.(
-            `memory-core: startup index warmup failed for ${agentId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        });
-    }
+            if (!manager) {
+              if (error) {
+                api.logger.debug?.(`memory-core: startup index warmup unavailable: ${error}`);
+              }
+              return;
+            }
+            if (backend.backend === "builtin") {
+              await manager.sync?.({ reason: "startup-warmup" });
+            }
+          })
+          .catch((error: unknown) => {
+            if (generation !== lifecycleGeneration) {
+              return;
+            }
+            api.logger.debug?.(
+              `memory-core: startup index warmup failed for ${agentId}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+      }
+    }, MEMORY_MANAGER_WARMUP_DELAY_MS);
+    warmupTimer = timer;
+    warmupTimer.unref?.();
   });
+
+  api.on("gateway_stop", cancelWarmup);
 }
 
 export default definePluginEntry({

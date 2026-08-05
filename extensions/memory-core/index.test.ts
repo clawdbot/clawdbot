@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
@@ -112,6 +112,10 @@ describe("memory-core plugin runtime registration", () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("registers the dreaming runtime slash command", () => {
     let command: OpenClawPluginCommandDefinition | undefined;
     plugin.register(
@@ -196,6 +200,7 @@ describe("memory-core plugin runtime registration", () => {
   });
 
   it("warms each configured memory manager at gateway start and logs failures at debug", async () => {
+    vi.useFakeTimers();
     const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
       [];
     const syncMain = vi.fn(async () => {});
@@ -229,6 +234,8 @@ describe("memory-core plugin runtime registration", () => {
     }
     warmup({}, { config });
 
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
     await vi.waitFor(() => {
       expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
       expect(syncMain).toHaveBeenCalledWith({ reason: "startup-warmup" });
@@ -239,7 +246,123 @@ describe("memory-core plugin runtime registration", () => {
     });
   });
 
+  it("defers memory manager initialization until after the gateway start turn", async () => {
+    vi.useFakeTimers();
+    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
+      [];
+    getMemorySearchManagerMock.mockResolvedValue({ manager: null } as never);
+    const config = {} as OpenClawConfig;
+    plugin.register(
+      createTestPluginApi({
+        config,
+        runtime: hostRuntime,
+        on(hookName, handler) {
+          if (hookName === "gateway_start") {
+            gatewayStartHandlers.push(
+              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
+            );
+          }
+        },
+      }),
+    );
+    const warmup = gatewayStartHandlers.at(-1);
+    if (!warmup) {
+      throw new Error("expected memory warmup gateway_start hook");
+    }
+
+    warmup({}, { config });
+
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("cancels deferred memory warmup when the gateway stops", async () => {
+    vi.useFakeTimers();
+    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
+      [];
+    const gatewayStopHandlers: Array<() => void> = [];
+    const config = {} as OpenClawConfig;
+    plugin.register(
+      createTestPluginApi({
+        config,
+        runtime: hostRuntime,
+        on(hookName, handler) {
+          if (hookName === "gateway_start") {
+            gatewayStartHandlers.push(
+              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
+            );
+          }
+          if (hookName === "gateway_stop") {
+            gatewayStopHandlers.push(handler as unknown as () => void);
+          }
+        },
+      }),
+    );
+    const warmup = gatewayStartHandlers.at(-1);
+    const stop = gatewayStopHandlers.at(-1);
+    if (!warmup || !stop) {
+      throw new Error("expected memory warmup lifecycle hooks");
+    }
+
+    warmup({}, { config });
+    stop();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it("prevents a restarted gateway generation from syncing a stale manager", async () => {
+    vi.useFakeTimers();
+    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
+      [];
+    let resolveStaleManager:
+      | ((value: { manager: { sync: () => Promise<void> } }) => void)
+      | undefined;
+    const staleManagerResult = new Promise<{ manager: { sync: () => Promise<void> } }>(
+      (resolve) => {
+        resolveStaleManager = resolve;
+      },
+    );
+    const staleSync = vi.fn(async () => {});
+    const currentSync = vi.fn(async () => {});
+    getMemorySearchManagerMock
+      .mockReturnValueOnce(staleManagerResult as never)
+      .mockResolvedValueOnce({ manager: { sync: currentSync } } as never);
+    const config = {} as OpenClawConfig;
+    plugin.register(
+      createTestPluginApi({
+        config,
+        runtime: hostRuntime,
+        on(hookName, handler) {
+          if (hookName === "gateway_start") {
+            gatewayStartHandlers.push(
+              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
+            );
+          }
+        },
+      }),
+    );
+    const warmup = gatewayStartHandlers.at(-1);
+    if (!warmup) {
+      throw new Error("expected memory warmup gateway_start hook");
+    }
+
+    warmup({}, { config });
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
+
+    warmup({}, { config });
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => expect(currentSync).toHaveBeenCalledWith({ reason: "startup-warmup" }));
+
+    resolveStaleManager?.({ manager: { sync: staleSync } });
+    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2));
+    expect(staleSync).not.toHaveBeenCalled();
+  });
+
   it("leaves QMD startup synchronization to the backend boot policy", async () => {
+    vi.useFakeTimers();
     const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
       [];
     const sync = vi.fn(async () => {});
@@ -267,6 +390,7 @@ describe("memory-core plugin runtime registration", () => {
 
     warmup({}, { config });
 
+    await vi.runOnlyPendingTimersAsync();
     await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
     expect(sync).not.toHaveBeenCalled();
   });

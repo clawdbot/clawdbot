@@ -89,6 +89,19 @@ and export only when `diagnostics.otel.logs` is explicitly `true`. Log export
 defaults to OTLP; set `diagnostics.otel.logsExporter` to `stdout` for JSONL on
 stdout, or `both` for both.
 
+<Note>
+The shared `endpoint` and `OTEL_EXPORTER_OTLP_ENDPOINT` are bases for all
+enabled signals. OpenClaw appends `/v1/traces`, `/v1/metrics`, or `/v1/logs`
+to root and custom collector paths. For compatibility with hosted frontends,
+a shared endpoint already ending in one of those signal paths keeps that path
+for its matching signal and replaces the terminal segment for the others.
+
+Signal-specific `tracesEndpoint`, `metricsEndpoint`, and `logsEndpoint`
+settings, plus their matching `OTEL_EXPORTER_OTLP_*_ENDPOINT` fallbacks, are
+passed to the exporter as exact URLs. OpenClaw does not append or rewrite their
+paths.
+</Note>
+
 ## Which processes export
 
 - **Gateway** starts the exporter at startup and exports from the Gateway
