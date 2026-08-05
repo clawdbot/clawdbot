@@ -887,10 +887,10 @@ async function getSessionManagedOutgoingAttachmentIndex(
       sessionKey,
       storePath: loaded.storePath,
     });
-    if (!exact.found && exact.reason !== "database-missing") {
+    if (!exact.found) {
       return { kind: "unavailable", reason: exact.reason };
     }
-    entry = exact.found ? exact.value?.entry : undefined;
+    entry = exact.value?.entry;
   }
   const sessionId = entry?.sessionId;
   if (!sessionId) {

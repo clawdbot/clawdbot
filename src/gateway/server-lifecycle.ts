@@ -408,7 +408,9 @@ export async function prepareGatewayLifecycle(params: {
       tickInterval: runtimeState.tickInterval,
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
-      stopMediaCleanup: runtimeState.stopMediaCleanup,
+      // Maintenance installs after lifecycle construction; resolve the current
+      // owner at close time instead of capturing the inert startup placeholder.
+      stopMediaCleanup: () => runtimeState.stopMediaCleanup(),
       worktreeCleanup: runtimeState.worktreeCleanup,
       skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,

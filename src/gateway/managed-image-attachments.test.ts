@@ -2001,6 +2001,24 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
+  it("retains history records when a per-agent session database is missing", async () => {
+    const fixture = await createFixture(stateDir);
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    getRuntimeConfigMock.mockReturnValue({
+      session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+    });
+    loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
   it("retains history records when a fixed store database is missing", async () => {
     const fixture = await createFixture(stateDir);
     const storePath = path.join(stateDir, "unmounted-sessions.json");
