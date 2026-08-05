@@ -501,7 +501,6 @@ enum class GatewayMethod(
   SessionsCompanionAsk("sessions.companion.ask"),
   SessionsCompanionState("sessions.companion.state"),
   SessionsCompanionReset("sessions.companion.reset"),
-  Ready("ready"),
   MemorySearch("memory.search"),
   SkillsProposalsEventsList("skills.proposals.events.list"),
   SkillsProposalsEvaluate("skills.proposals.evaluate"),
@@ -509,6 +508,7 @@ enum class GatewayMethod(
   TasksRetry("tasks.retry"),
   TasksDismiss("tasks.dismiss"),
   AuditRunInspect("audit.run.inspect"),
+  Ready("ready"),
 }
 
 enum class GatewayEvent(
