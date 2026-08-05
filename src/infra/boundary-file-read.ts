@@ -1,10 +1,15 @@
 // Exposes root-scoped file open helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
+import path from "node:path";
 import {
+  canonicalPathFromExistingAncestor,
   matchRootFileOpenFailure as matchRootFileOpenFailureFsSafe,
+  openRootFile,
+  type OpenRootFileParams,
   readFileDescriptorBounded as readFileDescriptorBoundedFsSafe,
   readFileDescriptorBoundedSync as readFileDescriptorBoundedSyncFsSafe,
   type RootFileOpenFailure,
+  type RootFileOpenResult,
 } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 
@@ -18,6 +23,25 @@ export {
   type RootFileOpenFailure,
   type RootFileOpenResult,
 } from "@openclaw/fs-safe/advanced";
+
+/**
+ * Opens a root-scoped file after canonicalizing symlink parents. fs-safe 0.5.2
+ * rejects every symlink path component by default; the workspace contract
+ * follows contained parent symlinks (directory aliases) while final-symlink
+ * targets and out-of-root escapes stay rejected by openRootFile itself.
+ */
+export async function openRootFileFollowingParents(
+  params: OpenRootFileParams,
+): Promise<RootFileOpenResult> {
+  let absolutePath = path.resolve(params.absolutePath);
+  try {
+    const canonicalParent = await canonicalPathFromExistingAncestor(path.dirname(absolutePath));
+    absolutePath = path.join(canonicalParent, path.basename(absolutePath));
+  } catch {
+    // Keep the lexical path; openRootFile reports the boundary or IO failure.
+  }
+  return await openRootFile({ ...params, absolutePath });
+}
 
 // fs-safe folds ENOENT, ENOTDIR, and ELOOP into its `path` reason. Only the
 // first two mean the artifact is absent; a symlink loop is an unreadable path.

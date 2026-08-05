@@ -19,7 +19,12 @@ import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js"
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
+import {
+  adoptTailscaleProfileAvatar,
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+} from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
@@ -42,6 +47,7 @@ import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
+import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
@@ -175,6 +181,10 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const authenticatedUserIsTailscaleProvider = Boolean(
+    authResult.tailscaleIdentity &&
+    classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
+  );
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -188,8 +198,10 @@ export async function attachAuthenticatedGatewayConnect(
   let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
   if (authenticatedUserId) {
     try {
-      const profile = ensureProfileForEmail(authenticatedUserId);
-      // Profile metadata is a connect-time snapshot; edits become visible after reconnect.
+      const profile = authResult.tailscaleIdentity
+        ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
+        : ensureProfileForEmail(authenticatedUserId);
+      // User edits become visible after reconnect; detached provider-avatar adoption refreshes below.
       authenticatedUserProfile = {
         profileId: profile.id,
         displayName: profile.displayName,
@@ -197,7 +209,7 @@ export async function attachAuthenticatedGatewayConnect(
         updatedAt: profile.updatedAt,
       };
     } catch (error) {
-      // Profile storage must not block login; retain the legacy email-only identity on failure.
+      // Profile storage and best-effort provider metadata must never block login.
       logWsControl.warn(
         `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
       );
@@ -309,6 +321,7 @@ export async function attachAuthenticatedGatewayConnect(
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
@@ -441,6 +454,30 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
+  const buildAuthenticatedPresenceUser = () => {
+    if (!authenticatedUserId) {
+      return undefined;
+    }
+    if (!authenticatedUserProfile) {
+      return {
+        id: authenticatedUserId,
+        ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
+      };
+    }
+    return {
+      id: authenticatedUserProfile.profileId,
+      ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
+      ...(authenticatedUserProfile.displayName
+        ? { name: authenticatedUserProfile.displayName }
+        : {}),
+      // This authenticated route resolves the uploaded avatar first, then the
+      // gateway-side Gravatar proxy, so clients never need an email-hash URL.
+      // The revision changes when the profile avatar changes, so reconnecting
+      // viewers refetch instead of reusing a stale route response.
+      avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
+    };
+  };
+
   if (presenceKey) {
     upsertPresence(presenceKey, {
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
@@ -454,25 +491,7 @@ export async function attachAuthenticatedGatewayConnect(
       roles: [role],
       scopes,
       instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-      ...(authenticatedUserId
-        ? {
-            user: authenticatedUserProfile
-              ? {
-                  id: authenticatedUserProfile.profileId,
-                  email: authenticatedUserId,
-                  ...(authenticatedUserProfile.displayName
-                    ? { name: authenticatedUserProfile.displayName }
-                    : {}),
-                  // This authenticated route resolves the uploaded avatar first, then the
-                  // gateway-side Gravatar proxy, so clients never need an email-hash URL.
-                  // The ?v=<updatedAt> revision changes when the profile (avatar) is
-                  // updated, so a reconnecting viewer's <img> refetches instead of reusing
-                  // a stale cached image for the unchanged route.
-                  avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
-                }
-              : { id: authenticatedUserId, email: authenticatedUserId },
-          }
-        : {}),
+      ...(authenticatedUserId ? { user: buildAuthenticatedPresenceUser() } : {}),
       reason: "connect",
     });
     incrementPresenceVersion();
@@ -552,4 +571,36 @@ export async function attachAuthenticatedGatewayConnect(
   }
 
   await sendGatewayHello(context, state, pluginSurfaceUrls);
+
+  const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
+  const tailscaleProfileId = authenticatedUserProfile?.profileId;
+  if (tailscaleProfileId && !authenticatedUserProfile?.hasAvatar && tailscaleProfilePic) {
+    runDetachedConnectWork(
+      async () => {
+        const updated = await adoptTailscaleProfileAvatar(tailscaleProfileId, tailscaleProfilePic);
+        if (!updated.avatarMime) {
+          return;
+        }
+        authenticatedUserProfile = {
+          profileId: updated.id,
+          displayName: updated.displayName,
+          hasAvatar: true,
+          updatedAt: updated.updatedAt,
+        };
+        nextClient.authenticatedUserProfile = authenticatedUserProfile;
+        if (isClosed() || !presenceKey) {
+          return;
+        }
+        upsertPresence(presenceKey, { user: buildAuthenticatedPresenceUser() });
+        const requestContext = buildRequestContext();
+        broadcastPresenceSnapshot({
+          broadcast: requestContext.broadcast,
+          incrementPresenceVersion: requestContext.incrementPresenceVersion,
+          getHealthVersion: requestContext.getHealthVersion,
+        });
+      },
+      (error) =>
+        logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),
+    );
+  }
 }

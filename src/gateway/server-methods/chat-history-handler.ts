@@ -16,7 +16,6 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   resolveTranscriptSessionKeyBySessionId,
@@ -58,31 +57,19 @@ import {
   readChatHistoryPage,
   readChatHistoryMessageSeq,
 } from "./chat-history-pages.js";
+import type { ChatMetadataResult } from "./chat-metadata-runtime.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
-import {
-  buildMemoizedChatStartupMetadataResult,
-  listMemoizedChatStartupAgents,
-} from "./chat-startup-projection-memo.js";
+import { listMemoizedChatStartupAgents } from "./chat-startup-projection-memo.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import {
   loadOptionalServerMethodModelCatalogSnapshot,
   startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-  GatewayRequestHandlers,
-} from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
-
-type ChatMetadataResult = {
-  commands?: unknown[];
-  models?: unknown[];
-  swarmEnabled: boolean;
-};
 
 async function handleChatMetadataRequest({
   params,
@@ -108,55 +95,10 @@ async function handleChatMetadataRequest({
   }
   respond(
     true,
-    await buildChatMetadataResult({
-      cfg,
-      context,
+    await context.readChatMetadata({
       agentId: requestedAgentId,
     }),
   );
-}
-
-async function buildChatMetadataResult(params: {
-  cfg: OpenClawConfig;
-  context: GatewayRequestContext;
-  agentId: string;
-}): Promise<ChatMetadataResult> {
-  const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
-    import("./models-list-result.js"),
-    import("./commands-list-result.js"),
-  ]);
-  const [modelsResult, commandsResult] = await Promise.allSettled([
-    buildModelsListResult({
-      context: params.context,
-      agentId: params.agentId,
-      params: { view: "configured" },
-    }),
-    Promise.resolve().then(() =>
-      buildCommandsListResult({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        includeArgs: true,
-        scope: "text",
-      }),
-    ),
-  ]);
-
-  if (modelsResult.status === "rejected") {
-    throw modelsResult.reason;
-  }
-
-  if (commandsResult.status === "rejected") {
-    params.context.logGateway.warn(
-      "chat.metadata continuing without text commands: " +
-        formatErrorMessage(commandsResult.reason),
-    );
-  }
-
-  return {
-    ...modelsResult.value,
-    ...(commandsResult.status === "fulfilled" ? commandsResult.value : {}),
-    swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
-  };
 }
 
 async function buildChatStartupModelCatalogProjection(params: {
@@ -518,16 +460,17 @@ async function handleChatHistoryRequest({
           : undefined;
         const metadata =
           includeMetadata && catalogOwnedBySessionAgent
-            ? await buildMemoizedChatStartupMetadataResult({
-                cfg: catalogConfig,
-                context,
-                agentId: sessionAgentId,
-                modelCatalog: modelCatalogSnapshot,
-                sessionEntry: entry,
-                ...(catalogProjection
-                  ? { catalogProjector: catalogProjection.sessionCatalogProjector }
-                  : {}),
-              })
+            ? await context
+                .readChatMetadata({
+                  agentId: sessionAgentId,
+                  sessionEntry: entry,
+                })
+                .catch((error: unknown) => {
+                  context.logGateway.debug(
+                    `chat.startup continuing without metadata: ${formatErrorMessage(error)}`,
+                  );
+                  return undefined;
+                })
             : undefined;
         const agentsList = includeAgentsList
           ? catalogProjection && modelCatalog && modelCatalogSnapshot

@@ -101,10 +101,6 @@ type TelegramTextMessage = Pick<
   "text" | "caption" | "entities" | "caption_entities" | "poll"
 > & { rich_message?: unknown };
 
-function hasTelegramRichMessage(value: unknown): boolean {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function compactRichText(value: string): string {
   return value
     .split("\n")
@@ -187,11 +183,11 @@ function renderRichBlocks(value: unknown): string {
 export function resolveTelegramRichMessagePlaceholder(
   msg: TelegramTextMessage,
 ): string | undefined {
-  return hasTelegramRichMessage(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
+  return isRecord(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
 }
 
 export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string | undefined {
-  if (!hasTelegramRichMessage(msg.rich_message)) {
+  if (!isRecord(msg.rich_message)) {
     return undefined;
   }
   return compactRichText(renderRichBlocks(msg.rich_message)) || undefined;

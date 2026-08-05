@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   maybeRepairPluginOpenClawHostLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
   migrateLegacyOnboardingRecommendationsScope: vi.fn(),
+  migrateLegacyTailscaleProfileIdentities: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
   maybeRepairOpenAICodexAuthConfig: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
@@ -49,6 +50,10 @@ vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
 
 vi.mock("../../infra/state-migrations.onboarding-recommendations.js", () => ({
   migrateLegacyOnboardingRecommendationsScope: mocks.migrateLegacyOnboardingRecommendationsScope,
+}));
+
+vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({
+  migrateLegacyTailscaleProfileIdentities: mocks.migrateLegacyTailscaleProfileIdentities,
 }));
 
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
@@ -259,6 +264,7 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReturnValue(new Map());
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
       detected: [],
@@ -325,6 +331,25 @@ describe("doctor repair sequencing", () => {
     });
     expect(result.changeNotes).toContain("Migrated onboarding recommendation state.");
     expect(result.warningNotes).toContain("Migration warning.");
+  });
+
+  it("runs the doctor-only Tailscale profile identity migration", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
+    const candidate = {} as OpenClawConfig;
+    mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({
+      changes: ["Migrated Tailscale profile identity."],
+      warnings: ["Tailscale identity conflict."],
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: { cfg: candidate, candidate, pendingChanges: false, fixHints: [] },
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(mocks.migrateLegacyTailscaleProfileIdentities).toHaveBeenCalledWith({ env });
+    expect(result.changeNotes).toContain("Migrated Tailscale profile identity.");
+    expect(result.warningNotes).toContain("Tailscale identity conflict.");
   });
 
   it("retains the exact auth profile map after import for later session-owner repair", async () => {

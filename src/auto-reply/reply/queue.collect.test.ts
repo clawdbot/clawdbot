@@ -618,13 +618,61 @@ describe("followup queue collect routing", () => {
 
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).not.toContain("older public content");
-    expect(calls[0]?.prompt).not.toContain("private direct content");
+    expect(calls[0]?.prompt).toContain("- private direct content");
     expect(calls[0]?.originatingTo).toBe("direct:A");
     expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[1]?.prompt).toContain("- older public content");
     expect(calls[1]?.prompt).not.toContain("private direct content");
     expect(calls[1]?.originatingTo).toBe("channel:B");
     expect(calls[2]?.prompt).toContain("newer public content");
+  });
+
+  it("keeps content in every context-isolated overflow summary", async () => {
+    const key = `test-collect-overflow-all-context-lines-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder(6);
+    const settings = createQueueSettings({ cap: 3 });
+    const queued = [
+      ["dropped A", "A"],
+      ["dropped B", "B"],
+      ["dropped C1", "C"],
+      ["dropped C2", "C"],
+      ["dropped D", "D"],
+      ["dropped E", "E"],
+      ["survivor 1", "survivor"],
+      ["survivor 2", "survivor"],
+      ["survivor 3", "survivor"],
+    ] as const;
+
+    for (const [prompt, target] of queued) {
+      enqueueTestRun(
+        key,
+        {
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: `channel:${target}`,
+          originatingChatType: "channel",
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(6);
+    const overflowPrompts = calls.slice(0, 5).map((run) => run.prompt);
+    expect(overflowPrompts).toEqual([
+      expect.stringContaining("- dropped A"),
+      expect.stringContaining("- dropped B"),
+      expect.stringMatching(/- dropped C1[\s\S]*- dropped C2/),
+      expect.stringContaining("- dropped D"),
+      expect.stringContaining("- dropped E"),
+    ]);
+    expect(overflowPrompts[2]).toContain("Dropped 2 messages");
+    expect(overflowPrompts.every((prompt) => prompt.includes("Summary:\n- "))).toBe(true);
+    expect(calls[5]?.prompt).toContain("survivor 1");
+    expect(calls[5]?.prompt).toContain("survivor 2");
+    expect(calls[5]?.prompt).toContain("survivor 3");
   });
 
   it("evicts oldest overflow context metadata when the item cap is reached", () => {
@@ -695,6 +743,8 @@ describe("followup queue collect routing", () => {
   it("does not register a drop:new source that the full queue rejects", () => {
     const key = `test-drop-new-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn();
+    const onAbandoned = vi.fn();
+    const onDisposition = vi.fn();
     const onComplete = vi.fn();
     const settings = createQueueSettings({ mode: "followup", cap: 1, dropPolicy: "new" });
 
@@ -704,9 +754,11 @@ describe("followup queue collect routing", () => {
         key,
         {
           ...createRun({ prompt: "rejected" }),
+          onQueueDisposition: onDisposition,
           turnAdoptionLifecycle: {
             onAdopted: async () => {},
             onDeferred: onEnqueued,
+            onAbandoned,
             onSettled: onComplete,
           },
         },
@@ -715,6 +767,8 @@ describe("followup queue collect routing", () => {
     ).toBe(false);
 
     expect(onEnqueued).not.toHaveBeenCalled();
+    expect(onDisposition).toHaveBeenCalledWith("queue-cap-new");
+    expect(onAbandoned).toHaveBeenCalledOnce();
     expect(onComplete).toHaveBeenCalledOnce();
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual(["existing"]);
     clearFollowupQueue(key);
@@ -749,7 +803,7 @@ describe("followup queue collect routing", () => {
       "channel:D",
     ]);
     expect(calls[0]?.prompt).toContain("Dropped 1 message");
-    expect(calls[0]?.prompt).not.toContain("content B");
+    expect(calls[0]?.prompt).toContain("- content B");
     expect(calls[1]?.prompt).toContain("- content C");
     expect(calls[2]?.prompt).toContain("content D");
     expect(calls.every((call) => !call.prompt.includes("content A"))).toBe(true);
@@ -1014,6 +1068,7 @@ describe("followup queue collect routing", () => {
     await done.promise;
 
     expect(calls[0]?.prompt).toContain("Dropped 1 message");
+    expect(calls[0]?.prompt).toContain("- second");
     expect(calls[0]?.run.model).toBe("model-b");
     expect(calls[0]?.run.authProfileId).toBe("auth-b");
     expect(calls[1]?.prompt).toContain("- retained");

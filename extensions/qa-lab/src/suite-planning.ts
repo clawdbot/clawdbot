@@ -288,10 +288,8 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
     (params.concurrency > 1 ||
       params.scenarios.some(
         (scenario) =>
-          isQaMergePatchObject(scenario.gatewayConfigPatch) ||
-          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined) ||
-          (scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined) ||
-          (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
+          scenarioRequiresIsolatedQaSuiteWorker(scenario) ||
+          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined),
       ))
   );
 }

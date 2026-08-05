@@ -43,6 +43,8 @@ export function renderAgentOverview(params: {
   identityDraft: AgentIdentityDraft;
   identitySaving: boolean;
   identityError: string | null;
+  canUpdateConfig: boolean;
+  canUpdateIdentity: boolean;
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
@@ -102,7 +104,7 @@ export function renderAgentOverview(params: {
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
-  const disabled = !configForm || configLoading || configSaving;
+  const disabled = !params.canUpdateConfig || !configForm || configLoading || configSaving;
   const thinkingDefault = agent.thinkingDefault ?? "-";
 
   const identityDraft = params.identityDraft;
@@ -119,7 +121,7 @@ export function renderAgentOverview(params: {
   const identityInvalid =
     (identityDraft.name !== null && !identityDraft.name.trim()) ||
     (identityDraft.emoji !== null && !identityDraft.emoji.trim());
-  const identityBusy = params.identitySaving;
+  const identityBusy = params.identitySaving || !params.canUpdateIdentity;
 
   const handleAvatarFileSelect = (e: Event) => {
     const input = e.target as HTMLInputElement;
@@ -270,7 +272,7 @@ export function renderAgentOverview(params: {
           <button
             type="button"
             class="btn btn--sm primary"
-            ?disabled=${configSaving || !configDirty}
+            ?disabled=${!params.canUpdateConfig || configSaving || !configDirty}
             @click=${onConfigSave}
           >
             ${configSaving ? t("common.saving") : t("common.save")}

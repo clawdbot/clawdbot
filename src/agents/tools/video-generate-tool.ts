@@ -46,6 +46,7 @@ import { getCustomProviderApiKey } from "../model-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   hasSnapshotCapabilityProviderAvailability,
@@ -105,6 +106,7 @@ const log = createSubsystemLogger("agents/tools/video-generate");
 const MAX_INPUT_IMAGES = 9;
 const MAX_INPUT_VIDEOS = 4;
 const MAX_INPUT_AUDIOS = 3;
+const GENERATED_VIDEO_MEDIA_SUBDIR = "tool-video-generation";
 const GENERATED_VIDEO_PROBE_BUDGET_MS = 3000;
 const GENERATED_VIDEO_PROBE_CONCURRENCY = 2;
 const MAX_GENERATED_VIDEO_PROBES = 8;
@@ -737,6 +739,9 @@ async function executeVideoGenerationJob(params: {
   }
 
   const urlOnlyVideos: Array<{ url: string; mimeType: string; fileName?: string }> = [];
+  type PersistedVideo =
+    | { kind: "saved"; media: Awaited<ReturnType<typeof saveMediaBuffer>> }
+    | { kind: "url"; media: (typeof urlOnlyVideos)[number] };
   const bufferVideos: Array<(typeof result.videos)[number] & { buffer: Buffer }> = [];
   for (const video of result.videos) {
     if (video.buffer) {
@@ -757,27 +762,45 @@ async function executeVideoGenerationJob(params: {
   }
 
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "video");
-  const savedVideos: Array<Awaited<ReturnType<typeof saveMediaBuffer>>> = [];
-  for (const video of bufferVideos) {
-    try {
-      const saved = await saveMediaBuffer(
-        video.buffer,
-        video.mimeType,
-        "tool-video-generation",
-        mediaMaxBytes,
-        params.filename || video.fileName,
-      );
-      savedVideos.push(saved);
-    } catch (error) {
-      if (video.url && isGeneratedMediaSizeLimitError(error)) {
-        urlOnlyVideos.push({
-          url: video.url,
-          mimeType: video.mimeType,
-          fileName: video.fileName,
-        });
-        continue;
+  const persistedVideos = await persistGeneratedMediaBatch<PersistedVideo>({
+    subdir: GENERATED_VIDEO_MEDIA_SUBDIR,
+    mode: "sequential",
+    saves: bufferVideos.map((video) => async () => {
+      try {
+        const savedMedia = await saveMediaBuffer(
+          video.buffer,
+          video.mimeType,
+          GENERATED_VIDEO_MEDIA_SUBDIR,
+          mediaMaxBytes,
+          params.filename || video.fileName,
+        );
+        return {
+          value: { kind: "saved" as const, media: savedMedia },
+          savedMedia,
+        };
+      } catch (error) {
+        if (video.url && isGeneratedMediaSizeLimitError(error)) {
+          return {
+            value: {
+              kind: "url" as const,
+              media: {
+                url: video.url,
+                mimeType: video.mimeType,
+                fileName: video.fileName,
+              },
+            },
+          };
+        }
+        throw error;
       }
-      throw error;
+    }),
+  });
+  const savedVideos: Array<Awaited<ReturnType<typeof saveMediaBuffer>>> = [];
+  for (const persisted of persistedVideos) {
+    if (persisted.kind === "saved") {
+      savedVideos.push(persisted.media);
+    } else {
+      urlOnlyVideos.push(persisted.media);
     }
   }
   const totalCount = savedVideos.length + urlOnlyVideos.length;
