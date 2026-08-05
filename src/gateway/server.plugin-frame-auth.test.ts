@@ -771,7 +771,7 @@ describe("control ui plugin frame auth route boundaries", () => {
         );
         expect(allowed.res.statusCode).toBe(200);
 
-        // Null Origin + cross-site Sec-Fetch-Site → attacker cross-site page, blocked.
+        // Null Origin + cross-site Sec-Fetch-Site → blocked.
         const blocked = createResponse();
         await dispatchRequest(
           server,
@@ -782,39 +782,76 @@ describe("control ui plugin frame auth route boundaries", () => {
           blocked.res,
         );
         expect(blocked.res.statusCode).toBe(401);
+
+        // Null Origin + same-site (not same-origin) → blocked (stricter than before).
+        const sameSiteBlocked = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/sandbox-hook",
+            headers: { cookie, origin: "null", "sec-fetch-site": "same-site" },
+          }),
+          sameSiteBlocked.res,
+        );
+        expect(sameSiteBlocked.res.statusCode).toBe(401);
+
+        // Null Origin + no Sec-Fetch-Site → blocked (fail closed).
+        const noFetchBlocked = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/sandbox-hook",
+            headers: { cookie, origin: "null" },
+          }),
+          noFetchBlocked.res,
+        );
+        expect(noFetchBlocked.res.statusCode).toBe(401);
       },
     });
   });
 
-  test("allows cookie auth without Origin header (non-browser client)", async () => {
+  test("rejects no-Origin cookie requests with cross-site Sec-Fetch-Site and allows otherwise", async () => {
     const handlePluginRequest = createRuntimeScopeRecorderHandler({
-      pluginId: "no-origin-cookie",
-      path: "/no-origin-hook",
+      pluginId: "no-origin-fetch-cookie",
+      path: "/no-origin-fetch-hook",
       method: "assistant.media.get",
       observedRuntimeScopes: [],
       allowedResults: [],
     });
     const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
-      pluginId: "no-origin-cookie",
-      path: "/no-origin-hook",
+      pluginId: "no-origin-fetch-cookie",
+      path: "/no-origin-fetch-hook",
     });
 
     await withGatewayServer({
-      prefix: "openclaw-plugin-cookie-no-origin-test-",
+      prefix: "openclaw-plugin-cookie-no-origin-fetch-test-",
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/no-origin-hook",
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname === "/no-origin-fetch-hook",
       },
       run: async (server) => {
-        // No Origin header → non-browser client, cookie still works.
-        const response = createResponse();
+        // No Origin + cross-site Sec-Fetch-Site → blocked (CSRF vector closed).
+        const blocked = createResponse();
         await dispatchRequest(
           server,
-          createRequest({ path: "/no-origin-hook", headers: { cookie } }),
-          response.res,
+          createRequest({
+            path: "/no-origin-fetch-hook",
+            headers: { cookie, "sec-fetch-site": "cross-site" },
+          }),
+          blocked.res,
         );
-        expect(response.res.statusCode).toBe(200);
+        expect(blocked.res.statusCode).toBe(401);
+
+        // No Origin + no Sec-Fetch-Site → non-browser client, allowed.
+        const allowed = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-origin-fetch-hook", headers: { cookie } }),
+          allowed.res,
+        );
+        expect(allowed.res.statusCode).toBe(200);
       },
     });
   });

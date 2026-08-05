@@ -211,28 +211,40 @@ export function authorizeControlUiPluginCookieRequest(
  * Cookie-specific browser-Origin gate for Control UI plugin-tab requests.
  *
  * Unlike the bearer path (which rejects null/opaque Origins), this gate accepts
- * null Origin when Sec-Fetch-Site is not cross-site, because the plugin-tab
+ * null Origin only with `Sec-Fetch-Site: same-origin`, because the plugin-tab
  * sandbox frame has an opaque origin by design. Concrete cross-site Origins are
- * rejected via checkBrowserOrigin so a SameSite=None cookie cannot be used from
- * an unrelated page.
+ * rejected via checkBrowserOrigin. Requests without an Origin header are checked
+ * against Fetch Metadata so a cross-site browser GET that omits Origin (which is
+ * possible for some navigation/image requests) cannot bypass the gate.
  */
 function isControlUiPluginCookieOriginAllowed(req: IncomingMessage, cfg?: OpenClawConfig): boolean {
   const origin = getHeader(req, "origin");
+  const fetchSite = normalizeLowercaseStringOrEmpty(getHeader(req, "sec-fetch-site"));
+
+  // A cross-site browser request must be rejected regardless of whether it
+  // carries an Origin header. Sec-Fetch-Site: cross-site is the authoritative
+  // signal that the request originated from a different site.
+  if (fetchSite === "cross-site") {
+    return false;
+  }
+
   if (!origin) {
-    // No Origin header → not a browser request (curl, CLI). Cookie auth
-    // still requires a valid signed cookie, so let it through.
+    // No Origin and not cross-site: either a non-browser client (curl, CLI)
+    // or a same-origin/same-site browser request that omits Origin. Both are
+    // safe — the SameSite=None cookie only reaches the gateway from the same
+    // site in this case.
     return true;
   }
+
   const trimmedOrigin = origin.trim();
   if (trimmedOrigin === "null" || trimmedOrigin === "") {
-    // Opaque-origin sandbox iframe. Allow only when the browser's Fetch
-    // Metadata indicates the request did not originate from a cross-site
-    // context. An attacker page sends Sec-Fetch-Site: cross-site; the
-    // intended sandbox descendant sends same-origin or same-site (or none
-    // for non-browser clients that somehow set Origin: null).
-    const fetchSite = normalizeLowercaseStringOrEmpty(getHeader(req, "sec-fetch-site"));
-    return fetchSite !== "cross-site";
+    // Opaque-origin sandbox iframe. Require the strictest Fetch Metadata signal
+    // (same-origin) so a same-site (but not same-origin) context cannot use the
+    // cookie. This is narrower than the bearer path and matches the intended
+    // plugin-tab frame whose descendant requests inherit the parent's site.
+    return fetchSite === "same-origin";
   }
+
   // Concrete Origin: delegate to the canonical browser-origin validator. This
   // accepts same-host, loopback, private, and allowlisted origins; rejects
   // everything else (e.g. https://attacker.example).
