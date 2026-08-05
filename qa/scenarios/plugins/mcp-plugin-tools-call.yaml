@@ -5,6 +5,7 @@ scenario:
   surface: mcp
   coverage:
     primary:
+      - plugins.activation-plugin-tools
       - plugins.tool-plugin-mcp-tools
       - plugins.tool-plugin-invocation
   objective: Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.

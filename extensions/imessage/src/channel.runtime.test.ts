@@ -1,4 +1,6 @@
 // Imessage tests cover channel plugin behavior.
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const monitorMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -47,12 +49,12 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
         imessage: {
           accounts: {
             "swang430-gmail-com": { cliPath: "imsg" },
-            default: {},
+            default: { enabled: true },
           },
         },
       },
     } as never;
-    const { ctx, abort, logEvents } = makeCtx({ cfg, accountId: "default" });
+    const { ctx, abort, logEvents, statusEvents } = makeCtx({ cfg, accountId: "default" });
 
     const settled = vi.fn();
     const task = startIMessageGatewayAccount(ctx).then(settled);
@@ -63,6 +65,8 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
     expect(settled).not.toHaveBeenCalled();
     expect(logEvents.some((e) => e.line.includes("skipping watcher"))).toBe(true);
     expect(logEvents.some((e) => e.line.includes('using account "swang430-gmail-com"'))).toBe(true);
+    expect(statusEvents).not.toEqual([]);
+    expect(statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle)).toBe(true);
 
     abort();
     await task;
@@ -83,10 +87,130 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
         },
       },
     } as never;
-    const { ctx } = makeCtx({ cfg, accountId: "swang430-gmail-com" });
+    const { ctx, statusEvents } = makeCtx({ cfg, accountId: "swang430-gmail-com" });
 
     await startIMessageGatewayAccount(ctx);
     expect(monitorMock).toHaveBeenCalledTimes(1);
+    expect(statusEvents).toContainEqual(
+      expect.objectContaining({ lifecycle: "starting", accountId: "swang430-gmail-com" }),
+    );
+    expect(monitorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ statusSink: expect.any(Function) }),
+    );
+  });
+
+  it.each([
+    {
+      name: "an implicit and explicit default database",
+      primary: { cliPath: "imsg" },
+      secondary: () => ({
+        cliPath: "imsg",
+        dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
+      }),
+    },
+    {
+      name: "the same absolute executable with implicit and explicit databases",
+      primary: { cliPath: "/usr/local/bin/imsg" },
+      secondary: () => ({
+        cliPath: "/usr/local/bin/imsg",
+        dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
+      }),
+    },
+  ])("starts only one real monitor for $name", async ({ primary, secondary }) => {
+    monitorMock.mockClear();
+    monitorMock.mockResolvedValueOnce(undefined);
+    const cfg = {
+      channels: {
+        imessage: {
+          accounts: { primary, secondary: secondary() },
+        },
+      },
+    } as never;
+    const owner = makeCtx({ cfg, accountId: "primary" });
+    const duplicate = makeCtx({ cfg, accountId: "secondary" });
+
+    await startIMessageGatewayAccount(owner.ctx);
+    const duplicateTask = startIMessageGatewayAccount(duplicate.ctx);
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(monitorMock).toHaveBeenCalledTimes(1);
+      expect(duplicate.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(
+        true,
+      );
+      expect(
+        duplicate.statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle),
+      ).toBe(true);
+    } finally {
+      duplicate.abort();
+      await duplicateTask;
+    }
+  });
+
+  it("starts the only configured watcher instead of parking it under an unconfigured account", async () => {
+    monitorMock.mockClear();
+    monitorMock.mockResolvedValueOnce(undefined);
+    const cfg = {
+      channels: {
+        imessage: {
+          accounts: {
+            primary: {},
+            secondary: { enabled: true, cliPath: "imsg" },
+          },
+        },
+      },
+    } as never;
+    const configured = makeCtx({ cfg, accountId: "secondary" });
+    const task = startIMessageGatewayAccount(configured.ctx);
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(monitorMock).toHaveBeenCalledTimes(1);
+      expect(configured.statusEvents).toContainEqual(
+        expect.objectContaining({ lifecycle: "starting", accountId: "secondary" }),
+      );
+    } finally {
+      configured.abort();
+      await task;
+    }
+  });
+
+  it("starts independent monitors for distinct auto-detected remote wrappers named imsg", async () => {
+    monitorMock.mockClear();
+    monitorMock.mockResolvedValue(undefined);
+    const cfg = {
+      channels: {
+        imessage: {
+          accounts: {
+            primary: {
+              enabled: true,
+              cliPath: "/opt/host-a/imsg",
+              dbPath: "/Users/bot/Library/Messages/chat.db",
+            },
+            secondary: {
+              enabled: true,
+              cliPath: "/opt/host-b/imsg",
+              dbPath: "/Users/bot/Library/Messages/chat.db",
+            },
+          },
+        },
+      },
+    } as never;
+    const first = makeCtx({ cfg, accountId: "primary" });
+    const second = makeCtx({ cfg, accountId: "secondary" });
+
+    await startIMessageGatewayAccount(first.ctx);
+    const secondTask = startIMessageGatewayAccount(second.ctx);
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(monitorMock).toHaveBeenCalledTimes(2);
+      expect(second.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(false);
+    } finally {
+      second.abort();
+      await secondTask;
+    }
   });
 
   it("starts monitorIMessageProvider when an account has no duplicate sibling", async () => {

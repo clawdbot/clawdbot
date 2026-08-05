@@ -23,6 +23,7 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "billing",
   "server_error",
   "timeout",
+  "tls_certificate",
   "model_not_found",
   "session_expired",
   "context_overflow",

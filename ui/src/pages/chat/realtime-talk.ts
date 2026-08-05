@@ -20,7 +20,6 @@ import type {
   RealtimeTalkWebRtcSdpSessionResult,
 } from "./realtime-talk-shared.ts";
 import {
-  CLIENT_VOICE_TRANSCRIPT_DRAIN_TIMEOUT_MS,
   type ClientVoiceSessionOwner,
   type DetachedVoiceSession,
   reserveClientVoiceSessionOwner,
@@ -646,19 +645,17 @@ export class RealtimeTalkSession {
       detached.owner?.release();
       return;
     }
-    const drainTimer = setTimeout(
-      () => detached.owner?.abort(),
-      CLIENT_VOICE_TRANSCRIPT_DRAIN_TIMEOUT_MS,
-    );
+    const owner = detached.owner!;
+    owner.beginDrain();
     void detached.transcriptQueue
       .flush()
       .then(async () => {
         let lastError: unknown;
         for (const delayMs of [0, 500, 2_000]) {
           if (delayMs > 0) {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, delayMs);
-            });
+            await waitForTranscriptRetry(delayMs, owner.closeSignal);
+          } else if (owner.closeSignal.aborted) {
+            throw transcriptPersistenceAbortError();
           }
           try {
             await this.client.request(
@@ -667,16 +664,25 @@ export class RealtimeTalkSession {
                 sessionKey: this.sessionKey,
                 voiceSessionId: detached.voiceSessionId,
               },
-              { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+              {
+                signal: owner.closeSignal,
+                timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+              },
             );
             return;
           } catch (error) {
+            if (owner.closeSignal.aborted) {
+              throw transcriptPersistenceAbortError();
+            }
             lastError = error;
           }
         }
         throw transcriptWriteError(lastError, "Realtime Talk voice session close failed");
       })
       .catch((error: unknown) => {
+        if (owner.closeSignal.aborted) {
+          return;
+        }
         console.warn("Realtime Talk voice session close failed", error);
         // Suppress if a newer transport has started: closing the old call is its own
         // teardown and must not push the active replacement call into an error state.
@@ -684,10 +690,7 @@ export class RealtimeTalkSession {
           this.callbacks.onStatus?.("error", "Realtime Talk voice session close failed");
         }
       })
-      .finally(() => {
-        clearTimeout(drainTimer);
-        detached.owner?.release();
-      });
+      .finally(owner.release);
   }
 
   async setVideoEnabled(enabled: boolean): Promise<void> {

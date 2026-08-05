@@ -1004,6 +1004,33 @@ describe("cron cli", () => {
     expect(stdoutText()).toContain('"id": "job-1"');
   });
 
+  it.each([
+    {
+      name: "get",
+      args: ["cron", "get", "job-1", "--json"],
+      method: "cron.get",
+      params: { id: "job-1" },
+    },
+    {
+      name: "runs",
+      args: ["cron", "runs", "--id", "job-1", "--json"],
+      method: "cron.runs",
+      params: { id: "job-1", limit: 50 },
+    },
+  ])(
+    "accepts --json for cron $name and prints one JSON object",
+    async ({ args, method, params }) => {
+      await runCronCommand(args);
+
+      const gatewayCall = callGatewayFromCli.mock.calls.find(
+        ([calledMethod]) => calledMethod === method,
+      );
+      expect(gatewayCall?.[2]).toEqual(params);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+      expect(() => JSON.parse(stdoutText())).not.toThrow();
+    },
+  );
+
   it("rejects partial cron runs limit", async () => {
     await expectCronCommandExit(["cron", "runs", "--id", "job-1", "--limit", "10x"]);
     expectRuntimeErrorContaining("Invalid --limit");
@@ -1663,6 +1690,63 @@ describe("cron cli", () => {
     expect(params.schedule.at).toBe("2026-03-23T22:00:00.000Z");
   });
 
+  it.each([
+    ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00.000", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-02-28T24:00:00", "America/New_York", "2027-03-01T05:00:00.000Z"],
+    ["2027-02-28T24:00:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-03-13T24:00:00", "America/New_York", "2027-03-14T05:00:00.000Z"],
+    ["2027-03-14T24:00:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-14t24:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-27T24:00:00", "Europe/Oslo", "2027-03-27T23:00:00.000Z"],
+    ["2027-03-28T24:00:00", "Europe/Oslo", "2027-03-28T22:00:00.000Z"],
+  ])(
+    "rolls local end-of-day --at %s into the next day in %s on cron add",
+    async (at, tz, expected) => {
+      const params = await runCronAddAndGetParams([
+        "--name",
+        "tz-at-end-of-day",
+        "--at",
+        at,
+        "--tz",
+        tz,
+        "--session",
+        "isolated",
+        "--message",
+        "test",
+      ]);
+
+      expect(params.schedule).toEqual({ kind: "at", at: expected });
+    },
+  );
+
+  it.each([
+    ["2027-02-28T24:01:00", "UTC"],
+    ["2027-02-28t24:01", "UTC"],
+    ["2027-02-28T24:00:00.001", "America/New_York"],
+    ["2027-02-28t24:00:00.001", "America/New_York"],
+    ["2027-09-04T24:00:00", "America/Santiago"],
+  ])(
+    "rejects invalid or nonexistent local end-of-day --at %s in %s on cron add",
+    async (at, tz) => {
+      await expectCronCommandExit([
+        "cron",
+        "add",
+        "--name",
+        "invalid-tz-at-end-of-day",
+        "--at",
+        at,
+        "--tz",
+        tz,
+        "--session",
+        "isolated",
+        "--message",
+        "test",
+      ]);
+    },
+  );
+
   it("does not apply --tz when --at already has an offset", async () => {
     await runCronCommand([
       "cron",
@@ -1804,6 +1888,39 @@ describe("cron cli", () => {
     });
     expect(patch?.patch).not.toHaveProperty("deleteAfterRun");
   });
+
+  it.each([
+    ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00.000", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-02-28T24:00:00", "America/New_York", "2027-03-01T05:00:00.000Z"],
+    ["2027-02-28T24:00:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-03-13T24:00:00", "America/New_York", "2027-03-14T05:00:00.000Z"],
+    ["2027-03-14T24:00:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-14t24:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-27T24:00:00", "Europe/Oslo", "2027-03-27T23:00:00.000Z"],
+    ["2027-03-28T24:00:00", "Europe/Oslo", "2027-03-28T22:00:00.000Z"],
+  ])(
+    "rolls local end-of-day --at %s into the next day in %s on cron edit",
+    async (at, tz, expected) => {
+      const patch = await runCronEditAndGetPatch(["--at", at, "--tz", tz]);
+
+      expect(patch.patch?.schedule).toEqual({ kind: "at", at: expected });
+    },
+  );
+
+  it.each([
+    ["2027-02-28T24:01:00", "UTC"],
+    ["2027-02-28t24:01", "UTC"],
+    ["2027-02-28T24:00:00.001", "America/New_York"],
+    ["2027-02-28t24:00:00.001", "America/New_York"],
+    ["2027-09-04T24:00:00", "America/Santiago"],
+  ])(
+    "rejects invalid or nonexistent local end-of-day --at %s in %s on cron edit",
+    async (at, tz) => {
+      await expectCronCommandExit(["cron", "edit", "job-1", "--at", at, "--tz", tz]);
+    },
+  );
 
   it("preserves an explicit keep policy when converting to --at", async () => {
     const patch = await runCronEditAndGetPatch([

@@ -293,9 +293,11 @@ export type DiagnosticsOtelConfig = {
   tracesEndpoint?: string;
   metricsEndpoint?: string;
   logsEndpoint?: string;
-  protocol?: "http/protobuf" | "grpc";
+  protocol?: "http/protobuf";
   headers?: Record<string, string>;
   serviceName?: string;
+  /** Replacement prefix for OpenClaw-owned metric names. Empty removes the prefix; defaults to "openclaw.". */
+  metricNamePrefix?: string;
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
@@ -322,6 +324,11 @@ export type AuditConfig = {
    * records stay readable until they expire.
    */
   enabled?: boolean;
+  /**
+   * Retain bounded execution-identity attribution for exact-run inspection.
+   * Default: false. Requires the audit ledger and takes effect after Gateway restart.
+   */
+  executionIdentity?: boolean;
   /**
    * Record content-free message lifecycle metadata. `direct` records only
    * known direct conversations; `all` also records group, channel, and

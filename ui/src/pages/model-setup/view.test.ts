@@ -85,9 +85,9 @@ const detected: SystemAgentSetupDetectResult = {
     {
       id: "llama-cpp",
       brandId: "llama-cpp",
-      label: "Local model (llama.cpp)",
-      hint: "Download and run a private GGUF model",
-      actionLabel: "Review download",
+      label: "llama.cpp",
+      hint: "Run one private GGUF model directly inside this Gateway",
+      actionLabel: "Set up model",
     },
   ],
   recommendedInstalls: [
@@ -159,7 +159,11 @@ function text(container: Element): string {
   return container.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
+function wizardStep(
+  step: WizardStep,
+  value: unknown = step.initialValue,
+  wizardMode: ModelSetupViewProps["wizardMode"] = "auth",
+): HTMLDivElement {
   return mount(
     props({
       wizard: {
@@ -169,6 +173,7 @@ function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLD
         busy: false,
         validationError: null,
       },
+      wizardMode,
       wizardValue: value,
     }),
   );
@@ -502,7 +507,7 @@ describe("renderModelSetup", () => {
       '[data-prepare-choice="llama-cpp"] button',
     );
     expect(ollama?.textContent).toContain("Choose connection");
-    expect(llamaCpp?.textContent).toContain("Review download");
+    expect(llamaCpp?.textContent).toContain("Set up model");
     expect(
       container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
         ?.textContent,
@@ -958,12 +963,12 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Expires in 10 minutes");
   });
 
-  it("copies device codes through the plain-HTTP clipboard fallback", async () => {
-    vi.stubGlobal("navigator", {});
-    let copiedText: string | undefined;
+  it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+    vi.stubGlobal("navigator", copied ? {} : { clipboard: { writeText } });
     const execCommand = vi.fn().mockImplementation(() => {
-      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
-      return true;
+      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("ABCD-EFGH");
+      return copied;
     });
     (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
     const container = wizardStep({
@@ -972,14 +977,14 @@ describe("renderModelSetup", () => {
       deviceCode: { code: "ABCD-EFGH" },
     });
 
-    const copy = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Copy",
-    );
-    expect(copy).toBeDefined();
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__device-code button");
     copy?.click();
 
-    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
-    expect(copiedText).toBe("ABCD-EFGH");
+    const feedback = copied ? "Copied!" : "Copy failed";
+    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
+    expect(copy?.getAttribute("aria-label")).toBe(feedback);
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(writeText).toHaveBeenCalledTimes(copied ? 0 : 1);
     expect(document.querySelector("textarea")).toBeNull();
   });
 
@@ -1027,6 +1032,15 @@ describe("renderModelSetup", () => {
     const confirm = wizardStep({ id: "confirm", type: "confirm", message: "Continue?" });
     expect(text(confirm)).toContain("Yes");
     expect(text(confirm)).toContain("No");
+
+    const prepareConfirm = wizardStep(
+      { id: "confirm", type: "confirm", message: "Set up this model?" },
+      undefined,
+      "prepare",
+    );
+    expect(text(prepareConfirm)).toContain("Continue");
+    expect(text(prepareConfirm)).toContain("No");
+    expect(text(prepareConfirm)).not.toContain("Yes");
   });
 
   it.each(["multiselect", "action"] as const)("renders the %s wizard step", (type) => {

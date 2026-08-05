@@ -1,8 +1,21 @@
 // Qwen provider module implements model/runtime integration.
 import { buildDashscopeVideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
-import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
+import { isQwenCodingPlanBaseUrl } from "./models.js";
 
 const DEFAULT_QWEN_VIDEO_BASE_URL = "https://dashscope-intl.aliyuncs.com";
+
+function isQwenVideoEndpointSupported(baseUrl: string | undefined): boolean {
+  if (isQwenCodingPlanBaseUrl(baseUrl)) {
+    return false;
+  }
+  try {
+    const hostname = new URL(baseUrl ?? DEFAULT_QWEN_VIDEO_BASE_URL).hostname;
+    return !/^token-plan\..+\.maas\.aliyuncs\.com\.?$/iu.test(hostname);
+  } catch {
+    return true;
+  }
+}
+
 function resolveQwenVideoBaseUrl(configuredBaseUrl: string | undefined): string {
   const direct = configuredBaseUrl?.trim();
   if (!direct) {
@@ -16,24 +29,13 @@ function resolveQwenVideoBaseUrl(configuredBaseUrl: string | undefined): string 
 }
 
 function resolveDashscopeAigcApiBaseUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    if (
-      url.hostname === "coding-intl.dashscope.aliyuncs.com" ||
-      url.hostname === "coding.dashscope.aliyuncs.com" ||
-      url.hostname === "dashscope-intl.aliyuncs.com" ||
-      url.hostname === "dashscope.aliyuncs.com"
-    ) {
-      return url.origin;
-    }
-  } catch {
-    // Fall through to legacy prefix handling for non-URL strings.
-  }
-  if (baseUrl.startsWith(QWEN_STANDARD_CN_BASE_URL)) {
-    return "https://dashscope.aliyuncs.com";
-  }
-  if (baseUrl.startsWith(QWEN_STANDARD_GLOBAL_BASE_URL)) {
-    return DEFAULT_QWEN_VIDEO_BASE_URL;
+  const url = new URL(baseUrl);
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/u, "");
+  if (
+    /(?:^|\.)dashscope(?:-[^.]+)?\.aliyuncs\.com$/u.test(hostname) ||
+    hostname.endsWith(".maas.aliyuncs.com")
+  ) {
+    return url.origin;
   }
   return baseUrl.replace(/\/+$/u, "");
 }
@@ -46,4 +48,11 @@ export const qwenVideoGenerationProvider = buildDashscopeVideoGenerationProvider
   defaultBaseUrl: DEFAULT_QWEN_VIDEO_BASE_URL,
   resolveRequestBaseUrl: resolveQwenVideoBaseUrl,
   resolveAigcBaseUrl: resolveDashscopeAigcApiBaseUrl,
+  credentialPolicy: {
+    // Coding/Token Plan subscriptions use the same provider id but do not include Wan models.
+    acceptsApiKey: (apiKey) => !apiKey.trim().startsWith("sk-sp-"),
+    acceptsBaseUrl: isQwenVideoEndpointSupported,
+    unsupportedMessage:
+      "Qwen Wan video generation requires a Standard DashScope endpoint and a same-region Standard API key; Coding Plan and Token Plan credentials are not supported.",
+  },
 });

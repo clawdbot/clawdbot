@@ -36,6 +36,8 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
+import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
   processResponsesStream,
   ResponsesStreamFailure,
@@ -137,6 +139,10 @@ interface RequestBody {
   prompt_cache_key?: string;
   [key: string]: unknown;
 }
+
+type ObserveResponsesPromptEgress = NonNullable<
+  ReturnType<typeof createResponsesPromptEgressObserver>
+>;
 
 // ============================================================================
 // Retry Helpers
@@ -284,6 +290,10 @@ export const streamOpenAICodexResponses: StreamFunction<
       if (nextBody !== undefined) {
         body = nextBody as RequestBody;
       }
+      const observePromptEgress = createResponsesPromptEgressObserver(
+        options,
+        context.systemPrompt,
+      );
       // NOTE: when options.sessionId is absent, this falls back to a fresh random id
       // per request, which forfeits session-affinity routing on the WS transport (the
       // backend routes by session_id/x-client-request-id). Left as-is for this fix;
@@ -324,6 +334,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               },
               requestOptions,
               firstEventAbort.abort,
+              observePromptEgress,
             );
 
             if (activeSignal?.aborted) {
@@ -395,6 +406,10 @@ export const streamOpenAICodexResponses: StreamFunction<
         let attemptResponse: Response;
         let errorText: string;
         try {
+          observePromptEgress?.(body, {
+            egress: "native-codex-sse",
+            payloadVariant: "initial",
+          });
           attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
             method: "POST",
             headers: sseHeaders,
@@ -516,11 +531,12 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
-  const base = buildBaseOptions(model, options, apiKey);
-  return streamOpenAICodexResponses(model, context, {
-    ...base,
+  const resolvedOptions = {
+    ...buildBaseOptions(model, options, apiKey),
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
-  } satisfies OpenAICodexResponsesOptions);
+  } satisfies OpenAICodexResponsesOptions;
+  responsesPromptObserver.copy(options, resolvedOptions);
+  return streamOpenAICodexResponses(model, context, resolvedOptions);
 };
 
 // ============================================================================
@@ -1254,25 +1270,6 @@ function extractWebSocketCloseError(event: unknown): Error {
   return new Error("WebSocket closed");
 }
 
-async function decodeWebSocketData(data: unknown): Promise<string | null> {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (data instanceof ArrayBuffer) {
-    return new TextDecoder().decode(new Uint8Array(data));
-  }
-  if (ArrayBuffer.isView(data)) {
-    const view = data;
-    return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-  }
-  if (data && typeof data === "object" && "arrayBuffer" in data) {
-    const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
-    const arrayBuffer = await blobLike.arrayBuffer();
-    return new TextDecoder().decode(new Uint8Array(arrayBuffer));
-  }
-  return null;
-}
-
 async function* parseWebSocket(
   socket: WebSocketLike,
   signal?: AbortSignal,
@@ -1293,40 +1290,42 @@ async function* parseWebSocket(
   };
 
   const onMessage: WebSocketListener = (event) => {
-    void (async () => {
-      let text: string | null = null;
-      try {
-        if (!event || typeof event !== "object" || !("data" in event)) {
-          return;
-        }
-        text = await decodeWebSocketData((event as { data?: unknown }).data);
-        if (!text) {
-          return;
-        }
-        const parsed = JSON.parse(text) as Record<string, unknown>;
-        const type = typeof parsed.type === "string" ? parsed.type : "";
-        if (
-          type === "response.completed" ||
-          type === "response.done" ||
-          type === "response.incomplete"
-        ) {
-          sawCompletion = true;
-          done = true;
-        }
-        queue.push(parsed);
-        wake();
-      } catch (cause) {
-        failed = new CodexProtocolError(
-          `Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`,
-          {
-            cause,
-            payload: text,
-          },
-        );
+    const data =
+      event && typeof event === "object" && "data" in event
+        ? (event as { data?: unknown }).data
+        : undefined;
+    if (typeof data !== "string") {
+      // Codex response events are text frames. Keep malformed transport failures
+      // on the shared marker so callers receive the canonical retry guidance.
+      failed = new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+        payload: data,
+      });
+      done = true;
+      wake();
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(data) as Record<string, unknown>;
+      const type = typeof parsed.type === "string" ? parsed.type : "";
+      if (
+        type === "response.completed" ||
+        type === "response.done" ||
+        type === "response.incomplete"
+      ) {
+        sawCompletion = true;
         done = true;
-        wake();
       }
-    })();
+      queue.push(parsed);
+      wake();
+    } catch (cause) {
+      failed = new CodexProtocolError(`Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`, {
+        cause,
+        payload: data,
+      });
+      done = true;
+      wake();
+    }
   };
 
   const onError: WebSocketListener = (event) => {
@@ -1478,6 +1477,7 @@ async function processWebSocketStream(
   onStart: () => void,
   options?: OpenAICodexResponsesOptions,
   abortFirstEventStream?: (reason: Error) => void,
+  observePromptEgress?: ObserveResponsesPromptEgress,
 ): Promise<void> {
   const { socket, entry, release } = await acquireWebSocket(
     url,
@@ -1497,6 +1497,10 @@ async function processWebSocketStream(
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);
     }
+    observePromptEgress?.(requestBody, {
+      egress: "native-codex-websocket",
+      payloadVariant: "initial",
+    });
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(
       startWebSocketOutputOnFirstEvent(

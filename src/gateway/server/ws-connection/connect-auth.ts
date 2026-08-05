@@ -18,6 +18,7 @@ import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-cont
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import { admitGatewayConnect, resolveTrustedProxyControlUiScopes } from "./connect-admission.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
+import { isControlUiOperatorBootstrapProfile } from "./connect-device-metadata.js";
 import { verifyGatewayConnectDeviceProof } from "./connect-device-proof.js";
 import {
   evaluateMissingDeviceIdentity,
@@ -411,15 +412,35 @@ export async function authenticateGatewayConnect(
     return undefined;
   }
   advanceHandshakePhase("auth_validated");
+  const issuedBootstrapProfile =
+    authMethod === "bootstrap-token" && bootstrapTokenCandidate
+      ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
+      : null;
   const usesSharedGatewayAuth =
     authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
   const sharedGatewaySessionGeneration = usesSharedGatewayAuth
     ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
     : undefined;
+  // A host-issued Control UI handoff creates a durable browser token. Bind both
+  // the bootstrap session and that token to the current shared-auth generation.
+  const controlUiBootstrapSharedGatewaySessionGeneration =
+    authMethod === "bootstrap-token" &&
+    isControlUi &&
+    role === "operator" &&
+    isControlUiOperatorBootstrapProfile({
+      profile: issuedBootstrapProfile,
+      requestedScopes: scopes,
+    })
+      ? getRequiredSharedGatewaySessionGeneration?.()
+      : undefined;
   const sessionUsesSharedGatewayAuth =
-    usesSharedGatewayAuth || deviceTokenSharedGatewaySessionGeneration !== undefined;
+    usesSharedGatewayAuth ||
+    deviceTokenSharedGatewaySessionGeneration !== undefined ||
+    controlUiBootstrapSharedGatewaySessionGeneration !== undefined;
   const sessionSharedGatewaySessionGeneration =
-    sharedGatewaySessionGeneration ?? deviceTokenSharedGatewaySessionGeneration;
+    sharedGatewaySessionGeneration ??
+    deviceTokenSharedGatewaySessionGeneration ??
+    controlUiBootstrapSharedGatewaySessionGeneration;
   if (sessionUsesSharedGatewayAuth) {
     const requiredSharedGatewaySessionGeneration = getRequiredSharedGatewaySessionGeneration?.();
     if (
@@ -433,10 +454,6 @@ export async function authenticateGatewayConnect(
       return undefined;
     }
   }
-  const issuedBootstrapProfile =
-    authMethod === "bootstrap-token" && bootstrapTokenCandidate
-      ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
-      : null;
   const handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
   const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
     isControlUi,

@@ -366,7 +366,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
 
           // Extract-before-delete is the retention invariant. Admission is fenced across archive
           // creation, then rechecked inside the write transaction before any rows are reclaimed.
-          const materialized = materializeSqliteSessionStateDeletePlans([plan]);
+          const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
           let deleted = false;
           let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
             [];

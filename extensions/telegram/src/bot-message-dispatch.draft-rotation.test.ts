@@ -104,6 +104,41 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("keeps partial text lazy until the draft stream materializes it", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let resolveText: (() => string | undefined) | undefined;
+    answerDraftStream.updateLazy.mockImplementation((resolve) => {
+      resolveText = resolve;
+    });
+    let textReads = 0;
+    const lazyPayload = Object.defineProperty({}, "text", {
+      enumerable: true,
+      get: () => {
+        textReads += 1;
+        return "lazy preview";
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.(lazyPayload);
+        expect(textReads).toBe(0);
+        expect(answerDraftStream.updateLazy).toHaveBeenCalledTimes(1);
+        expect(resolveText?.()).toBe("lazy preview");
+        expect(textReads).toBe(1);
+        await dispatcherOptions.deliver({ text: "lazy preview" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("replaces non-prefix partial snapshots instead of appending them", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(

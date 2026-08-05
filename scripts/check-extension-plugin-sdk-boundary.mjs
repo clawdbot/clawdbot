@@ -15,8 +15,9 @@ import {
   resolveRepoSpecifier,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
-import { resolveRepoRoot, runAsScript } from "./lib/ts-guard-utils.mjs";
+import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 // Generated bundles are validated at their build owner; they are not bounded authored source.

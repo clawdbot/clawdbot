@@ -294,8 +294,9 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         t("wizard.synologyChat.incomingWebhookHelpUseUrl"),
         t("wizard.synologyChat.incomingWebhookHelpReplies"),
       ],
+      sensitive: true,
       currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).incomingUrl?.trim(),
-      keepPrompt: (value) => t("wizard.synologyChat.incomingWebhookKeep", { value }),
+      keepPrompt: t("wizard.synologyChat.incomingWebhookKeep"),
       validate: ({ value }) => validateWebhookUrl(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({

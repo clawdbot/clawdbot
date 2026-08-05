@@ -398,11 +398,11 @@ config to Codex.
 
 Commands:
 
-- `openclaw mcp list`
-- `openclaw mcp show [name]`
-- `openclaw mcp status [--verbose]`
-- `openclaw mcp doctor [name] [--probe]`
-- `openclaw mcp probe [name]`
+- `openclaw mcp list [--json]`
+- `openclaw mcp show [name] [--json]`
+- `openclaw mcp status [--verbose] [--json]`
+- `openclaw mcp doctor [name] [--probe] [--json]`
+- `openclaw mcp probe [name] [--json]`
 - `openclaw mcp add <name> [flags]`
 - `openclaw mcp set <name> <json>`
 - `openclaw mcp configure <name> [flags]`

@@ -2,6 +2,7 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
+  createAccountStatusSink,
   createChannelMessageAdapterFromOutbound,
   createRuntimeOutboundDelegates,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -1251,7 +1252,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             accountId: ctx.accountId,
           });
           const port = account.config.webhook?.port ?? 3978;
-          ctx.setStatus({ accountId: ctx.accountId, port });
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
+          statusSink({ port });
           ctx.log?.info(`starting provider account ${ctx.accountId} (port ${port})`);
           return monitorMSTeamsProvider({
             cfg: ctx.cfg,
@@ -1259,6 +1264,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             msteamsCfg: account.config,
             runtime: ctx.runtime,
             abortSignal: ctx.abortSignal,
+            statusSink,
           });
         },
       },

@@ -256,6 +256,21 @@ openclaw-custodian-page {
   margin: -12px 16px 14px 46px;
 }
 
+.custodian__wizard-step {
+  display: grid;
+  gap: 12px;
+  margin: -12px 16px 14px 46px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.custodian__wizard-title {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
 .custodian__thinking {
   display: flex;
   flex-direction: row;

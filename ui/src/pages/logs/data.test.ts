@@ -21,12 +21,12 @@ describe("parseLogLine", () => {
       time: "2026-08-01T15:00:00.000Z",
     },
     {
-      name: "preserves positional-only legacy records",
+      name: "joins every numeric segment for positional-only legacy records",
       record: {
         "0": '{"subsystem":"gateway"}',
         "1": "legacy request failed",
       },
-      message: "legacy request failed",
+      message: '{"subsystem":"gateway"} legacy request failed',
       subsystem: "gateway",
       level: null,
       time: null,
@@ -40,7 +40,7 @@ describe("parseLogLine", () => {
         message: "request failed retry later",
       },
       message: "request failed retry later",
-      subsystem: "worker",
+      subsystem: null,
       level: null,
       time: null,
     },
@@ -56,9 +56,8 @@ describe("parseLogLine", () => {
   it("strips ANSI escape sequences from rendered log fields", () => {
     const parsed = parseLogLine(
       JSON.stringify({
-        "0": "\u001b[36mgateway\u001b[39m",
-        "1": "\u001b[31mfailed\u001b[39m to start",
-        _meta: { logLevelName: "error" },
+        message: "\u001b[31mfailed\u001b[39m to start",
+        _meta: { name: '{"subsystem":"gateway"}', logLevelName: "error" },
       }),
     );
 

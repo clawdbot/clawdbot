@@ -9,7 +9,7 @@ import {
   type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
 import { upsertPresence } from "../infra/system-presence.js";
-import { stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
+import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
@@ -297,8 +297,16 @@ export async function prepareGatewayLifecycle(params: {
     clearTimeout(postReadyState.maintenanceTimer);
     postReadyState.maintenanceTimer = null;
   };
+  let outboundDeliveryRecoveryStopPromise: Promise<void> | null = null;
+  const stopOutboundDeliveryRecoveryForClose = () => {
+    outboundDeliveryRecoveryStopPromise ??= runtimeState.stopOutboundDeliveryRecovery();
+    return outboundDeliveryRecoveryStopPromise;
+  };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    // Fence outbound recovery before any awaited close step can tear down the
+    // plugin/channel runtime it needs for reconciliation.
+    void stopOutboundDeliveryRecoveryForClose();
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();
@@ -317,9 +325,12 @@ export async function prepareGatewayLifecycle(params: {
   const beginClosePrelude = async () => {
     clearSessionSuspensionTimers();
     markClosePreludeStarted();
-    // Join the last reload before any owner it can publish into is torn down.
-    // The close handler re-awaits this same promise to retain warning reporting.
-    await stopConfigReloaderForClose().catch(() => {});
+    // Both owners are fenced synchronously above. Join them before any runtime
+    // they can publish into is torn down.
+    await Promise.all([
+      stopOutboundDeliveryRecoveryForClose(),
+      stopConfigReloaderForClose().catch(() => {}),
+    ]);
   };
   const runClosePrelude = async () => {
     await beginClosePrelude();
@@ -455,6 +466,30 @@ export async function prepareGatewayLifecycle(params: {
       clearFallbackGatewayContextForServer();
     }
   };
+
+  if (diagnosticsEnabled) {
+    // Gateway lifecycle owns both this existing heartbeat timer and the monitor
+    // it samples, so startup failure and normal close tear them down together.
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+      sampleLiveness: () => {
+        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
+        if (!sample || sample.degradedSinceMs == null) {
+          return null;
+        }
+        return {
+          reasons: sample.reasons,
+          intervalMs: sample.intervalMs,
+          degradedSinceMs: sample.degradedSinceMs,
+          eventLoopDelayP99Ms: sample.delayP99Ms,
+          eventLoopDelayMaxMs: sample.delayMaxMs,
+          eventLoopUtilization: sample.utilization,
+          cpuCoreRatio: sample.cpuCoreRatio,
+        };
+      },
+    });
+  }
 
   return {
     ...runtime,

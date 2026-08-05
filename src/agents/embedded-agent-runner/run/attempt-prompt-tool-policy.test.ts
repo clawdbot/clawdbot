@@ -62,6 +62,7 @@ describe("applyPromptBuildToolsAllow", () => {
     const catalogRef: ToolSearchCatalogRef = {
       current: {
         entries: [catalogEntry("read"), catalogEntry("write")],
+        counterScope: "scope-1",
         searchCount: 0,
         describeCount: 0,
         callCount: 0,
@@ -126,6 +127,7 @@ describe("applyPromptBuildToolsAllow", () => {
     const catalogRef: ToolSearchCatalogRef = {
       current: {
         entries: [catalogEntry("read"), catalogEntry("write")],
+        counterScope: "scope-1",
         searchCount: 0,
         describeCount: 0,
         callCount: 0,
@@ -180,6 +182,7 @@ describe("applyPromptBuildToolsAllow", () => {
     const catalogRef: ToolSearchCatalogRef = {
       current: {
         entries: [catalogEntry(pluginTool.name, pluginTool)],
+        counterScope: "scope-1",
         searchCount: 0,
         describeCount: 0,
         callCount: 0,
@@ -207,6 +210,7 @@ describe("applyPromptBuildToolsAllow", () => {
     const catalogRef: ToolSearchCatalogRef = {
       current: {
         entries: [catalogEntry("read"), catalogEntry("write")],
+        counterScope: "scope-1",
         searchCount: 2,
         describeCount: 1,
         callCount: 3,
@@ -225,15 +229,18 @@ describe("applyPromptBuildToolsAllow", () => {
 
     applyPromptBuildToolsAllow({ ...params, toolsAllow: ["read"] });
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["read"]);
+    expect(catalogRef.current?.counterScope).toBe("scope-1");
 
     const writeOnly = applyPromptBuildToolsAllow({ ...params, toolsAllow: ["write"] });
     expect(writeOnly.tools).toEqual([{ name: "write" }]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["write"]);
+    expect(catalogRef.current?.counterScope).toBe("scope-1");
 
     const restored = applyPromptBuildToolsAllow(params);
     expect(restored.tools).toEqual([{ name: "read" }, { name: "write" }]);
     expect(catalogRef.current).toMatchObject({
       entries: baseline.catalogEntries,
+      counterScope: "scope-1",
       searchCount: 2,
       describeCount: 1,
       callCount: 3,

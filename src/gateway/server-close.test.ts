@@ -12,6 +12,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
@@ -234,11 +235,17 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("clears the process-root plugin registry after teardown", async () => {
+    const lifecycleSlot = resolveGlobalMap<string, number>(
+      Symbol.for("openclaw.test.gatewayCloseLifecycleSlot"),
+      (state) => state.clear(),
+    );
+    lifecycleSlot.set("stale", 1);
     setActivePluginRegistry(createEmptyPluginRegistry());
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 
     await close({ reason: "test" });
 
+    expect(lifecycleSlot.size).toBe(0);
     expect(getActivePluginRegistry()).toBeNull();
   });
 

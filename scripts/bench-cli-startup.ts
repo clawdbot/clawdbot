@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type CommandCase = {
   id: string;
@@ -529,11 +528,33 @@ function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void 
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
-  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
+  return parseIntegerOption(raw, fallback, label, 1);
 }
 
 function parseNonNegativeInt(raw: string | undefined, fallback: number, label = "value"): number {
-  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
+  return parseIntegerOption(raw, fallback, label, 0);
+}
+
+// This runner is checked out from trusted main beside frozen candidates, whose
+// root dependencies need not include current workspace packages.
+function parseIntegerOption(
+  raw: string | undefined,
+  fallback: number,
+  label: string,
+  min: number,
+): number {
+  const value = raw?.trim();
+  if (!value) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(value)) {
+    throw new Error(`${label} must be an integer >= ${min}; got ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min) {
+    throw new Error(`${label} must be an integer >= ${min}; got ${JSON.stringify(raw)}`);
+  }
+  return parsed;
 }
 
 function parseGatewayPortEnv(raw: string | undefined): number {

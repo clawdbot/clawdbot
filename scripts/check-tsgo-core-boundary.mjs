@@ -2,11 +2,10 @@
 
 // Enforces core tsgo project boundaries and sparse-checkout safety.
 import { spawnSync } from "node:child_process";
-import path from "node:path";
 import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
-
-const repoRoot = path.resolve(import.meta.dirname, "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 
 const coreGraphs = [

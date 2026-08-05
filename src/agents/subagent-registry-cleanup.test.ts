@@ -39,7 +39,6 @@ describe("resolveDeferredCleanupDecision", () => {
       now,
       announceExpiryMs: 5 * 60_000,
       announceCompletionHardExpiryMs: 30 * 60_000,
-      maxAnnounceRetryCount: 3,
       deferDescendantDelayMs: 1_000,
       resolveAnnounceRetryDelayMs: () => 2_000,
       ...overrides,

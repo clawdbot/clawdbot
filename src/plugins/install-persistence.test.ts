@@ -17,7 +17,7 @@ import {
   runtimeLogs,
   setInstalledPluginIndexInstallRecords,
   writeConfigFile,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
   applyPluginUninstallDirectoryRemoval,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -109,8 +109,8 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(enabledConfig);
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecords,
-      "writePersistedInstalledPluginIndexInstallRecords",
+      writePersistedInstalledPluginIndexInstallRecordsWithLease,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
     );
     expect(persistedRecords.alpha).toEqual({
       source: "npm",
@@ -881,8 +881,8 @@ describe("persistPluginInstall", () => {
       'Installed plugin "needs-config" without enabling it because it requires configuration first.',
     );
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecords,
-      "writePersistedInstalledPluginIndexInstallRecords",
+      writePersistedInstalledPluginIndexInstallRecordsWithLease,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
     );
     expect(persistedRecords["needs-config"]).toMatchObject({
       source: "npm",
@@ -937,7 +937,7 @@ describe("persistPluginInstall", () => {
     ).rejects.toThrow("has invalid configured settings");
 
     expect(enablePluginInConfig).not.toHaveBeenCalled();
-    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -969,8 +969,8 @@ describe("persistPluginInstall", () => {
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecords,
-      "writePersistedInstalledPluginIndexInstallRecords",
+      writePersistedInstalledPluginIndexInstallRecordsWithLease,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
     );
     expect(persistedRecords["memory-lancedb"]).toEqual({
       source: "path",

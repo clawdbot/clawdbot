@@ -52,9 +52,15 @@ type SessionCatalogGroupsParams = {
   onFinishSectionDrag: () => void;
   viewMenuOpenCatalogId: string | null;
   creatorFilterActive: boolean;
-  onOpenViewMenu: (trigger: HTMLElement) => void;
+  onOpenViewMenu: (
+    catalogId: string,
+    trigger: HTMLElement,
+    position?: { x: number; y: number },
+  ) => void;
   onLoadMore: (catalogId: string) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
+  newSessionDisabledReason?: string;
+  sectionDragDisabledReason?: string;
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   catalogOpenTarget: "viewer" | "terminal";
   terminalAvailable: boolean;
@@ -158,14 +164,31 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       <div
         class=${sectionClass}
         data-session-section=${sectionId}
-        @dragover=${(event: DragEvent) => params.onSectionDragOver(event, sectionId)}
-        @dragleave=${(event: DragEvent) => params.onSectionDragLeave(event, sectionId)}
-        @drop=${(event: DragEvent) => params.onSectionDrop(event, sectionId)}
+        @dragover=${params.sectionDragDisabledReason
+          ? nothing
+          : (event: DragEvent) => params.onSectionDragOver(event, sectionId)}
+        @dragleave=${params.sectionDragDisabledReason
+          ? nothing
+          : (event: DragEvent) => params.onSectionDragLeave(event, sectionId)}
+        @drop=${params.sectionDragDisabledReason
+          ? nothing
+          : (event: DragEvent) => params.onSectionDrop(event, sectionId)}
       >
         ${renderSidebarSessionSectionHeader({
           sectionId,
+          disabledReason: params.sectionDragDisabledReason,
           onStartDrag: params.onStartSectionDrag,
           onFinishDrag: params.onFinishSectionDrag,
+          onContextMenu: (event) => {
+            event.preventDefault();
+            const header = event.currentTarget as HTMLElement;
+            const trigger =
+              header.querySelector<HTMLElement>("[data-session-catalog-view-menu]") ?? header;
+            params.onOpenViewMenu(catalog.id, trigger, {
+              x: event.clientX,
+              y: event.clientY,
+            });
+          },
           content: html`
             <button
               type="button"
@@ -208,7 +231,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               aria-expanded=${String(params.viewMenuOpenCatalogId === catalog.id)}
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
-                params.onOpenViewMenu(event.currentTarget as HTMLElement);
+                params.onOpenViewMenu(catalog.id, event.currentTarget as HTMLElement);
               }}
             >
               ${icons.listFilter}
@@ -217,9 +240,10 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               ? html`<button
                   type="button"
                   class="sidebar-session-group-actions sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
-                  title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
+                  title=${params.newSessionDisabledReason ??
+                  `${t("chat.runControls.newSession")} — ${catalog.label}`}
                   aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  ?disabled=${!params.connected}
+                  ?disabled=${Boolean(params.newSessionDisabledReason)}
                   @click=${() =>
                     params.onOpenNewSession?.(params.newSessionAgentId, {
                       catalogId: catalog.id,

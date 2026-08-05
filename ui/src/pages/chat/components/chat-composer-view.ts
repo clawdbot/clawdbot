@@ -115,7 +115,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? html`
         <div class="agent-chat__disabled-banner callout info callout--action" role="status">
           <span class="callout__content">${props.disabledBanner.text}</span>
-          <button type="button" class="btn btn--xs" @click=${props.disabledBanner.onAction}>
+          <button
+            type="button"
+            class="btn btn--xs"
+            ?disabled=${Boolean(props.disabledBanner.disabledReason)}
+            title=${props.disabledBanner.disabledReason ?? nothing}
+            @click=${props.disabledBanner.onAction}
+          >
             ${props.disabledBanner.actionLabel}
           </button>
           ${props.disabledBanner.kind === "composer-replacement" && showAbortableUi

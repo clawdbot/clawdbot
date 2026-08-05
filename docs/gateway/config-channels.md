@@ -91,7 +91,7 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
         quotedBot: true,
         threadParticipation: true,
       },
-      heartbeat: {
+      heartbeatVisibility: {
         showOk: false,
         showAlerts: true,
         useIndicator: true,
@@ -104,9 +104,9 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
 - `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. Override per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`; each flag resolves account -> channel -> defaults independently. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. See [Mention gating](/channels/groups#mention-gating-default) for the current producer matrix. These settings do not change outbound reply/thread modes or authorized command handling.
-- `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output (default `false`).
-- `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
-- `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output (default `true`).
+- `channels.defaults.heartbeatVisibility.showOk`: include healthy channel statuses in heartbeat output (default `false`).
+- `channels.defaults.heartbeatVisibility.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
+- `channels.defaults.heartbeatVisibility.useIndicator`: render compact indicator-style heartbeat output (default `true`).
 
 ### WhatsApp
 

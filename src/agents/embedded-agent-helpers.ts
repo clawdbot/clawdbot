@@ -3,7 +3,6 @@
 export {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers/bootstrap.js";
 export {

@@ -23,23 +23,10 @@ export function normalizeTranscriptSourceProviderId(
   return normalizeCapabilityProviderId(providerId);
 }
 
-function resolveTranscriptsSourceProviderEntries(cfg?: OpenClawConfig): TranscriptSourceProvider[] {
-  return resolvePluginCapabilityProviders({
-    key: "transcriptSourceProviders",
-    cfg,
-  });
-}
-
-function buildProviderMaps(cfg?: OpenClawConfig): {
-  canonical: Map<string, TranscriptSourceProvider>;
-  aliases: Map<string, TranscriptSourceProvider>;
-} {
-  return buildCapabilityProviderMaps(resolveTranscriptsSourceProviderEntries(cfg));
-}
-
 /** List canonical transcript source providers for a config snapshot. */
 export function listTranscriptSourceProviders(cfg?: OpenClawConfig): TranscriptSourceProvider[] {
-  return [...buildProviderMaps(cfg).canonical.values()];
+  const providers = resolvePluginCapabilityProviders({ key: "transcriptSourceProviders", cfg });
+  return [...buildCapabilityProviderMaps(providers).canonical.values()];
 }
 
 /** Resolve a transcript provider by canonical id or alias. */

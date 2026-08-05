@@ -8,6 +8,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import { defaultRuntime } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
   buildToolPluginManifest,
@@ -272,6 +273,71 @@ describe("plugin authoring commands", () => {
         packageManifest,
       }),
     ).toEqual([]);
+  });
+
+  it("emits a stable JSON validation result without human output", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-valid-json-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-valid-json",
+      pluginId: "valid-json",
+      toolName: "valid_json_echo",
+    });
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+
+    try {
+      await runPluginsValidateCommand({ root: tmpDir, entry: entryPath, json: true });
+
+      expect(writeJson).toHaveBeenCalledOnce();
+      expect(writeJson).toHaveBeenCalledWith({ valid: true, pluginId: "valid-json", errors: [] });
+      expect(log).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      writeJson.mockRestore();
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("keeps validation errors on stderr and sanitizes JSON paths", async () => {
+    const homeDir = tempDirs.make("openclaw-plugin-invalid-json-home-");
+    const rootDir = path.join(homeDir, "plugins", "invalid-json");
+    fs.mkdirSync(rootDir, { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "package.json"), "{}\n");
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`expected runtime exit ${code}`);
+    });
+
+    try {
+      await expect(
+        withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+          await runPluginsValidateCommand({ root: rootDir, json: true });
+        }),
+      ).rejects.toThrow("expected runtime exit 1");
+
+      expect(writeJson).toHaveBeenCalledWith({
+        valid: false,
+        errors: [
+          "plugin manifest not found: $OPENCLAW_HOME/plugins/invalid-json/openclaw.plugin.json",
+        ],
+      });
+      expect(error).toHaveBeenCalledWith(
+        `plugin manifest not found: ${rootDir}/openclaw.plugin.json`,
+      );
+      expect(log).not.toHaveBeenCalled();
+      expect(exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+    } finally {
+      writeJson.mockRestore();
+      log.mockRestore();
+      error.mockRestore();
+      exit.mockRestore();
+    }
   });
 
   it.each(["validate", "build --check"] as const)(

@@ -1,10 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import {
   buildExecApprovalContinuationFallbackPrompt,
   buildExecApprovalContinuationPrompt,
   formatExecApprovalContinuationSourceOutput,
   resizeExecApprovalContinuationPrompt,
 } from "./bash-tools.exec-approval-output.js";
+import {
+  appendExecTimeoutRetryGuidance,
+  renderExecOutputText,
+  renderExecUpdateText,
+} from "./bash-tools.exec-output.js";
+import { runExecProcess } from "./bash-tools.exec-runtime.js";
 
 const MAX_SOURCE_UTF16_UNITS = 256_000;
 const MARKER =
@@ -185,4 +192,99 @@ describe("resizeExecApprovalContinuationPrompt", () => {
     expect(resized.split(OUTPUT_BEGIN)).toHaveLength(2);
     expect(resized.split(OUTPUT_END)).toHaveLength(2);
   });
+});
+
+describe("exec output rendering", () => {
+  it.each(["overall-timeout", "no-output-timeout"] as const)(
+    "warns that %s may already have produced side effects",
+    (exitReason) => {
+      const text = appendExecTimeoutRetryGuidance("Command timed out.", exitReason);
+
+      expect(text).toContain("external side effects may already have completed");
+      expect(text).toContain("Verify the resulting state before retrying");
+      expect(text).toContain("Do not automatically rerun non-idempotent commands");
+      expect(text).toContain("known to be safe to retry");
+    },
+  );
+
+  it("leaves non-timeout exits unchanged", () => {
+    expect(appendExecTimeoutRetryGuidance("Command failed.", "signal")).toBe("Command failed.");
+  });
+
+  it.each([
+    { name: "undefined input", input: undefined, expected: "(no output)" },
+    { name: "empty input", input: "", expected: "(no output)" },
+    { name: "non-empty input", input: "hello", expected: "hello" },
+    { name: "whitespace-only input", input: "  ", expected: "  " },
+    { name: "multiline input", input: "line1\nline2", expected: "line1\nline2" },
+  ])("renders $name", ({ input, expected }) => {
+    expect(renderExecOutputText(input)).toBe(expected);
+  });
+
+  it.each([
+    { name: "no output", input: { warnings: [] }, expected: "(no output)" },
+    { name: "tail output", input: { tailText: "hello", warnings: [] }, expected: "hello" },
+    {
+      name: "warning without output",
+      input: { warnings: ["warning1"] },
+      expected: "warning1\n\n(no output)",
+    },
+    {
+      name: "warning and output",
+      input: { tailText: "hello", warnings: ["warning1"] },
+      expected: "warning1\n\nhello",
+    },
+    {
+      name: "multiple warnings",
+      input: { tailText: "hello", warnings: ["warning1", "warning2"] },
+      expected: "warning1\nwarning2\n\nhello",
+    },
+    {
+      name: "explicit empty warnings",
+      input: { tailText: "hello", warnings: [] },
+      expected: "hello",
+    },
+    {
+      name: "undefined tail with warnings",
+      input: { tailText: undefined, warnings: ["warning1"] },
+      expected: "warning1\n\n(no output)",
+    },
+  ])("renders updates with $name", ({ input, expected }) => {
+    expect(renderExecUpdateText(input)).toBe(expected);
+  });
+});
+
+describe("approved exec continuation producer", () => {
+  afterEach(() => {
+    resetProcessRegistryForTests();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves real multiline output beyond the legacy 16k boundary",
+    async () => {
+      const handle = await runExecProcess({
+        command: "/usr/bin/printf 'first line\\n\\tindented\\n\\n'; /usr/bin/printf '%017000d' 0",
+        workdir: process.cwd(),
+        env: {
+          HOME: process.env.HOME ?? "/tmp",
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+        },
+        usePty: false,
+        warnings: [],
+        maxOutput: 200_000,
+        pendingMaxOutput: 200_000,
+        notifyOnExit: false,
+        timeoutSec: 10,
+      });
+
+      const outcome = await handle.promise;
+      expect(outcome.status).toBe("completed");
+      const source = formatExecApprovalContinuationSourceOutput([
+        { label: "output", value: outcome.aggregated },
+      ]);
+      expect(source).toContain("first line\n\tindented\n\n");
+      expect(source.length).toBeGreaterThan(16_000);
+      expect(source).toBe(outcome.aggregated);
+    },
+  );
 });

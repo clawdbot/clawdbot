@@ -13,8 +13,7 @@ const {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } = await import("../active-turn-thread-route.js");
-const { beginDiscordInboundEventDeliveryCorrelation } =
-  await import("../inbound-event-delivery.js");
+const { discordInboundEventDelivery } = await import("../inbound-event-delivery.js");
 
 function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
   return {
@@ -471,7 +470,7 @@ describe("handleDiscordMessageAction", () => {
       for (const ok of [false, true]) {
         const markDelivered = vi.fn();
         const onThreadAdopted = vi.fn();
-        const endDelivery = beginDiscordInboundEventDeliveryCorrelation(
+        const endDelivery = discordInboundEventDelivery.begin(
           sessionKey,
           {
             outboundTo: "channel:c1",

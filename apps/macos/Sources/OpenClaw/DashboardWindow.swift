@@ -63,6 +63,7 @@ enum DashboardNativeCommand: String {
 
 struct DashboardNativeNavigation: Equatable {
     let path: String
+    var search: String?
     let fallbackURL: URL
 }
 

@@ -10,7 +10,11 @@ import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
-import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import {
+  canCallGatewayMethod,
+  isGatewayMethodAdvertised,
+  type GatewayMethodOperatorScope,
+} from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
@@ -175,13 +179,6 @@ type DreamingConfigCapability = Pick<
   "lookupSchemaPath" | "patch" | "state"
 >;
 
-function confirmDreamingAction(message: string): boolean {
-  if (typeof globalThis.confirm !== "function") {
-    return true;
-  }
-  return globalThis.confirm(message);
-}
-
 function isMemoryWikiEnabled(state: DreamingState): boolean {
   return isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
     enabledByDefault: false,
@@ -194,6 +191,24 @@ function canCallMemoryWikiMethod(state: DreamingState, method: string): boolean 
     return available;
   }
   return isMemoryWikiEnabled(state);
+}
+
+export function canCallDreamingMethod(
+  state: DreamingState,
+  method: string,
+  requiredScope: GatewayMethodOperatorScope,
+  options?: { requireAdvertisement?: boolean },
+): boolean {
+  return canCallGatewayMethod(
+    {
+      client: state.client,
+      hello: state.hello,
+      phase: state.connected ? "connected" : "offline",
+    },
+    method,
+    requiredScope,
+    options,
+  );
 }
 
 function buildDreamDiaryActionSuccessMessage(
@@ -463,18 +478,11 @@ async function runDreamDiaryAction(
     reloadDiary?: boolean;
   },
 ): Promise<boolean> {
-  if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
-    return false;
-  }
+  const client = state.client;
   if (
-    method === "doctor.memory.repairDreamingArtifacts" &&
-    !confirmDreamingAction(t("dreaming.actions.confirmRepair"))
-  ) {
-    return false;
-  }
-  if (
-    method === "doctor.memory.dedupeDreamDiary" &&
-    !confirmDreamingAction(t("dreaming.actions.confirmDedupe"))
+    !client ||
+    !canCallDreamingMethod(state, method, "operator.write") ||
+    state.dreamDiaryActionLoading
   ) {
     return false;
   }
@@ -484,7 +492,7 @@ async function runDreamDiaryAction(
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
-    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(
+    const payload = await client.request<DoctorMemoryDreamActionPayload>(
       method,
       buildSelectedAgentPayload(state),
     );
@@ -560,8 +568,13 @@ async function writeDreamingPatch(
   state: DreamingState,
   config: DreamingConfigCapability,
   patch: Record<string, unknown>,
+  canDispatch: () => boolean,
 ): Promise<boolean> {
-  if (state.dreamingModeSaving) {
+  if (
+    state.dreamingModeSaving ||
+    !canDispatch() ||
+    !canCallDreamingMethod(state, "config.patch", "operator.admin")
+  ) {
     return false;
   }
 
@@ -571,6 +584,7 @@ async function writeDreamingPatch(
     const updated = await config.patch({
       raw: patch,
       note: "Dreaming settings updated from the Dreaming tab.",
+      canDispatch,
     });
     if (!updated) {
       state.dreamingStatusError =
@@ -647,8 +661,9 @@ export async function updateDreamingEnabled(
   state: DreamingState,
   config: DreamingConfigCapability,
   enabled: boolean,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
-  if (state.dreamingModeSaving) {
+  if (state.dreamingModeSaving || !canDispatch()) {
     return false;
   }
   if (!config.state.configSnapshot?.hash) {
@@ -661,19 +676,27 @@ export async function updateDreamingEnabled(
   if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
     return false;
   }
-  const ok = await writeDreamingPatch(state, config, {
-    plugins: {
-      entries: {
-        [pluginId]: {
-          config: {
-            dreaming: {
-              enabled,
+  if (!canDispatch()) {
+    return false;
+  }
+  const ok = await writeDreamingPatch(
+    state,
+    config,
+    {
+      plugins: {
+        entries: {
+          [pluginId]: {
+            config: {
+              dreaming: {
+                enabled,
+              },
             },
           },
         },
       },
     },
-  });
+    canDispatch,
+  );
   if (ok && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,

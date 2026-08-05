@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
@@ -11,12 +12,14 @@ import {
   XAI_REALTIME_DEFAULT_SILENCE_DURATION_MS,
   XAI_REALTIME_DEFAULT_VAD_THRESHOLD,
   XAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+  XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS,
   type XaiRealtimeAudioFormatConfig,
   type XaiRealtimeEvent,
   type XaiRealtimeSessionUpdate,
   type XaiRealtimeVoiceBridgeConfig,
 } from "./realtime-voice-config.js";
-import type { XaiRealtimeVoiceConnection } from "./realtime-voice-lifecycle.js";
+
+export class XaiRealtimePlaybackMarkOverflowError extends Error {}
 
 export abstract class XaiRealtimeVoiceProtocol {
   protected readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -317,8 +320,16 @@ export abstract class XaiRealtimeVoiceProtocol {
     }
   }
 
-  protected sendMark(): void {
+  protected emitAudioWithPlaybackMark(audio: Buffer): void {
+    // Playback marks gate the next response. Dropping one would invent an
+    // acknowledgement, so fail before delivering audio that cannot be tracked.
+    if (this.markQueue.length >= XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS) {
+      throw new XaiRealtimePlaybackMarkOverflowError(
+        `xAI realtime voice playback mark limit exceeded (${XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS})`,
+      );
+    }
     const markName = `audio-${randomUUID()}`;
+    this.config.onAudio(audio);
     this.markQueue.push(markName);
     this.config.onMark?.(markName);
   }
@@ -326,6 +337,6 @@ export abstract class XaiRealtimeVoiceProtocol {
   protected abstract resetInputTranscripts(): void;
   protected abstract handleEvent(
     event: XaiRealtimeEvent,
-    connection: XaiRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
   ): void;
 }

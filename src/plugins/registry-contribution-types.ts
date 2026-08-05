@@ -3,7 +3,7 @@ import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-e
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
@@ -290,6 +290,14 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
   }): MemoryRuntimeBackendConfig;
+  /** Authorize raw hits before caller-visible use; absent runtimes must not expose session hits. */
+  authorizeSearchHits?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    requesterSessionKey: string | undefined;
+    sandboxed: boolean;
+    hits: MemorySearchResult[];
+  }): Promise<MemorySearchResult[]>;
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };

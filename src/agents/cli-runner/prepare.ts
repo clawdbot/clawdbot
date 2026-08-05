@@ -58,13 +58,14 @@ import {
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
+import {
+  loadAuthProfileStoreForRuntime,
+  resolveRuntimeAuthProfileAgentDir,
+} from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
-  buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
+  buildBootstrapBudgetState,
   buildBootstrapTruncationReportMeta,
-  analyzeBootstrapBudget,
 } from "../bootstrap-budget.js";
 import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
@@ -85,11 +86,6 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import {
-  resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
-  resolveBootstrapTotalMaxChars,
-} from "../embedded-agent-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -417,6 +413,7 @@ export async function prepareCliRunContext(
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
+  const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
@@ -835,6 +832,7 @@ export async function prepareCliRunContext(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        chatType: runtimeChatType,
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
@@ -881,20 +879,17 @@ export async function prepareCliRunContext(
   const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
     ? bootstrapFiles
     : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
-  const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles: bootstrapFilesForInjectionStats,
-      injectedFiles: contextFiles,
-    }),
+  const {
+    bootstrapAnalysis,
     bootstrapMaxChars,
+    bootstrapPromptWarning,
+    bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
-  });
-  const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
-  const bootstrapPromptWarning = buildBootstrapPromptWarning({
-    analysis: bootstrapAnalysis,
-    mode: bootstrapPromptWarningMode,
+  } = buildBootstrapBudgetState({
+    config: params.config,
+    agentId: sessionAgentId,
+    bootstrapFiles: bootstrapFilesForInjectionStats,
+    injectedFiles: contextFiles,
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
@@ -946,6 +941,15 @@ export async function prepareCliRunContext(
           modelId,
         })
       : undefined;
+  const mcpToolAuthAgentDir = mcpContextBase
+    ? resolveRuntimeAuthProfileAgentDir(agentDir)
+    : undefined;
+  const mcpToolAuth = mcpContextBase
+    ? {
+        ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
+        store: authStore ?? loadScopedAuthStore(),
+      }
+    : undefined;
   const requestedLoopbackToolsAllow =
     runtimeToolsAllowPolicy ?? params.cliToolAvailability?.openClaw;
   const mcpProjectionContext =
@@ -958,7 +962,12 @@ export async function prepareCliRunContext(
       : prepareDeps.resolveMcpLoopbackScopedTools;
   const projectedToolsBeforePromptBuild =
     (bundleMcpEnabled || shouldMaterializeRuntimePolicy) && mcpProjectionContext
-      ? resolveProjectedTools({ cfg: runtimeConfig, ...mcpProjectionContext }).tools
+      ? resolveProjectedTools({
+          cfg: runtimeConfig,
+          ...mcpProjectionContext,
+          ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
+          ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
+        }).tools
       : [];
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
     projectedToolsBeforePromptBuild,
@@ -1057,6 +1066,7 @@ export async function prepareCliRunContext(
         ? prepareDeps.mintMcpLoopbackClientGrant({
             context: mcpGrantContext,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+            ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
     const mcpClientGrantCapture =
@@ -1412,7 +1422,7 @@ export async function prepareCliRunContext(
           requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
           silentReplyPromptMode: params.silentReplyPromptMode,
           runtimeChannel,
-          runtimeChatType: params.sessionEntry?.chatType,
+          runtimeChatType,
           runtimeCapabilities,
           ownerNumbers: params.ownerNumbers,
           heartbeatPrompt,

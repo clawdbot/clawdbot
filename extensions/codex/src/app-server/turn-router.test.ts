@@ -935,16 +935,21 @@ describe("CodexAppServerTurnRouter", () => {
     expect(notificationHandler).not.toHaveBeenCalled();
     expect(requestHandler).not.toHaveBeenCalled();
 
-    let finishActiveRequest!: (result: { decision: string }) => void;
-    const activeResult = new Promise<{ decision: string }>((resolve) => {
-      finishActiveRequest = resolve;
-    });
-    let failActiveRequest!: (error: Error) => void;
-    const rejectedActiveResult = new Promise<{ decision: string }>((_resolve, reject) => {
-      failActiveRequest = reject;
-    });
-    const activeHandler = vi.fn((request: { id: number | string }) =>
-      request.id === "request-active-reject" ? rejectedActiveResult : activeResult,
+    const activeHandler = vi.fn(
+      (request: { id: number | string }, _scope: unknown, signal: AbortSignal) =>
+        new Promise<{ decision: string }>((resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              if (request.id === "request-active-reject") {
+                reject(new Error("stale request failure"));
+                return;
+              }
+              resolve({ decision: "accept" });
+            },
+            { once: true },
+          );
+        }),
     );
     const activeRoute = router.reserveThread({
       threadId: "thread-active",
@@ -952,29 +957,22 @@ describe("CodexAppServerTurnRouter", () => {
     });
     activeRoute.armTurn();
     await activeRoute.bindTurn("turn-active");
-    harness.send({
-      id: "request-active",
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "thread-active",
-        turnId: "turn-active",
-        itemId: "item-2",
-      },
-    });
-    harness.send({
-      id: "request-active-reject",
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "thread-active",
-        turnId: "turn-active",
-        itemId: "item-3",
-      },
-    });
+    for (const [id, itemId] of [
+      ["request-active", "item-2"],
+      ["request-active-reject", "item-3"],
+    ]) {
+      harness.send({
+        id,
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-active", turnId: "turn-active", itemId },
+      });
+    }
     await vi.waitFor(() => expect(activeHandler).toHaveBeenCalledTimes(2));
+    const activeSignals = () => activeHandler.mock.calls.map((call) => call[2].aborted);
+    expect(activeSignals()).toEqual([false, false]);
 
     activeRoute.release();
-    finishActiveRequest({ decision: "accept" });
-    failActiveRequest(new Error("stale request failure"));
+    expect(activeSignals()).toEqual([true, true]);
 
     expect(await waitForResponse(harness, "request-active")).toEqual({
       id: "request-active",
@@ -987,12 +985,21 @@ describe("CodexAppServerTurnRouter", () => {
 
     const closingRoute = router.reserveThread({
       threadId: "thread-close",
-      onRequest: requestHandler,
+      onRequest: activeHandler,
     });
+    closingRoute.armTurn();
+    await closingRoute.bindTurn("turn-close");
+    harness.send({
+      id: "request-close",
+      method: "item/commandExecution/requestApproval",
+      params: { threadId: "thread-close", turnId: "turn-close", itemId: "item-4" },
+    });
+    await vi.waitFor(() => expect(activeHandler).toHaveBeenCalledTimes(3));
     harness.process.stderr.write("fatal transport detail\n");
     harness.process.emit("exit", 17, "SIGTERM");
 
     await expect(closingRoute.bindTurn("turn-close")).rejects.toThrow("turn router closed");
+    expect(activeHandler.mock.calls[2]?.[2].aborted).toBe(true);
     expect(closingRoute.signal.aborted).toBe(true);
     expect(closingRoute.signal.reason).toEqual(
       new Error("codex app-server turn router closed", {

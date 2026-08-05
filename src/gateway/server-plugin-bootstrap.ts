@@ -4,6 +4,7 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -40,7 +41,7 @@ type GatewayPluginBootstrapParams = {
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
-  preferSetupRuntimeForChannelPlugins?: boolean;
+  channelPluginLoadIntent?: ChannelPluginLoadIntent;
   suppressPluginInfoLogs?: boolean;
   logDiagnostics?: boolean;
   startupTrace?: GatewayStartupTrace;
@@ -132,7 +133,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     baseMethods: params.baseMethods,
     pluginIds: params.pluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
-    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    channelPluginLoadIntent: params.channelPluginLoadIntent ?? "full",
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
     ambientEnvTriggers: params.ambientEnvTriggers,
@@ -149,12 +150,5 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
 
 /** Loads gateway plugins during normal gateway startup. */
 export function loadGatewayStartupPlugins(params: GatewayPluginBootstrapParams) {
-  return prepareGatewayPluginLoad(params);
-}
-
-/** Reloads deferred gateway plugins while preserving startup bootstrap behavior. */
-export function reloadDeferredGatewayPlugins(
-  params: Omit<GatewayPluginBootstrapParams, "preferSetupRuntimeForChannelPlugins">,
-) {
   return prepareGatewayPluginLoad(params);
 }

@@ -3,14 +3,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
-const authorizeScopedGatewayHttpRequestOrReply = vi.hoisted(() => vi.fn());
+const authorizeScopedUserProfileAvatarHttpRequestOrReply = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn());
 const getProfileAvatar = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
 
 vi.mock("./http-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-utils.js")>()),
-  authorizeScopedGatewayHttpRequestOrReply,
+  authorizeScopedUserProfileAvatarHttpRequestOrReply,
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
 vi.mock("../state/user-profiles.js", () => ({
@@ -47,11 +47,11 @@ function request(path: string, headers: Record<string, string> = {}) {
 
 describe("profile avatar HTTP endpoint", () => {
   beforeEach(() => {
-    authorizeScopedGatewayHttpRequestOrReply.mockReset();
+    authorizeScopedUserProfileAvatarHttpRequestOrReply.mockReset();
     getProfileAvatar.mockReset();
     getUserProfileListItem.mockReset();
     getRuntimeConfig.mockReset();
-    authorizeScopedGatewayHttpRequestOrReply.mockResolvedValue({});
+    authorizeScopedUserProfileAvatarHttpRequestOrReply.mockResolvedValue({});
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });
@@ -69,7 +69,7 @@ describe("profile avatar HTTP endpoint", () => {
       auth: {} as never,
     });
 
-    expect(authorizeScopedGatewayHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
     expect(res.setHeader).toHaveBeenCalledWith(
       "Access-Control-Allow-Origin",
       "https://control.example",
@@ -95,7 +95,7 @@ describe("profile avatar HTTP endpoint", () => {
       { auth: {} as never },
     );
 
-    expect(authorizeScopedGatewayHttpRequestOrReply).toHaveBeenCalledWith(
+    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).toHaveBeenCalledWith(
       expect.objectContaining({ operatorMethod: "users.list" }),
     );
     expect(res.writeHead).toHaveBeenCalledWith(
@@ -103,6 +103,20 @@ describe("profile avatar HTTP endpoint", () => {
       expect.objectContaining({ "Content-Type": "image/webp", ETag: '"first-hash-webp"' }),
     );
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
+  });
+
+  it("rejects mutating methods before avatar authentication", async () => {
+    const res = response();
+    const req = { method: "POST", headers: {} } as unknown as IncomingMessage;
+
+    await handleUserProfileAvatarHttpRequest(req, res.response, "/api/users/profile-1/avatar", {
+      auth: {} as never,
+    });
+
+    expect(res.response.statusCode).toBe(405);
+    expect(res.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
+    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(getProfileAvatar).not.toHaveBeenCalled();
   });
 
   it("answers a matching ETag without a body", async () => {

@@ -39,7 +39,6 @@ export function prepareEmbeddedRunTerminal(input: {
   outerContextTokenMeta: { contextTokens?: number };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
-  lastTurnTotal?: number;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
@@ -72,7 +71,6 @@ export function prepareEmbeddedRunTerminal(input: {
     usageAccumulator: input.usageAccumulator,
     lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
-    lastTurnTotal: input.lastTurnTotal,
   });
   const reportedModelRef = resolveReportedModelRef({
     provider: input.provider,
@@ -82,8 +80,6 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
-  // Total-only usage (lastTurnTotal override) carries no token split, so cost
-  // math uses the accumulated input/output/cache fields untouched by it.
   const costUsd = estimateUsageCost({
     usage: usageMeta.usage,
     cost: resolveModelCostConfig({

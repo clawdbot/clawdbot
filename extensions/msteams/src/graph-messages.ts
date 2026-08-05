@@ -5,8 +5,7 @@ import {
   deleteGraphRequest,
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
-  postGraphBetaJson,
-  postGraphJson,
+  mutateGraphJson,
   resolveGraphToken,
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
@@ -127,9 +126,10 @@ export async function pinMessageMSTeams(
   const body = {
     "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(params.messageId)}`,
   };
-  const result = await postGraphJson<{ id?: string }>({
+  const result = await mutateGraphJson<{ id?: string }>({
     token,
     path: `${conv.basePath}/pinnedMessages`,
+    method: "POST",
     body,
   });
   return { ok: true, pinnedMessageId: result.id };
@@ -302,7 +302,13 @@ export async function reactMessageMSTeams(
   });
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
-  await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
+  await mutateGraphJson<unknown>({
+    token,
+    path,
+    method: "POST",
+    body: { reactionType },
+    beta: true,
+  });
   return { ok: true };
 }
 
@@ -326,7 +332,13 @@ export async function unreactMessageMSTeams(
   });
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;
-  await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
+  await mutateGraphJson<unknown>({
+    token,
+    path,
+    method: "POST",
+    body: { reactionType },
+    beta: true,
+  });
   return { ok: true };
 }
 

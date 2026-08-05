@@ -6,7 +6,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { InMemoryBoardStore, type BoardStore } from "./board-store.js";
+import type { BoardStore } from "./board-store.js";
+import { createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -20,12 +21,7 @@ function seedSession(env: NodeJS.ProcessEnv, sessionKey: string): void {
 }
 
 function createSqliteStore(): BoardStore {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-board-identity-") };
-  seedSession(env, "agent:main:board");
-  return new SqliteBoardStore({
-    resolveSession: () => ({ agentId: "main", sessionKey: "agent:main:board" }),
-    env,
-  });
+  return createTestBoardStore();
 }
 
 function generatedIdentity(key: string, fallbackName: string) {
@@ -41,10 +37,8 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-describe.each([
-  ["memory", () => new InMemoryBoardStore()],
-  ["sqlite", createSqliteStore],
-] as const)("generated BoardStore identity: %s", (_kind, createStore) => {
+describe("generated BoardStore identity", () => {
+  const createStore = createSqliteStore;
   it("keeps colliding titles distinct and canonical spellings stable", () => {
     const store = createStore();
     const composed = store.putWidget({

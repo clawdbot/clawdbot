@@ -50,6 +50,11 @@ describe("ingestMemoryWikiSource human notes", () => {
       malformedNotes: "HANDWRITTEN NOTE MUST SURVIVE\n<!-- openclaw:human:end -->",
       missingMarker: /openclaw:human:start/i,
     },
+    {
+      name: "opening and closing",
+      malformedNotes: "HANDWRITTEN NOTE MUST SURVIVE",
+      missingMarker: /openclaw:human:start/i,
+    },
   ])(
     "preserves the source page when handwritten Notes are missing the $name marker",
     async ({ malformedNotes, missingMarker }) => {

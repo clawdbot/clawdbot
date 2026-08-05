@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
@@ -72,12 +73,6 @@ function readStringArray(value: unknown): string[] | undefined {
     (entry): entry is string => typeof entry === "string" && entry.length > 0,
   );
   return result.length > 0 ? result : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 function readString(value: unknown): string | undefined {
@@ -689,7 +684,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           throw new Error(`${options.displayName} node host received malformed params JSON.`);
         }
       }
-      const params = asRecord(raw);
+      const params = asOptionalRecord(raw) ?? {};
       const action = readString(params.action);
       let result: unknown;
       switch (action) {

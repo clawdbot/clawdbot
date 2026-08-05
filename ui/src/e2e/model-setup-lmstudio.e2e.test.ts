@@ -188,7 +188,7 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
           },
         ],
       });
-      await page.getByRole("button", { name: "Yes" }).click();
+      await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("heading", { name: "Connection verified" }).waitFor();
       await expect
         .poll(() => page.locator(".model-setup-success").textContent())

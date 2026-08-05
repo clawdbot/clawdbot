@@ -56,6 +56,12 @@ jobs:
           # Pull-request validation runs on GitHub-hosted runners instead.
           sticky-disk: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}
+      - name: Ensure Testbox base commit
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:

@@ -86,11 +86,17 @@ extension OnboardingView {
     func handleNext() {
         // All callers (Next button, chat handoff) honor the same page gates.
         guard canAdvance else { return }
-        if self.activePageIndex == self.memoryImportPageIndex,
-           self.memoryImport.isFailed
-        {
-            self.memoryImport.dismissFailure()
-            self.updateMonitoring(for: self.activePageIndex)
+        let remoteDecision = Self.remoteGatewayAdvanceDecision(
+            connectionMode: state.connectionMode,
+            activePageIndex: activePageIndex,
+            connectionPageIndex: connectionPageIndex,
+            authIssue: remoteAuthIssue,
+            probeState: remoteProbeState,
+            input: remoteGatewayProbeInput)
+        guard remoteDecision.canAdvance else {
+            if remoteDecision.shouldProbe {
+                Task { await self.probeRemoteConnection(advanceOnSuccess: true) }
+            }
             return
         }
         self.commitRecommendedConnectionIfNeeded(for: activePageIndex)
@@ -114,18 +120,15 @@ extension OnboardingView {
         aiSetup.clearCompletedHandoffIfOwned()
         OnboardingController.markComplete()
         OnboardingController.shared.close()
-        // Land people in the real conversation, not on an empty desktop: the
-        // agent chat is the product, and it is verified working by now.
-        if state.connectionMode != .unconfigured {
-            AppNavigationActions.openChat(draft: agentDraft?.composerValue)
+        guard state.connectionMode != .unconfigured else { return }
+        // An explicit agent handoff from the helper chat carries a composer
+        // draft; land that in the chat it was written for.
+        if let agentDraft {
+            AppNavigationActions.openChat(draft: agentDraft.composerValue)
+            return
         }
-    }
-
-    func advancePastEmptyMemoryImportIfNeeded() {
-        guard self.memoryImport.autoAdvanceRequested else { return }
-        withAnimation {
-            self.memoryImport.consumeAutoAdvanceRequest()
-        }
-        self.updateMonitoring(for: self.activePageIndex)
+        // Inference works; the dashboard's custodian onboarding owns the rest
+        // (memory import, channels, permissions guidance, hatch).
+        AppNavigationActions.openDashboardOnboarding()
     }
 }

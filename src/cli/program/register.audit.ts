@@ -10,10 +10,11 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 export function registerAuditCommand(program: Command): void {
   program
     .command("audit")
-    .description("Inspect metadata-only run, tool, and message lifecycle records")
+    .description("Inspect activity records and exact-run identity context")
     .option("--agent <id>", "Filter by agent id")
     .option("--session <key>", "Filter by exact session key")
     .option("--run <id>", "Filter by run id")
+    .option("--execution <id>", "Inspect one exact execution id")
     .option("--kind <kind>", "Filter by kind (agent_run, tool_action, or message)")
     .option(
       "--status <status>",
@@ -24,7 +25,8 @@ export function registerAuditCommand(program: Command): void {
     .option("--after <timestamp>", "Include records at/after ISO time or Unix milliseconds")
     .option("--before <timestamp>", "Include records at/before ISO time or Unix milliseconds")
     .option("--cursor <sequence>", "Continue from a previous result cursor")
-    .option("--limit <count>", "Maximum records (1-500)", "100")
+    .option("--limit <count>", "Maximum records (1-500; decisions 1-100)")
+    .option("--explain", "Inspect execution identity and run-admission reasoning", false)
     .option("--json", "Output a bounded JSON page", false)
     .addHelpText(
       "after",
@@ -38,6 +40,7 @@ export function registerAuditCommand(program: Command): void {
             agentId: opts.agent as string | undefined,
             sessionKey: opts.session as string | undefined,
             runId: opts.run as string | undefined,
+            executionId: opts.execution as string | undefined,
             kind: opts.kind as AuditListCommandOptions["kind"],
             status: opts.status as AuditListCommandOptions["status"],
             direction: opts.direction as AuditListCommandOptions["direction"],
@@ -46,6 +49,7 @@ export function registerAuditCommand(program: Command): void {
             before: opts.before as string | undefined,
             cursor: opts.cursor as string | undefined,
             limit: opts.limit as string | undefined,
+            explain: Boolean(opts.explain),
             json: Boolean(opts.json),
           },
           defaultRuntime,

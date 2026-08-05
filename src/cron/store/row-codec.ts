@@ -1,6 +1,7 @@
 /** Converts cron jobs between public store shape and normalized SQLite rows. */
 import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
@@ -12,12 +13,7 @@ import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } f
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
-import {
-  booleanToInteger,
-  integerToBoolean,
-  normalizeNumber,
-  parseJsonObject,
-} from "./scalar-codec.js";
+import { booleanToInteger, integerToBoolean, normalizeNumber } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
@@ -252,7 +248,7 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
     };
   }
   if (row.schedule_kind === "stream") {
-    const schedule = parseJsonObject<Record<string, unknown>>(row.job_json, {}).schedule;
+    const schedule = asOptionalObjectRecord(safeParseJson(row.job_json))?.schedule;
     if (!isRecord(schedule) || schedule.kind !== "stream" || !Array.isArray(schedule.command)) {
       return null;
     }
@@ -262,7 +258,7 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
 }
 
 function pacingFromRow(row: CronJobRow): CronPacing | undefined {
-  const pacing = parseJsonObject<Record<string, unknown>>(row.job_json, {}).pacing;
+  const pacing = asOptionalObjectRecord(safeParseJson(row.job_json))?.pacing;
   if (!isRecord(pacing) || Array.isArray(pacing)) {
     return undefined;
   }
@@ -273,7 +269,7 @@ function pacingFromRow(row: CronJobRow): CronPacing | undefined {
 }
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
-  const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+  const jobJson = asOptionalObjectRecord(safeParseJson(row.job_json)) ?? {};
   const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
   const ownerAccountId = normalizeOptionalAccountId(
     typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
@@ -480,7 +476,8 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
   for (const [index, row] of rows.entries()) {
     const job = rowToCronJob(row);
     const configJob = mergeFailureDestinationProjection(
-      parseJsonObject<Record<string, unknown>>(row.job_json, job ? stripJobRuntimeFields(job) : {}),
+      asOptionalObjectRecord(safeParseJson(row.job_json)) ??
+        (job ? stripJobRuntimeFields(job) : {}),
       job,
     );
     const runtimeEntry = {

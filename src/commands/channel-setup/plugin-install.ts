@@ -104,6 +104,7 @@ function loadChannelSetupPluginRegistry(params: {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins: true,
     forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins,
+    channelPluginLoadIntent: "setup",
   });
 }
 

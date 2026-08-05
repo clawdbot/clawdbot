@@ -202,6 +202,7 @@ async function runEmbeddedAgentInternal(
         agentId: params.agentId,
         config: params.config,
       });
+      startupStages.mark("workspace");
       const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
       const requestedAgentDir =
         params.agentDir ?? resolveAgentDir(config, requestedWorkspaceResolution.agentId);
@@ -250,6 +251,7 @@ async function runEmbeddedAgentInternal(
         ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
         runtimePluginSelections,
       };
+      startupStages.mark("harness-selection");
       // Configless direct hosts reuse one idle generation. The prepared-runtime lifecycle keeps
       // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
       // Cold plugin loading and provider discovery can exceed the lane no-progress budget.
@@ -261,6 +263,7 @@ async function runEmbeddedAgentInternal(
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
             : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
       );
+      startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       try {
         // A reload may complete while admission waits. The committed generation owns config,
@@ -320,7 +323,7 @@ async function runEmbeddedAgentInternal(
               `[workspace-fallback] caller=runEmbeddedAgent reason=${requestedWorkspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${preparedAgentId} workspace=${redactedWorkspace}`,
             );
           }
-          startupStages.mark("workspace");
+          startupStages.mark("runtime-context");
           notifyExecutionPhase("workspace");
           startupStages.mark("runtime-plugins");
           notifyExecutionPhase("runtime_plugins");

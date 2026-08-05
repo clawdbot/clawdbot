@@ -72,7 +72,7 @@ export interface SessionListHost {
   readonly sidebarMenus: Pick<
     SidebarMenusController,
     | "catalogViewMenuPosition"
-    | "catalogViewMenuTrigger"
+    | "openCatalogViewMenu"
     | "openSessionGroupMenu"
     | "openSessionMenu"
     | "sessionGroupMenu"
@@ -113,6 +113,13 @@ export interface SessionListHost {
   finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
   openNewSession(): void;
+  readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
+  readSessionMutationAccess(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): import("../lib/session-method-access.ts").SessionMethodAccess;
+  requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
   clearSessionSelection(): void;
   handleSessionListDragOver(event: DragEvent): void;
@@ -147,6 +154,10 @@ export function renderRecentSession(params: {
   display?: CatalogBackingSessionDisplay;
 }) {
   const { host, session, display } = params;
+  const pinAccess = host.readSessionMutationAccess({
+    method: "sessions.patch",
+    params: { key: session.key, pinned: !session.pinned },
+  });
   const label = display?.label ?? session.label;
   const { subtitle, narration } = resolveSidebarSessionSubtitle({
     session,
@@ -206,13 +217,19 @@ export function renderRecentSession(params: {
     .filter(Boolean)
     .join(" ");
   const childrenExpanded = host.isSessionChildrenExpanded(session);
+  const groupWriteAccess = host.readSessionMutationAccess({
+    method: "sessions.groups.put",
+    requiredScope: "operator.write",
+  });
+  const rowDraggable = !session.isChild && groupWriteAccess.allowed;
   const row = html`
     <div
       class=${rowClass}
       data-session-key=${session.key}
       role="listitem"
-      draggable=${session.isChild ? "false" : "true"}
-      @dragstart=${session.isChild
+      draggable=${rowDraggable ? "true" : "false"}
+      title=${!session.isChild && !groupWriteAccess.allowed ? groupWriteAccess.reason : nothing}
+      @dragstart=${!rowDraggable
         ? nothing
         : (event: DragEvent) => {
             if (event.dataTransfer) {
@@ -220,7 +237,7 @@ export function renderRecentSession(params: {
               host.startSessionDrag(session);
             }
           }}
-      @dragend=${session.isChild
+      @dragend=${!rowDraggable
         ? nothing
         : () => {
             host.finishSessionDrag();
@@ -344,9 +361,9 @@ export function renderRecentSession(params: {
                 class="session-action session-action--pin"
                 data-sidebar-session-pin="true"
                 type="button"
-                title=${pinLabel}
+                title=${pinAccess.allowed ? pinLabel : pinAccess.reason}
                 aria-label=${pinLabel}
-                ?disabled=${!host.connected}
+                ?disabled=${!pinAccess.allowed}
                 @click=${() => host.toggleSessionPin(session)}
               >
                 ${icons.pin}

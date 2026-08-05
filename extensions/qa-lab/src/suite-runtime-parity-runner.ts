@@ -36,6 +36,8 @@ import type {
 import {
   createQaSuiteTransportAdapter,
   requireQaSuiteStartLab,
+  runQaSuiteCleanupSteps,
+  throwQaSuiteCleanupErrors,
   writeQaSuiteProgress,
 } from "./suite.js";
 
@@ -102,6 +104,8 @@ export async function runQaRuntimeParitySuite(params: {
     scenarios: [...liveScenarioOutcomes],
   });
 
+  let runFailed = false;
+  let runError: unknown;
   try {
     const scenarios = await mapQaSuiteWithConcurrency(
       params.selectedScenarios,
@@ -283,10 +287,15 @@ export async function runQaRuntimeParitySuite(params: {
       scenarios,
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
+  } catch (error) {
+    runFailed = true;
+    runError = error;
+    throw error;
   } finally {
-    await transportFactoryResult.cleanupWithoutGateway();
-    if (ownsLab) {
-      await lab.stop();
-    }
+    const cleanupErrors = await runQaSuiteCleanupSteps([
+      () => transportFactoryResult.cleanupWithoutGateway(),
+      ...(ownsLab ? [() => lab.stop()] : []),
+    ]);
+    throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
   }
 }

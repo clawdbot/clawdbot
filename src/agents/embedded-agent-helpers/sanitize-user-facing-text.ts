@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 /**
  * Converts raw provider/transport errors into concise user-facing copy.
  */
@@ -27,7 +28,6 @@ import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
-import { stableStringify } from "../stable-stringify.js";
 import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,

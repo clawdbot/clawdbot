@@ -8,7 +8,7 @@ import {
   stripTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
@@ -228,9 +228,11 @@ export function maybeEmitFailureAlert(
     consecutiveCount: number;
     delivery?: "emit" | "record-only";
     occurredAtMs?: number;
+    deferredNotifications?: DeferredCronNotifications;
   },
 ) {
-  if (!params.alertConfig || params.consecutiveCount < params.alertConfig.after) {
+  const alertConfig = params.alertConfig;
+  if (!alertConfig || params.consecutiveCount < alertConfig.after) {
     return;
   }
   if (
@@ -252,24 +254,33 @@ export function maybeEmitFailureAlert(
   // Cooldown is stored on job state so process restarts and service reloads do
   // not spam operators with repeated alerts for the same failing job.
   const inCooldown =
-    typeof lastAlert === "number" && now - lastAlert < Math.max(0, params.alertConfig.cooldownMs);
+    typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
   if (inCooldown) {
     return;
   }
-  if (params.delivery !== "record-only") {
+  params.job.state.lastFailureAlertAtMs = now;
+  if (params.delivery === "record-only") {
+    return;
+  }
+
+  const job = structuredClone(params.job);
+  const notify = () =>
     emitFailureAlert(state, {
-      job: params.job,
+      job,
       error: params.error,
       errorReason: params.errorReason,
       runAtMs: params.runAtMs,
       consecutiveErrors: params.consecutiveCount,
-      channel: params.alertConfig.channel,
-      to: params.alertConfig.to,
-      mode: params.alertConfig.mode,
-      accountId: params.alertConfig.accountId,
-      threadId: params.alertConfig.threadId,
+      channel: alertConfig.channel,
+      to: alertConfig.to,
+      mode: alertConfig.mode,
+      accountId: alertConfig.accountId,
+      threadId: alertConfig.threadId,
       status: params.status,
     });
+  if (params.deferredNotifications) {
+    params.deferredNotifications.push(notify);
+  } else {
+    notify();
   }
-  params.job.state.lastFailureAlertAtMs = now;
 }

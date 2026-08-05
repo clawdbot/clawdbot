@@ -1459,6 +1459,24 @@ function Install-OpenClaw {
 }
 
 # Install OpenClaw from GitHub
+function Assert-GitCheckoutHasCommit {
+    param([string]$RepoDir)
+
+    $gitDir = Join-Path $RepoDir ".git"
+    if (-not (Test-Path -LiteralPath $gitDir -PathType Container)) {
+        return
+    }
+
+    $hasHead = $false
+    try {
+        git "--git-dir=$gitDir" "--work-tree=$RepoDir" rev-parse --verify --quiet "HEAD^{commit}" 2>$null | Out-Null
+        $hasHead = ($LASTEXITCODE -eq 0)
+    } catch {}
+    if (-not $hasHead) {
+        throw "Git checkout has no commit: $RepoDir. Move or remove this incomplete checkout, then retry."
+    }
+}
+
 function Install-OpenClawFromGit {
     param(
         [string]$RepoDir,
@@ -1471,6 +1489,7 @@ function Install-OpenClawFromGit {
     $repoUrl = "https://github.com/openclaw/openclaw.git"
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
 
+    Assert-GitCheckoutHasCommit -RepoDir $RepoDir
     if (-not (Test-Path $RepoDir)) {
         git clone $repoUrl $RepoDir
     }

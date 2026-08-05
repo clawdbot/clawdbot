@@ -1,5 +1,6 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
+import { readSessionMethodAccess } from "../session-method-access.ts";
 import { readSessionCustomGroupNames, readSidebarSectionOrder } from "./custom-groups.ts";
 import type {
   SessionConnectionOwner,
@@ -93,7 +94,11 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       let sectionOrder = readSidebarSectionOrder(listed);
       // Browser-local catalogs predate the gateway store and migrate exactly once.
       const legacy = readLegacyStoredGroups();
-      if (names.length === 0 && legacy.length > 0) {
+      const legacyMigrationAccess = readSessionMethodAccess(host.snapshot(), {
+        method: "sessions.groups.put",
+        requiredScope: "operator.write",
+      });
+      if (names.length === 0 && legacy.length > 0 && legacyMigrationAccess.allowed) {
         const put = await scope.client.request("sessions.groups.put", { names: legacy });
         if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
           return;
@@ -101,7 +106,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         names = readSessionCustomGroupNames(put);
         sectionOrder = readSidebarSectionOrder(put);
       }
-      if (legacy.length > 0) {
+      if (legacy.length > 0 && legacyMigrationAccess.allowed) {
         try {
           getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
         } catch {

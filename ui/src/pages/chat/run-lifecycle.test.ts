@@ -133,6 +133,33 @@ describe("replayPendingChatAbort", () => {
     expect(host.pendingAbort).toBeNull();
   });
 
+  it("denies a queued exact-run stop when the reconnect is read-only", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["chat.abort"] },
+      },
+      pendingAbort: {
+        sourceClient: client,
+        runId: "run-main",
+        sessionKey: "global",
+        agentId: "work",
+      },
+    });
+
+    await expect(replayPendingChatAbort(host)).resolves.toBe(false);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.pendingAbort).toBeNull();
+    expect(host.chatError).toContain("operator.write");
+    expect(host.lastError).toBe(host.chatError);
+  });
+
   it("consumes an ambiguously failed exact-run stop without retrying it", async () => {
     const request = vi.fn(async () => {
       throw new Error("gateway closed before acknowledgement");

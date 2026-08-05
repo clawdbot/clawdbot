@@ -3,11 +3,11 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   getPreparedMessageToolCatalog,
@@ -52,6 +52,7 @@ import {
   toStaticCatalogEntry,
   type PreparedConfiguredRuntimeModel,
 } from "./prepared-model-runtime.configured.js";
+import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -60,7 +61,6 @@ import type {
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
-import { stableStringify } from "./stable-stringify.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
@@ -228,6 +228,7 @@ export async function prepareWorkspaceBuildGroup(
   const runtimePluginRegistry = !input.readOnly
     ? loadAgentRuntimePluginRegistryHandle({
         config: input.config,
+        env,
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
         ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
         selections: input.runtimePluginSelections,
@@ -236,11 +237,7 @@ export async function prepareWorkspaceBuildGroup(
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
   return await withPluginRuntimeRegistryScope(runtimePluginRegistry, async () => {
     const pluginMetadataStartedAt = performance.now();
-    const pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
-      config: input.config,
-      env,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
+    const pluginMetadataSnapshot = prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry);
     const pluginMetadataMs = performance.now() - pluginMetadataStartedAt;
     const matchesStaticModelId = createStaticModelIdMatcher({
       manifestPlugins: pluginMetadataSnapshot.plugins,

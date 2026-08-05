@@ -8,7 +8,6 @@ import {
   mergeSetupRuntimeChannelPlugin,
   resolveBundledRuntimeChannelRegistration,
   resolveSetupChannelRegistration,
-  shouldDeferConfiguredChannelFullRuntimeMerge,
 } from "./loader-channel-setup.js";
 import type { PluginModuleLoader } from "./loader-module-runtime.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
@@ -38,8 +37,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
   registryBuilder: PluginRegistryBuilder;
   cfg: OpenClawConfig;
   entry: NormalizedPluginsConfig["entries"][string] | undefined;
-  env: NodeJS.ProcessEnv;
-  preferSetupRuntimeForChannelPlugins: boolean;
   seenIds: Map<string, PluginRecord["origin"]>;
   candidateOrigin: PluginRecord["origin"];
   logger: PluginLogger;
@@ -93,14 +90,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
   if (
     registrationPlan.loadSetupRuntimeEntry &&
     setupRegistration.usesBundledSetupContract &&
-    !shouldDeferConfiguredChannelFullRuntimeMerge({
-      manifestChannels: manifestRecord.channels,
-      startupDeferConfiguredChannelFullLoadUntilAfterListen:
-        manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
-      cfg: params.cfg,
-      env: params.env,
-      preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
-    }) &&
     resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.source) !== params.safeSource
   ) {
     const runtimeModuleSource = resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.source);

@@ -12,7 +12,6 @@ import {
   resolveCommitmentDatabasePath,
 } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStatus } from "../commitments/types.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -95,14 +94,12 @@ export async function commitmentsListCommand(
   opts: { json?: boolean; status?: string; all?: boolean; agent?: string },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = getRuntimeConfig();
   const status = opts.all ? undefined : parseStatus(opts.status ?? "pending", runtime);
   if (!opts.all && opts.status && !status) {
     return;
   }
   const commitments = (
     await listCommitments({
-      cfg,
       status,
       agentId: normalizeOptionalString(opts.agent),
     })
@@ -151,9 +148,7 @@ export async function commitmentsDismissCommand(
     runtime.exit(1);
     return;
   }
-  const cfg = getRuntimeConfig();
   const dismissed = await markCommitmentsStatus({
-    cfg,
     ids,
     status: "dismissed",
     nowMs: Date.now(),

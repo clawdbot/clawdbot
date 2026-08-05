@@ -152,6 +152,7 @@ export async function runQaFlowSuiteStandard(
       lab,
       mock: activeMock,
       gateway: activeGateway,
+      runtimeId: params?.forcedRuntime ?? "openclaw",
       outputDir,
       // YAML scenarios should see the full staged gateway config, not just
       // the transport fragment. Routing/session/plugin assertions depend on it.
@@ -165,16 +166,20 @@ export async function runQaFlowSuiteStandard(
     };
     env = activeEnv;
 
-    const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
-      params?.transportReadyTimeoutMs,
-    );
-    // The gateway child already waits for /readyz before returning, but the
-    // selected transport can still be finishing account startup. Pay that
-    // readiness cost once here so the first scenario does not race bootstrap.
-    await waitForTransportReady(activeEnv, transportReadyTimeoutMs).catch(async () => {
-      await waitForGatewayHealthy(activeEnv, transportReadyTimeoutMs);
-      await waitForTransportReady(activeEnv, transportReadyTimeoutMs);
-    });
+    // Lifecycle scenarios deliberately start a blocked channel. Waiting for
+    // connected-channel readiness here would prevent those scenarios from running.
+    if (!gatewayRuntimeOptions?.allowUnhealthyStartup) {
+      const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
+        params?.transportReadyTimeoutMs,
+      );
+      // The gateway child already waits for /readyz before returning, but the
+      // selected transport can still be finishing account startup. Pay that
+      // readiness cost once here so the first scenario does not race bootstrap.
+      await waitForTransportReady(activeEnv, transportReadyTimeoutMs).catch(async () => {
+        await waitForGatewayHealthy(activeEnv, transportReadyTimeoutMs);
+        await waitForTransportReady(activeEnv, transportReadyTimeoutMs);
+      });
+    }
     const scenarios: QaSuiteScenarioResult[] = [];
     let runtimeParityCellTiming: QaRuntimeParityCellTiming | undefined;
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({

@@ -401,7 +401,6 @@ export async function markCommitmentsAttempted(params: {
 }
 
 export async function markCommitmentsStatus(params: {
-  cfg?: OpenClawConfig;
   ids: string[];
   status: Extract<CommitmentStatus, "sent" | "dismissed" | "expired">;
   nowMs?: number;
@@ -445,7 +444,6 @@ export async function markCommitmentsStatus(params: {
 }
 
 export async function listCommitments(params?: {
-  cfg?: OpenClawConfig;
   status?: CommitmentStatus;
   agentId?: string;
   nowMs?: number;

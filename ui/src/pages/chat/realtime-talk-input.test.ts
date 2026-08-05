@@ -142,6 +142,59 @@ describe("realtime Talk microphone inputs", () => {
     await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
   });
 
+  it("does not request microphone or camera media after cancellation", async () => {
+    const getUserMedia = vi.fn();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      openRealtimeTalkInput(undefined, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      openRealtimeTalkCamera(undefined, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("releases media when cancellation follows browser permission resolution", async () => {
+    const stop = vi.fn();
+    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    const pending = new Promise<MediaStream>((resolve) => {
+      resolveMedia = resolve;
+    });
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(() => pending) },
+    });
+    const controller = new AbortController();
+    const opening = openRealtimeTalkInput(undefined, { signal: controller.signal });
+
+    resolveMedia({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+    controller.abort();
+
+    await expect(opening).rejects.toMatchObject({ name: "AbortError" });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("keeps cancellation precedence over a late media rejection", async () => {
+    let rejectMedia: (error: unknown) => void = () => undefined;
+    const pending = new Promise<MediaStream>((_resolve, reject) => {
+      rejectMedia = reject;
+    });
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(() => pending) },
+    });
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled", "AbortError");
+    const opening = openRealtimeTalkCamera(undefined, { signal: controller.signal });
+
+    controller.abort(reason);
+    rejectMedia(new DOMException("denied", "NotAllowedError"));
+
+    await expect(opening).rejects.toBe(reason);
+  });
+
   it("acquires camera separately so camera errors cannot stop microphone input", async () => {
     const audio = { getTracks: () => [] } as unknown as MediaStream;
     const camera = { getTracks: () => [] } as unknown as MediaStream;

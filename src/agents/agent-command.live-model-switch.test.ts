@@ -116,10 +116,16 @@ const state = vi.hoisted(() => ({
   storePathMock: undefined as string | undefined,
   resolvedSessionKeyMock: undefined as string | undefined,
   trajectoryRecorderParamsMock: vi.fn(),
+  enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
 
 vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+}));
+
+vi.mock("../audit/execution-identity-admission.js", () => ({
+  enqueueExecutionIdentityContextAtAdmission: (...args: unknown[]) =>
+    state.enqueueExecutionIdentityContextAtAdmissionMock(...args),
 }));
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
@@ -134,6 +140,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpLifecycleEnd: (...args: unknown[]) => state.emitAcpLifecycleEndMock(...args),
   emitAcpLifecycleError: (...args: unknown[]) => state.emitAcpLifecycleErrorMock(...args),
   emitAcpLifecycleStart: vi.fn(),
+  emitAcpPromptSubmitted: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
@@ -355,14 +362,16 @@ vi.mock("../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: (...args: unknown[]) =>
     state.assertLifecycleCurrentMock(...args),
   captureAgentRunLifecycleGeneration: () => "test-generation",
-  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: vi.fn(),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
-  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
+}));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
+  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
 }));
 
 vi.mock("../infra/outbound/session-context.js", () => ({
@@ -649,11 +658,13 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 }));
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
+let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
 let agentCommandTesting: typeof import("./agent-command.js").testing;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
+  agentCommandFromSystem ??= mod.agentCommandFromSystem;
   agentCommandTesting ??= mod.testing;
 });
 
@@ -778,6 +789,17 @@ async function runBasicAgentCommand() {
   });
 }
 
+async function runSystemAgentCommand() {
+  await agentCommandFromSystem(
+    {
+      message: "boot",
+      sessionKey: "agent:main:boot",
+      deliver: false,
+    },
+    { boundary: "gateway.boot" },
+  );
+}
+
 function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0]> = {}) {
   return agentCommand({
     message: "hello",
@@ -897,6 +919,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
         finalizeRaw: () => text,
         finalize: () => text,
+        finalizeReplySnapshot: () => ({ disposition: "visible" as const, text }),
       };
     });
     state.buildAcpResultMock.mockImplementation((params: { payloadText?: string }) => ({
@@ -1056,6 +1079,62 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
     );
+  });
+
+  it("keeps collection off by default without blocking local execution", async () => {
+    setupSuccessfulAttempt();
+
+    await runBasicAgentCommand();
+
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+      }),
+      { enabled: false },
+    );
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records authoritative local and system ingress only after explicit opt-in", async () => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      logging: { audit: { executionIdentity: true } },
+    };
+    setupSuccessfulAttempt();
+
+    await runBasicAgentCommand();
+    await runSystemAgentCommand();
+
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+      }),
+      { enabled: true },
+    );
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+      }),
+      { enabled: true },
+    );
+  });
+
+  it.each([
+    ["local CLI", runBasicAgentCommand],
+    ["system", runSystemAgentCommand],
+  ])("keeps %s runs nonblocking when evidence cannot be queued", async (_name, run) => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      logging: { audit: { executionIdentity: true } },
+    };
+    state.enqueueExecutionIdentityContextAtAdmissionMock.mockReturnValue(undefined);
+    setupSuccessfulAttempt();
+
+    await run();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
   });
 
   it("forwards the auth profile bound to the configured default model", async () => {
@@ -4383,6 +4462,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("marks ACP execution start when the prompt is submitted", async () => {
+    setupAcpSession();
+    const onExecutionStarted = vi.fn();
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const callbacks = params as {
+        onLifecycle?: (event: { type: string; at: number }) => void;
+        onEvent?: (event: unknown) => void;
+      };
+      expect(onExecutionStarted).not.toHaveBeenCalled();
+      callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
+      callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+
+    await agentCommand({
+      message: "ACP execution boundary",
+      sessionKey: "agent:main:main",
+      onExecutionStarted,
+    });
+
+    expect(onExecutionStarted).toHaveBeenCalledTimes(1);
   });
 
   it("keeps session provenance for internal ACP turns", async () => {

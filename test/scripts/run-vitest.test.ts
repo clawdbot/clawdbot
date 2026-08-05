@@ -1,5 +1,5 @@
 // Run Vitest tests cover run vitest script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +13,7 @@ import {
   TOOLING_EXCLUDED_TESTS,
   VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
+  resolveBoundedVitestInvocations,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
@@ -38,6 +39,15 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
+  it("ends argument failures with the stable failure trailer", () => {
+    const result = spawnSync(process.execPath, [nodePath.resolve("scripts/run-vitest.mjs")], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[vitest] FAILED (exit 1)");
+  });
+
   it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
     "keeps hardcoded Vitest path %s valid",
     (referencedPath) => {
@@ -183,6 +193,90 @@ describe("scripts/run-vitest", () => {
     expect(
       resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--", "--no-isolate"]),
     ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
+  });
+
+  it("bounds config-only Gateway server runs in fresh worker processes", () => {
+    const argv = [
+      "run",
+      "--config",
+      "test/vitest/vitest.gateway-server.config.ts",
+      "--reporter=verbose",
+      "--",
+      "-x",
+    ];
+
+    expect(
+      resolveBoundedVitestInvocations(argv, {
+        env: {},
+        gatewayServerTargetChunks: [
+          ["src/gateway/server-a.test.ts"],
+          ["src/gateway/server-b.test.ts"],
+        ],
+      }),
+    ).toEqual([
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--reporter=verbose",
+        "src/gateway/server-a.test.ts",
+        "--",
+        "-x",
+      ],
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--reporter=verbose",
+        "src/gateway/server-b.test.ts",
+        "--",
+        "-x",
+      ],
+    ]);
+  });
+
+  it("bounds implicit CI runs for absolute Gateway server config paths", () => {
+    expect(
+      resolveBoundedVitestInvocations(
+        ["--config", "/repo/test/vitest/vitest.gateway-server.config.ts"],
+        {
+          env: { CI: "1" },
+          gatewayServerTargetChunks: [
+            ["src/gateway/server-a.test.ts"],
+            ["src/gateway/server-b.test.ts"],
+          ],
+        },
+      ),
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ["local watch default", ["--config", "test/vitest/vitest.gateway-server.config.ts"]],
+    ["explicit watch", ["watch", "--config", "test/vitest/vitest.gateway-server.config.ts"]],
+    [
+      "explicit target",
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "src/gateway/server-startup.test.ts",
+      ],
+    ],
+    [
+      "coverage output",
+      ["run", "--config", "test/vitest/vitest.gateway-server.config.ts", "--coverage"],
+    ],
+    ["different config", ["run", "--config", "test/vitest/vitest.gateway-core.config.ts"]],
+  ])("keeps %s as one direct Vitest invocation", (_label, argv) => {
+    expect(
+      resolveBoundedVitestInvocations(argv, {
+        env: {},
+        gatewayServerTargetChunks: [
+          ["src/gateway/server-a.test.ts"],
+          ["src/gateway/server-b.test.ts"],
+        ],
+      }),
+    ).toEqual([argv]);
   });
 
   it("routes explicit tooling tests through the tooling config", () => {

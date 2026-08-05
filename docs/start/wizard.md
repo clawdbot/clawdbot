@@ -159,9 +159,12 @@ Local mode (default) walks through these steps:
    Security note: if this agent will run tools or process webhook/hook
    content, prefer the strongest latest-generation model available and keep
    tool policy strict - weaker or older tiers are easier to prompt-inject.
-   For non-interactive runs, `--secret-input-mode ref` stores env-backed refs
-   instead of plaintext API key values; the referenced env var must already
-   be set, or onboarding fails fast. Interactive secret reference mode can
+   For non-interactive runs, `--secret-input-mode ref` stores new credentials
+   as env-backed refs; set the provider env var when adding a credential.
+   Existing resolvable named profiles and their `env`, `file`, or `exec` refs
+   are reused unchanged without a new credential write or additional provider
+   env var. Previously stored plaintext is not migrated; see
+   [Secrets management](/gateway/secrets). Interactive secret reference mode can
    point at an environment variable or a configured provider ref (`file` or
    `exec`), with a fast preflight check before saving. After model/auth setup,
    the wizard offers an optional live completion test; a failure can return to

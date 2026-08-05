@@ -8,7 +8,10 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  resetGatewayWorkAdmission,
+  waitForActiveGatewayRootWork,
+} from "../../process/gateway-work-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
@@ -465,20 +468,37 @@ describe("gateway agent handler", () => {
     );
 
     const call = await waitForAgentCommandCall<{
+      onActiveModelSelected?: (selection: { provider: string; model: string }) => Promise<void>;
       trustedInternalHandoff?: {
         kind: string;
         sourceSessionKey: string;
         sourceSessionId?: string;
         targetSessionKey: string;
         targetSessionId: string;
+        provider: string;
+        model: string;
       };
     }>();
+    const trustedInternalHandoff = expectDefined(
+      call.trustedInternalHandoff,
+      "trusted completion handoff test invariant",
+    );
+    await expectDefined(
+      call.onActiveModelSelected,
+      "model-selection callback test invariant",
+    )({
+      provider: "anthropic",
+      model: "sonnet-4.6",
+    });
+    expect(call.trustedInternalHandoff).toBe(trustedInternalHandoff);
     expect(call.trustedInternalHandoff).toMatchObject({
       kind: "subagent-completion",
       sourceSessionKey: "agent:main:subagent:child",
       sourceSessionId: "child-session-id",
       targetSessionKey: "agent:main:main",
       targetSessionId: "existing-session-id",
+      provider: "anthropic",
+      model: "sonnet-4.6",
     });
   });
 
@@ -1958,6 +1978,7 @@ describe("gateway agent handler", () => {
         phase: "ready",
         basePersisted: true,
       });
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-recovered",
@@ -2046,6 +2067,7 @@ describe("gateway agent handler", () => {
       expect(context.logGateway.warn).toHaveBeenCalledWith(
         "cron continuation release recovery exhausted for cron-media-release-exhausts",
       );
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-exhausted",

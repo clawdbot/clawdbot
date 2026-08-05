@@ -605,9 +605,6 @@ export class TranscriptsStore {
     const transcriptPath = path.join(sessionDir, "transcript.jsonl");
     const summaryJsonPath = path.join(sessionDir, "summary.json");
     const summaryPath = path.join(sessionDir, "summary.md");
-    // Every export starts with identity metadata, so even an interrupted partial
-    // materialization remains inspectable by Doctor without guessing its owner.
-    const includeMetadata = true;
     const includeTranscript = kind === "all" || kind === "transcript";
     const includeSummary = kind === "all" || kind === "summary";
     const storedSummary = includeSummary ? await this.readSummary(session) : {};
@@ -632,13 +629,13 @@ export class TranscriptsStore {
     if (!ensured.ok) {
       throw ensured.error;
     }
-    if (includeMetadata) {
-      exportedHashes["metadata.json"] = await writeTranscriptArtifact(
-        sessionDir,
-        "metadata.json",
-        `${JSON.stringify(session, null, 2)}\n`,
-      );
-    }
+    // Every export starts with identity metadata, so even an interrupted partial
+    // materialization remains inspectable by Doctor without guessing its owner.
+    exportedHashes["metadata.json"] = await writeTranscriptArtifact(
+      sessionDir,
+      "metadata.json",
+      `${JSON.stringify(session, null, 2)}\n`,
+    );
     if (includeTranscript) {
       exportedHashes["transcript.jsonl"] = await writeTranscriptJsonlArtifact({
         sessionDir,
@@ -668,9 +665,7 @@ export class TranscriptsStore {
         removedExports.add("summary.md");
       }
     }
-    if (Object.keys(exportedHashes).length > 0 || removedExports.size > 0) {
-      this.updateExportManifest(session, exportedHashes, removedExports);
-    }
+    this.updateExportManifest(session, exportedHashes, removedExports);
     return {
       sessionDir,
       metadataPath,

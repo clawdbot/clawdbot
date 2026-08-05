@@ -19,7 +19,6 @@ export function resolveCliExecutionStartupContext(params: {
   commandPath?: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
-  routeMode?: boolean;
 }) {
   const invocation = resolveCliArgvInvocation(params.argv);
   // Commander owns the action path after parsing option values. Route-first
@@ -33,7 +32,6 @@ export function resolveCliExecutionStartupContext(params: {
       commandPath,
       jsonOutputMode: params.jsonOutputMode,
       env: params.env,
-      routeMode: params.routeMode,
     }),
   };
 }

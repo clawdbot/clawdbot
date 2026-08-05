@@ -16,6 +16,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
@@ -831,16 +832,10 @@ function setCachedSessionManagedOutgoingAttachmentIndex(
       index,
     },
   );
-  while (
-    sessionManagedOutgoingAttachmentIndexCache.size >
-    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES
-  ) {
-    const oldestKey = sessionManagedOutgoingAttachmentIndexCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    sessionManagedOutgoingAttachmentIndexCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(
+    sessionManagedOutgoingAttachmentIndexCache,
+    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES,
+  );
 }
 
 function sameManagedOutgoingAttachmentTranscriptStat(

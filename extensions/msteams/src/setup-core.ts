@@ -391,22 +391,14 @@ export function createMSTeamsSetupWizardBase(): Pick<
         await noteMSTeamsCredentialHelp(prompter);
       }
 
-      if (canUseEnv) {
-        const keepEnv = await prompter.confirm({
-          message: t("wizard.msteams.envPrompt"),
+      if (canUseEnv || hasConfigCreds) {
+        const keep = await prompter.confirm({
+          message: t(canUseEnv ? "wizard.msteams.envPrompt" : "wizard.msteams.credentialsKeep"),
           initialValue: true,
         });
-        if (keepEnv) {
+        if (keep) {
           next = enableMSTeamsAccount(next, resolvedAccountId);
         } else {
-          ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-        }
-      } else if (hasConfigCreds) {
-        const keep = await prompter.confirm({
-          message: t("wizard.msteams.credentialsKeep"),
-          initialValue: true,
-        });
-        if (!keep) {
           ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
         }
       } else {

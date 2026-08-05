@@ -38,7 +38,7 @@ import {
   formatLifecycle,
   formatPriorityLabel,
   formatStatusLabel,
-  formatTime,
+  formatWorkboardDate,
   formatUpdatedTime,
   taskDetail,
   taskMatchesLifecycle,
@@ -56,7 +56,7 @@ function renderEvents(card: WorkboardCard) {
         (event) => html`
           <li>
             <span>${formatEventLabel(event)}</span>
-            <time>${formatTime(event.at)}</time>
+            <time>${formatWorkboardDate(event.at)}</time>
           </li>
         `,
       )}

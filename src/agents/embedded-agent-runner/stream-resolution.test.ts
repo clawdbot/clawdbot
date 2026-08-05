@@ -10,6 +10,7 @@ import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Model } from "../../llm/types.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import {
   describeEmbeddedAgentStreamStrategy as describeEmbeddedAgentStreamStrategyImpl,
   resolveEmbeddedAgentApiKey,
@@ -19,6 +20,11 @@ import {
 const streamMocks = vi.hoisted(() => ({
   delegate: undefined as StreamFn | undefined,
   streamSimple: vi.fn(),
+  anthropicVertex: vi.fn(),
+}));
+
+vi.mock("../anthropic-vertex-stream.js", () => ({
+  createAnthropicVertexStreamFnForModel: streamMocks.anthropicVertex,
 }));
 
 vi.mock("../../llm/stream.js", async (importOriginal) => {
@@ -89,6 +95,7 @@ async function expectStreamResultRecord(
 
 afterEach(() => {
   streamMocks.streamSimple.mockReset();
+  streamMocks.anthropicVertex.mockReset();
   if (streamMocks.delegate) {
     streamMocks.streamSimple.mockImplementation(streamMocks.delegate);
   }
@@ -280,6 +287,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   });
 
   it("keeps real lifecycle-owned Codex sessions on authenticated WebSocket transport", async () => {
+    const prompt = "PRIVATE-EMBEDDED-NATIVE-CODEX-PROMPT";
     const tokenHeader = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString(
       "base64url",
     );
@@ -292,6 +300,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
     const handshakes: Array<{ url: string; headers: Headers }> = [];
     const sentRequests: Array<Record<string, unknown>> = [];
+    const recordEvent = vi.fn();
     let rejectNextConnection = false;
     const fetchSpy = vi.fn(() => {
       throw new Error("explicit WebSocket transport must not issue an HTTP request");
@@ -368,10 +377,19 @@ describe("resolveEmbeddedAgentStreamFn", () => {
         sessionId: "session-websocket",
         resolvedApiKey: protectedAccessToken,
       });
+      const observedEmbeddedStreamFn = wrapStreamFnWithProviderPromptState({
+        streamFn: embeddedStreamFn,
+        state: {},
+        effectiveContextTokenBudget: 128_000,
+        recordEvent,
+      });
       expect(boundaryStreamFactory.mock.calls.slice(initialBoundaryCalls)).toEqual([]);
-      const stream = await embeddedStreamFn(
+      const stream = await observedEmbeddedStreamFn(
         model,
-        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        {
+          systemPrompt: prompt,
+          messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        },
         { transport: "websocket" },
       );
       const result = await stream.result();
@@ -387,13 +405,29 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       expect(handshakes[0]?.headers.get("session_id")).toBe("session-websocket");
       expect(handshakes[0]?.headers.get("x-client-request-id")).toBe("session-websocket");
       expect(sentRequests).toEqual([
-        expect.objectContaining({ type: "response.create", model: "gpt-5.5" }),
+        expect.objectContaining({
+          type: "response.create",
+          model: "gpt-5.5",
+          instructions: prompt,
+        }),
       ]);
+      expect(recordEvent).toHaveBeenCalledWith("provider.prompt.observed", {
+        egress: "native-codex-websocket",
+        payloadVariant: "initial",
+        promptSource: "instructions",
+        expectedChars: prompt.length,
+        observedChars: prompt.length,
+        matchesAssembledPrompt: true,
+      });
+      expect(JSON.stringify(recordEvent.mock.calls)).not.toContain(prompt);
 
       rejectNextConnection = true;
-      const rejectedStream = await embeddedStreamFn(
+      const rejectedStream = await observedEmbeddedStreamFn(
         model,
-        { messages: [{ role: "user", content: "retry", timestamp: 2 }] },
+        {
+          systemPrompt: prompt,
+          messages: [{ role: "user", content: "retry", timestamp: 2 }],
+        },
         { transport: "websocket", sessionId: "session-websocket-rejected" },
       );
       const rejectedResult = await rejectedStream.result();
@@ -403,6 +437,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       expect(resolveSessionAuth).toHaveBeenCalledTimes(2);
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(boundaryStreamFactory.mock.calls.slice(initialBoundaryCalls)).toEqual([]);
+      expect(recordEvent).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -646,6 +681,64 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     );
     expect(result.sessionId).toBe("run-session");
     expect(result.promptCacheKey).toBe("cron-cache-key");
+  });
+
+  it.each(["custom", "anthropic-vertex"] as const)(
+    "preserves %s stream identity without cache or run cancellation",
+    (provider) => {
+      const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+      if (provider === "anthropic-vertex") {
+        streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
+      }
+      const streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: currentStreamFn as never,
+        sessionId: "session-1",
+        model: {
+          api: provider === "anthropic-vertex" ? "anthropic-messages" : "custom-api",
+          provider,
+          id: "custom-model",
+        } as never,
+      });
+
+      expect(streamFn).toBe(currentStreamFn);
+    },
+  );
+
+  it.each([
+    ["custom", "run"],
+    ["custom", "caller"],
+    ["anthropic-vertex", "run"],
+    ["anthropic-vertex", "caller"],
+  ] as const)("cancels %s streams when their %s owner aborts", async (provider, signalOwner) => {
+    // Attempt transport and compaction both resolve streams through this owner.
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    if (provider === "anthropic-vertex") {
+      streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
+    }
+    const runController = new AbortController();
+    const callerController = new AbortController();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "session-1",
+      signal: runController.signal,
+      model: {
+        api: provider === "anthropic-vertex" ? "anthropic-messages" : "custom-api",
+        provider,
+        id: "custom-model",
+      } as never,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn({ provider, id: "custom-model" } as never, {} as never, {
+        signal: callerController.signal,
+      }),
+      `${provider} composed signal`,
+    );
+    expect(result.signal).toMatchObject({ aborted: false });
+
+    const abortReason = new Error(`${signalOwner} canceled`);
+    (signalOwner === "run" ? runController : callerController).abort(abortReason);
+    expect(result.signal).toMatchObject({ aborted: true, reason: abortReason });
   });
 
   it.each(["run", "caller"] as const)(

@@ -70,7 +70,7 @@ export function submitFinalProviderToolResult(params: {
 }): void | Promise<void> {
   const epoch = params.session.toolResultEpoch;
   const providerCallId = resolveRelayProviderToolCallId(params.session, params.callId);
-  if (params.session.completedProviderToolResults.has(providerCallId)) {
+  if (params.session.toolCalls.isProviderCompleted(providerCallId)) {
     if (
       relaySessions.get(params.session.id) === params.session &&
       params.session.toolResultEpoch === epoch
@@ -91,7 +91,7 @@ export function submitFinalProviderToolResult(params: {
       return false;
     }
     if (params.session.toolResultEpoch !== epoch) {
-      if (!params.session.cancelledAgentToolCalls.has(params.callId)) {
+      if (!params.session.toolCalls.hasCancelled(params.callId)) {
         return false;
       }
       // The browser already considers this final submitted while it waits behind
@@ -104,9 +104,13 @@ export function submitFinalProviderToolResult(params: {
         ),
         suppressedToolResultOptions(params.session),
       );
-      params.session.completedProviderToolResults.add(providerCallId);
-      params.session.cancelledAgentToolCalls.delete(params.callId);
-      params.session.completedAgentToolCalls.add(params.callId);
+      if (
+        !params.session.toolCalls.markProviderCompleted([providerCallId]) ||
+        !params.session.toolCalls.markAgentCompleted([params.callId])
+      ) {
+        return false;
+      }
+      params.session.toolCalls.deleteCancelled(params.callId);
       return false;
     }
     await submit();
@@ -117,7 +121,9 @@ export function submitFinalProviderToolResult(params: {
     if (params.session.toolResultEpoch !== epoch) {
       return;
     }
-    params.session.completedProviderToolResults.add(providerCallId);
+    if (!params.session.toolCalls.markProviderCompleted([providerCallId])) {
+      return;
+    }
     if (relaySessions.get(params.session.id) === params.session) {
       params.onAccepted?.();
     }

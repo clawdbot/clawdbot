@@ -2,13 +2,7 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { findMSTeamsConversationMember } from "./graph-conversation-members.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
-import {
-  deleteGraphRequest,
-  escapeOData,
-  patchGraphJson,
-  postGraphJson,
-  resolveGraphToken,
-} from "./graph.js";
+import { deleteGraphRequest, escapeOData, mutateGraphJson, resolveGraphToken } from "./graph.js";
 
 // ---------------------------------------------------------------------------
 // Add Participant
@@ -71,9 +65,10 @@ export async function addParticipantMSTeams(
     "user@odata.bind": `https://graph.microsoft.com/v1.0/users('${escapeOData(params.userId)}')`,
   };
 
-  await postGraphJson<unknown>({
+  await mutateGraphJson<unknown>({
     token,
     path: `${conv.basePath}/members`,
+    method: "POST",
     body,
   });
 
@@ -153,9 +148,10 @@ export async function renameGroupMSTeams(
 
   const body = conv.kind === "chat" ? { topic: params.name } : { displayName: params.name };
 
-  await patchGraphJson<unknown>({
+  await mutateGraphJson<unknown>({
     token,
     path: conv.basePath,
+    method: "PATCH",
     body,
   });
 

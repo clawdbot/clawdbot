@@ -30,6 +30,13 @@ import {
   type MSTeamsActivityHandler,
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import {
+  publishMSTeamsBlocked,
+  publishMSTeamsReady,
+  publishMSTeamsRecovering,
+  publishMSTeamsStopped,
+  type MSTeamsStatusSink,
+} from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
 import { createAccountScopedMSTeamsPollStore } from "./poll-store-scoped.js";
 import {
@@ -72,6 +79,7 @@ type MonitorMSTeamsOpts = {
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
   pollStore?: MSTeamsPollStore;
+  statusSink?: MSTeamsStatusSink;
 };
 
 type MonitorMSTeamsResult = {
@@ -89,6 +97,7 @@ export async function monitorMSTeamsProvider(
   let msteamsCfg = opts.msteamsCfg ?? resolveMSTeamsAccountConfig(cfg, accountId);
   if (!msteamsCfg || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
+    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
     return { app: null, shutdown: async () => {} };
   }
 
@@ -101,6 +110,7 @@ export async function monitorMSTeamsProvider(
   });
   if (!creds) {
     log.error("msteams credentials not configured");
+    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
     return { app: null, shutdown: async () => {} };
   }
   const appId = creds.appId; // Extract for use in closures
@@ -608,10 +618,12 @@ export async function monitorMSTeamsProvider(
     throw err;
   });
   log.info(`msteams provider started on port ${port}`);
+  publishMSTeamsReady(opts.statusSink);
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
     log.error("msteams server error", { error: formatUnknownError(err) });
+    publishMSTeamsRecovering(opts.statusSink, formatUnknownError(err));
   });
 
   const shutdown = async () => {
@@ -625,6 +637,7 @@ export async function monitorMSTeamsProvider(
       });
     });
     await ingress.stop();
+    publishMSTeamsStopped(opts.statusSink);
   };
 
   // Keep this task alive until close so gateway runtime does not treat startup as exit.

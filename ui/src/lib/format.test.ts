@@ -15,7 +15,6 @@ import {
   formatTimeMs,
   formatTokens,
   formatUnknownText,
-  parseSessionKeyParts,
   truncateText,
 } from "./format.ts";
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
@@ -193,34 +192,6 @@ describe("formatUnknownText", () => {
 
   it("formats symbols without relying on object coercion", () => {
     expect(formatUnknownText(Symbol("agent"))).toBe("Symbol(agent)");
-  });
-});
-
-describe("parseSessionKeyParts", () => {
-  it("parses a standard agent session key", () => {
-    expect(parseSessionKeyParts("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN")).toEqual({
-      agentId: "data-expert",
-      channel: "dingtalk",
-      accountId: "cidzg6sF43NZMy52Rnk8EN",
-    });
-  });
-
-  it("parses account ids containing separators", () => {
-    expect(parseSessionKeyParts("agent:main:telegram:user:12345:extra")).toEqual({
-      agentId: "main",
-      channel: "telegram",
-      accountId: "user:12345:extra",
-    });
-  });
-
-  it("returns null for non-agent or malformed keys", () => {
-    expect(parseSessionKeyParts("global:default")).toBeNull();
-    expect(parseSessionKeyParts("direct:some-key")).toBeNull();
-    expect(parseSessionKeyParts("")).toBeNull();
-    expect(parseSessionKeyParts("agent:")).toBeNull();
-    expect(parseSessionKeyParts("agent:main")).toBeNull();
-    expect(parseSessionKeyParts("agent:main:")).toBeNull();
-    expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
   });
 });
 
