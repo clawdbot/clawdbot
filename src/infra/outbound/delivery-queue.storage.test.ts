@@ -94,7 +94,7 @@ describe("delivery-queue storage", () => {
         if (!firstAttemptId) {
           throw new Error("test invariant: first platform owner must claim the durable row");
         }
-        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
+        const lostClaim = `Delivery platform claim was lost: ${id}`;
         // Admission snapshots taken before ownership must CAS the unclaimed
         // state; a producer that claimed meanwhile retains its media and row.
         await expect(
