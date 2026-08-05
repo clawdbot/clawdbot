@@ -41,6 +41,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import {
@@ -68,6 +69,12 @@ import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.j
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import {
+  createCodingTools,
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+} from "./sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -557,6 +564,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     modelContextWindowTokens: options?.modelContextWindowTokens,
     imageSanitization,
     memoryWriteProvenance,
+    ...(includeBaseCodingTools
+      ? { baseToolNames: createCodingTools(codingRoot).map((tool) => tool.name) }
+      : {}),
+    baseToolFactories: {
+      createEditTool,
+      createReadTool,
+      createWriteTool,
+    },
     applyPatchEnabled,
     applyPatchWorkspaceOnly,
     execDefaults: {
