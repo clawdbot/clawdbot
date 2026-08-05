@@ -93,6 +93,8 @@ describe("chat pane history anchor", () => {
       sessionId: "session-history",
       messageId: "missing-message",
     };
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
     anchorPane.onHistoryAnchorConsumed = vi.fn(() => {
       anchorPane.historyAnchor = undefined;
     });
@@ -124,5 +126,8 @@ describe("chat pane history anchor", () => {
       }),
     ]);
     expect(state.chatError).toBe(state.lastError);
+    await toastHost.updateComplete;
+    expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(state.lastError);
+    toastHost.remove();
   });
 });
