@@ -58,8 +58,8 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   }) => {
     for (const candidate of [
       { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
-      { raw: agentConfigOverride?.model, source: "agent" as const },
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
       if (normalizeModelSelectionMock(candidate.raw)) {
         return candidate;
@@ -802,7 +802,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through fallback-only subagents.model to the agent model", async () => {
+    it("falls through fallback-only subagents.model to the global subagent default", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -818,7 +818,7 @@ describe("cron model formatting and precedence edge cases", () => {
             subagents: { model: { fallbacks: [] } },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
 
@@ -843,7 +843,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    it("prefers agents.defaults.subagents.model over the agent model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -858,7 +858,7 @@ describe("cron model formatting and precedence edge cases", () => {
             model: { primary: "anthropic/claude-opus-4-6" },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
   });

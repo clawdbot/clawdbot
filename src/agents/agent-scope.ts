@@ -458,11 +458,12 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
+  // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
+  // then the global subagent default, then agent-primary inheritance.
   const candidates: SubagentModelConfigSelectionResult[] = [
     ...(agentConfig?.subagents?.model
       ? [{ raw: agentConfig.subagents.model, source: "subagent" as const }]
       : []),
-    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
     ...(params.cfg.agents?.defaults?.subagents?.model
       ? [
           {
@@ -471,6 +472,7 @@ export function resolveSubagentModelConfigSelectionResult(params: {
           },
         ]
       : []),
+    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
   ];
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }
