@@ -2,7 +2,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import {
+  findPersistedAuthProfileCredential,
+  getRuntimeAuthProfileStoreSnapshot,
+} from "../agents/auth-profiles/store.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,9 +23,12 @@ function resolvePinnedAuthProfileProvider(params: {
   agentDir: string;
   profileId: string;
 }): string | undefined {
-  const storedProvider = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir).profiles[
-    params.profileId
-  ]?.provider;
+  const storedProvider =
+    getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[params.profileId]?.provider ??
+    findPersistedAuthProfileCredential({
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+    })?.provider;
   return storedProvider ?? params.cfg.auth?.profiles?.[params.profileId]?.provider;
 }
 
