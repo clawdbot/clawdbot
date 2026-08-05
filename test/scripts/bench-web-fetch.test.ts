@@ -51,12 +51,17 @@ describe("web fetch benchmark script", () => {
     expect(result.stderr).not.toContain("\n    at ");
   });
 
-  it("rejects non-decimal run counts instead of expanding the benchmark", () => {
-    const result = runBenchWebFetch("--runs", "1e3");
+  it.each([
+    ["--runs", "1e3", "--runs must be a positive integer"],
+    ["--warmup", "1e3", "--warmup must be a non-negative integer"],
+    ["--runs", "9007199254740993", "--runs must be a positive integer"],
+    ["--warmup", "9007199254740993", "--warmup must be a non-negative integer"],
+  ])("rejects invalid benchmark count %s %s", (flag, value, expectedError) => {
+    const result = runBenchWebFetch(flag, value);
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--runs must be a positive integer");
+    expect(result.stderr.trim()).toBe(expectedError);
     expect(result.stderr).not.toContain("\n    at ");
   });
 });
