@@ -8,7 +8,7 @@ import type {
 
 // Video generation mode helpers derive the active mode from reference inputs
 // and expose the provider capability block that applies to that mode/model.
-export function resolveVideoGenerationMode(params: {
+function resolveVideoGenerationMode(params: {
   inputImageCount?: number;
   inputVideoCount?: number;
 }): VideoGenerationMode | null {
@@ -42,7 +42,7 @@ export function listSupportedVideoGenerationModes(
 }
 
 export function resolveVideoGenerationModeCapabilities(params: {
-  provider?: Pick<VideoGenerationProvider, "capabilities" | "catalogByModel">;
+  provider?: Pick<VideoGenerationProvider, "capabilities">;
   model?: string;
   inputImageCount?: number;
   inputVideoCount?: number;
@@ -53,14 +53,6 @@ export function resolveVideoGenerationModeCapabilities(params: {
   const inputImageCount = params.inputImageCount ?? 0;
   const inputVideoCount = params.inputVideoCount ?? 0;
   const mode = resolveVideoGenerationMode(params);
-  const catalogModes = params.model
-    ? params.provider?.catalogByModel?.[params.model]?.modes
-    : undefined;
-  // A model catalog narrows the provider-wide union. Treat it as authoritative
-  // so unsupported modes are rejected before provider request construction.
-  if (mode && catalogModes && !catalogModes.includes(mode)) {
-    return { mode, capabilities: undefined };
-  }
   const capabilities = params.provider?.capabilities;
   const withModelLimits = <
     T extends VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,

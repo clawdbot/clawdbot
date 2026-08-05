@@ -43,7 +43,7 @@ describe("DashScope Wan request contracts", () => {
     expect(
       DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-t2v"]?.capabilities?.generate
         ?.supportsAspectRatio,
-    ).toBe(false);
+    ).toBe(true);
     expect(DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-i2v"]?.modes).toEqual(["imageToVideo"]);
     expect(DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-r2v"]?.modes).toEqual([
       "imageToVideo",

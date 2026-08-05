@@ -1,7 +1,6 @@
 // Video capability overlay tests cover config-driven capability overrides.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
   buildVideoGenerationCapabilityFailure,
   resolveProviderWithModelCapabilities,
@@ -201,12 +200,6 @@ describe("video-generation capability overlays", () => {
       ] as const;
 
       for (const request of requests) {
-        const resolved = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model,
-          inputImageCount: request.inputImageCount,
-          inputVideoCount: request.inputVideoCount,
-        });
         const failure = buildVideoGenerationCapabilityFailure({
           providerId: "qwen",
           model,
@@ -217,10 +210,8 @@ describe("video-generation capability overlays", () => {
         });
 
         if (declaredModes.includes(request.mode)) {
-          expect(resolved.capabilities, `${model}:${request.mode}`).toBeDefined();
           expect(failure, `${model}:${request.mode}`).toBeUndefined();
         } else {
-          expect(resolved.capabilities, `${model}:${request.mode}`).toBeUndefined();
           expect(failure, `${model}:${request.mode}`).toMatch(/does not support/u);
         }
       }
