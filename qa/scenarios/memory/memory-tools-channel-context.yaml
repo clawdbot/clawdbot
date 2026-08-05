@@ -127,7 +127,7 @@ flow:
             message:
               expr: "`final request did not consume the matching successful memory_get result: ${JSON.stringify(finalRequest)}`"
         - call: waitForCondition
-          saveAs: durableChannelOutbound
+          saveAs: durableChannelLifecycle
           args:
             - lambda:
                 expr: |-
@@ -141,10 +141,13 @@ flow:
                     if (!finalSent) return undefined;
                     const previewRetired = events.find((event) => event.kind === "message-deleted" && event.message.id !== candidate.id && event.cursor < finalSent.cursor);
                     if (!previewRetired) return undefined;
-                    const previewSent = events.some((event) => event.kind === "outbound-message" && event.message.id === previewRetired.message.id && event.cursor < previewRetired.cursor);
-                    return previewSent ? candidate : undefined;
+                    const previewSent = events.find((event) => event.kind === "outbound-message" && event.message.id === previewRetired.message.id && event.cursor < previewRetired.cursor);
+                    return previewSent ? { message: candidate, previewId: previewRetired.message.id, finalId: candidate.id, previewSentCursor: previewSent.cursor, previewDeletedCursor: previewRetired.cursor, finalSentCursor: finalSent.cursor } : undefined;
                   })()
             - 10000
+        - set: durableChannelOutbound
+          value:
+            expr: durableChannelLifecycle.message
         - set: visibleChannelOutbounds
           value:
             expr: "state.getSnapshot().messages.slice(outboundStartIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.channelId && message.conversation.kind === 'channel')"
@@ -157,4 +160,4 @@ flow:
             expr: "(durableChannelOutbound.text.match(new RegExp(config.expectedNeedle, 'g')) ?? []).length === 1"
             message:
               expr: "`final QA-room reply must contain ${config.expectedNeedle} exactly once: ${durableChannelOutbound.text}`"
-      detailsExpr: "`${durableChannelOutbound.text}; path=${config.expectedMemoryPath}; matched=${searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId}; room=${config.channelId}`"
+      detailsExpr: "`${durableChannelOutbound.text}; path=${config.expectedMemoryPath}; matched=${searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId}; room=${config.channelId}; lifecycle=${JSON.stringify({ previewId: durableChannelLifecycle.previewId, previewSentCursor: durableChannelLifecycle.previewSentCursor, previewDeletedCursor: durableChannelLifecycle.previewDeletedCursor, finalId: durableChannelLifecycle.finalId, finalSentCursor: durableChannelLifecycle.finalSentCursor })}`"

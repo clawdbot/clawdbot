@@ -144,24 +144,30 @@ describe("qa scenario catalog causality", () => {
       "thread-memory-isolation",
       "poll",
       "finalRequest.toolOutputCallId === searchResultRequest.plannedToolCallId",
+      null,
     ],
     [
       "memory-tools-channel-context",
       "poll",
       "finalRequest.toolOutputCallId === searchResultRequest.plannedToolCallId",
+      "durableChannelLifecycle",
     ],
     [
       "agent-tool-consumption",
       "immediate",
       "getResultRequest.toolOutputCallId === searchResultRequest.plannedToolCallId",
+      null,
     ],
   ] as const)(
     "asserts the complete memory tool chain before %s delivery",
-    (scenarioId, requestCollectionMode, finalLinkNeedle) => {
+    (scenarioId, requestCollectionMode, finalLinkNeedle, durableWaitSaveAs) => {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-      const outboundIndex = actions.findIndex(
-        (action) => (action as { call?: string }).call === "waitForOutboundMessage",
+      const outboundIndex = actions.findIndex((action) =>
+        durableWaitSaveAs
+          ? (action as { call?: string }).call === "waitForCondition" &&
+            (action as { saveAs?: string }).saveAs === durableWaitSaveAs
+          : (action as { call?: string }).call === "waitForOutboundMessage",
       );
       const requestCollectionIndex = actions.findIndex((action) =>
         requestCollectionMode === "poll"
@@ -192,6 +198,15 @@ describe("qa scenario catalog causality", () => {
       expect(searchResultAssertIndex, scenarioId).toBeGreaterThan(searchPlanAssertIndex);
       expect(finalRequestAssertIndex, scenarioId).toBeGreaterThan(searchResultAssertIndex);
       expect(outboundIndex, scenarioId).toBeGreaterThan(finalRequestAssertIndex);
+
+      if (durableWaitSaveAs) {
+        const durableWait = actions[outboundIndex] as
+          | { args?: Array<{ lambda?: { expr?: string } }> }
+          | undefined;
+        const durableExpr = durableWait?.args?.[0]?.lambda?.expr ?? "";
+        expect(durableExpr, scenarioId).toContain("event.cursor < finalSent.cursor");
+        expect(durableExpr, scenarioId).toContain("event.cursor < previewRetired.cursor");
+      }
 
       if (requestCollectionMode === "poll") {
         const requestPoll = actions[requestCollectionIndex] as

@@ -184,7 +184,7 @@ flow:
             message:
               expr: "`request 4 did not consume the successful write result before terminal generation: ${JSON.stringify(writeResultRequest)}`"
         - call: waitForCondition
-          saveAs: durableCompletion
+          saveAs: durableCompletionLifecycle
           args:
             - lambda:
                 expr: |-
@@ -198,10 +198,13 @@ flow:
                     if (!finalSent) return undefined;
                     const previewRetired = events.find((event) => event.kind === "message-deleted" && event.message.id !== candidate.id && event.cursor < finalSent.cursor);
                     if (!previewRetired) return undefined;
-                    const previewSent = events.some((event) => event.kind === "outbound-message" && event.message.id === previewRetired.message.id && event.cursor < previewRetired.cursor);
-                    return previewSent ? candidate : undefined;
+                    const previewSent = events.find((event) => event.kind === "outbound-message" && event.message.id === previewRetired.message.id && event.cursor < previewRetired.cursor);
+                    return previewSent ? { message: candidate, previewId: previewRetired.message.id, finalId: candidate.id, previewSentCursor: previewSent.cursor, previewDeletedCursor: previewRetired.cursor, finalSentCursor: finalSent.cursor } : undefined;
                   })()
             - 10000
+        - set: durableCompletion
+          value:
+            expr: durableCompletionLifecycle.message
         - set: allBusEvents
           value:
             expr: "state.getSnapshot().events.filter((event) => event.cursor > busCursorBefore && 'message' in event && event.message.direction === 'outbound' && event.message.conversation.id === config.conversationId)"
@@ -238,4 +241,4 @@ flow:
             expr: "artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)"
             message:
               expr: "`artifact postdated the durable completion reply: artifactMtime=${artifactStat.mtimeMs} replyTimestamp=${finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp}`"
-      detailsExpr: "`read:${firstReadRequest.plannedToolCallId} -> read:${secondReadRequest.plannedToolCallId} -> write:${writeRequest.plannedToolCallId} -> result:${writeResultRequest.toolOutputCallId}; artifactBeforeReply=${artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)}; durableCompletions=${completionMessages.length}`"
+      detailsExpr: "`read:${firstReadRequest.plannedToolCallId} -> read:${secondReadRequest.plannedToolCallId} -> write:${writeRequest.plannedToolCallId} -> result:${writeResultRequest.toolOutputCallId}; artifactBeforeReply=${artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)}; durableCompletions=${completionMessages.length}; lifecycle=${JSON.stringify({ previewId: durableCompletionLifecycle.previewId, previewSentCursor: durableCompletionLifecycle.previewSentCursor, previewDeletedCursor: durableCompletionLifecycle.previewDeletedCursor, finalId: durableCompletionLifecycle.finalId, finalSentCursor: durableCompletionLifecycle.finalSentCursor })}`"
