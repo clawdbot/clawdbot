@@ -7,7 +7,7 @@
 
 export type DreamingLanguage = string;
 
-export interface DreamingTranslations {
+interface DreamingTranslations {
   // Section headers
   dreamDiary: string;
   deepSleep: string;
@@ -164,17 +164,4 @@ const translationsRegistry: Record<string, DreamingTranslations> = {
  */
 export function getDreamingTranslations(language: DreamingLanguage = "en"): DreamingTranslations {
   return translationsRegistry[language] ?? en;
-}
-
-/** Register custom translations for a new language. */
-export function registerDreamingTranslations(
-  language: DreamingLanguage,
-  translations: DreamingTranslations,
-): void {
-  translationsRegistry[language] = translations;
-}
-
-/** Get list of available languages. */
-export function getAvailableLanguages(): string[] {
-  return Object.keys(translationsRegistry);
 }
