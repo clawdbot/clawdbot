@@ -23,7 +23,6 @@ import { renderTelegramHtmlText } from "./format.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
-import { resolveTelegramBlockStreamingEnabled } from "./preview-streaming.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -88,11 +87,9 @@ export function createTelegramDraftController(params: {
     streamDeliveryEnabled &&
     !params.hasTelegramQuoteReply &&
     !params.forceBlockStreamingForReasoning;
-  const accountBlockStreamingEnabled = resolveTelegramBlockStreamingEnabled({
-    account: params.telegramCfg,
+  const accountBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.telegramCfg, {
     previewAvailable,
-    streamMode: params.streamMode,
-    legacyBlockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
+    blockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
   });
   const canStreamAnswerDraft = previewAvailable && !accountBlockStreamingEnabled;
   const streamReasoningDraft = params.resolvedReasoningLevel === "stream";

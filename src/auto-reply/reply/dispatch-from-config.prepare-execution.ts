@@ -21,6 +21,7 @@ import {
   withFullRuntimeReplyConfig,
   withPublishedRuntimeReplyConfig,
 } from "./get-reply-fast-path.js";
+import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -366,11 +367,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         },
       })
     : undefined;
-  const canCaptureItemEvents = Boolean(params.replyOptions?.onItemEvent);
+  const canCaptureCliPreambleEvents =
+    Boolean(params.replyOptions?.onItemEvent) && shouldBridgeCliPreambleEvents(params.replyOptions);
   const canConsumeItemEvents =
-    deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureItemEvents;
-  // Item-event presence gates CLI commentary classification downstream, so
-  // capture-only channels still need the handler to keep commentary out of final text.
+    deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureCliPreambleEvents;
+  // CLI runners classify preambles as item events only when this handler exists.
+  // Keep it for channel-owned capture even when delivery policy hides the event.
   const onItemEvent = canConsumeItemEvents
     ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
         if (isDispatchOperationAborted()) {

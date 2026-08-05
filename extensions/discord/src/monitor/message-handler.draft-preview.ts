@@ -5,6 +5,7 @@ import {
   buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
+  resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingProgressNarration,
@@ -23,10 +24,7 @@ import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import type { RequestClient } from "../internal/discord.js";
-import {
-  resolveDiscordBlockStreamingEnabled,
-  resolveDiscordPreviewStreamMode,
-} from "../preview-streaming.js";
+import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
 
 type DraftReplyReference = {
   peek: () => string | undefined;
@@ -63,11 +61,9 @@ export function createDiscordDraftPreviewController(params: {
     allowProviderPreview &&
     (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off";
-  const accountBlockStreamingEnabled = resolveDiscordBlockStreamingEnabled({
-    account: params.discordConfig,
+  const accountBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig, {
     previewAvailable,
-    streamMode: discordStreamMode,
-    legacyBlockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
+    blockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
   });
   const canStreamDraft = previewAvailable && !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
