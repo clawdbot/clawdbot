@@ -70,6 +70,7 @@ export function createAttemptTranscriptJournal(params: {
   abortSession: () => Promise<void>;
   attempt: AttemptParamsLike;
   messages: AgentMessage[];
+  onInitialSdkUserValidated?: () => void;
   sdkSessionId: string;
 }) {
   const hiddenTurn = params.attempt.trigger === "memory";
@@ -425,6 +426,7 @@ export function createAttemptTranscriptJournal(params: {
           replayInvalid = true;
         } else {
           initialSdkUserValidated = true;
+          params.onInitialSdkUserValidated?.();
         }
         persistenceReceipt.resolve();
         return;
@@ -439,6 +441,8 @@ export function createAttemptTranscriptJournal(params: {
         const outcome = await append(write);
         if (!outcome) {
           replayInvalid = true;
+          persistenceReceipt.reject(new Error("Copilot steering user write was suppressed"));
+          return;
         }
         await publish(accept(outcome));
         persistenceReceipt.resolve();
@@ -527,6 +531,12 @@ export function createAttemptTranscriptJournal(params: {
           const outcome = await append(write);
           if (!outcome) {
             replayInvalid = true;
+            if (write.eventId) {
+              sdkUserPersistenceReceipt(write.eventId).reject(
+                new Error("Copilot steering user write was suppressed"),
+              );
+            }
+            continue;
           }
           const didAppend = accept(outcome);
           appended ||= didAppend;

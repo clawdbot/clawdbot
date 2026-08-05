@@ -74,14 +74,8 @@ function loadChatSendSessionContext(params: {
   const expectedSessionRoutingContract = normalizeOptionalChatText(
     p.expectedSessionRoutingContract,
   );
-  // An active run advances its own transcript leaf while steering remains valid.
-  // Treat explicit steers as run-owned input so normal branch fencing cannot reject them.
   const expectedLeafEntryId =
-    p.queueMode === "steer"
-      ? undefined
-      : p.expectedLeafEntryId === null
-        ? null
-        : normalizeOptionalChatText(p.expectedLeafEntryId);
+    p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);

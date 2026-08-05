@@ -108,6 +108,7 @@ export async function runCopilotExecution(context: {
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
   let transcriptJournal: AttemptTranscriptJournal | undefined;
+  let initialSdkUserValidated = false;
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
@@ -407,6 +408,9 @@ export async function runCopilotExecution(context: {
       abortSession: () => session?.abort() ?? Promise.resolve(),
       attempt: input,
       messages,
+      onInitialSdkUserValidated: () => {
+        initialSdkUserValidated = true;
+      },
       sdkSessionId,
     });
     bridge = attachEventBridge(session, {
@@ -457,6 +461,7 @@ export async function runCopilotExecution(context: {
     activeRunHandleRef = registerCopilotActiveRun({
       abortActiveSession,
       bridge,
+      canAcceptSteering: () => initialSdkUserValidated,
       input,
       isAborted: () => aborted,
       isSettled: () => settled,

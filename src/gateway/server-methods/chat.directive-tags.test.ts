@@ -18,6 +18,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   appendTranscriptMessage,
@@ -1322,7 +1323,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
   });
 
-  it("allows an explicit steer after the active run advances its transcript leaf", async () => {
+  it("rejects a stale explicit steer without an active owner", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-stale-steer-no-owner-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "finished" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-stale-steer-no-owner",
+      requestParams: {
+        expectedLeafEntryId: "leaf-before-finished-run",
+        queueMode: "steer",
+      },
+      waitFor: "none",
+    });
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
+  });
+
+  it("allows an explicit steer after its active owner advances the transcript leaf", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-moving-leaf-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1331,14 +1359,30 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       parentId: null,
     });
     const { context, respond, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-steer-moving-leaf",
-      requestParams: {
-        expectedLeafEntryId: "leaf-before-active-run-output",
-        queueMode: "steer",
-      },
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
     });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      isStreaming: () => true,
+      queueMessage: async () => {},
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-moving-leaf",
+        requestParams: {
+          expectedLeafEntryId: "leaf-before-active-run-output",
+          queueMode: "steer",
+        },
+      });
+    } finally {
+      operation.complete();
+    }
 
     expect(respond).toHaveBeenCalledWith(
       true,

@@ -702,6 +702,9 @@ describe("runReplyAgent active steering", () => {
   });
 
   it.each([
+    "no_active_run",
+    "not_streaming",
+    "stale_run",
     "compacting",
     "image_input_unsupported",
     "source_reply_delivery_mode_mismatch",
@@ -727,6 +730,7 @@ describe("runReplyAgent active steering", () => {
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
+      shouldFollowup: true,
       resolvedQueueMode: "steer",
     });
 

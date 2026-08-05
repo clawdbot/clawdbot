@@ -17,6 +17,7 @@ type CopilotQueueMessageOptions = Parameters<typeof queueAgentHarnessMessage>[2]
 export function registerCopilotActiveRun(params: {
   abortActiveSession: () => void;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
+  canAcceptSteering: () => boolean;
   input: AttemptParamsLike;
   isAborted: () => boolean;
   isSettled: () => boolean;
@@ -49,6 +50,9 @@ export function registerCopilotActiveRun(params: {
       ) {
         return;
       }
+      if (!params.canAcceptSteering()) {
+        throw new Error("Copilot steering is unavailable before initial user validation");
+      }
       const messageId = await params.session.send({ prompt: text });
       if (options?.waitForTranscriptCommit === true) {
         await waitForPersistenceReceipt(
@@ -57,7 +61,7 @@ export function registerCopilotActiveRun(params: {
         );
       }
     },
-    isStreaming: () => !params.isSettled() && !params.isAborted(),
+    isStreaming: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
     isAborted: params.isAborted,
     isCompacting: () => params.bridge?.isCompacting() ?? false,
     // session.send resolves with the injected user-message id; the journal
