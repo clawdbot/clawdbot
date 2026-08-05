@@ -40,6 +40,10 @@ import { isPathInside } from "./path-safety.js";
 
 /** npm install resolution metadata re-exported for lazy plugin install callers. */
 export type { NpmIntegrityDrift, NpmSpecResolution };
+export {
+  installGuardedReplace,
+  installGuardedReplaceReconcile,
+} from "../infra/install-guarded-replace.js";
 
 /** Lazy runtime barrel for plugin install helpers used outside the main install module. */
 export {

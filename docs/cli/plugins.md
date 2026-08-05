@@ -39,6 +39,8 @@ openclaw plugins search <query>
 openclaw plugins search <query> --limit 20
 openclaw plugins search <query> --json
 openclaw plugins install <path-or-spec>
+openclaw plugins replace-guarded <candidate-archive> --id <id> --candidate-sha256 <sha256> --expected-predecessor-sha256 <sha256> --rollback-archive <path> --rollback-sha256 <sha256> --receipt <path>
+openclaw plugins replace-guarded reconcile --receipt <path>
 openclaw plugins inspect <id>
 openclaw plugins inspect <id> --runtime
 openclaw plugins inspect <id> --json
@@ -151,6 +153,14 @@ is available, then fall back to `latest`.
     `--force` reuses the existing install target and overwrites an already-installed plugin or hook pack in place. Use it when you are intentionally reinstalling the same id from a new local path, archive, ClawHub package, or npm artifact. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
 
     If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source.
+
+  </Accordion>
+  <Accordion title="Guarded archive replacement">
+    `plugins replace-guarded` is a separate recovery-oriented command for an already-installed local archive plugin. It requires exact candidate archive, installed predecessor payload, and rollback archive SHA-256 identities plus a new receipt path whose parent directory already exists. The command reserves that receipt before changing the plugin target, stores an independent trust anchor in the host state database, and holds the host-wide lifecycle lease shared by CLI, onboarding, chat-command, doctor-repair, and post-core install/update/uninstall flows. It then stages and validates the candidate, retains a recoverable predecessor until the target and installed index are consistent, and records a typed final outcome. The installed-index transition uses a compare-and-swap transaction so an unrelated record update cannot be overwritten.
+
+    If the process stops after publication, run `openclaw plugins replace-guarded reconcile --receipt <path>`. Reconciliation first verifies the mutable receipt against its independently persisted trust anchor. It then either completes a target whose installed-index transaction committed, restores the verified predecessor when it did not, or reports that operator authorization is required when neither state can be proven safe. Re-running reconciliation for a completed, rolled-back, or aborted receipt verifies the anchored target/index state and otherwise makes no change.
+
+    This command does not accept `--force`, `--marketplace`, `--link`, `--pin`, or `--dangerously-force-unsafe-install`. It does not change `plugins update` eligibility, mutate plugin configuration, or restart the Gateway.
 
   </Accordion>
   <Accordion title="--pin scope">

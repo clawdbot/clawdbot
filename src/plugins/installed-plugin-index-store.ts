@@ -1,6 +1,8 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync, readFileSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   openOpenClawStateDatabase,
@@ -309,20 +311,18 @@ function readPersistedInstalledPluginIndexFromSqlite(
   }
 }
 
-function writePersistedInstalledPluginIndexToSqlite(
+function writePersistedInstalledPluginIndexUsingDatabase(
+  db: DatabaseSync,
   index: InstalledPluginIndex,
-  options: InstalledPluginIndexStoreOptions = {},
 ): void {
-  assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = {
     ...index,
     warning: INSTALLED_PLUGIN_INDEX_WARNING,
     installRecords: copySafeInstallRecords(index.installRecords) ?? {},
   };
   const now = Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    db.prepare(
-      `
+  db.prepare(
+    `
         INSERT INTO installed_plugin_index (
           index_key, version, host_contract_version, compat_registry_version,
           migration_version, policy_hash, generated_at_ms, refresh_reason,
@@ -346,22 +346,80 @@ function writePersistedInstalledPluginIndexToSqlite(
           warning = excluded.warning,
           updated_at_ms = excluded.updated_at_ms
       `,
-    ).run({
-      index_key: INSTALLED_PLUGIN_INDEX_SQLITE_KEY,
-      version: persisted.version,
-      host_contract_version: persisted.hostContractVersion,
-      compat_registry_version: persisted.compatRegistryVersion,
-      migration_version: persisted.migrationVersion,
-      policy_hash: persisted.policyHash,
-      generated_at_ms: persisted.generatedAtMs,
-      refresh_reason: persisted.refreshReason ?? null,
-      install_records_json: JSON.stringify(persisted.installRecords),
-      plugins_json: JSON.stringify(persisted.plugins),
-      diagnostics_json: JSON.stringify(persisted.diagnostics),
-      warning: persisted.warning,
-      updated_at_ms: now,
-    });
+  ).run({
+    index_key: INSTALLED_PLUGIN_INDEX_SQLITE_KEY,
+    version: persisted.version,
+    host_contract_version: persisted.hostContractVersion,
+    compat_registry_version: persisted.compatRegistryVersion,
+    migration_version: persisted.migrationVersion,
+    policy_hash: persisted.policyHash,
+    generated_at_ms: persisted.generatedAtMs,
+    refresh_reason: persisted.refreshReason ?? null,
+    install_records_json: JSON.stringify(persisted.installRecords),
+    plugins_json: JSON.stringify(persisted.plugins),
+    diagnostics_json: JSON.stringify(persisted.diagnostics),
+    warning: persisted.warning,
+    updated_at_ms: now,
+  });
+}
+
+function writePersistedInstalledPluginIndexToSqlite(
+  index: InstalledPluginIndex,
+  options: InstalledPluginIndexStoreOptions = {},
+): void {
+  assertWritableInstalledPluginIndexStoreOptions(options);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    writePersistedInstalledPluginIndexUsingDatabase(db, index);
   }, resolveInstalledPluginIndexStateDatabaseOptions(options));
+}
+
+/** Atomically replaces one install record only when its trusted predecessor hash still matches. */
+export async function compareAndSwapPersistedInstalledPluginIndexInstallRecord(
+  params: InstalledPluginIndexStoreOptions &
+    Partial<Omit<RefreshInstalledPluginIndexParams, "reason" | "installRecords">> & {
+      pluginId: string;
+      expectedRecordSha256: string;
+      nextRecord: PluginInstallRecord;
+    },
+): Promise<boolean> {
+  assertWritableInstalledPluginIndexStoreOptions(params);
+  const committed = runOpenClawStateWriteTransaction(({ db }) => {
+    const row = db
+      .prepare(
+        `
+          SELECT version, warning, host_contract_version, compat_registry_version,
+                 migration_version, policy_hash, generated_at_ms, refresh_reason,
+                 install_records_json, plugins_json, diagnostics_json
+            FROM installed_plugin_index
+           WHERE index_key = ?
+        `,
+      )
+      .get(INSTALLED_PLUGIN_INDEX_SQLITE_KEY) as InstalledPluginIndexSqliteRow | undefined;
+    const current = parseInstalledPluginIndexSqliteRow(row);
+    if (!current) {
+      return false;
+    }
+    const currentRecords = copySafeInstallRecords(current.installRecords) ?? {};
+    if (hashJson(currentRecords[params.pluginId] ?? null) !== params.expectedRecordSha256) {
+      return false;
+    }
+    const nextRecords: Record<string, PluginInstallRecord> = {
+      ...(currentRecords as Record<string, PluginInstallRecord>),
+      [params.pluginId]: structuredClone(params.nextRecord),
+    };
+    const index = refreshInstalledPluginIndex({
+      ...params,
+      reason: "source-changed",
+      installRecords: nextRecords,
+    });
+    writePersistedInstalledPluginIndexUsingDatabase(db, index);
+    return true;
+  }, resolveInstalledPluginIndexStateDatabaseOptions(params));
+  if (committed) {
+    clearPluginMetadataLifecycleCaches();
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+  }
+  return committed;
 }
 
 export async function readPersistedInstalledPluginIndex(

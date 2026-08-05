@@ -55,6 +55,7 @@ import {
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
+import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
@@ -1309,7 +1310,7 @@ export async function repairMissingPluginInstallsForIds(params: {
   });
 }
 
-async function repairMissingPluginInstalls(params: {
+async function repairMissingPluginInstallsUnlocked(params: {
   cfg: OpenClawConfig;
   pluginIds: ReadonlySet<string>;
   channelIds: ReadonlySet<string>;
@@ -1622,4 +1623,13 @@ async function repairMissingPluginInstalls(params: {
       : {}),
     records: nextRecords,
   };
+}
+
+async function repairMissingPluginInstalls(
+  params: Parameters<typeof repairMissingPluginInstallsUnlocked>[0],
+): Promise<RepairMissingPluginInstallsResult> {
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease(resolveDefaultPluginExtensionsDir(env), async () => {
+    return await repairMissingPluginInstallsUnlocked(params);
+  });
 }

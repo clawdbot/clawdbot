@@ -1,5 +1,6 @@
 /** Public installed-plugin-index API for load, refresh, policy hash, and invalidation checks. */
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -45,6 +46,30 @@ export {
   hasMissingConfigPathActivationMetadata,
 } from "./installed-plugin-index-config-path-scope.js";
 export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+
+/**
+ * Builds the one install-record transition allowed by guarded archive replacement.
+ * Keeping `source: "archive"` preserves normal `plugins update` eligibility rules.
+ */
+export function buildGuardedReplaceInstallRecord(params: {
+  previous: PluginInstallRecord;
+  candidateArchivePath: string;
+  targetDir: string;
+  version?: string;
+  installedAt: string;
+}): PluginInstallRecord {
+  if (params.previous.source !== "archive") {
+    throw new Error("guarded replacement requires an archive install record");
+  }
+  return {
+    ...params.previous,
+    source: "archive",
+    sourcePath: params.candidateArchivePath,
+    installPath: params.targetDir,
+    ...(params.version ? { version: params.version } : {}),
+    installedAt: params.installedAt,
+  };
+}
 
 function buildInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & { refreshReason?: InstalledPluginIndexRefreshReason },

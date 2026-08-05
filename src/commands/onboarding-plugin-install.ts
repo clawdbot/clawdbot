@@ -46,6 +46,7 @@ import {
   resolveNpmInstallRecordSpec,
 } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
@@ -996,7 +997,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
 }
 
 /** Ensures an onboarding plugin is installed, enabled, and recorded in config. */
-export async function ensureOnboardingPluginInstalled(params: {
+async function ensureOnboardingPluginInstalledUnlocked(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   prompter: WizardPrompter;
@@ -1363,4 +1364,13 @@ export async function ensureOnboardingPluginInstalled(params: {
     pluginId: entry.pluginId,
     status: "failed",
   };
+}
+
+/** Keeps onboarding payload, enablement, and install-record changes in one lifecycle lease. */
+export async function ensureOnboardingPluginInstalled(
+  params: Parameters<typeof ensureOnboardingPluginInstalledUnlocked>[0],
+): Promise<OnboardingPluginInstallResult> {
+  return await withPluginLifecycleLease(resolveDefaultPluginExtensionsDir(), async () => {
+    return await ensureOnboardingPluginInstalledUnlocked(params);
+  });
 }

@@ -39,6 +39,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -851,7 +852,7 @@ export async function loadConfigForInstall(
   return loadConfigFromSnapshotForInstall(request, prepared);
 }
 
-export async function runPluginInstallCommand(params: {
+async function runPluginInstallCommandUnlocked(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
     force?: boolean;
@@ -1352,4 +1353,13 @@ export async function runPluginInstallCommand(params: {
   if (!npmResult.ok) {
     return runtime.exit(1);
   }
+}
+
+/** Runs install/update payload and installed-index mutations under the shared lifecycle lease. */
+export async function runPluginInstallCommand(
+  params: Parameters<typeof runPluginInstallCommandUnlocked>[0],
+) {
+  return await withPluginLifecycleLease(resolveDefaultPluginExtensionsDir(), async () => {
+    return await runPluginInstallCommandUnlocked(params);
+  });
 }

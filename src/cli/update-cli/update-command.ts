@@ -101,8 +101,10 @@ import {
 } from "../../infra/update-post-core-context.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import { resolveDefaultPluginExtensionsDir } from "../../plugins/install-paths.js";
 import {
   loadInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
@@ -111,6 +113,7 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "../../plugins/official-external-install-records.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import {
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
@@ -1745,7 +1748,7 @@ async function runGitUpdate(params: {
   };
 }
 
-export async function updatePluginsAfterCoreUpdate(params: {
+async function updatePluginsAfterCoreUpdateUnlocked(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -2083,6 +2086,19 @@ export async function updatePluginsAfterCoreUpdate(params: {
     },
     integrityDrifts,
   };
+}
+
+/** Serializes post-core payload convergence and its installed-index commit. */
+export async function updatePluginsAfterCoreUpdate(
+  params: Parameters<typeof updatePluginsAfterCoreUpdateUnlocked>[0],
+): Promise<PostCorePluginUpdateResult> {
+  return await withPluginLifecycleLease(resolveDefaultPluginExtensionsDir(), async () => {
+    const persistedInstallRecords = await readPersistedInstalledPluginIndexInstallRecords();
+    return await updatePluginsAfterCoreUpdateUnlocked({
+      ...params,
+      pluginInstallRecords: persistedInstallRecords ?? params.pluginInstallRecords,
+    });
+  });
 }
 
 async function maybeRestartService(params: {
@@ -2972,15 +2988,23 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   const sourceConfigPath = path.join(resultDir, "source-config.json");
   const postCoreHostVersion = await readPackageVersion(params.root);
 
-  const pluginInstallRecords = preparePostCorePluginInstallRecordsForFreshProcess({
-    records: params.pluginInstallRecords,
-    targetVersion: postCoreHostVersion,
-  });
+  const pluginInstallRecords = await withPluginLifecycleLease(
+    resolveDefaultPluginExtensionsDir(),
+    async () => {
+      const persistedInstallRecords = await readPersistedInstalledPluginIndexInstallRecords();
+      const currentInstallRecords = persistedInstallRecords ?? params.pluginInstallRecords;
+      const preparedInstallRecords = preparePostCorePluginInstallRecordsForFreshProcess({
+        records: currentInstallRecords,
+        targetVersion: postCoreHostVersion,
+      });
+      if (preparedInstallRecords !== currentInstallRecords) {
+        await writePersistedInstalledPluginIndexInstallRecords(preparedInstallRecords);
+      }
+      return preparedInstallRecords;
+    },
+  );
 
   try {
-    if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
-    }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     const childStdio = resolvePostCoreUpdateChildStdio();

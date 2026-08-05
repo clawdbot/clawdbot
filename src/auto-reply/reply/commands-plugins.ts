@@ -23,6 +23,7 @@ import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
+import { resolveDefaultPluginExtensionsDir } from "../../plugins/install-paths.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import {
@@ -30,6 +31,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../../plugins/official-external-plugin-catalog.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
@@ -213,7 +215,7 @@ function findTrustedCatalogPackageInstall(packageName: string):
   };
 }
 
-async function installPluginFromPluginsCommand(params: {
+async function installPluginFromPluginsCommandUnlocked(params: {
   raw: string;
   config: OpenClawConfig;
   snapshot: ConfigSnapshotForInstallPersist;
@@ -345,6 +347,14 @@ async function installPluginFromPluginsCommand(params: {
     install: installRecord,
   });
   return { ok: true, pluginId: result.pluginId };
+}
+
+async function installPluginFromPluginsCommand(
+  params: Parameters<typeof installPluginFromPluginsCommandUnlocked>[0],
+): ReturnType<typeof installPluginFromPluginsCommandUnlocked> {
+  return await withPluginLifecycleLease(resolveDefaultPluginExtensionsDir(), async () => {
+    return await installPluginFromPluginsCommandUnlocked(params);
+  });
 }
 
 async function loadPluginCommandState(

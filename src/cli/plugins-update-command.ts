@@ -12,11 +12,13 @@ import { extractShippedPluginInstallConfigRecords } from "../config/plugin-insta
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
@@ -98,7 +100,7 @@ function projectUpdaterResultOntoSourceConfig(params: {
 }
 
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
-export async function runPluginUpdateCommand(params: {
+async function runPluginUpdateCommandUnlocked(params: {
   id?: string;
   opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
 }) {
@@ -361,4 +363,16 @@ export async function runPluginUpdateCommand(params: {
   if (outcomeSummary.hasErrors) {
     defaultRuntime.exit(1);
   }
+}
+
+/** Runs plugin payload and installed-index updates under the shared lifecycle lease. */
+export async function runPluginUpdateCommand(
+  params: Parameters<typeof runPluginUpdateCommandUnlocked>[0],
+) {
+  if (params.opts.dryRun) {
+    return await runPluginUpdateCommandUnlocked(params);
+  }
+  return await withPluginLifecycleLease(resolveDefaultPluginExtensionsDir(), async () => {
+    return await runPluginUpdateCommandUnlocked(params);
+  });
 }

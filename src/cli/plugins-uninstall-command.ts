@@ -5,6 +5,8 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
@@ -28,7 +30,7 @@ function isPromptInputClosedError(
   return error instanceof PromptInputClosedError;
 }
 
-export async function runPluginUninstallCommand(
+async function runPluginUninstallCommandUnlocked(
   id: string,
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
@@ -213,4 +215,18 @@ export async function runPluginUninstallCommand(
     `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,
   );
   runtime.log("Restart the gateway to apply changes.");
+}
+
+/** Runs config, installed-index, and payload removal under the shared lifecycle lease. */
+export async function runPluginUninstallCommand(
+  id: string,
+  opts: PluginUninstallOptions = {},
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  if (opts.dryRun) {
+    return await runPluginUninstallCommandUnlocked(id, opts, runtime);
+  }
+  await withPluginLifecycleLease(resolveDefaultPluginExtensionsDir(), async () => {
+    await runPluginUninstallCommandUnlocked(id, opts, runtime);
+  });
 }
