@@ -113,6 +113,13 @@ export type CompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  /** Structured provider failure metadata used by callers to classify retryable errors. */
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+    rawError?: string;
+  };
   result?: {
     summary?: string;
     firstKeptEntryId?: string;

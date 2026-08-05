@@ -201,6 +201,7 @@ export async function delegateCompactionToRuntime(
     ok: result.ok,
     compacted: result.compacted,
     reason: result.reason,
+    ...(result.failure ? { failure: result.failure } : {}),
     result: result.result
       ? {
           summary: result.result.summary,

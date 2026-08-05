@@ -299,6 +299,51 @@ describe("Engine contract tests", () => {
     });
   });
 
+  it("delegateCompactionToRuntime preserves structured provider failures", async () => {
+    installCompactRuntimeSpy();
+    const failure = {
+      ok: false,
+      compacted: false,
+      reason: "Provider returned 503",
+      failure: {
+        reason: "server_error",
+        status: 503,
+        code: "upstream_unavailable",
+        rawError: "loopback upstream unavailable",
+      },
+    } as const;
+    compactEmbeddedAgentSessionDirectMock
+      .mockResolvedValueOnce(failure)
+      .mockResolvedValueOnce(failure);
+
+    const expected = {
+      ok: false,
+      compacted: false,
+      reason: "Provider returned 503",
+      failure: {
+        reason: "server_error",
+        status: 503,
+        code: "upstream_unavailable",
+      },
+    };
+
+    await expect(
+      new LegacyContextEngine().compact({
+        sessionId: "s-failure",
+        sessionKey: "agent:main:s-failure",
+        runtimeContext: { workspaceDir: "/tmp/workspace" },
+      }),
+    ).resolves.toMatchObject(expected);
+
+    await expect(
+      delegateCompactionToRuntime({
+        sessionId: "s-failure",
+        sessionKey: "agent:main:s-failure",
+        runtimeContext: { workspaceDir: "/tmp/workspace" },
+      }),
+    ).resolves.toMatchObject(expected);
+  });
+
   it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-target-"));
     const storePath = path.join(root, "openclaw-agent.sqlite");
