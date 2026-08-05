@@ -457,9 +457,23 @@ export function resolveConfiguredDreaming(configValue: Record<string, unknown> |
   const pluginEntry = asRecord(entries?.[pluginId]);
   const config = asRecord(pluginEntry?.config);
   const dreaming = asRecord(config?.dreaming);
+
+  if (typeof dreaming?.enabled === "boolean") {
+    return {
+      pluginId,
+      enabled: dreaming.enabled,
+    };
+  }
+
+  const isEnabled = isPluginEnabledInConfigSnapshot(
+    configValue ? ({ config: configValue } as ConfigSnapshot) : undefined,
+    pluginId,
+    { enabledByDefault: true },
+  );
+
   return {
     pluginId,
-    enabled: normalizeBoolean(dreaming?.enabled, false),
+    enabled: isEnabled,
   };
 }
 

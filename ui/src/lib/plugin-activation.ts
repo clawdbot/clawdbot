@@ -32,6 +32,30 @@ export function isPluginEnabledInConfigSnapshot(
     return false;
   }
 
+  const entries =
+    plugins && "entries" in plugins && plugins.entries && typeof plugins.entries === "object"
+      ? (plugins.entries as Record<string, unknown>)
+      : null;
+  const entry = entries?.[pluginId];
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    const enabled = (entry as { enabled?: unknown }).enabled;
+    if (enabled === false) {
+      return false;
+    }
+  }
+
+  const slots =
+    plugins && "slots" in plugins && plugins.slots && typeof plugins.slots === "object"
+      ? (plugins.slots as Record<string, unknown>)
+      : null;
+  const isSelectedSlot =
+    (typeof slots?.memory === "string" && slots.memory.trim() === pluginId) ||
+    (typeof slots?.contextEngine === "string" && slots.contextEngine.trim() === pluginId);
+
+  if (isSelectedSlot) {
+    return true;
+  }
+
   const allow =
     Array.isArray(plugins?.allow) && plugins.allow.every((entry) => typeof entry === "string")
       ? plugins.allow
@@ -39,18 +63,18 @@ export function isPluginEnabledInConfigSnapshot(
   if (allow.length > 0 && !allow.includes(pluginId)) {
     return false;
   }
-
-  const entries =
-    plugins && "entries" in plugins && plugins.entries && typeof plugins.entries === "object"
-      ? (plugins.entries as Record<string, unknown>)
-      : null;
-  const entry = entries?.[pluginId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return enabledByDefault;
+  if (allow.includes(pluginId)) {
+    return true;
   }
 
-  const enabled = (entry as { enabled?: unknown }).enabled;
-  return typeof enabled === "boolean" ? enabled : enabledByDefault;
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    const enabled = (entry as { enabled?: unknown }).enabled;
+    if (typeof enabled === "boolean") {
+      return enabled;
+    }
+  }
+
+  return enabledByDefault;
 }
 
 /** Workboard ships disabled; an unloaded snapshot therefore reads as disabled. */

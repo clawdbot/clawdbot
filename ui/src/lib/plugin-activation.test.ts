@@ -78,4 +78,65 @@ describe("isPluginEnabledInConfigSnapshot", () => {
       }),
     ).toBe(true);
   });
+
+  it("treats plugins selected in plugins.slots.memory as enabled even when omitted from plugins.allow", () => {
+    expect(
+      isPluginEnabledInConfigSnapshot(
+        {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              slots: {
+                memory: "custom-memory-plugin",
+              },
+              allow: ["browser"],
+            },
+          },
+        },
+        "custom-memory-plugin",
+        { enabledByDefault: false },
+      ),
+    ).toBe(true);
+  });
+
+  it("respects explicit entry disabled state even if selected in plugins.slots.memory", () => {
+    expect(
+      isPluginEnabledInConfigSnapshot(
+        {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              slots: {
+                memory: "custom-memory-plugin",
+              },
+              entries: {
+                "custom-memory-plugin": {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+        "custom-memory-plugin",
+        { enabledByDefault: false },
+      ),
+    ).toBe(false);
+  });
+
+  it("treats plugins listed in plugins.allow as explicitly enabled", () => {
+    expect(
+      isPluginEnabledInConfigSnapshot(
+        {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              allow: ["my-allowed-plugin"],
+            },
+          },
+        },
+        "my-allowed-plugin",
+        { enabledByDefault: false },
+      ),
+    ).toBe(true);
+  });
 });

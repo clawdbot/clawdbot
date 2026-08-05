@@ -973,6 +973,26 @@ describe("dreaming controller", () => {
     });
   });
 
+  it("treats selected third-party memory slot plugin as enabled when config.dreaming section is omitted", () => {
+    expect(
+      resolveConfiguredDreaming({
+        plugins: {
+          slots: {
+            memory: "custom-memory-plugin",
+          },
+          entries: {
+            "custom-memory-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      pluginId: "custom-memory-plugin",
+      enabled: true,
+    });
+  });
+
   it('falls back to memory-core when selected memory slot is "none"', () => {
     expect(
       resolveConfiguredDreaming({
