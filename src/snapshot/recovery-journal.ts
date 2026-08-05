@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Insertable, Selectable } from "kysely";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
+import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
@@ -96,22 +97,18 @@ export async function writeRecoveryJournalRecord(
 }
 
 async function openRecoveryJournal(databasePath: string) {
-  await fs
-    .lstat(databasePath)
-    .then((stat) => {
-      if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
-        throw new RecoveryJournalError("corrupt", "Recovery journal is not a trusted file.");
-      }
-      return true;
-    })
-    .catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return false;
-      }
-      throw error;
-    });
+  const expectedIdentity =
+    (await readTrustedRecoveryJournalIdentity(databasePath)) ??
+    (await createTrustedRecoveryJournalFile(databasePath));
   const database = openNodeSqliteDatabase(databasePath);
   try {
+    const openedIdentity = await readTrustedRecoveryJournalIdentity(databasePath);
+    if (!openedIdentity || !sameFileIdentity(expectedIdentity, openedIdentity)) {
+      throw new RecoveryJournalError(
+        "corrupt",
+        "Recovery journal identity changed before SQLite ownership was established.",
+      );
+    }
     // sqlite-allow-raw -- this boundary owns dedicated journal bootstrap DDL and durability pragmas.
     database.exec(`
       PRAGMA journal_mode = DELETE;
@@ -127,5 +124,36 @@ async function openRecoveryJournal(databasePath: string) {
   } catch (error) {
     database.close();
     throw error;
+  }
+}
+
+async function readTrustedRecoveryJournalIdentity(databasePath: string) {
+  return await fs
+    .lstat(databasePath)
+    .then((stat) => {
+      if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
+        throw new RecoveryJournalError("corrupt", "Recovery journal is not a trusted file.");
+      }
+      return stat;
+    })
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    });
+}
+
+async function createTrustedRecoveryJournalFile(databasePath: string) {
+  const handle = await fs.open(databasePath, "wx", PRIVATE_FILE_MODE);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink !== 1) {
+      throw new RecoveryJournalError("corrupt", "Recovery journal is not a trusted file.");
+    }
+    await handle.sync();
+    return stat;
+  } finally {
+    await handle.close();
   }
 }
