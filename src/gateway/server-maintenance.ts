@@ -37,6 +37,7 @@ import {
   type MediaCleanupStopResult,
   registerMediaCleanupDrain,
   waitForMediaCleanupDrains,
+  waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
@@ -373,12 +374,21 @@ export function startGatewayMaintenanceTimers(params: {
     void managedOutgoingCleanupLoader.load();
     void runConfiguredMediaCleanup();
   };
+  let mediaCleanupStartPromise: Promise<void> | undefined;
   const startMediaCleanup = () => {
-    if (mediaCleanupStopped || mediaCleanupInterval) {
+    if (mediaCleanupStopped || mediaCleanupInterval || mediaCleanupStartPromise) {
       return;
     }
-    mediaCleanupInterval = setInterval(runMediaMaintenance, 60 * 60_000);
-    runMediaMaintenance();
+    // Gateway readiness must not wait on a prior stuck generation. Defer only
+    // this cleanup owner until the process-wide drain fence is clear.
+    mediaCleanupStartPromise = waitForMediaCleanupDrainsToSettle().then(() => {
+      mediaCleanupStartPromise = undefined;
+      if (mediaCleanupStopped || mediaCleanupInterval) {
+        return;
+      }
+      mediaCleanupInterval = setInterval(runMediaMaintenance, 60 * 60_000);
+      runMediaMaintenance();
+    });
   };
   let stopMediaCleanupPromise: Promise<MediaCleanupStopResult> | undefined;
   const stopMediaCleanup = () => {

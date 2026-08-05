@@ -529,7 +529,14 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
   if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
     return resolveFixedSessionStoreTargetsReadOnly(cfg, requested, env, params.cache);
   }
-  const targets = resolveExistingAgentSessionStoreTargetsSync(cfg, requested, { env });
+  const configuredTarget = {
+    agentId: requested,
+    storePath: resolveStorePath(cfg.session?.store, { agentId: requested, env }),
+  };
+  const targets = dedupeTargetsByStorePath([
+    configuredTarget,
+    ...resolveExistingAgentSessionStoreTargetsSync(cfg, requested, { env }),
+  ]);
   for (const target of targets) {
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,

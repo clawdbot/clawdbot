@@ -16,6 +16,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.js";
+import { resolveSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
@@ -667,6 +668,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
         transcriptAttachmentIndexCache,
         sessionStoreAvailabilityCache,
         sessionStoreTargetsReadCache,
+        stateDir,
       );
       // Session-store unavailability is not proof that durable chat history no longer owns media.
       shouldDelete = transcriptMatch === "missing";
@@ -882,6 +884,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   agentId?: string,
   storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
   storeTargetsReadCache?: SessionStoreTargetsReadCache,
+  stateDir?: string,
 ): Promise<SessionManagedOutgoingAttachmentIndexRead> {
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
@@ -894,17 +897,57 @@ async function getSessionManagedOutgoingAttachmentIndex(
     storeAvailabilityCache?.get(ownerAgentId) ??
     resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
       cache: storeTargetsReadCache,
+      ...(stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {}),
     });
   storeAvailabilityCache?.set(ownerAgentId, discovery);
   if (!discovery.available) {
     return { kind: "unavailable", reason: discovery.reason };
   }
-  const sessionOptions = { agentId: ownerAgentId };
-  const loaded = loadSessionEntryReadOnly(sessionKey, sessionOptions);
-  let entry = loaded.entry;
-  if (!entry) {
+  const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
+  const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
+  type SessionEntry = ReturnType<typeof loadSessionEntryReadOnly>["entry"];
+  let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
+  for (const target of discovery.targets) {
     const exact = loadExactSessionEntryReadOnlyResult({
-      ...(sessionOptions?.agentId ? { agentId: sessionOptions.agentId } : {}),
+      agentId: ownerAgentId,
+      clone: false,
+      env,
+      sessionKey,
+      storePath: target.storePath,
+    });
+    if (!exact.found) {
+      return { kind: "unavailable", reason: exact.reason };
+    }
+    let targetEntry = exact.value?.entry;
+    if (!targetEntry) {
+      try {
+        targetEntry = resolveSqliteSessionEntry(
+          {
+            agentId: ownerAgentId,
+            clone: false,
+            env,
+            sessionKey,
+            storePath: target.storePath,
+          },
+          { readOnly: true },
+        ).existing;
+      } catch {
+        return { kind: "unavailable", reason: "row-invalid" };
+      }
+    }
+    if (targetEntry) {
+      if (matched) {
+        return { kind: "unavailable", reason: "read-failed" };
+      }
+      matched = { entry: targetEntry, storePath: target.storePath };
+    }
+  }
+  let entry: SessionEntry = matched?.entry;
+  let storePath = matched?.storePath ?? discovery.targets[0]?.storePath ?? "";
+  if (!entry && usesRuntimeState) {
+    const loaded = loadSessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
+    const exact = loadExactSessionEntryReadOnlyResult({
+      agentId: ownerAgentId,
       clone: false,
       sessionKey,
       storePath: loaded.storePath,
@@ -912,14 +955,14 @@ async function getSessionManagedOutgoingAttachmentIndex(
     if (!exact.found) {
       return { kind: "unavailable", reason: exact.reason };
     }
-    entry = exact.value?.entry;
+    entry = exact.value?.entry ?? loaded.entry;
+    storePath = loaded.storePath;
   }
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     cache?.set(cacheKey, null);
     return { kind: "available", index: null };
   }
-  const storePath = loaded.storePath;
 
   let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
   // This path is only a cache/reset-archive hint. Canonical active messages are
@@ -1019,6 +1062,7 @@ async function recordMatchesTranscriptMessage(
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
   storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
   storeTargetsReadCache?: SessionStoreTargetsReadCache,
+  stateDir?: string,
 ): Promise<ManagedOutgoingTranscriptMatch> {
   if (!record.messageId) {
     return "missing";
@@ -1029,6 +1073,7 @@ async function recordMatchesTranscriptMessage(
     record.agentId,
     storeAvailabilityCache,
     storeTargetsReadCache,
+    stateDir,
   );
   if (read.kind === "unavailable") {
     return "unavailable";
@@ -1042,8 +1087,12 @@ async function recordMatchesTranscriptMessage(
 
 async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   record: ManagedImageRecord,
+  stateDir?: string,
 ): Promise<ManagedOutgoingMediaArtifactDownload | null> {
-  if ((await recordMatchesTranscriptMessage(record)) !== "match") {
+  if (
+    (await recordMatchesTranscriptMessage(record, undefined, undefined, undefined, stateDir)) !==
+    "match"
+  ) {
     return null;
   }
   const kind = resolveManagedRecordKind(record);
@@ -1097,7 +1146,7 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   if (!kind || (parsed.family === "image") !== (kind === "image")) {
     return null;
   }
-  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record);
+  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
 }
 
 /** Upgrade legacy managed-image URLs that predate stable artifact ids. */
@@ -1114,7 +1163,7 @@ export async function resolveManagedOutgoingMediaUrlDownload(params: {
   if (!record || record.sessionKey !== params.sessionKey) {
     return null;
   }
-  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record);
+  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
 }
 
 export async function attachManagedOutgoingMediaToMessage(params: {
@@ -1506,7 +1555,15 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  if ((await recordMatchesTranscriptMessage(record)) !== "match") {
+  if (
+    (await recordMatchesTranscriptMessage(
+      record,
+      undefined,
+      undefined,
+      undefined,
+      opts.stateDir,
+    )) !== "match"
+  ) {
     sendStatus(res, 404, "not found");
     return true;
   }
