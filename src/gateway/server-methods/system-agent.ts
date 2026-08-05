@@ -549,21 +549,16 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         if (params.reset) {
           const existing = sessions.get(sessionId);
+          // Persist the reset first; a failed write must leave the live session intact.
+          appendTranscriptReset();
           sessions.delete(sessionId);
-          try {
-            if (existing?.pendingApproval) {
-              context.systemAgentApprovalManager?.expire(
-                existing.pendingApproval.id,
-                "session-reset",
-              );
-            }
-            await existing?.engine.dispose();
-          } finally {
-            // Discarding the session is irreversible, so the boundary outlives a
-            // failed cleanup step and a replacement that fails to initialize.
-            // Later ordinary sessions seed only the turns after it.
-            appendTranscriptReset();
+          if (existing?.pendingApproval) {
+            context.systemAgentApprovalManager?.expire(
+              existing.pendingApproval.id,
+              "session-reset",
+            );
           }
+          await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
         if (params.wizardAnswer !== undefined && !session) {
