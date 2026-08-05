@@ -43,7 +43,25 @@ export function resolveMSTeamsSqliteStateEnv(
 }
 
 export function toPluginJsonValue<T>(value: T): T {
-  const serialized = JSON.stringify(value);
+  // JSON-safe clone for the keyed plugin-state store: BigInts serialize as
+  // strings, and circular references are replaced in place so every
+  // serializable sibling field survives the round trip.
+  const ancestors: unknown[] = [];
+  const serialized = JSON.stringify(value, function (this: unknown, _key, val) {
+    if (typeof val === "bigint") {
+      return String(val);
+    }
+    if (val !== null && typeof val === "object") {
+      while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
+        ancestors.pop();
+      }
+      if (ancestors.includes(val)) {
+        return "[Circular]";
+      }
+      ancestors.push(val);
+    }
+    return val;
+  });
   return JSON.parse(serialized) as T;
 }
 
