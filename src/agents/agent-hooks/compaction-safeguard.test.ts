@@ -594,8 +594,47 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("<workspace-critical-rules>");
   });
 
-  it("keeps the newest preserved turns when the section exceeds its cap", () => {
-    const messages = Array.from({ length: 200 }, (_, i) => ({
+  it("never reduces the summary body to nothing, at any suffix size", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body =
+      "## Decisions\nD\n## Open TODOs\nT\n## Constraints/Rules\nC\n" +
+      "## Pending user asks\nP\n## Exact identifiers\nN823JB";
+    // Sweep the boundary the overflow branch used to sit on. maxChars - 1 is
+    // the case that left the body a single character on the ordinary path.
+    const suffixSizes = [0, 1, 100, max / 2, max - 2, max - 1, max, max + 1, max * 3];
+
+    for (const size of suffixSizes) {
+      const out = capCompactionSummaryPreservingSuffix(body, "s".repeat(size));
+
+      expect(out.length, `length at suffix=${size}`).toBeLessThanOrEqual(max);
+      // The defect this PR exists to fix: the artifact must never come back
+      // carrying none of the summary it was built to preserve.
+      expect(out.startsWith("## Decisions"), `body head at suffix=${size}`).toBe(true);
+      expect(out, `identifiers at suffix=${size}`).toContain("N823JB");
+    }
+  });
+
+  it("keeps a long body's reserved share even against an oversized suffix", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body = "## Decisions\n".padEnd(max, "b");
+
+    for (const size of [max - 1, max, max * 2]) {
+      // "~" appears nowhere in the body or either marker, so its first index is
+      // exactly where the body's share ends.
+      const out = capCompactionSummaryPreservingSuffix(body, "~".repeat(size));
+
+      expect(out.length, `length at suffix=${size}`).toBeLessThanOrEqual(max);
+      // Half the budget is the floor; a truncated body still says it was cut.
+      expect(out.startsWith("## Decisions"), `body head at suffix=${size}`).toBe(true);
+      expect(out, `marker at suffix=${size}`).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+      expect(out.indexOf("~"), `body share at suffix=${size}`).toBeGreaterThanOrEqual(
+        Math.floor(max / 2),
+      );
+    }
+  });
+
+  it("leaves configured preserved turns whole rather than char-capping them", () => {
+    const messages = Array.from({ length: 12 }, (_, i) => ({
       role: "assistant" as const,
       content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
       timestamp: 0,
@@ -603,15 +642,15 @@ describe("compaction-safeguard summary budgets", () => {
 
     const section = formatPreservedTurnsSection(messages);
 
-    // Preserved turns are the most recent messages, pulled out of the model
-    // input precisely so they survive verbatim; the final one must not be cut.
-    expect(section).toContain("turn-199");
-    expect(section).not.toContain("turn-0 ");
-    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
-    expect(section).toContain("## Recent turns preserved verbatim");
+    // recentTurnsPreserve promises the configured recent turns verbatim, and a
+    // char cap would cut mid-line through a rendered turn. The turn count is
+    // the bound; oversized totals are absorbed by the budget split instead.
+    expect(section).toContain("turn-0 ");
+    expect(section).toContain("turn-11 ");
+    expect(section).not.toContain(SUFFIX_TRUNCATED_MARKER.trim());
   });
 
-  it("keeps the earliest split-turn prefix lines when the section exceeds its cap", () => {
+  it("keeps the earliest lines when a split-turn prefix exceeds its cap", () => {
     const messages = Array.from({ length: 200 }, (_, i) => ({
       role: "assistant" as const,
       content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
@@ -620,8 +659,7 @@ describe("compaction-safeguard summary budgets", () => {
 
     const section = formatSplitTurnContextSection(messages);
 
-    // A split-turn prefix is summarized front-to-back, so its head is the part
-    // worth keeping — the opposite end from preserved turns.
+    // Summarized front-to-back per TURN_PREFIX_INSTRUCTIONS, so the head stays.
     expect(section).toContain("turn-0 ");
     expect(section).not.toContain("turn-199");
     expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());

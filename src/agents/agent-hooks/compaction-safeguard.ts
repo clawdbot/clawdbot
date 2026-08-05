@@ -69,8 +69,9 @@ const MAX_TOOL_FAILURE_CHARS = 240;
 const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 const MAX_FILE_OPS_SECTION_CHARS = 2_000;
 const MAX_FILE_OPS_LIST_CHARS = 900;
-// Keeps the summed suffix parts under MAX_COMPACTION_SUMMARY_CHARS: two context
-// sections at this cap plus file ops, tool failures, and workspace rules.
+// Bound for the split-turn prefix, the only suffix part with no bound of its
+// own. Not applied to preserved turns, which recentTurnsPreserve bounds by turn
+// count and promises verbatim.
 const MAX_CONTEXT_SECTION_CHARS = 4_000;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 // Distinct from SUMMARY_TRUNCATED_MARKER: names loss of appended context
@@ -577,20 +578,6 @@ function capWithMarker(text: string, maxChars: number, marker: string): string {
   return `${truncateUtf16Safe(text, budget)}${marker}`;
 }
 
-// Mirror of capWithMarker for text whose newest content is at the end: the
-// marker leads so the artifact still says the head was cut.
-function capTailWithMarker(text: string, maxChars: number, marker: string): string {
-  if (maxChars <= 0 || text.length <= maxChars) {
-    return text;
-  }
-  const budget = Math.max(0, maxChars - marker.length);
-  if (budget <= 0) {
-    // Marker cannot fit; keep the tail instead of a partial marker fragment.
-    return sliceUtf16Safe(text, -maxChars);
-  }
-  return `${marker}${sliceUtf16Safe(text, -budget)}`;
-}
-
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
   return capWithMarker(summary, maxChars, SUMMARY_TRUNCATED_MARKER);
 }
@@ -606,29 +593,28 @@ function capCompactionSummaryPreservingSuffix(
   if (maxChars <= 0) {
     return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
   }
-  if (suffix.length >= maxChars) {
-    // The suffix alone can fill the budget, which previously dropped summaryBody
-    // outright and produced a full-length summary carrying none of the summary.
-    // Split the budget instead: the body keeps its head, the suffix its tail
-    // (workspace rules, diagnostics) over its head (preserved turns). Both sides
-    // of the split mark their own loss so the stored artifact never reads as
-    // complete when either half was cut.
-    const bodyBudget = Math.min(summaryBody.length, Math.floor(maxChars / 2));
-    const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
-    const suffixBudget = maxChars - cappedBody.length;
-    log.warn(
-      `Compaction suffix (${suffix.length} chars) exceeds the ${maxChars}-char summary budget; truncating suffix and capping summary body to ${cappedBody.length} chars`,
-    );
-    if (suffixBudget <= SUFFIX_TRUNCATED_MARKER.length) {
-      // Marker cannot fit; keep suffix tail instead of a partial marker fragment.
-      return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
-    }
-    const keptSuffix = sliceUtf16Safe(suffix, -(suffixBudget - SUFFIX_TRUNCATED_MARKER.length));
-    return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${keptSuffix}`;
-  }
-  const bodyBudget = Math.max(0, maxChars - suffix.length);
+  // The body is never squeezed below its reserved share. A suffix at or near the
+  // budget used to leave it a sliver — or, once the suffix reached maxChars,
+  // nothing at all — producing a full-length artifact that carried none of the
+  // summary the compaction existed to produce. Reserving first makes the sliver
+  // and the total-loss cases the same code path rather than adjacent branches.
+  const reservedForBody = Math.min(summaryBody.length, Math.floor(maxChars / 2));
+  const bodyBudget = Math.max(reservedForBody, maxChars - suffix.length);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
-  return `${cappedBody}${suffix}`;
+  const suffixBudget = maxChars - cappedBody.length;
+  if (suffix.length <= suffixBudget) {
+    return `${cappedBody}${suffix}`;
+  }
+  log.warn(
+    `Compaction suffix (${suffix.length} chars) exceeds its ${suffixBudget}-char share of the ${maxChars}-char summary budget; truncating suffix and keeping ${cappedBody.length} chars of summary body`,
+  );
+  if (suffixBudget <= SUFFIX_TRUNCATED_MARKER.length) {
+    // Marker cannot fit; keep suffix tail instead of a partial marker fragment.
+    return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
+  }
+  // Suffix keeps its tail (workspace rules, diagnostics) over its head.
+  const keptSuffix = sliceUtf16Safe(suffix, -(suffixBudget - SUFFIX_TRUNCATED_MARKER.length));
+  return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${keptSuffix}`;
 }
 
 function resolveSummaryReserveTokens(
@@ -793,41 +779,31 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
     .filter((line): line is string => Boolean(line));
 }
 
-// Which end of an oversized context section survives its cap. The two callers
-// promise opposite things: preserved turns are the most recent messages, pulled
-// out of the model input so they survive verbatim, so dropping their newest
-// lines defeats the section; a split-turn prefix is summarized front-to-back
-// per TURN_PREFIX_INSTRUCTIONS, so its earliest lines are the ones to keep.
-type ContextSectionKeep = "head" | "tail";
-
-function formatContextSection(
-  messages: AgentMessage[],
-  heading: string,
-  keep: ContextSectionKeep,
-): string {
+function formatContextSection(messages: AgentMessage[], heading: string): string {
   const lines = formatContextMessages(messages);
-  if (lines.length === 0) {
-    return "";
-  }
-  // Split-turn prefixes are not turn-count bounded the way preserved turns are
-  // (MAX_RECENT_TURNS_PRESERVE), so this section is the one suffix contributor
-  // that could otherwise outgrow the whole summary budget. Keep every suffix
-  // part bounded so capCompactionSummaryPreservingSuffix stays off its
-  // budget-splitting path. Marked as context loss, not summary loss.
-  const body = lines.join("\n");
-  const capped =
-    keep === "tail"
-      ? capTailWithMarker(body, MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER)
-      : capWithMarker(body, MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER);
-  return `${heading}\n${capped}`;
+  return lines.length > 0 ? `${heading}\n${lines.join("\n")}` : "";
+}
+
+// The split-turn prefix is the one suffix contributor with no bound of its own:
+// preserved turns are turn-count bounded (MAX_RECENT_TURNS_PRESERVE), file ops,
+// tool failures, and workspace rules each carry char caps, but this section
+// grows with the turn — either rendered message-by-message or generated by the
+// summarizer under its own token budget. Bound it at both construction sites.
+// Keeps the head, since TURN_PREFIX_INSTRUCTIONS summarizes front-to-back.
+function boundSplitTurnSection(section: string): string {
+  return capWithMarker(section, MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER);
 }
 
 function formatPreservedTurnsSection(messages: AgentMessage[]): string {
-  return formatContextSection(messages, "\n\n## Recent turns preserved verbatim", "tail");
+  // Deliberately uncapped: recentTurnsPreserve promises the configured recent
+  // turns verbatim, and a char cap would cut mid-line through a rendered turn.
+  // The turn count is the bound; capCompactionSummaryPreservingSuffix absorbs
+  // any residual overflow without costing the summary body its reserved share.
+  return formatContextSection(messages, "\n\n## Recent turns preserved verbatim");
 }
 
 function formatSplitTurnContextSection(messages: AgentMessage[]): string {
-  return formatContextSection(messages, "**Turn Context (split turn):**\n", "head");
+  return boundSplitTurnSection(formatContextSection(messages, "**Turn Context (split turn):**\n"));
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
@@ -1232,7 +1208,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\nAdditional requirements:\n\n${currentInstructions}`,
               previousSummary: undefined,
             });
-            splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+            splitTurnSectionLocal = boundSplitTurnSection(
+              `**Turn Context (split turn):**\n\n${prefixSummary}`,
+            );
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSectionLocal}`
               : splitTurnSectionLocal;
