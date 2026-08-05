@@ -72,16 +72,21 @@ function buildSummary(payload: ClawRouterUsagePayload): string | undefined {
 async function readClawRouterUsagePayload(
   response: Response,
   timeoutMs: number,
-): Promise<ClawRouterUsagePayload> {
+): Promise<ClawRouterUsagePayload | undefined> {
   const buffer = await readResponseWithLimit(response, CLAWROUTER_USAGE_RESPONSE_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
     onOverflow: ({ maxBytes }) => new Error(`ClawRouter usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`ClawRouter usage response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(
-    new TextDecoder("utf-8", { fatal: true }).decode(buffer),
-  ) as ClawRouterUsagePayload;
+  try {
+    const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+    return payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as ClawRouterUsagePayload)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function fetchClawRouterUsage(params: {
@@ -116,6 +121,14 @@ export async function fetchClawRouterUsage(params: {
       throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
     }
     const payload = await readClawRouterUsagePayload(response, params.timeoutMs);
+    if (!payload) {
+      return {
+        provider: "clawrouter",
+        displayName: "ClawRouter",
+        windows: [],
+        error: "Malformed usage response",
+      };
+    }
     const budget = payload.budget;
     const limitMicros = asFiniteNumberInRange(budget?.limitMicros, { min: 0 });
     const spentMicros = asFiniteNumberInRange(budget?.spentMicros, { min: 0 });
