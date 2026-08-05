@@ -123,49 +123,6 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
 
-  it("retries the original prompt after handled preflight truncation", async () => {
-    const state = makePromptState();
-
-    const result = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
-        makeAttempt({
-          route: "truncate_tool_results_only",
-          handled: true,
-          truncatedCount: 2,
-        }),
-        state,
-      ),
-    );
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(state.continueFromCurrentTranscript).not.toHaveBeenCalled();
-  });
-
-  it("continues from the current transcript after handled mid-turn truncation", async () => {
-    const state = makePromptState();
-
-    const result = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
-        makeAttempt({
-          route: "truncate_tool_results_only",
-          source: "mid-turn",
-          handled: true,
-          truncatedCount: 2,
-        }),
-        state,
-      ),
-    );
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
   it("keeps replay state unsafe after a later clean attempt", async () => {
     const state = makePromptState();
     const dirty = await normalizeEmbeddedRunAttempt(

@@ -175,24 +175,13 @@ export type EmbeddedRunAttemptResult = {
   assistantTranscriptOwned?: boolean;
   /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
-  preflightRecovery?:
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled: true;
-        truncatedCount?: number;
-      }
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled?: false;
-      };
+  preflightRecovery?: {
+    route: Exclude<PreemptiveCompactionRoute, "fits">;
+    source?: "mid-turn";
+    estimatedPromptTokens?: number;
+    promptBudgetBeforeReserve?: number;
+    overflowTokens?: number;
+  };
   sessionIdUsed: string;
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
