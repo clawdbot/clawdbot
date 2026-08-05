@@ -45,6 +45,7 @@ type PreparedAgentMetadata = PreparedAgentFacts & {
 };
 
 type PreparedMetadataGeneration = {
+  epoch: number;
   facts: PreparedGenerationFacts;
   agentsById: Map<string, PreparedAgentMetadata>;
   metadataByKey: Map<string, Promise<ChatMetadataResult>>;
@@ -267,7 +268,6 @@ export function createGatewayChatMetadataRuntime(params: {
   let pending:
     | {
         facts?: PreparedGenerationFacts;
-        epoch: number;
         promise: Promise<void>;
       }
     | undefined;
@@ -326,6 +326,7 @@ export function createGatewayChatMetadataRuntime(params: {
       }),
     );
     const generation: PreparedMetadataGeneration = {
+      epoch,
       facts,
       agentsById: new Map(agents.map((agent) => [agent.agentId, agent])),
       metadataByKey: new Map(),
@@ -359,20 +360,19 @@ export function createGatewayChatMetadataRuntime(params: {
   const refresh = (): Promise<void> => {
     const trackRefresh = (
       promise: Promise<void>,
-      epoch: number,
       facts?: PreparedGenerationFacts,
     ): Promise<void> => {
       refreshTail = promise;
-      pending = { ...(facts ? { facts } : {}), epoch, promise };
-      const clearPending = () => {
-        if (pending?.promise === promise) {
-          pending = undefined;
-        }
-      };
+      pending = { ...(facts ? { facts } : {}), promise };
       void promise.then(
         () => {
-          clearPending();
-          if (epoch !== invalidationEpoch) {
+          if (pending?.promise !== promise) {
+            return;
+          }
+          pending = undefined;
+          // One worker can absorb later invalidations and publish their generation. Settle the
+          // replacement owned by what it actually committed, not by the epoch that scheduled it.
+          if (current?.epoch !== invalidationEpoch) {
             return;
           }
           lastError = undefined;
@@ -381,10 +381,11 @@ export function createGatewayChatMetadataRuntime(params: {
           committedReplacement?.resolve();
         },
         (error: unknown) => {
-          clearPending();
-          if (epoch === invalidationEpoch) {
-            fail(error);
+          if (pending?.promise !== promise) {
+            return;
           }
+          pending = undefined;
+          fail(error);
         },
       );
       return promise;
@@ -393,9 +394,8 @@ export function createGatewayChatMetadataRuntime(params: {
       if (pending) {
         return pending.promise;
       }
-      const epoch = invalidationEpoch;
       const promise = refreshTail.catch(() => {}).then(runRefresh);
-      return trackRefresh(promise, epoch);
+      return trackRefresh(promise);
     }
     let facts: PreparedGenerationFacts;
     try {
@@ -411,9 +411,8 @@ export function createGatewayChatMetadataRuntime(params: {
     if (pending?.facts && generationFactsMatch(pending.facts, facts)) {
       return pending.promise;
     }
-    const epoch = invalidationEpoch;
     const promise = refreshTail.catch(() => {}).then(runRefresh);
-    return trackRefresh(promise, epoch, facts);
+    return trackRefresh(promise, facts);
   };
 
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {

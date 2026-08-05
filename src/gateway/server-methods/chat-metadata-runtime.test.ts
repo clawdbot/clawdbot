@@ -217,6 +217,34 @@ describe("gateway chat metadata runtime", () => {
     });
   });
 
+  test("resolves the replacement gate after a coalesced second invalidation", async () => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+    const releaseCommands = createDeferred();
+    harness.buildCommands.mockImplementationOnce(async () => {
+      await releaseCommands.promise;
+      return { commands: [{ name: "replacement" }] };
+    });
+
+    harness.runtime.invalidate();
+    const firstRefresh = harness.runtime.refresh();
+    await vi.waitFor(() => expect(harness.buildCommands).toHaveBeenCalledTimes(2));
+
+    harness.runtime.invalidate();
+    const secondRefresh = harness.runtime.refresh();
+    releaseCommands.resolve();
+    await Promise.all([firstRefresh, secondRefresh]);
+
+    const timedOut = Symbol("timed out");
+    const result = await Promise.race([
+      harness.runtime.read({ agentId: "main" }),
+      new Promise<typeof timedOut>((resolve) => {
+        setTimeout(() => resolve(timedOut), 100);
+      }),
+    ]);
+    expect(result).not.toBe(timedOut);
+  });
+
   test("rejects replacement waiters on failure and recovers on a later generation", async () => {
     const harness = createHarness();
     await harness.runtime.refresh();
