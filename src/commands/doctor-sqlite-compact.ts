@@ -51,6 +51,12 @@ export function compactDoctorSqliteFile(
     checkpointTruncate(database, options.sqlitePath);
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     database.exec("VACUUM;");
+    // Refresh planner statistics after compaction. VACUUM rewrites the file but
+    // leaves sqlite_stat* untouched, so a store that just shed most of its rows
+    // keeps plans shaped for the old data volume (observed in production as a
+    // 36.7s -> 809ms session-catalog scan difference after a 16.7GB -> 970MB
+    // prune; see #119720).
+    database.exec("ANALYZE;");
     checkpointTruncate(database, options.sqlitePath);
     const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);
