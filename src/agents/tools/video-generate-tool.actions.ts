@@ -134,7 +134,8 @@ export const {
 } = createMediaGenerateTaskActions({
   inactiveText: "No active video generation task is currently running for this session.",
   findActiveTask: findActiveVideoGenerationTaskForSession,
-  findDuplicateTask: findDuplicateGuardVideoGenerationTaskForSession,
+  findDuplicateTask: (sessionKey, request) =>
+    findDuplicateGuardVideoGenerationTaskForSession(sessionKey, request),
   buildStatusText: buildVideoGenerationTaskStatusText,
   buildStatusDetails: buildVideoGenerationTaskStatusDetails,
 });

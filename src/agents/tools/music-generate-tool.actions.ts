@@ -88,7 +88,9 @@ export const {
 } = createMediaGenerateTaskActions({
   inactiveText: "No active music generation task is currently running for this session.",
   findActiveTask: findActiveMusicGenerationTaskForSession,
-  findDuplicateTask: findDuplicateGuardMusicGenerationTaskForSession,
+  // Prompt-only imports must not resolve duplicate guards until an action runs.
+  findDuplicateTask: (sessionKey, request) =>
+    findDuplicateGuardMusicGenerationTaskForSession(sessionKey, request),
   buildStatusText: buildMusicGenerationTaskStatusText,
   buildStatusDetails: buildMusicGenerationTaskStatusDetails,
 });
