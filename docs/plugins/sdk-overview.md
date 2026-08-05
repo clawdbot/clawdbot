@@ -261,6 +261,8 @@ Core publishes this example as `plugin.<plugin-id>.backend`, evaluates it with a
 bounded timeout, and caches the result briefly. Plugin criteria are
 advisory when registered. Only an operator can promote one to required through
 `gateway.readiness`; plugins cannot make their own checks block readiness.
+Unselected plugin criteria are not evaluated or exposed in readiness results;
+only criteria named in `requiredCriteria` or `advisoryCriteria` appear.
 `subjects.declare(...)` returns a reference in the plugin's namespace. Local
 criterion IDs, subject kinds, and keys are limited to 64 characters. Subject
 declarations may be parented in any order; core validates the completed graph.
