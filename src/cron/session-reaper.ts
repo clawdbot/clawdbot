@@ -4,6 +4,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
+  loadExactSessionEntry,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
@@ -60,15 +61,23 @@ export async function removeCronJobBaseSession(params: {
   agentId: string;
   jobId: string;
   sessionStorePath: string;
+  shouldRemove?: () => boolean;
 }): Promise<boolean> {
   const sessionKey = resolveCronAgentSessionKey({
     agentId: params.agentId,
     sessionKey: `cron:${params.jobId}`,
   });
+  const existing = loadExactSessionEntry({
+    storePath: params.sessionStorePath,
+    sessionKey,
+  })?.entry;
+  if (!existing || params.shouldRemove?.() === false) {
+    return false;
+  }
   const result = await applySessionEntryLifecycleMutation({
     agentId: params.agentId,
     storePath: params.sessionStorePath,
-    removals: [{ sessionKey, archiveRemovedTranscript: true }],
+    removals: [{ sessionKey, archiveRemovedTranscript: true, expectedEntry: existing }],
   });
   return result.removedEntries > 0;
 }

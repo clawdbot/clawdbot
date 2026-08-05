@@ -103,6 +103,57 @@ describe("CronService.remove session cleanup", () => {
     });
   });
 
+  it("preserves the session of a replacement job with the same id", async () => {
+    const { storePath } = await makeStorePath();
+    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "main",
+      resolveSessionStorePath: () => sessionStorePath,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const original = await cron.add({
+      id: "reused-job-id",
+      name: "original job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "original" },
+    });
+    const sessionKey = `agent:main:cron:${original.id}`;
+    const originalMarker = markCronJobActive(original.id);
+
+    await cron.remove(original.id);
+    await cron.add({
+      id: original.id,
+      name: "replacement job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 120_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "replacement" },
+    });
+    const replacementMarker = markCronJobActive(original.id);
+    await replaceSessionEntry(
+      { agentId: "main", storePath: sessionStorePath, sessionKey },
+      { sessionId: "replacement-session", updatedAt: Date.now() },
+    );
+
+    clearCronJobActive(original.id, replacementMarker);
+    clearCronJobActive(original.id, originalMarker);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toMatchObject({
+      entry: { sessionId: "replacement-session" },
+    });
+  });
+
   it("does not delete a shared main session", async () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
