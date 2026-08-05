@@ -34,12 +34,8 @@ import {
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
-import {
-  formatHostingProfileIds,
-  HOSTING_PROFILE_ENV,
-  parseHostingProfileId,
-} from "../../hosting/profiles.js";
-import type { HostingProfileId } from "../../hosting/types.js";
+import { formatHostingProfileIds, parseHostingProfileId } from "../../hosting/profiles.js";
+import { HOSTING_PROFILE_ENV, type HostingProfileId } from "../../hosting/types.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {

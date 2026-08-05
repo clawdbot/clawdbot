@@ -6,13 +6,7 @@ import {
   type ReadinessCondition,
 } from "../readiness/conditions.js";
 import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "../readiness/subjects.js";
-import type { HostingProfileId } from "./types.js";
-
-export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
-
-export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
-
-export const HOSTING_PROFILE_CONTRACT_VERSION = 1 as const;
+import { HOSTING_PROFILE_ENV, HOSTING_PROFILE_IDS, type HostingProfileId } from "./types.js";
 
 type HostingProfileSource = "argument" | "environment" | "config";
 

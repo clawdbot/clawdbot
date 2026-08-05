@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HOSTING_PROFILE_IDS } from "../hosting/profiles.js";
+import { HOSTING_PROFILE_IDS } from "../hosting/types.js";
 
 export const HostingConfigSchema = z
   .strictObject({
