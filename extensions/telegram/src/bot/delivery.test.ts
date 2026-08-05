@@ -216,6 +216,16 @@ function createVoiceMessagesForbiddenError() {
   );
 }
 
+function createEmptyTextError() {
+  return new Error("Bad Request: text must be non-empty");
+}
+
+function createCaptionTooLongError() {
+  return new Error(
+    "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: caption is too long)",
+  );
+}
+
 function createThreadNotFoundError(operation = "sendMessage") {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
@@ -1037,6 +1047,64 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("does not mirror media follow-up text that Telegram rejects as empty", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const invisibleText = "\u200B".repeat(1025);
+    const emptyError = createEmptyTextError();
+    const mediaUrl = "https://example.com/photo.jpg";
+    const sendPhoto = vi.fn().mockResolvedValueOnce({ message_id: 82, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockRejectedValue(emptyError);
+    const transcriptMirror = vi.fn();
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl, text: invisibleText }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto, sendMessage }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).resolves.toEqual({ delivered: true });
+
+    expect(sendPhoto).toHaveBeenCalledOnce();
+    expect(mockCallArg(sendPhoto, 0, 2)).toHaveProperty("caption", undefined);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(recordSentMessage.mock.calls).toEqual([["123", 82, undefined]]);
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: undefined, mediaUrls: [mediaUrl] });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: true,
+      content: "",
+    });
+  });
+
+  it("retries media without a caption when Telegram renders it empty", async () => {
+    const invisibleText = "\u200B".repeat(1024);
+    const emptyError = createEmptyTextError();
+    const mediaUrl = "https://example.com/photo.jpg";
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(emptyError)
+      .mockResolvedValueOnce({ message_id: 83, chat: { id: "123" } });
+    const transcriptMirror = vi.fn();
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl, text: invisibleText }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).resolves.toEqual({ delivered: true });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), { caption: invisibleText });
+    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("caption");
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: undefined, mediaUrls: [mediaUrl] });
+  });
+
   it.each([
     {
       kind: "ordinary Markdown",
@@ -1472,6 +1540,28 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("records no delivery when Telegram rejects rendered-empty HTML", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(new Error("Bad Request: text must be non-empty"));
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "<i></i>" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        textMode: "html",
+      }),
+    ).rejects.toThrow("text must be non-empty");
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: false,
+      content: "<i></i>",
+    });
+  });
+
   it("uses reply_parameters when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -1901,6 +1991,69 @@ describe("deliverReplies", () => {
     if (firstMockCallArg(sendMessage, 2) === undefined) {
       throw new Error("Expected Telegram fallback text options");
     }
+  });
+
+  it("does not account for a voice fallback that Telegram rejects as empty", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const emptyError = createEmptyTextError();
+    const sendVoice = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn().mockRejectedValue(emptyError);
+    const transcriptMirror = vi.fn();
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await expect(
+      deliverWith({
+        replies: [
+          { mediaUrl: "https://example.com/note.ogg", text: "<i></i>", audioAsVoice: true },
+        ],
+        runtime: createRuntime(),
+        bot: createBot({ sendVoice, sendMessage }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).rejects.toBe(emptyError);
+
+    expect(sendVoice).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+    expect(transcriptMirror).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: false,
+      content: "<i></i>",
+    });
+  });
+
+  it("does not mirror caption text when the caption fallback is empty", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const invisibleText = "\u200B".repeat(1024);
+    const emptyError = createEmptyTextError();
+    const sendVoice = vi
+      .fn()
+      .mockRejectedValueOnce(createCaptionTooLongError())
+      .mockResolvedValueOnce({ message_id: 81, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockRejectedValue(emptyError);
+    const transcriptMirror = vi.fn();
+    const mediaUrl = "https://example.com/note.ogg";
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl, text: invisibleText, audioAsVoice: true }],
+        runtime: createRuntime(),
+        bot: createBot({ sendVoice, sendMessage }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).resolves.toEqual({ delivered: true });
+
+    expect(sendVoice).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(recordSentMessage.mock.calls).toEqual([["123", 81, undefined]]);
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: undefined, mediaUrls: [mediaUrl] });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: true,
+      content: "",
+    });
   });
 
   it("uses spokenText only after voice rejection", async () => {

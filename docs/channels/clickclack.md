@@ -231,25 +231,26 @@ no account selector, so multiple enabled discussion accounts are rejected
 rather than choosing one by configuration order.
 
 Opening a discussion creates a public ClickClack channel marked as externally
-managed. The plugin keeps the session label, category, and archive state in
-sync. Restoring a session restores its channel; clearing the session category
-moves the channel back to the configured default section. Deleting an
-OpenClaw session archives the ClickClack channel instead of deleting it, so its
-history remains available. The plugin reconciles bindings when discussion RPCs
-are used and approximately once per minute while any bindings exist.
+managed. The plugin keeps the session label and category in sync, but channel
+lifecycle remains independent. Clearing the session category
+moves the channel back to the configured default section. Archiving, resetting,
+or deleting an OpenClaw session never archives or replaces the ClickClack
+channel. ClickClack owns channel archive and restore independently. The plugin
+reconciles bindings when discussion RPCs are used and approximately once per
+minute while any bindings exist.
 
 Inbound messages in a managed channel use a deterministic side session under
 the same agent id as the attached main session. The side agent is told which
 main session to observe and can use `sessions_history` and `session_status`
 (`changesSince` is useful for incremental checks). It uses `sessions_send` only
 when people in the discussion ask it to relay or steer the main session.
-The binding, managed ownership reference, and side-session peer identity include
-the concrete OpenClaw session id along with the pinned ClickClack server and
-channel. Resetting a reusable session key or retargeting an account revokes the
-old channel locally, archives it when the old credential remains usable, and
-cannot reuse its side transcript. Messages arriving through an
-archived, reset, disabled, or retargeted binding are dropped instead of falling
-back to the account's normal channel routing. Released bindings leave a durable
+The binding separates durable room identity from its replaceable session
+attachment. The side-session peer identity and scoped grant include the exact
+concrete OpenClaw session id, so resetting a reusable session key rotates the
+attachment and cannot reuse the old side transcript. The ClickClack channel id,
+URL, history, and ownership reference remain unchanged. Messages arriving
+through an inactive, disabled, or retargeted attachment are dropped instead of
+falling back to the account's normal channel routing. Released bindings leave a durable
 revoked-channel marker so delayed realtime events remain fail-closed. Remote
 ownership is keyed by ClickClack server and channel id, so renaming the local
 account cannot turn a managed channel into an ordinary one.
@@ -270,22 +271,22 @@ before persisting a binding. If a create response is lost, the next open adopts
 the channel by its server-enforced `external_ref` instead of creating another.
 Until that outcome is reconciled, the pending reservation quarantines
 otherwise-unbound events in the destination workspace. The coarse reconciler
-adopts the channel when the same session is still live or archives it after a
-reset; it clears the reservation when no remote channel was created.
+adopts the channel when the logical session is active, including after its
+concrete session id changes; it clears the reservation when no remote channel
+was created.
 That reference contains a durable per-OpenClaw-installation namespace plus a
-hash of the session key, concrete session id, ClickClack destination, and durable
+hash of the session key, ClickClack destination, and durable
 binding generation. Separate gateways cannot adopt each other's channels,
-reset sessions cannot inherit old channel history, and an account or workspace
+while concrete session resets keep the same channel. An account or workspace
 round trip cannot re-adopt a previous channel. Bindings are also pinned to the
 configured ClickClack server URL and are invalidated if the account is
 retargeted. Changing or removing `controlUrlBase` updates or clears the managed
 channel link on the next reconciliation pass. Changing
-`discussions.workspace` archives and releases the old binding before a channel
-can be opened in the new workspace when the old workspace credential remains
-configured. If the token was replaced with a workspace-scoped credential that
-cannot access the old workspace, OpenClaw records the old channel as revoked and
-releases the binding without trying the replacement token; archive that leftover
-channel from ClickClack.
+`discussions.workspace` releases the old attachment before a channel can be
+opened in the new workspace. It never archives the old room. If the token was
+replaced with a workspace-scoped credential that cannot access the old
+workspace, OpenClaw records the old channel as revoked and releases the binding
+without trying the replacement token.
 
 The attached main session also receives a pull-only `discussion` tool. It reads
 the latest messages and recent thread replies as one escaped, attributed record

@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import android.os.Looper
 import androidx.activity.ComponentActivity
@@ -22,27 +21,35 @@ class ChatMessageViewsTest {
 
     try {
       controller.get().setContent {
-        ChatMessageBubble(
-          message =
-            ChatMessage(
-              id = "managed-image",
-              role = "assistant",
-              content =
-                listOf(
-                  ChatMessageContent(
-                    type = "image",
-                    mimeType = "image/png",
-                    artifactId = artifactId,
-                    alt = "Managed image",
-                  ),
-                ),
-              timestampMs = 1,
+        ChatBubble(
+          messageId = "managed-image",
+          entryId = null,
+          role = "assistant",
+          live = false,
+          content =
+            listOf(
+              ChatMessageContent(
+                type = "image",
+                mimeType = "image/png",
+                artifactId = artifactId,
+                alt = "Managed image",
+              ),
             ),
-          imageResolverReady = true,
+          timestampMs = null,
+          onReplyMessage = {},
+          sessionActionsEnabled = false,
+          onRewindMessage = {},
+          onForkMessage = {},
+          speechState = null,
+          onToggleListen = { _, _ -> },
+          inlineMediaPlaybackBlocked = false,
+          inlineWidgetResolverReady = true,
+          resolveInlineWidgetResource = { _, _ -> null },
           loadImageArtifact = { requestedArtifactId ->
             requested += requestedArtifactId
             null
           },
+          loadMediaArtifact = { _, _, _ -> null },
         )
       }
       shadowOf(Looper.getMainLooper()).idle()

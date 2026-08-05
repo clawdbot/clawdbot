@@ -89,8 +89,8 @@ function runWorkflowShellScript(
     let moduleIndex = 0;
     const moduleRoot = options.cwd ?? process.cwd();
     const rewritten = script.replace(
-      /node --input-type=module <<'EOF'\n([\s\S]*?)\nEOF/gu,
-      (_match, body: string) => {
+      /node --input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
+      (_match, _marker: string, body: string) => {
         const modulePath = path.join(
           moduleRoot,
           `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
@@ -419,6 +419,131 @@ function runMaturityArtifactCopyScenario(
 
 function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
+}
+
+type QaProfileTimeoutFixtureMode =
+  | "natural-124"
+  | "self-kill"
+  | "supervisor-term"
+  | "term"
+  | "kill";
+
+function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-qa-profile-timeout-"));
+  try {
+    const binDir = path.join(root, "bin");
+    mkdirSync(binDir);
+    const fakePnpm = path.join(binDir, "pnpm");
+    writeFileSync(
+      fakePnpm,
+      `#!/usr/bin/env bash
+set -u
+echo "child-stderr-sentinel:\${FAKE_PNPM_MODE}" >&2
+echo "child-locale:\${LC_ALL-unset}" >&2
+case "\${FAKE_PNPM_MODE}" in
+  natural-124)
+    echo "timeout: sending signal KILL to command 'spoofed-child'" >&2
+    exit 124
+    ;;
+  self-kill)
+    kill -KILL "$$"
+    ;;
+  supervisor-term)
+    : > "$SUPERVISOR_READY_FILE"
+    while :; do sleep 0.01; done
+    ;;
+  term)
+    trap 'exit 0' TERM
+    while :; do sleep 0.01; done
+    ;;
+  kill)
+    trap '' TERM
+    while :; do sleep 0.01 || true; done
+    ;;
+esac
+`,
+      "utf8",
+    );
+    chmodSync(fakePnpm, 0o755);
+    const fixturePath = `${binDir}:${process.env.PATH ?? ""}`;
+    const timeoutVersion = spawnSync("timeout", ["--version"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: fixturePath },
+    });
+    if (timeoutVersion.status !== 0 || !timeoutVersion.stdout.includes("(GNU coreutils)")) {
+      throw new Error(
+        `QA timeout fixture requires GNU timeout: ${timeoutVersion.stdout}${timeoutVersion.stderr}`,
+      );
+    }
+
+    const workflow = readQaProfileEvidenceWorkflow();
+    const runProfileStep = expectDefined(
+      workflow.jobs.run_qa_profile.steps.find(
+        (step: WorkflowStep) => step.name === "Run QA profile",
+      ),
+      "Run QA profile step",
+    );
+    let script = runProfileStep.run
+      .replace("--kill-after=30s 110m", "--kill-after=0.5s 1s")
+      .replaceAll("110 minutes", "1 second")
+      .replaceAll("30-second", "0.5-second");
+    if (mode === "supervisor-term") {
+      const timeoutCommandTail = '  3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?';
+      const signaledTimeoutCommandTail = `  3>&2 2>"$timeout_supervisor_fifo" &
+timeout_supervisor_pid=$!
+(
+  for _ in {1..100}; do
+    [[ -e "$SUPERVISOR_READY_FILE" ]] && break
+    sleep 0.01
+  done
+  [[ -e "$SUPERVISOR_READY_FILE" ]]
+  kill -TERM "$timeout_supervisor_pid"
+) &
+timeout_signaler_pid=$!
+wait "$timeout_supervisor_pid" || qa_exit_code=$?
+wait "$timeout_signaler_pid"`;
+      const signaledScript = script.replace(timeoutCommandTail, signaledTimeoutCommandTail);
+      if (signaledScript === script) {
+        throw new Error("QA timeout fixture could not instrument the timeout supervisor");
+      }
+      script = signaledScript;
+    }
+    const githubOutput = path.join(root, "github-output");
+    const run = runWorkflowShellScript(script, {
+      cwd: root,
+      env: {
+        ...process.env,
+        FAKE_PNPM_MODE: mode,
+        GITHUB_OUTPUT: githubOutput,
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_RUN_ID: "42",
+        LC_ALL: "POSIX",
+        PATH: fixturePath,
+        QA_PROFILE: "all",
+        REQUESTED_REF: "fixture",
+        SUPERVISOR_READY_FILE: path.join(root, "supervisor-ready"),
+        TARGET_SHA: "a".repeat(40),
+      },
+    });
+    const outputDir = path.join(root, ".artifacts", "qa-e2e", "profile-all-42-1");
+    const status = JSON.parse(
+      readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
+    ) as {
+      exitCode: number;
+      timedOut: boolean;
+      timeoutOutcome: "none" | "term" | "kill";
+    };
+    return {
+      commandStatus: run.status,
+      githubOutput: readFileSync(githubOutput, "utf8"),
+      status,
+      stderr: run.stderr,
+      stdout: run.stdout,
+      timeoutVersion: timeoutVersion.stdout.trim(),
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function runQaProfileFailureGate(options: {
@@ -854,6 +979,22 @@ function runGeneratedPublisherScenario(
 }
 
 describe("ci workflow guards", () => {
+  it("extracts module heredocs only at exact closing marker lines", () => {
+    const run = runWorkflowShellScript(
+      `node --input-type=module <<'NODE'
+NODE_prefix: for (const value of ["heredoc-body-preserved"]) {
+  console.log(value);
+  break NODE_prefix;
+}
+NODE
+`,
+      {},
+    );
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toBe("heredoc-body-preserved\n");
+  });
+
   it("routes PR edited metadata only to interested automation", () => {
     const autoResponse = readWorkflow(".github/workflows/auto-response.yml");
     const clawsweeperDispatch = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
@@ -898,6 +1039,54 @@ describe("ci workflow guards", () => {
       betaBlocker: ["title"],
       activePrLimit: [],
     });
+  });
+
+  it("runs the PR context and evidence gate only for relevant PR changes", () => {
+    const workflow = readRealBehaviorProofWorkflow();
+
+    expect(workflow.name).toBe("PR context and evidence");
+    expect(workflow.jobs["real-behavior-proof"].name).toBe("PR context and evidence");
+    expect(workflow.on.pull_request_target.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+    ]);
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.pull_request.number }}",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event.action == 'synchronize' }}",
+    );
+  });
+
+  it("isolates auto-response per item and ignores ClawSweeper PR label feedback", () => {
+    const workflow = readWorkflow(".github/workflows/auto-response.yml");
+    const guard = workflow.jobs["auto-response"].if;
+
+    expect(workflow.on.issues.types).toEqual(["opened", "edited", "labeled"]);
+    expect(workflow.on.issue_comment.types).toEqual(["created"]);
+    expect(workflow.on.pull_request_target.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "labeled",
+      "unlabeled",
+    ]);
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}",
+    );
+    expect(guard).toContain("github.event_name != 'pull_request_target'");
+    expect(guard).toContain("github.event.action != 'labeled'");
+    expect(guard).toContain("github.event.action != 'unlabeled'");
+    expect(guard).toContain("github.actor != 'clawsweeper[bot]'");
+    expect(guard).toContain("github.actor != 'openclaw-clawsweeper[bot]'");
+    expect(guard).not.toContain("openclaw-barnacle[bot]");
   });
 
   it("routes stale bug issues through ClawSweeper instead of Barnacle closure", () => {
@@ -5113,6 +5302,90 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(true);
   });
 
+  it.skipIf(process.platform !== "linux")(
+    "classifies QA timeouts only from isolated supervisor diagnostics",
+    () => {
+      const scenarios = [
+        {
+          exitCode: 124,
+          mode: "natural-124",
+          supervisorSignals: [],
+          timedOut: false,
+          timeoutOutcome: "none",
+        },
+        {
+          exitCode: 137,
+          mode: "self-kill",
+          supervisorSignals: [],
+          timedOut: false,
+          timeoutOutcome: "none",
+        },
+        {
+          exitCode: 143,
+          mode: "supervisor-term",
+          supervisorSignals: ["TERM"],
+          timedOut: false,
+          timeoutOutcome: "none",
+        },
+        {
+          exitCode: 124,
+          mode: "term",
+          supervisorSignals: ["TERM"],
+          timedOut: true,
+          timeoutOutcome: "term",
+        },
+        {
+          exitCode: 137,
+          mode: "kill",
+          supervisorSignals: ["TERM", "KILL"],
+          timedOut: true,
+          timeoutOutcome: "kill",
+        },
+      ] as const;
+
+      for (const scenario of scenarios) {
+        const result = runQaProfileTimeoutFixture(scenario.mode);
+        expect(result.commandStatus, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(result.status).toMatchObject({
+          exitCode: scenario.exitCode,
+          timedOut: scenario.timedOut,
+          timeoutOutcome: scenario.timeoutOutcome,
+        });
+        expect(result.githubOutput).toContain(`qa_exit_code=${scenario.exitCode}`);
+        expect(result.stderr).toContain(`child-stderr-sentinel:${scenario.mode}`);
+        expect(result.stderr).toContain("child-locale:POSIX");
+        expect(result.timeoutVersion).toContain("(GNU coreutils)");
+
+        const supervisorSignals: readonly ("TERM" | "KILL")[] = scenario.supervisorSignals;
+        for (const signal of ["TERM", "KILL"] as const) {
+          const diagnostic = `timeout: sending signal ${signal} to command 'env'`;
+          if (supervisorSignals.includes(signal)) {
+            expect(result.stderr).toContain(diagnostic);
+          } else {
+            expect(result.stderr).not.toContain(diagnostic);
+          }
+        }
+
+        if (scenario.mode === "natural-124") {
+          expect(result.stderr).toContain(
+            "timeout: sending signal KILL to command 'spoofed-child'",
+          );
+        }
+        if (scenario.timeoutOutcome === "term") {
+          expect(result.stdout).toContain(
+            "::warning::QA profile 'all' timed out after 1 second and was terminated",
+          );
+        } else if (scenario.timeoutOutcome === "kill") {
+          expect(result.stdout).toContain(
+            "::warning::QA profile 'all' timed out after 1 second and required SIGKILL after the 0.5-second grace period",
+          );
+        } else {
+          expect(result.stdout).not.toContain("::warning::QA profile");
+        }
+      }
+    },
+  );
+
   it("keeps maturity scorecard generated QA evidence handoff strict", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
     const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
@@ -5214,9 +5487,53 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
+    expect(runProfileStep.env?.REQUESTED_REF).toBe("${{ inputs.ref }}");
+    expect(runProfileStep.env?.TARGET_SHA).toBe(
+      "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+    );
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
+    expect(runProfileStep.run).toContain('mkdir -p "$output_dir"');
+    expect(runProfileStep.run.indexOf('mkdir -p "$output_dir"')).toBeLessThan(
+      runProfileStep.run.indexOf('echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"'),
+    );
+    expect(runProfileStep.run).toContain(
+      "LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m",
+    );
     expect(runProfileStep.run).toContain("qa_exit_code=$?");
+    expect(runProfileStep.run).toContain('timeout_child_env+=("LC_ALL=$LC_ALL")');
+    expect(runProfileStep.run).toContain('timeout_child_env+=("-u" "LC_ALL")');
+    expect(runProfileStep.run).toContain(`bash -c 'exec "$@" 2>&3' bash`);
+    expect(runProfileStep.run).toContain('3>&2 2>"$timeout_supervisor_fifo"');
+    expect(runProfileStep.run).toContain('mkfifo "$timeout_supervisor_fifo"');
+    expect(runProfileStep.run).toContain(
+      'tee "$timeout_supervisor_log" <"$timeout_supervisor_fifo" >&2 &',
+    );
+    expect(runProfileStep.run).toContain("supervisor_tee_pid=$!");
+    expect(runProfileStep.run).toContain("trap cleanup_timeout_supervisor EXIT");
+    expect(runProfileStep.run).toContain(
+      'rm -f "$timeout_supervisor_fifo" "$timeout_supervisor_log"',
+    );
+    expect(runProfileStep.run).not.toContain(">(tee");
+    const teeWait = runProfileStep.run.indexOf('wait "$supervisor_tee_pid"');
+    const timeoutClassification = runProfileStep.run.indexOf(
+      'grep -Eq "^timeout: sending signal KILL',
+    );
+    expect(teeWait).toBeGreaterThan(-1);
+    expect(teeWait).toBeLessThan(timeoutClassification);
+    expect(runProfileStep.run).toContain(
+      `[[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$"`,
+    );
+    expect(runProfileStep.run).toContain(
+      `[[ "$qa_exit_code" -eq 124 ]] && grep -Eq "^timeout: sending signal TERM to command '[A-Za-z0-9_./+-]+'$"`,
+    );
+    expect(runProfileStep.run).not.toContain('case "$qa_exit_code"');
+    expect(runProfileStep.run).toContain('TIMEOUT_OUTCOME="$timeout_outcome"');
+    expect(runProfileStep.run).toContain("qa-profile-run-status.json");
+    expect(runProfileStep.run).toContain("exitCode: Number(process.env.QA_EXIT_CODE)");
+    expect(runProfileStep.run).toContain('timedOut: timeoutOutcome !== "none"');
+    expect(runProfileStep.run).toContain("timeoutOutcome,");
+    expect(runProfileStep.run).toContain("completedAt: new Date().toISOString()");
     expect(runProfileStep.run).not.toContain("--allow-failures");
     const failProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
@@ -5400,6 +5717,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const qaUploadStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload QA profile evidence",
     );
+    expect(qaUploadStep.if).toBe("always()");
     expect(qaUploadStep.with).toMatchObject({
       name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
       path: "${{ steps.run_profile.outputs.output_dir }}",

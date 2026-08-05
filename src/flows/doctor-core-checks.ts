@@ -40,6 +40,7 @@ import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
@@ -128,7 +129,15 @@ async function collectRuntimeToolSchemaFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
+  const runWithPluginMetadataSnapshot = (
+    ctx as HealthCheckContext & {
+      runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+    }
+  ).runWithPluginMetadataSnapshot;
+  return runtime.collectRuntimeToolSchemaFindings(
+    ctx.cfg,
+    runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : undefined,
+  );
 }
 
 async function collectProviderCatalogProjectionFindingsWithRuntime(
@@ -1032,6 +1041,28 @@ const browserCheck: HealthCheck = {
 function createSkillsReadinessCheck(
   deps: CoreHealthCheckDeps,
 ): HealthCheck & { readonly defaultEnabled: false } {
+  const detectUnavailableSkills = async (
+    ctx: HealthCheckContext | HealthRepairContext,
+  ): Promise<readonly SkillStatusEntry[]> => {
+    const runWithPluginMetadataSnapshot = (
+      ctx as (HealthCheckContext | HealthRepairContext) & {
+        runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+      }
+    ).runWithPluginMetadataSnapshot;
+    const detect = () => deps.detectUnavailableSkills(ctx.cfg);
+    if (!runWithPluginMetadataSnapshot) {
+      return await detect();
+    }
+    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
+    return await runWithPluginMetadataSnapshot(
+      {
+        config: ctx.cfg,
+        workspaceDir: resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId),
+      },
+      detect,
+    );
+  };
+
   return {
     id: "core/doctor/skills-readiness",
     kind: "core",
@@ -1040,14 +1071,14 @@ function createSkillsReadinessCheck(
     defaultEnabled: false,
     async detect(ctx, scope) {
       const unavailable = filterUnavailableSkillsForScope(
-        await deps.detectUnavailableSkills(ctx.cfg),
+        await detectUnavailableSkills(ctx),
         scope?.paths,
       );
       return unavailable.map(unavailableSkillToFinding);
     },
     async repair(ctx, findings) {
       const unavailable = filterUnavailableSkillsForScope(
-        await deps.detectUnavailableSkills(ctx.cfg),
+        await detectUnavailableSkills(ctx),
         findings.map((finding) => finding.path),
       );
       if (unavailable.length === 0) {

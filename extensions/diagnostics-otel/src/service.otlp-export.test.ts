@@ -9,6 +9,8 @@
 // Collector-boundary cases start the real NodeSDK, so teardown restores every global SDK
 // registration; otherwise a shutdown provider would poison later real-SDK cases.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
@@ -36,6 +38,10 @@ import {
 
 const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
 const ENDPOINT_ENV_KEYS = [
+  "OTEL_SDK_DISABLED",
+  "OTEL_TRACES_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
   "OTEL_EXPORTER_OTLP_ENDPOINT",
   "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
   "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
@@ -178,6 +184,154 @@ function captureOtelDiagnostics(): string[] {
   );
   return messages;
 }
+
+async function startOtlpReceiver() {
+  const requests: Array<{
+    contentType: string | undefined;
+    method: string | undefined;
+    url: string;
+  }> = [];
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      requests.push({
+        contentType: request.headers["content-type"],
+        method: request.method,
+        url: request.url ?? "",
+      });
+      response.writeHead(200, { "content-type": "application/x-protobuf" });
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    requests,
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeIdleConnections();
+      });
+    },
+  };
+}
+
+function releasePreloadedOtelGlobals() {
+  context.disable();
+  logs.disable();
+  metrics.disable();
+  propagation.disable();
+  trace.disable();
+  process.env[PRELOAD_ENV] = "0";
+}
+
+async function emitRealSdkSignals() {
+  trace.getTracer("openclaw-otel-routing-test").startSpan("routing-test").end();
+  metrics.getMeter("openclaw-otel-routing-test").createCounter("openclaw.routing.test").add(1);
+  emit({
+    type: "log.record",
+    level: "INFO",
+    message: "OTLP routing test",
+  });
+  await waitForDiagnosticEventsDrained();
+}
+
+const SHARED_ENDPOINT_ROUTING_CASES = [
+  {
+    label: "root",
+    suffix: "",
+    expected: ["/v1/traces", "/v1/metrics", "/v1/logs"],
+  },
+  {
+    label: "trailing-slash root",
+    suffix: "/",
+    expected: ["/v1/traces", "/v1/metrics", "/v1/logs"],
+  },
+  {
+    label: "custom collector path",
+    suffix: "/api/public/otel",
+    expected: [
+      "/api/public/otel/v1/traces",
+      "/api/public/otel/v1/metrics",
+      "/api/public/otel/v1/logs",
+    ],
+  },
+  {
+    label: "signal-qualified collector path",
+    suffix: "/api/public/otel/v1/traces",
+    expected: [
+      "/api/public/otel/v1/traces",
+      "/api/public/otel/v1/metrics",
+      "/api/public/otel/v1/logs",
+    ],
+  },
+] as const;
+
+test.each(SHARED_ENDPOINT_ROUTING_CASES)(
+  "routes real exporters from a shared $label endpoint",
+  async ({ suffix, expected }) => {
+    const receiver = await startOtlpReceiver();
+    releasePreloadedOtelGlobals();
+    const { service, ctx } = await startOtelService({
+      endpoint: `${receiver.endpoint}${suffix}`,
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+
+    try {
+      await emitRealSdkSignals();
+      await service.stop?.(ctx);
+
+      expect(new Set(receiver.requests.map((request) => request.url))).toEqual(new Set(expected));
+      expect(
+        receiver.requests.every(
+          (request) =>
+            request.method === "POST" && request.contentType === "application/x-protobuf",
+        ),
+      ).toBe(true);
+    } finally {
+      await service.stop?.(ctx);
+      await receiver.close();
+    }
+  },
+  30_000,
+);
+
+test("uses real signal-specific exporter endpoints verbatim", async () => {
+  const receiver = await startOtlpReceiver();
+  releasePreloadedOtelGlobals();
+  const traceEndpoint = `${receiver.endpoint}/custom-traces?tenant=red`;
+  const metricEndpoint = `${receiver.endpoint}/custom-metrics/`;
+  const logEndpoint = `${receiver.endpoint}/v1/traces`;
+  const { service, ctx } = await startOtelService({
+    endpoint: `${receiver.endpoint}/shared-unused`,
+    traces: true,
+    metrics: true,
+    logs: true,
+    configure: (serviceContext) => {
+      serviceContext.config.diagnostics!.otel!.tracesEndpoint = traceEndpoint;
+      serviceContext.config.diagnostics!.otel!.metricsEndpoint = metricEndpoint;
+      serviceContext.config.diagnostics!.otel!.logsEndpoint = logEndpoint;
+    },
+  });
+
+  try {
+    await emitRealSdkSignals();
+    await service.stop?.(ctx);
+
+    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
+      new Set(["/custom-traces?tenant=red", "/custom-metrics/", "/v1/traces"]),
+    );
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
 
 // Covers all three completeTrackedLifecycleSpan owners: run.completed,
 // harness.run.completed, and message.processed. The mocked suite cannot tell the two id

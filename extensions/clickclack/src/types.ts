@@ -164,6 +164,7 @@ export type ClickClackChannel = {
   sidebar_section?: string;
   display_title?: string;
   archived?: boolean;
+  archived_at?: string | null;
   created_at: string;
 };
 

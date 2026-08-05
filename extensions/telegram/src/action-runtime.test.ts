@@ -2560,6 +2560,19 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(expectedMessage);
   });
 
+  it.each([[[{ text: "Yes", callback_data: "yes" }]], '[[{"text":"Yes","callback_data":"yes"}]]'])(
+    "rejects retired native button input before delivery",
+    async (buttons) => {
+      await expect(
+        handleTelegramAction(
+          { action: "sendMessage", to: "123456", content: "Choose", buttons },
+          telegramConfig({ capabilities: { inlineButtons: "all" } }),
+        ),
+      ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
+      expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    },
+  );
+
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
     await sendInlineButtonsMessage({
       to: "tg:5232990709",

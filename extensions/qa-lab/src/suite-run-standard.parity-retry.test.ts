@@ -130,6 +130,71 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe("QA suite Control UI ownership", () => {
+  it.each([
+    {
+      label: "a non-Control UI scenario by default",
+      surface: "channel",
+      explicit: undefined,
+      enabled: false,
+    },
+    {
+      label: "an explicitly disabled non-Control UI scenario",
+      surface: "channel",
+      explicit: false,
+      enabled: false,
+    },
+    {
+      label: "an explicitly enabled non-Control UI scenario",
+      surface: "channel",
+      explicit: true,
+      enabled: true,
+    },
+    {
+      label: "a Control UI scenario by default",
+      surface: "control-ui",
+      explicit: undefined,
+      enabled: true,
+    },
+    {
+      label: "an explicitly disabled Control UI scenario",
+      surface: "control-ui",
+      explicit: false,
+      enabled: false,
+    },
+  ])("only starts and publishes the gateway Control UI for $label", async (testCase) => {
+    const lab = makeRetryTestLab();
+    const context = makeRetryTestContext();
+    context.selectedScenarios = [
+      makeQaSuiteTestScenario("control-ui-ownership", { surface: testCase.surface }),
+    ];
+    const runScenario = vi
+      .fn<QaSuiteScenarioRunner>()
+      .mockResolvedValue(makeRetryTestResult("pass"));
+
+    await runQaFlowSuiteStandard(
+      {
+        lab,
+        ...(testCase.explicit === undefined ? {} : { controlUiEnabled: testCase.explicit }),
+      },
+      context,
+      runScenario,
+    );
+
+    expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
+      expect.objectContaining({ controlUiEnabled: testCase.enabled }),
+    );
+    if (testCase.enabled) {
+      expect(lab.setControlUi).toHaveBeenCalledWith({
+        controlUiProxyTarget: "http://127.0.0.1:18789",
+        controlUiProxyToken: "qa-test-token",
+      });
+    } else {
+      expect(lab.setControlUi).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("QA runtime parity scenario retry isolation", () => {
   it.each([
     { forcedRuntime: undefined, expectedRuntime: "openclaw" },

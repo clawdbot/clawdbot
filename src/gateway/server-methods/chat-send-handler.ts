@@ -26,7 +26,6 @@ import {
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -417,7 +416,7 @@ export async function handleChatSend(
                   onAdopted: async () => {},
                   onDeferred: () => {
                     queuedFollowupEnqueued = registerQueuedChatTurn({
-                      chatQueuedTurns: ensureChatQueuedTurns(context),
+                      chatQueuedTurns: context.chatQueuedTurns,
                       runId: clientRunId,
                       controller: activeRunAbort.controller,
                       sessionId: backingSessionId ?? clientRunId,
@@ -430,14 +429,14 @@ export async function handleChatSend(
                   },
                   onCancellationRetired: () => {
                     retireQueuedChatTurnCancellation(
-                      ensureChatQueuedTurns(context),
+                      context.chatQueuedTurns,
                       clientRunId,
                       activeRunAbort.controller,
                     );
                   },
                   onSettled: () => {
                     completeQueuedChatTurn(
-                      ensureChatQueuedTurns(context),
+                      context.chatQueuedTurns,
                       clientRunId,
                       activeRunAbort.controller,
                     );

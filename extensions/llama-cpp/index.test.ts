@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
@@ -116,6 +117,30 @@ afterEach(() => {
 });
 
 describe("llama.cpp provider plugin", () => {
+  it("registers process-owned inference cleanup as a plugin service", async () => {
+    const services: OpenClawPluginService[] = [];
+    llamaCppPlugin.register(
+      createTestPluginApi({
+        id: "llama-cpp",
+        name: "llama.cpp Provider",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerService: (service) => services.push(service),
+      }),
+    );
+
+    expect(services).toEqual([
+      expect.objectContaining({
+        id: "llama-cpp-inference-runtime",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    ]);
+    await services[0]?.stop?.({} as never);
+  });
+
   it("registers the local text-inference provider", () => {
     expect(registerLlamaCppTextProvider()).toEqual(
       expect.objectContaining({
