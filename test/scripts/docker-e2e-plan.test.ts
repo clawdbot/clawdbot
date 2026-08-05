@@ -367,7 +367,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(client).not.toContain('condition("openclaw.workspace-writable")');
     expect(client).toContain('scenario === "node-unapproved"');
     expect(script).toContain(
-      'local runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,size=8m")',
+      'local runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,uid=1001,gid=1001,mode=0700,size=8m")',
     );
     expect(script).toContain('-e "OPENCLAW_WORKSPACE_DIR=/tmp/hosting-profile-workspace"');
     expect(script).toContain('nodes approve "$request_id" --json');
