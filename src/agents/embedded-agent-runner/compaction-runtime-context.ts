@@ -310,6 +310,8 @@ export function resolveCompactionContextTokenBudget(params: {
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
+  const requestedTokenBudget = normalizeContextTokenBudget(params.requestedTokenBudget);
+  const fallbackTokenBudget = normalizeContextTokenBudget(params.fallbackTokenBudget);
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -318,15 +320,11 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: readAgentModelContextTokens(params.model),
         modelContextWindow: params.model?.contextWindow,
+        agentContextTokens: requestedTokenBudget,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
-  return Math.min(
-    normalizeContextTokenBudget(params.requestedTokenBudget) ??
-      normalizeContextTokenBudget(params.fallbackTokenBudget) ??
-      resolvedBudget,
-    resolvedBudget,
-  );
+  return Math.min(requestedTokenBudget ?? fallbackTokenBudget ?? resolvedBudget, resolvedBudget);
 }
 
 export function buildEmbeddedCompactionRuntimeContext(

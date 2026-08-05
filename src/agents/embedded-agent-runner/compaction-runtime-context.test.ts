@@ -9,6 +9,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionContextTokenBudget,
   resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
@@ -68,6 +69,73 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
         catalog: [{ provider: "ollama", id: "qwen3.5:4b", reasoning: true }],
       }),
     ).toBe("high");
+  });
+});
+
+describe("resolveCompactionContextTokenBudget", () => {
+  it("preserves caller-resolved selected-agent caps above the global default", () => {
+    expect(
+      resolveCompactionContextTokenBudget({
+        config: {
+          agents: {
+            defaults: {
+              contextTokens: 128_000,
+            },
+          },
+        } as unknown as OpenClawConfig,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          contextWindow: 1_000_000,
+        } as never,
+        requestedTokenBudget: 500_000,
+      }),
+    ).toBe(500_000);
+  });
+
+  it("clamps caller-resolved budgets to the compaction model limit", () => {
+    expect(
+      resolveCompactionContextTokenBudget({
+        config: {
+          agents: {
+            defaults: {
+              contextTokens: 128_000,
+            },
+          },
+        } as unknown as OpenClawConfig,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          contextWindow: 1_000_000,
+        } as never,
+        requestedTokenBudget: 2_000_000,
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("uses the global default cap when no caller-resolved budget is available", () => {
+    expect(
+      resolveCompactionContextTokenBudget({
+        config: {
+          agents: {
+            defaults: {
+              contextTokens: 128_000,
+            },
+          },
+        } as unknown as OpenClawConfig,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          contextWindow: 1_000_000,
+        } as never,
+      }),
+    ).toBe(128_000);
   });
 });
 
