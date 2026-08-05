@@ -21,6 +21,10 @@ export type OfficialExternalPluginRepairHint = {
   repairHint: string;
 };
 
+export type MissingOfficialExternalChannelPluginRepairHint = OfficialExternalPluginRepairHint & {
+  channelId: string;
+};
+
 /** Resolves install/doctor commands for an official external plugin or channel id. */
 export function resolveOfficialExternalPluginRepairHint(
   pluginIdOrChannelId: string,
@@ -68,7 +72,7 @@ export function resolveMissingOfficialExternalChannelPluginRepairHints(
   params: MissingOfficialExternalChannelPluginRepairHintParams & {
     channelIds: readonly string[];
   },
-): OfficialExternalPluginRepairHint[] {
+): MissingOfficialExternalChannelPluginRepairHint[] {
   const policiesByChannelId = new Map(
     resolveConfiguredChannelPresencePolicy({
       config: params.config,
@@ -97,7 +101,7 @@ export function resolveMissingOfficialExternalChannelPluginRepairHints(
 /** Resolves a repair hint only when a missing configured channel is blocked by no plugin owner. */
 export function resolveMissingOfficialExternalChannelPluginRepairHint(
   params: MissingOfficialExternalChannelPluginRepairHintParams & { channelId: string },
-): OfficialExternalPluginRepairHint | null {
+): MissingOfficialExternalChannelPluginRepairHint | null {
   return (
     resolveMissingOfficialExternalChannelPluginRepairHints({
       config: params.config,
