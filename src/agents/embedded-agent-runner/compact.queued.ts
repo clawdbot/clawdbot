@@ -18,17 +18,22 @@ import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
-import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -297,12 +302,6 @@ async function compactEmbeddedAgentSessionImpl(
   if (inputParams.abortSignal?.aborted) {
     return createCompactionAbortedResult();
   }
-  ensureRuntimePluginsLoaded({
-    config: inputParams.config,
-    workspaceDir: inputParams.workspaceDir,
-    allowGatewaySubagentBinding: inputParams.allowGatewaySubagentBinding,
-  });
-  ensureContextEnginesInitialized();
   const runtimeTarget = await resolveAgentRunSessionTarget(inputParams);
   const agentIds = resolveSessionAgentIds({
     sessionKey: runtimeTarget.sessionKey,
@@ -319,27 +318,64 @@ async function compactEmbeddedAgentSessionImpl(
   };
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-  const contextEngine = await resolveContextEngine(params.config, {
-    agentDir,
-    workspaceDir: resolvedWorkspaceDir,
+  const runtimeSelection = resolveCompactionRuntimeSelection({
+    ...params,
+    modelId: params.model,
+    boundHarnessRuntime: params.agentHarnessId,
+    preparedRuntimePlan: params.runtimePlan,
+    selectedHarnessRuntime:
+      params.modelSelectionLocked === true
+        ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
+        : undefined,
   });
-  let disposeContextEngineOnExit = true;
-  try {
-    // Retain engine ownership until the queued path settles. Explicit cleanup
-    // or accepted background maintenance may release it from this call.
-    return await compactResolvedContextEngine(
-      params,
-      contextEngine,
-      agentDir,
-      resolvedWorkspaceDir,
-      () => {
-        disposeContextEngineOnExit = false;
+  const lease = await acquireAgentRunPreparedModelRuntime({
+    config: params.config ?? {},
+    agentId: agentIds.sessionAgentId,
+    agentDir,
+    inheritedAuthDir: resolveDefaultAgentDir(params.config ?? {}),
+    workspaceDir: resolvedWorkspaceDir,
+    ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+    runtimePluginSelections: [
+      {
+        provider: runtimeSelection.provider,
+        modelId: runtimeSelection.modelId,
+        ...(runtimeSelection.selectedHarnessRuntime
+          ? { runtime: runtimeSelection.selectedHarnessRuntime }
+          : {}),
+        agentId: agentIds.sessionAgentId,
       },
-    );
-  } finally {
-    if (disposeContextEngineOnExit) {
-      await disposeContextEngine(contextEngine);
+    ],
+  });
+  const run = async () => {
+    ensureContextEnginesInitialized();
+    const contextEngine = await resolveContextEngine(params.config, {
+      agentDir,
+      workspaceDir: resolvedWorkspaceDir,
+    });
+    let disposeContextEngineOnExit = true;
+    try {
+      // Retain engine ownership until the queued path settles. Explicit cleanup
+      // or accepted background maintenance may release it from this call.
+      return await compactResolvedContextEngine(
+        params,
+        contextEngine,
+        agentDir,
+        resolvedWorkspaceDir,
+        lease.snapshot,
+        () => {
+          disposeContextEngineOnExit = false;
+        },
+      );
+    } finally {
+      if (disposeContextEngineOnExit) {
+        await disposeContextEngine(contextEngine);
+      }
     }
+  };
+  try {
+    return await withPluginRuntimeRegistryScope(lease.snapshot.pluginRegistry, run);
+  } finally {
+    lease.release();
   }
 }
 
@@ -348,6 +384,7 @@ async function compactResolvedContextEngine(
   contextEngine: ContextEngine,
   agentDir: string,
   resolvedWorkspaceDir: string,
+  preparedModelRuntime: PreparedModelRuntimeSnapshot,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
   const runtimeTarget = await resolveAgentRunSessionTarget(params);
@@ -391,6 +428,7 @@ async function compactResolvedContextEngine(
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;
   try {
+    const preparedStores = preparedModelRuntime.createStores();
     // Ensure the policy-selected harness plugin so selection can pick implicit codex.
     await ensureSelectedAgentHarnessPlugin({
       config: params.config,
@@ -401,18 +439,17 @@ async function compactResolvedContextEngine(
       agentHarnessId: params.agentHarnessId,
       agentHarnessRuntimeOverride: selectedHarnessRuntime,
       workspaceDir: resolvedWorkspaceDir,
+      pluginRegistry: requireActivePluginRegistry(),
     });
     const {
       model: ceModel,
       authStorage,
       modelRegistry,
-    } = await resolveModelAsync(
-      ceRuntimeProvider,
-      ceModelId,
-      agentDir,
-      params.config,
-      initialModelAuth,
-    );
+    } = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, params.config, {
+      ...initialModelAuth,
+      ...preparedStores,
+      preparedModelRuntime,
+    });
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
     // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
     // selection can pick the credential-owning harness (codex for ChatGPT OAuth).

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -13,10 +14,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
-import {
-  HEARTBEAT_RUN_SCOPE,
-  type ReplyOptionsWithHeartbeatRunScope,
-} from "../../infra/heartbeat-run-scope.js";
+import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -24,11 +22,12 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -46,10 +45,6 @@ import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
-
-type ReplyOptionsWithOperationRunState = {
-  [REPLY_OPERATION_RUN_STATE]?: ReplyOperationRunState;
-};
 
 type AgentRunParams = {
   sessionId?: string;
@@ -167,6 +162,14 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+vi.mock("../../agents/runtime-plan/build.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/runtime-plan/build.js")>()),
+  buildAgentRuntimeDeliveryPlan: () => ({
+    isSilentPayload: () => false,
+    resolveFollowupRoute: () => undefined,
+  }),
+}));
+
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks: state.beforeAgentReplyHasHooksMock,
@@ -258,7 +261,7 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState & ReplyOptionsWithHeartbeatRunScope;
+  opts?: InternalGetReplyOptions;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -712,8 +715,9 @@ describe("runReplyAgent active steering", () => {
       gatewayHealth: "live",
     });
     const onAdopted = vi.fn();
+    const onBlockReply = vi.fn();
     const { run } = createMinimalRun({
-      opts: { turnAdoptionLifecycle: { onAdopted } },
+      opts: { onBlockReply, turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -733,6 +737,7 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "model reply" }));
     expect(onAdopted).not.toHaveBeenCalled();
   });
 
@@ -881,7 +886,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const sessionStore = {
       main: {
         sessionId: "pre-compact-session",
-        sessionFile: "/tmp/pre-compact.jsonl",
+        sessionFile: "main",
         updatedAt: Date.now(),
       },
     };
@@ -907,7 +912,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",
-      sessionFile: "/tmp/post-compact.jsonl",
+      sessionFile: "main",
       updatedAt: Date.now(),
     };
     active.complete();
@@ -916,7 +921,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
     expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+    expect((call as AgentRunParams).sessionFile).toBe("main");
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -1010,10 +1015,14 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("cleans up typing when followup admission is rejected", async () => {
-    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+  it("records queue-cap rejection while cleaning up typing", async () => {
+    vi.mocked(enqueueFollowupRun).mockImplementationOnce((...args) => {
+      args[1].onQueueDisposition?.("queue-cap-new");
+      return false;
+    });
+    const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false },
+      opts: { isHeartbeat: false, [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       isRunActive: () => true,
       shouldFollowup: true,
@@ -1027,6 +1036,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    expect(runState.admission).toEqual({ status: "skipped", reason: "queue-cap" });
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
@@ -1116,6 +1126,169 @@ describe("runReplyAgent heartbeat followup guard", () => {
       persistSpy.mockRestore();
     }
   });
+
+  it.each([
+    { label: "direct chat", sessionCtx: {} },
+    {
+      label: "group chat",
+      sessionCtx: {
+        ChatType: "group" as const,
+        SessionKey: "agent:test:telegram:group:-100123",
+      },
+    },
+  ])(
+    "returns a terminal failure in a $label after a delivered partial with block streaming disabled",
+    async ({ sessionCtx }) => {
+      const accounting = await import("./session-run-accounting.js");
+      const persistSpy = vi
+        .spyOn(accounting, "persistRunSessionUsage")
+        .mockRejectedValueOnce(new Error("persist exploded"));
+      const onPartialReply = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onPartialReply?.({ text: "partial answer" });
+        return {
+          payloads: [{ text: "final answer" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          blockStreamingEnabled: false,
+          opts: { onPartialReply },
+          sessionCtx,
+        });
+        const result = await run();
+        const payload = Array.isArray(result) ? result[0] : result;
+
+        expect(onPartialReply).toHaveBeenCalledWith({
+          text: "partial answer",
+          mediaUrls: undefined,
+        });
+        expect(payload).toMatchObject({
+          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          isError: true,
+        });
+      } finally {
+        persistSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rethrows after a delivered partial without visible content", async () => {
+    const accounting = await import("./session-run-accounting.js");
+    const persistSpy = vi
+      .spyOn(accounting, "persistRunSessionUsage")
+      .mockRejectedValueOnce(new Error("persist exploded"));
+    const onPartialReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "   " });
+      return {
+        payloads: [{ text: "final answer" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: false,
+        opts: { onPartialReply },
+      });
+
+      await expect(run()).rejects.toThrow("persist exploded");
+    } finally {
+      persistSpy.mockRestore();
+    }
+  });
+
+  it("rethrows heartbeat failures after a delivered partial", async () => {
+    const accounting = await import("./session-run-accounting.js");
+    const persistSpy = vi
+      .spyOn(accounting, "persistRunSessionUsage")
+      .mockRejectedValueOnce(new Error("persist exploded"));
+    const onPartialReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "heartbeat detail" });
+      return {
+        payloads: [{ text: "HEARTBEAT_OK" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: false,
+        opts: { isHeartbeat: true, onPartialReply },
+      });
+
+      await expect(run()).rejects.toThrow("persist exploded");
+    } finally {
+      persistSpy.mockRestore();
+    }
+  });
+
+  it("keeps user aborts silent after a delivered partial", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const onPartialReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "partial answer" });
+      replyOperation.abortByUser();
+      throw new Error("run stopped");
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: false,
+      opts: { onPartialReply },
+      replyOperation,
+    });
+    const result = await run();
+
+    expect(result).toEqual({ text: "NO_REPLY" });
+  });
+
+  it.each(["reasoning", "commentary"] as const)(
+    "rethrows after %s-only block streaming",
+    async (lane) => {
+      const accounting = await import("./session-run-accounting.js");
+      const persistSpy = vi
+        .spyOn(accounting, "persistRunSessionUsage")
+        .mockRejectedValueOnce(new Error("persist exploded"));
+      const onBlockReply = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onBlockReply?.({
+          text: `internal ${lane}`,
+          ...(lane === "reasoning" ? { isReasoning: true } : { isCommentary: true }),
+        });
+        return {
+          payloads: [{ text: "final answer" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          blockStreamingEnabled: true,
+          opts: {
+            onBlockReply,
+            reasoningPayloadsEnabled: lane === "reasoning",
+            commentaryPayloadsEnabled: lane === "commentary",
+          },
+        });
+
+        await expect(run()).rejects.toThrow("persist exploded");
+        expect(onBlockReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: `internal ${lane}` }),
+          expect.any(Object),
+        );
+      } finally {
+        persistSpy.mockRestore();
+      }
+    },
+  );
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
@@ -1977,7 +2150,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      context: { channel: "webchat" },
+      intentId: expect.any(String),
+      createdAt: expect.any(Number),
+    });
     expect(stored.restartRecoverySourceIngress).toBe("control-ui");
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
   });
@@ -2240,6 +2419,77 @@ describe("runReplyAgent pending final delivery capture", () => {
       expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
       expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
       expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("preserves an adopted restart claim when the replacement takes the SQLite lease", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const current = await readStoredMainSession(storePath);
+      expect(current.restartRecoveryDeliveryRunId).toBe("msg");
+      await replaceSessionEntry(
+        { storePath, sessionKey: "main" },
+        {
+          ...current,
+          abortedLastRun: true,
+          status: "killed",
+          updatedAt: Date.now(),
+        },
+      );
+      throw new SessionWriteLockStaleError({
+        lockPath: "sqlite:session-write:agent:main:main",
+        owner: "replacement gateway",
+        staleReasons: ["lease-lost"],
+      });
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        replyOperation,
+        sessionCtx: {
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+        },
+        runOverrides: { agentId: "main", messageProvider: "webchat" },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+
+      await expect(run()).resolves.toEqual({ text: SILENT_REPLY_TOKEN });
+
+      expect(replyOperation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_restart",
+      });
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "msg",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        status: "killed",
+      });
+      expect(
+        (await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds,
+      ).toBeUndefined();
     } finally {
       replyOperation.complete();
     }
@@ -2567,7 +2817,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(await readStoredMainSession(storePath)).toMatchObject({
-      pendingFinalDelivery: { kind: "transport-only" },
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "model reply",
+        context: { channel: "discord" },
+        intentId: expect.any(String),
+        createdAt: expect.any(Number),
+      },
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });
@@ -3432,6 +3688,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it.each([
     {
       label: "NO_REPLY",
+      pendingContinuation: false,
       result: {
         payloads: [{ text: "NO_REPLY" }],
         meta: { finalAssistantVisibleText: "NO_REPLY" },
@@ -3439,22 +3696,30 @@ describe("runReplyAgent typing (heartbeat)", () => {
     },
     {
       label: "accepted child spawn",
+      pendingContinuation: false,
       result: {
         payloads: [],
         meta: {},
         acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
       },
     },
-    { label: "yielded continuation", result: { payloads: [], meta: { yielded: true } } },
+    {
+      label: "yielded continuation",
+      pendingContinuation: true,
+      result: { payloads: [], meta: { yielded: true } },
+    },
     {
       label: "pending tool continuation",
+      pendingContinuation: true,
       result: { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
     },
-  ])("keeps successful $label completions silent", async ({ result }) => {
+  ])("keeps successful $label completions silent", async ({ result, pendingContinuation }) => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const { run } = createMinimalRun();
+    const onPendingContinuation = vi.fn();
+    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
     await expect(run()).resolves.toBeUndefined();
+    expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
   });
 
   it.each([

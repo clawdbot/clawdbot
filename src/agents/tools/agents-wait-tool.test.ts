@@ -45,6 +45,7 @@ function collectorRun(
     task: runId,
     cleanup: "keep",
     createdAt: Date.now(),
+    execution: { status: completion ? "terminal" : "running" },
     collect: true,
     swarmRequesterSessionKey: requesterSessionKey,
     groupId: "group",
@@ -79,6 +80,24 @@ describe("agents_wait", () => {
       result: "event result",
     });
     expect(registryEvents.listeners.size).toBe(0);
+  });
+
+  it("returns retained visible output when a successful collector ends with NO_REPLY", async () => {
+    const entry = collectorRun("retained", "agent:main:main", { status: "done" });
+    entry.execution = { status: "terminal", outcome: { status: "ok" } };
+    entry.completion = {
+      required: false,
+      resultText: "NO_REPLY",
+      fallbackResultText: "retained collector result",
+    };
+    records.set(entry.runId, entry);
+
+    await expect(
+      waitForCollectorCompletion({
+        runId: entry.runId,
+        currentSessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).resolves.toMatchObject({ result: "retained collector result" });
   });
 
   it("rejects when abort wins the listener-registration race", async () => {
@@ -208,6 +227,7 @@ describe("agents_wait", () => {
       task: "spawn collector",
       cleanup: "delete",
       createdAt: Date.now(),
+      execution: { status: "running" },
     });
     const completed = collectorRun("nested", ownerSessionKey, { status: "done" });
     completed.swarmWaitOwnerSessionKeys = [ownerSessionKey, "agent:main:main"];

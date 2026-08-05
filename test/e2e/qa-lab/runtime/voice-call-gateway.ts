@@ -141,7 +141,9 @@ async function waitForFinalToolResult(filePath: string) {
     if (final) {
       return { entries, final };
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error("timed out waiting for final Voice Call consult tool result");
 }
@@ -359,7 +361,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

@@ -28,7 +28,7 @@ function selectedRegistry(
   return (snapshot.registry as PluginRegistry | null | undefined) ?? undefined;
 }
 
-/** Settles the catalog after the channel registry surface changes. */
+/** Settles the catalog after the process-root registry changes. */
 export function settlePreparedMessageToolCatalog(
   preparedRegistry?: PluginRegistry,
   preparedVersion?: number,

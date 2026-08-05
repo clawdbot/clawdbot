@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import { createCodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 
@@ -19,6 +20,15 @@ function createTerminalReleaseHarness() {
     terminalDynamicToolReleaseCheckScheduled: false,
     resolveCompletion,
   };
+  const client = {
+    request,
+    addNotificationHandler: (handler: (notification: unknown) => void) => {
+      notificationHandlers.add(handler);
+      return () => notificationHandlers.delete(handler);
+    },
+    addRequestHandler: () => () => undefined,
+    addCloseHandler: () => () => undefined,
+  };
   const controller = createCodexAttemptLifecycleController(
     {
       prompt: {
@@ -33,27 +43,21 @@ function createTerminalReleaseHarness() {
           },
         },
       },
-      state: {
-        client: {
-          request,
-          addNotificationHandler: (handler: (notification: unknown) => void) => {
-            notificationHandlers.add(handler);
-            return () => notificationHandlers.delete(handler);
-          },
-          addRequestHandler: () => () => undefined,
-          addCloseHandler: () => () => undefined,
-        },
-      },
+      state: { client },
     } as never,
     {
       state,
       activeTurnItemIds: new Set(),
       pendingOpenClawDynamicToolCompletionIds: new Set(),
       steeringQueueRef: { current: { cancel } },
-      turnWatches: {
-        clearCompletionIdleTimer: vi.fn(),
-        clearAssistantCompletionIdleTimer: vi.fn(),
-        clearTerminalIdleTimer: vi.fn(),
+      interruptTurn: (turnId: string) =>
+        interruptCodexTurnAndWaitBestEffort(client as never, {
+          threadId: "thread-1",
+          turnId,
+        }),
+      completeTurn: () => {
+        state.completed = true;
+        resolveCompletion();
       },
     } as never,
   );

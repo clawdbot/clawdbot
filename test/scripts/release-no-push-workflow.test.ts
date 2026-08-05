@@ -199,8 +199,8 @@ describe("release validation no-push transport", () => {
       "validate_docker_lanes",
       "validate_docker_openwebui",
     ]) {
-      const job = workflow.jobs?.[jobName];
-      const runStep = job?.steps?.find((candidate) =>
+      const workflowJob = workflow.jobs?.[jobName];
+      const runStep = workflowJob?.steps?.find((candidate) =>
         candidate.run?.includes("test-live-build-docker.sh"),
       );
 
@@ -366,7 +366,8 @@ describe("release validation no-push transport", () => {
 
     expect(fullText).toContain("dispatch_and_wait plugin-prerelease.yml");
     expect(fullText).toContain("dispatch_and_wait openclaw-release-checks.yml");
-    expect(fullText).toContain("gh workflow run openclaw-performance.yml");
+    expect(fullText).toContain("dispatch_and_wait openclaw-performance.yml");
+    expect(fullText).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"');
 
     const preparePackage = job(release, "prepare_release_package");
     const live = job(release, "live_repo_e2e_release_checks");

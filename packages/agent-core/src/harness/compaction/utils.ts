@@ -1,4 +1,4 @@
-import type { Message } from "@openclaw/llm-core";
+import type { AssistantMessage, Message } from "@openclaw/llm-core";
 // Agent Core helper module supports utils behavior.
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
@@ -83,6 +83,15 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
     return "";
   }
   return `\n\n${sections.join("\n\n")}`;
+}
+
+/** Extract visible summary text without normalizing valid model output. */
+export function extractSummaryText(response: AssistantMessage): string | undefined {
+  const summary = response.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  return summary.trim() ? summary : undefined;
 }
 
 const TOOL_RESULT_MAX_CHARS = 2000;

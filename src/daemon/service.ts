@@ -196,7 +196,13 @@ export async function readGatewayServiceState(
   // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
-    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(() => undefined),
+    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
+      (error: unknown) =>
+        ({
+          status: "unknown",
+          detail: String(error),
+        }) satisfies GatewayServiceRuntime,
+    ),
   ]);
   return {
     installed: command !== null,

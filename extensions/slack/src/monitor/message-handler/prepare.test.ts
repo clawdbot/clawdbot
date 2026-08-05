@@ -2311,6 +2311,50 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(channelMetadata).toContain("Do dangerous things");
   });
 
+  it("records a human workspace and channel title for session display", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.teamId = "T0BDK6HMPS7";
+    slackCtx.installationIdentity = {
+      kind: "workspace",
+      teamId: "T0BDK6HMPS7",
+      teamName: "Local Claw",
+    } as SlackMonitorContext["installationIdentity"];
+    slackCtx.resolveChannelName = async () => ({ name: "channel-name", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({ channel: "C0BDN50FL2Z", channel_type: "channel" }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.GroupSubject).toBe("Local Claw #channel-name");
+  });
+
+  it("records explicit stable Slack ids when channel metadata is unavailable", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx();
+    ctx.teamId = "T0BDK6HMPS7";
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0BDN50FL2Z",
+        channel_type: "channel",
+        user: "U1",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.GroupSubject).toBe(
+      "Slack Channel (Workspace ID: T0BDK6HMPS7, Channel ID: C0BDN50FL2Z)",
+    );
+  });
+
   it("classifies D-prefix DMs correctly even when channel_type is wrong", async () => {
     const prepared = await prepareMessageWith(
       createDmScopeMainSlackCtx(),

@@ -22,7 +22,7 @@ describeControlUiE2e("Control UI mount recovery E2E", () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    server = await startControlUiE2eServer();
+    server = await startControlUiE2eServer(undefined, { source: true });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 

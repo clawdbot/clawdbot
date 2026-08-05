@@ -15,8 +15,9 @@ import {
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
+import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
@@ -147,39 +148,52 @@ export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
+  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return;
   }
   const showAll = opts.all === true;
-
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
-    includeSetupFallbackPlugins: true,
-  });
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  // Plugin metadata is process-stable. Resolve it once and carry its manifest,
+  // discovery, and installed-index facts through every list projection.
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
+    config: cfg,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    env: process.env,
+    allowWorkspaceScopedCurrent: true,
+  });
+
+  // JSON needs only manifest-backed account ids. Text keeps setup-backed snapshots
+  // because its credential/status details are part of the human output contract.
+  const plugins = opts.json
+    ? listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot })
+    : listReadOnlyChannelPluginsForConfig(cfg, {
+        includeSetupFallbackPlugins: true,
+        metadataSnapshot,
+      });
   const catalogEntries = listTrustedChannelPluginCatalogEntries({
     cfg,
     ...(workspaceDir ? { workspaceDir } : {}),
+    ...(metadataSnapshot.discovery ? { discovery: metadataSnapshot.discovery } : {}),
   });
   const runtimeAccountsByChannel =
     opts.json === true
       ? new Map<string, ChannelAccountSnapshot[]>()
       : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus());
-  const installedByChannelId = new Map<string, boolean>();
-  for (const entry of catalogEntries) {
-    installedByChannelId.set(
-      entry.id,
-      isCatalogChannelInstalled({
-        cfg,
-        entry,
-        ...(workspaceDir ? { workspaceDir } : {}),
-      }),
-    );
-  }
-  // A plugin loaded into the runtime registry is, by definition, installed.
-  // Catalog-tracked channels may still be flagged as not installed when the
-  // plugin object only came in via setup fallback metadata; in that case the
-  // explicit catalog check above wins.
+  // Installed ids are one prepared manifest fact set for the invocation. Rebuilding
+  // discovery for each catalog row turns this read into a full filesystem walk per row.
+  const manifestInstalledChannelIds = new Set<string>(
+    listManifestInstalledChannelIds({
+      cfg,
+      ...(workspaceDir ? { workspaceDir } : {}),
+      index: metadataSnapshot.index,
+    }),
+  );
+  const installedByChannelId = new Map(
+    catalogEntries.map((entry) => [entry.id, manifestInstalledChannelIds.has(entry.id)]),
+  );
+  // Metadata-backed plugins are installed by definition; catalog-only rows use
+  // the manifest snapshot above because no plugin projection exists for them.
   const isInstalled = (channelId: string): boolean => installedByChannelId.get(channelId) ?? true;
 
   type AccountLineSource = {
@@ -188,12 +202,22 @@ export async function channelsListCommand(
     installed: boolean;
   };
   const accountLines: AccountLineSource[] = [];
-  const renderedChannelIds = new Set<string>();
+  const accountIdsByPlugin = new Map(
+    plugins.map((plugin) => [plugin.id, plugin.config.listAccountIds(cfg) ?? []]),
+  );
+  const renderedChannelIds = new Set(
+    plugins
+      .filter(
+        (plugin) =>
+          (accountIdsByPlugin.get(plugin.id)?.length ?? 0) > 0 ||
+          (showAll && shouldShowConfigured(plugin)),
+      )
+      .map((plugin) => plugin.id),
+  );
 
-  for (const plugin of plugins) {
-    const accountIds = plugin.config.listAccountIds(cfg);
+  for (const plugin of opts.json ? [] : plugins) {
+    const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
     if (accountIds && accountIds.length > 0) {
-      renderedChannelIds.add(plugin.id);
       const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
       const rows = await resolveChannelAccountStatusRows({
         localAccountIds: accountIds,
@@ -229,7 +253,6 @@ export async function channelsListCommand(
     const runtimeSnapshot = runtimeAccountsByChannel
       .get(plugin.id)
       ?.find((account) => account.accountId === "default");
-    renderedChannelIds.add(plugin.id);
     accountLines.push({
       plugin,
       snapshot: runtimeSnapshot ?? snapshot,
@@ -258,6 +281,7 @@ export async function channelsListCommand(
         config: cfg,
         channelId: entry.id,
         ...(workspaceDir ? { workspaceDir } : {}),
+        manifestRecords: metadataSnapshot.plugins,
       });
       return {
         entry,
@@ -276,7 +300,7 @@ export async function channelsListCommand(
     };
     const chat: Record<string, JsonChannelEntry> = {};
     for (const plugin of plugins) {
-      const accountIds = plugin.config.listAccountIds(cfg);
+      const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
       const installed = isInstalled(plugin.id);
       if (accountIds && accountIds.length > 0) {
         chat[plugin.id] = {

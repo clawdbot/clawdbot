@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - docs/**
+      - scripts/docs-list.js
       - scripts/docs-sync-publish.mjs
       - .github/workflows/docs-sync-publish.yml
   workflow_dispatch:

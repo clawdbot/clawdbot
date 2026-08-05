@@ -665,6 +665,11 @@ export const en: TranslationMap = {
   sessionsView: {
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
+    actionRequiresConnection: "Connect to the Gateway to change threads.",
+    actionUnavailable: "This Gateway does not support this thread action.",
+    actionRequiresRead: "This action requires operator.read access.",
+    actionRequiresWrite: "This action requires operator.write access.",
+    actionRequiresAdmin: "This action requires operator.admin access.",
     deletePreservedWorktrees:
       "{count} thread worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
@@ -835,10 +840,15 @@ export const en: TranslationMap = {
     restoreSession: "Restore thread",
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
+    stopCloudWorkerConfirmAction: "Stop worker",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
     deleteSessionsConfirm: "Delete {count} threads and their transcripts?",
+    deleteSelectedConfirmOne:
+      "Delete 1 thread?\n\nThis will delete the thread entry and archive its transcript.",
+    deleteSelectedConfirm:
+      "Delete {count} threads?\n\nThis will delete the thread entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -872,7 +882,10 @@ export const en: TranslationMap = {
     noCheckpoints: "No compaction checkpoints recorded for this thread.",
     noSummary: "No summary captured.",
     branchFromCheckpoint: "Branch from checkpoint",
+    branchCheckpointConfirm: "Create a new child thread from this compacted checkpoint?",
     restoreCheckpoint: "Restore checkpoint",
+    restoreCheckpointConfirm:
+      "Restore this thread to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
   },
   agents: {
     noAgents: "No agents",
@@ -986,6 +999,7 @@ export const en: TranslationMap = {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
+      updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
       title: "Channels",
@@ -2801,11 +2815,13 @@ export const en: TranslationMap = {
     sectionCommunity: "Community",
     badgeBundledIos: "Included with the iOS app",
     badgeBundledAndroid: "Included with the Android app",
+    badgeStoreComingSoon: "Chrome Web Store · coming soon",
     ctaAppStore: "App Store",
     ctaPlayStore: "Google Play",
     ctaDownload: "Download",
     ctaDocs: "Docs",
     ctaSetupGuide: "Setup guide",
+    ctaChromeWebStore: "Chrome Web Store",
     ctaOpenPlugins: "Open Plugins",
     ctaBrowseClawHub: "Browse ClawHub",
     linkDiscord: "Discord community",
@@ -2896,6 +2912,7 @@ export const en: TranslationMap = {
     disconnected: "Connect to the gateway to load and manage tasks.",
     loadFailed: "Could not load tasks.",
     cancelFailed: "Could not cancel the task.",
+    recoveryFailed: "Could not update completion delivery.",
     invalidResponse: "The gateway returned an invalid task list.",
     untitled: "Background task",
     taskCount: "{count} tasks",
@@ -2904,6 +2921,12 @@ export const en: TranslationMap = {
     openSession: "Open thread",
     cancelTask: "Cancel {title}",
     cancelling: "Cancelling…",
+    retryDelivery: "Retry delivery",
+    dismissDelivery: "Dismiss delivery",
+    copyResult: "Copy result",
+    deliveryBlocked: "Completed, but result delivery is blocked.",
+    deliveryDismissed: "Completed; result delivery was dismissed.",
+    duplicateRisk: "Retrying may duplicate a result after an ambiguous acknowledgement.",
     status: {
       queued: "Queued",
       running: "Running",
@@ -3099,12 +3122,6 @@ export const en: TranslationMap = {
       manage: "Manage →",
       workflowHeading: "How the agent will use it",
       applicabilityHeading: "When the agent should use it",
-    },
-    relative: {
-      secondsAgo: "{count}s ago",
-      minutesAgo: "{count} minutes ago",
-      hoursAgo: "{count}h ago",
-      daysAgo: "{count}d ago",
     },
   },
   activity: {
@@ -3757,10 +3774,10 @@ export const en: TranslationMap = {
       resetDiaryComplete: "Removed {count} backfilled dream diary entries.",
       clearReplayedComplete: "Cleared {count} replayed short-term entries.",
       complete: "Dream diary action complete.",
-      confirmRepair:
-        "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
-      confirmDedupe:
-        "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
+      confirmRepairDescription:
+        "This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
+      confirmDedupeDescription:
+        "This rewrites DREAMS.md and removes only exact duplicate diary entries.",
       archivePathCopied: "Archive path copied.",
       archivePathCopyFailed: "Could not copy archive path.",
       updateFailed: "Could not update dreaming settings.",
@@ -4313,7 +4330,7 @@ export const en: TranslationMap = {
         summary:
           "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
         stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "Paste the token from openclaw gateway auth-token --show or enter the configured password.",
         stepGenerate:
           "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
         stepConnect: "Click Connect again after updating the credential.",
@@ -4323,7 +4340,7 @@ export const en: TranslationMap = {
         summary:
           "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
         stepReplace:
           "Replace stale token/password values; do not reuse a token from another Gateway URL.",
         stepMode:
@@ -4346,6 +4363,8 @@ export const en: TranslationMap = {
           "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
         upgradeSummary:
           "This browser is already known, but the requested access changed and needs a fresh approval.",
+        stepDashboard:
+          "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
         stepList: "Run openclaw devices list on the Gateway host.",
         stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
         stepApprove: "Approve the pending browser/device request from that list.",
@@ -4777,6 +4796,9 @@ export const en: TranslationMap = {
       coding: "Coding",
       noSessionsForAgent: "No sessions found for this agent",
       catalogViewOptions: "View options",
+      hideFromSidebar: "Hide from sidebar",
+      hiddenSessionSections: "Hidden session sections",
+      showSessionSection: "Show",
       catalogGroupByProject: "Project",
       catalogGroupByPerson: "Person",
       openSessionMenu: "Open thread menu",
@@ -4881,7 +4903,7 @@ export const en: TranslationMap = {
       hideConfirm: "Hide this message in this browser? The agent still sees it.",
       hideMessage: "Hide message",
       hideTooltip: "Hide in this browser only",
-      openInCanvas: "Open in canvas",
+      fullContentLoadFailed: "Could not load the full message.",
       reply: "Reply",
       replyToMessage: "Reply to message",
       replyingTo: "Replying to {name}",
@@ -4928,6 +4950,11 @@ export const en: TranslationMap = {
       chatOnly: "Chat only",
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
+      loadingModels: "Loading models…",
+      refreshingModels: "Refreshing models…",
+      modelsUnavailable: "Models unavailable",
+      modelsRefreshFailed: "Couldn’t refresh models",
+      noModelsAvailable: "No models available",
       providerModels: "{provider} models",
       resetReasoning: "Reset to default ({level})",
       useDefaultReasoning: "Use default reasoning ({level})",

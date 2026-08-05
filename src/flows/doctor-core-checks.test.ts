@@ -628,38 +628,38 @@ describe("CORE_HEALTH_CHECKS", () => {
       createCoreHealthChecks(createDeps()),
       "core/doctor/codex-session-routes",
     );
-
+    const codex = {
+      enabled: false,
+      config: { appServer: { command: "node -e process.exit(99)" } },
+    };
     const findings = await check.detect({
       mode: "lint",
       runtime,
       cfg: {
-        plugins: {
-          entries: {
-            codex: { enabled: false },
-          },
-        },
+        plugins: { entries: { codex } },
         agents: {
           defaults: {
-            model: {
-              primary: "gpt-5.5",
-            },
+            model: "openai-codex/gpt-5.5",
+            params: { temperature: 0.7 },
           },
         },
       } as unknown as OpenClawConfig,
     });
-
-    expect(findings).toStrictEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/codex-session-routes",
-        severity: "warning",
-        path: "agents.defaults.model.primary",
-        target: "openai/gpt-5.5",
-        requirement: "Codex plugin enabled for routes that use the Codex runtime.",
-        fixHint:
-          "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
-      }),
-    ]);
-    expect(findings[0]?.message).toContain("Codex plugin is disabled by config");
+    expect(findings.map((finding) => finding.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Codex plugin is disabled by config"),
+        "Codex app-server command override includes inline arguments.",
+        "Custom Codex app-server command bypasses OpenClaw's managed exact-version binary.",
+        "Explicit native Codex model routes cannot reproduce authored request transport parameters.",
+      ]),
+    );
+    expect(findings[0]).toMatchObject({
+      path: "agents.defaults.model",
+      target: "openai/gpt-5.5",
+      requirement: "Codex plugin enabled for routes that use the Codex runtime.",
+      fixHint:
+        "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
+    });
   });
 
   it("uses the read-only model catalog for hooks.gmail.model checks", async () => {

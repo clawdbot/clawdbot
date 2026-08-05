@@ -406,7 +406,10 @@ describe("media understanding attachments SSRF", () => {
         expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
           canonicalAttachmentPath,
         );
-        expect(openedFlags).toBe(fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        // fs-safe 0.5.2 may add O_NONBLOCK so a raced FIFO cannot pin a worker.
+        expect(Number(openedFlags) & ~fsConstants.O_NONBLOCK).toBe(
+          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+        );
       },
     );
   });

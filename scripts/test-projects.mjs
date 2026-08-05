@@ -43,7 +43,6 @@ import {
   withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
-import { forceKillVitestProcessGroup } from "./vitest-process-group.mjs";
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
@@ -91,7 +90,7 @@ function cleanupVitestRunSpec(spec) {
 function runPnpmSpecCommand(spec, pnpmArgs, label) {
   let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
-    const { child, getForwardedSignal, teardown } = spawnWatchedVitestProcess({
+    const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
       pnpmArgs,
       env: spec.env,
       label,
@@ -104,21 +103,19 @@ function runPnpmSpecCommand(spec, pnpmArgs, label) {
       },
     });
 
-    child.on("exit", (code, signal) => {
-      teardown();
-      const forwardedSignal = getForwardedSignal();
-      if (forwardedSignal) {
-        forceKillVitestProcessGroup(child);
-        resolve({ code: 143, noOutputTimedOut, signal: forwardedSignal });
-        return;
-      }
-      resolve({ code: code ?? (signal ? 143 : 1), noOutputTimedOut, signal });
-    });
-
-    child.on("error", (error) => {
-      teardown();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
+    completion.then(
+      ({ code, signal }) => {
+        const forwardedSignal = getForwardedSignal();
+        if (forwardedSignal) {
+          resolve({ code: 143, noOutputTimedOut, signal: forwardedSignal });
+          return;
+        }
+        resolve({ code: code ?? (signal ? 143 : 1), noOutputTimedOut, signal });
+      },
+      /** @param {unknown} error */ (error) => {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
   });
 }
 

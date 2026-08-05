@@ -387,6 +387,7 @@ describe("handleToolExecutionStart read path checks", () => {
       channelData: {
         askUser: {
           questionId,
+          optionValues: ["Staging (Recommended)", "Production"],
         },
       },
       presentationTextMode: "fallback",
@@ -571,6 +572,7 @@ describe("handleToolExecutionStart read path checks", () => {
         channelData: {
           askUser: {
             questionId: activation.questionId,
+            optionValues: ["Staging", "Production"],
           },
         },
       }),
@@ -2037,6 +2039,63 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas).toEqual([
       expect.objectContaining({ toolName: "exec", isError: true }),
     ]);
+  });
+
+  it("projects outcome-unknown exec results as errors with typed details", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "The command may have executed. Do not rerun it automatically.",
+        },
+      ],
+      details: {
+        status: "failed",
+        exitCode: null,
+        failureKind: "outcome-unknown",
+        reason: "outcome-unknown",
+        nodeInvokeFailure: {
+          failureCode: "TIMEOUT",
+          message: "node invoke timed out",
+          nodeCommandDispatched: true,
+        },
+        durationMs: 10,
+        aggregated: "The command may have executed. Do not rerun it automatically.",
+      },
+    };
+
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-outcome-unknown",
+      isError: false,
+      result,
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
+    const toolResult = events.find(
+      (event) => event.stream === "tool" && event.data?.phase === "result",
+    );
+    expect(toolResult?.data).toMatchObject({
+      isError: true,
+      result: {
+        details: {
+          reason: "outcome-unknown",
+          nodeInvokeFailure: {
+            failureCode: "TIMEOUT",
+            nodeCommandDispatched: true,
+          },
+        },
+      },
+    });
+    resetAgentEventsForTest();
   });
 
   it.each([

@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
     reportPath: "/qa-output/qa-suite-report.md",
     summaryPath: "/qa-output/qa-suite-summary.json",
   })),
+  waitForGatewayHealthy: vi.fn(async () => {}),
+  waitForTransportReady: vi.fn(async () => {}),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
@@ -60,8 +62,8 @@ vi.mock("./suite-artifacts.js", () => ({
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 vi.mock("./suite-runtime-gateway.js", () => ({
-  waitForGatewayHealthy: vi.fn(async () => {}),
-  waitForTransportReady: vi.fn(async () => {}),
+  waitForGatewayHealthy: mocks.waitForGatewayHealthy,
+  waitForTransportReady: mocks.waitForTransportReady,
 }));
 vi.mock("./suite.js", () => ({
   buildQaSuiteRuntimeMetrics: vi.fn(() => ({ wallMs: 1 })),
@@ -129,6 +131,44 @@ beforeEach(() => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
+  it.each([
+    { forcedRuntime: undefined, expectedRuntime: "openclaw" },
+    { forcedRuntime: "codex" as const, expectedRuntime: "codex" },
+  ])(
+    "records $expectedRuntime as the selected runtime fact",
+    async ({ forcedRuntime, expectedRuntime }) => {
+      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async (env) => {
+        expect(env.runtimeId).toBe(expectedRuntime);
+        return makeRetryTestResult("pass");
+      });
+
+      await runQaFlowSuiteStandard(
+        { lab: makeRetryTestLab(), ...(forcedRuntime ? { forcedRuntime } : {}) },
+        makeRetryTestContext(),
+        runScenario,
+      );
+
+      expect(runScenario).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("skips connected-transport readiness for intentionally unhealthy startup", async () => {
+    const context = makeRetryTestContext();
+    context.gatewayRuntimeOptions = { allowUnhealthyStartup: true };
+    const runScenario = vi
+      .fn<QaSuiteScenarioRunner>()
+      .mockResolvedValue(makeRetryTestResult("pass"));
+
+    await runQaFlowSuiteStandard({ lab: makeRetryTestLab() }, context, runScenario);
+
+    expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnhealthyStartup: true }),
+    );
+    expect(mocks.waitForGatewayHealthy).not.toHaveBeenCalled();
+    expect(mocks.waitForTransportReady).not.toHaveBeenCalled();
+    expect(runScenario).toHaveBeenCalledOnce();
+  });
+
   it("captures one failed parity attempt without replaying its transcript or usage", async () => {
     const runScenario = vi
       .fn<QaSuiteScenarioRunner>()

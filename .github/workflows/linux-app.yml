@@ -67,7 +67,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "false"
 
       - name: Check Rust formatting
         working-directory: apps/linux/src-tauri
@@ -121,6 +120,11 @@ jobs:
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       - name: Cache Cargo
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5

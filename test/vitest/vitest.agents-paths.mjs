@@ -14,7 +14,8 @@ const coreIsolatedFiles = [
   "src/agents/model-selection.plugin-runtime.test.ts",
   "src/agents/models-config.runtime-source-snapshot.test.ts",
   "src/agents/openai-transport-stream.streaming.test.ts",
-  "src/agents/subagent-orphan-recovery.test.ts",
+  "src/agents/subagent-registry.announce-loop-guard.test.ts",
+  "src/agents/subagent-registry-restart-recovery.test.ts",
   "src/agents/video-generation-task-status.test.ts",
 ];
 const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.test.ts`];

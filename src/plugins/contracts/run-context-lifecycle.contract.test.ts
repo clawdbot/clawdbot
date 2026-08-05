@@ -21,7 +21,7 @@ import {
   listPluginSessionSchedulerJobs,
   PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
 } from "../host-hook-runtime.test-fixtures.js";
-import { runPluginRegisterSync } from "../loader-module-runtime.js";
+import { runPluginRegisterSyncInRegistry } from "../loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
@@ -69,9 +69,14 @@ describe("plugin run context lifecycle", () => {
         name: "Late Run Context Plugin",
       }),
       register(api) {
-        runPluginRegisterSync((guardedApi) => {
-          capturedApi = guardedApi;
-        }, api);
+        runPluginRegisterSyncInRegistry(
+          (guardedApi) => {
+            capturedApi = guardedApi;
+          },
+          api,
+          registry.registry,
+          "late-run-context-plugin",
+        );
       },
     });
     setActivePluginRegistry(registry.registry);

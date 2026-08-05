@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
@@ -51,18 +53,21 @@ function sanitizeJitiCachePathSegment(value: string): string {
   return normalized.length > 0 ? normalized : "unknown";
 }
 
-function resolveJitiFsCacheTmpDir(): string {
-  let tmpDir = os.tmpdir();
-  if (process.env.TMPDIR && tmpDir === process.cwd() && !process.env.JITI_RESPECT_TMPDIR_ENV) {
-    const originalTmpDir = process.env.TMPDIR;
-    delete process.env.TMPDIR;
-    try {
-      tmpDir = os.tmpdir();
-    } finally {
-      process.env.TMPDIR = originalTmpDir;
-    }
+function resolveJitiFsCacheRoot(): string {
+  const xdgCacheHome = process.env.XDG_CACHE_HOME?.trim();
+  if (xdgCacheHome && path.isAbsolute(xdgCacheHome)) {
+    return xdgCacheHome;
   }
-  return tmpDir;
+  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    return localAppData && path.isAbsolute(localAppData)
+      ? localAppData
+      : path.join(homeDir, "AppData", "Local");
+  }
+  return process.platform === "darwin"
+    ? path.join(homeDir, "Library", "Caches")
+    : path.join(homeDir, ".cache");
 }
 
 function readJitiBooleanEnv(name: string, defaultValue: boolean): boolean {
@@ -141,9 +146,9 @@ function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {
     // Package installs should have package.json; keep cache setup best-effort.
   }
   return path.join(
-    resolveJitiFsCacheTmpDir(),
-    "jiti",
+    resolveJitiFsCacheRoot(),
     "openclaw",
+    "jiti",
     version,
     sanitizeJitiCachePathSegment(installMarker),
   );
@@ -348,10 +353,6 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
   }
   starts.push(path.dirname(normalized));
   return dedupeResolvedPaths(starts);
-}
-
-function formatResolutionError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveDevSourceRootParam(params: { devSourceRoot?: string | null }): string | null {
@@ -1560,7 +1561,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       packageRoot,
       candidates: dedupeResolvedPaths(candidates),
       resolvedPath: null,
-      error: formatResolutionError(error),
+      error: formatErrorMessage(error),
     };
   }
   return {
@@ -1604,7 +1605,7 @@ function isBundledPluginDistModulePath(modulePath: string): boolean {
   return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
 }
 
-export function shouldPreferNativeModuleLoad(modulePath: string): boolean {
+function shouldPreferNativeModuleLoad(modulePath: string): boolean {
   if (!supportsNativeModuleRuntime()) {
     return false;
   }

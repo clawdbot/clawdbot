@@ -2283,6 +2283,37 @@ openclaw-chat-video-player {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+.agent-chat__input--prefill-attention {
+  animation: chat-composer-prefill-attention 1200ms ease-out;
+}
+
+@keyframes chat-composer-prefill-attention {
+  0%,
+  30% {
+    background: color-mix(in srgb, var(--accent) 14%, var(--card));
+    border-color: color-mix(in srgb, var(--accent) 88%, var(--border));
+    box-shadow:
+      0 0 0 5px color-mix(in srgb, var(--accent) 32%, transparent),
+      0 0 28px color-mix(in srgb, var(--accent) 42%, transparent);
+  }
+  100% {
+    background: var(--card);
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+    box-shadow: 0 0 0 3px var(--accent-subtle);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__input--prefill-attention {
+    animation: none;
+    background: color-mix(in srgb, var(--accent) 14%, var(--card));
+    border-color: color-mix(in srgb, var(--accent) 88%, var(--border));
+    box-shadow:
+      0 0 0 5px color-mix(in srgb, var(--accent) 32%, transparent),
+      0 0 28px color-mix(in srgb, var(--accent) 42%, transparent);
+  }
+}
+
 .agent-chat__input--offline,
 .agent-chat__input--offline:focus-within {
   border-color: color-mix(in srgb, var(--warn) 38%, var(--border));
@@ -4639,6 +4670,60 @@ openclaw-chat-video-player {
 
 .chat-controls__model-provenance-value--inherit {
   color: var(--muted);
+}
+
+.chat-controls__model-catalog-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-controls__model-catalog-state--empty {
+  min-height: 72px;
+  border-bottom: 0;
+}
+
+.chat-controls__model-catalog-state-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-controls__model-catalog-state-label svg,
+.chat-controls__model-catalog-retry svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.chat-controls__model-catalog-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-controls__model-catalog-retry:hover,
+.chat-controls__model-catalog-retry:focus-visible {
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+  background: var(--bg-hover);
+  outline: none;
 }
 
 .chat-controls__model-reset {

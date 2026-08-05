@@ -4,10 +4,8 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { isTimeoutError } from "../../agents/failover-error.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -184,12 +182,6 @@ export async function registerPluginSubagentRunFromGateway(params: {
     expectsCompletionMessage: params.requester !== undefined,
     spawnMode: "run",
   });
-}
-
-export function resolveFailedTrackedAgentTaskStatus(
-  error: unknown,
-): GatewayAgentTaskTerminalStatus {
-  return isAbortError(error) || isTimeoutError(error) ? "timed_out" : "failed";
 }
 
 export function tryFinalizeTrackedAgentTask(params: {

@@ -50,7 +50,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
   let didReply = false;
-  let settledWithoutVisibleReply = false;
+  let finalReplyOutcome: "accepted" | "failed" | "suppressed" | undefined;
   const turnResult = await nativeCommandRuntime.dispatchChannelInboundTurn({
     cfg: params.cfg,
     channel: "discord",
@@ -92,17 +92,26 @@ export async function dispatchDiscordNativeAgentReply(params: {
               suppression: { reason: "no_visible_result" as const },
             };
       },
-      onDelivered: (_payload, _info, result) => {
-        if (result?.visibleReplySent === false) {
-          settledWithoutVisibleReply = true;
+      onDelivered: (_payload, info, result) => {
+        // A failed final outweighs later suppression until Discord accepts a final.
+        if (
+          info.kind === "final" &&
+          result?.visibleReplySent !== undefined &&
+          (result.visibleReplySent || finalReplyOutcome !== "failed")
+        ) {
+          finalReplyOutcome = result.visibleReplySent ? "accepted" : "suppressed";
         }
       },
       onError: (err, info) => {
-        if (isChannelPartialDeliveryError(err)) {
+        const partialDelivery = isChannelPartialDeliveryError(err);
+        if (partialDelivery) {
           // Preserve failed delivery accounting while preventing an empty fallback from
           // obscuring the prefix that Discord already accepted for this payload.
           didReply = true;
           logVerbose("discord: interaction reply partially delivered before expiry");
+        }
+        if (info.kind === "final") {
+          finalReplyOutcome = partialDelivery ? "accepted" : "failed";
         }
         const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
         params.log.error(`discord slash ${info.kind} reply failed: ${message}`);
@@ -119,14 +128,12 @@ export async function dispatchDiscordNativeAgentReply(params: {
     },
   });
 
-  if (!didReply && (params.suppressReplies || settledWithoutVisibleReply)) {
+  if (!didReply && (params.suppressReplies || finalReplyOutcome === "suppressed")) {
     await settleDiscordInteractionWithoutVisibleReply(params.interaction);
     return;
   }
   if (
-    params.suppressReplies ||
     didReply ||
-    settledWithoutVisibleReply ||
     (turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
   ) {
     return;

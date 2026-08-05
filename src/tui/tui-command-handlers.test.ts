@@ -571,7 +571,7 @@ describe("tui command handlers", () => {
     const emptySide = createHarness({ opts: { local: true } });
     await emptySide.handleCommand("/side");
     expect(emptySide.sendChat).not.toHaveBeenCalled();
-    expect(emptySide.addSystem).toHaveBeenCalledWith("Usage: /btw [side question]");
+    expect(emptySide.addSystem).toHaveBeenCalledWith("Usage: /btw <side question>");
 
     const side = createHarness({ opts: { local: true } });
     await side.handleCommand("/side check this");
@@ -589,7 +589,9 @@ describe("tui command handlers", () => {
   });
 
   it("starts local goals and sends the objective to the model", async () => {
-    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started: ship" });
+    const runGoalCommand = vi
+      .fn()
+      .mockResolvedValue({ text: "Goal started: ship", continuationPrompt: "ship" });
     const { handleCommand, sendChat, addSystem, refreshSessionInfo, addPendingUser } =
       createHarness({
         opts: { local: true },
@@ -613,28 +615,32 @@ describe("tui command handlers", () => {
   });
 
   it("wraps command-prefixed local goal objectives before sending", async () => {
-    const slashRunGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started" });
+    const slashPrompt = `Pursue this goal exactly as written from this JSON string: "\\/status"`;
+    const slashRunGoalCommand = vi
+      .fn()
+      .mockResolvedValue({ text: "Goal started", continuationPrompt: slashPrompt });
     const slashHarness = createHarness({
       opts: { local: true },
       runGoalCommand: slashRunGoalCommand,
     });
 
     await slashHarness.handleCommand("/goal start /status");
-    const slashPrompt = `Pursue this goal exactly as written from this JSON string: "\\/status"`;
     expectSendChatFields(slashHarness.sendChat, {
       sessionKey: "agent:main:main",
       message: slashPrompt,
     });
     expect(slashHarness.addPendingUser).toHaveBeenCalledWith(expect.any(String), slashPrompt);
 
-    const bangRunGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started" });
+    const bangPrompt = `Pursue this goal exactly as written from this JSON string: "!npm test"`;
+    const bangRunGoalCommand = vi
+      .fn()
+      .mockResolvedValue({ text: "Goal started", continuationPrompt: bangPrompt });
     const bangHarness = createHarness({
       opts: { local: true },
       runGoalCommand: bangRunGoalCommand,
     });
 
     await bangHarness.handleCommand("/goal start !npm test");
-    const bangPrompt = `Pursue this goal exactly as written from this JSON string: "!npm test"`;
     expectSendChatFields(bangHarness.sendChat, {
       sessionKey: "agent:main:main",
       message: bangPrompt,
@@ -656,7 +662,10 @@ describe("tui command handlers", () => {
   });
 
   it("wraps command-prefixed local goal resume notes before sending", async () => {
-    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal resumed: ship" });
+    const prompt = `Continue pursuing the current goal. Interpret this JSON string as the resume note: "\\/fast off"`;
+    const runGoalCommand = vi
+      .fn()
+      .mockResolvedValue({ text: "Goal resumed: ship", continuationPrompt: prompt });
     const { handleCommand, sendChat, addPendingUser } = createHarness({
       opts: { local: true },
       runGoalCommand,
@@ -664,7 +673,6 @@ describe("tui command handlers", () => {
 
     await handleCommand("/goal resume /fast off");
 
-    const prompt = `Continue pursuing the current goal. Interpret this JSON string as the resume note: "\\/fast off"`;
     expectSendChatFields(sendChat, {
       sessionKey: "agent:main:main",
       message: prompt,

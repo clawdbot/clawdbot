@@ -10,7 +10,6 @@ const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
 const startupInfo: InstalledPluginStartupInfo = {
   sidecar: false,
   memory: false,
-  deferConfiguredChannelFullLoadUntilAfterListen: false,
   agentHarnesses: [],
 };
 

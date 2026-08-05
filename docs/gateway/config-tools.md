@@ -154,7 +154,7 @@ Further restrict tools for specific providers or models. Order: base profile →
   tools: {
     profile: "coding",
     byProvider: {
-      "google-antigravity": { profile: "minimal" },
+      anthropic: { profile: "minimal" },
       "openai/gpt-5.4": { allow: ["group:fs", "sessions_list"] },
     },
   },

@@ -1,4 +1,5 @@
 // Anthropic tests cover index plugin behavior.
+import { calculateCost, type Usage } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -858,6 +859,70 @@ describe("anthropic provider replay hooks", () => {
     // promotional -> standard pricing cutover.
     expect(normalized?.cost).toEqual((resolved as ProviderRuntimeModel).cost);
   });
+
+  it.each(["claude-sonnet-5", "claude-opus-5"])(
+    "uses operator-configured %s pricing for assistant usage",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const configuredCost = { input: 777, output: 888, cacheRead: 999, cacheWrite: 666 };
+      const config: NonNullable<ProviderResolveDynamicModelContext["config"]> = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: modelId,
+                  name: modelId,
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: configuredCost,
+                  contextWindow: 1_000_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      };
+      const discoveredModel = provider.resolveDynamicModel?.({
+        config,
+        provider: "anthropic",
+        modelId,
+        modelRegistry: createModelRegistry([]),
+      } as ProviderResolveDynamicModelContext);
+      expect(discoveredModel).toBeDefined();
+
+      const configuredModel = {
+        ...(discoveredModel as ProviderRuntimeModel),
+        cost: configuredCost,
+      };
+      const resolvedModel =
+        provider.normalizeResolvedModel?.({
+          config,
+          provider: "anthropic",
+          modelId,
+          model: configuredModel,
+        } as never) ?? configuredModel;
+      const usage: Usage = {
+        input: 1_000,
+        output: 1_000,
+        cacheRead: 1_000,
+        cacheWrite: 1_000,
+        totalTokens: 4_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+
+      calculateCost(resolvedModel as Parameters<typeof calculateCost>[0], usage);
+
+      expect(resolvedModel.cost).toEqual(configuredCost);
+      expect(usage.cost.input).toBeCloseTo(0.777);
+      expect(usage.cost.output).toBeCloseTo(0.888);
+      expect(usage.cost.cacheRead).toBeCloseTo(0.999);
+      expect(usage.cost.cacheWrite).toBeCloseTo(0.666);
+      expect(usage.cost.total).toBeCloseTo(3.33);
+    },
+  );
 
   it("resolves Claude Mythos 5 with its direct-only mandatory-adaptive contract", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);

@@ -13,6 +13,7 @@ import {
 } from "./message-action-runner.test-helpers.js";
 
 const emptyConfig = {} as OpenClawConfig;
+const portableLocation = { latitude: 48.858844, longitude: 2.294351 };
 
 describe("runMessageAction send validation", () => {
   beforeEach(() => {
@@ -126,6 +127,38 @@ describe("runMessageAction send validation", () => {
       ).rejects.toThrow(/cannot be combined/i);
     },
   );
+
+  it.each([
+    { name: "text", content: { message: "hello" } },
+    { name: "image", content: { image: "https://example.com/photo.jpg" } },
+    { name: "buffer media", content: { buffer: "aGVsbG8=", filename: "hello.txt" } },
+  ])("repairs incidental location for model-authored $name sends", async ({ content }) => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      actionOrigin: "message-tool",
+      params: {
+        channel: "workspace",
+        target: "channel:C99999999",
+        ...content,
+        location: portableLocation,
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      action: "send",
+      normalization: { locationOmitted: true },
+    });
+    expect(result.kind === "send" ? result.payload : undefined).not.toMatchObject({
+      location: expect.anything(),
+    });
+  });
 
   it("uses the current internal UI source as the message-tool-only send sink", async () => {
     const result = await runMessageAction({

@@ -50,6 +50,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import {
@@ -95,8 +96,7 @@ import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,
 } from "../subagent-announce-handoff.js";
-import { isToolAllowedByPolicies } from "../tool-policy-match.js";
-import { readToolAllowlistIntersection } from "../tool-policy.js";
+import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -385,7 +385,7 @@ async function persistTextTurnTranscript(
   return { kind: "persisted", sessionEntry: turn.sessionEntry };
 }
 
-function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
+export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
     return visibleText;
@@ -628,15 +628,7 @@ export function runAgentAttempt(params: {
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         agentId: params.sessionAgentId,
-        agentAccountId: params.runContext.accountId,
-        messageProvider: params.opts.messageProvider ?? params.messageChannel,
-        messageChannel: params.messageChannel,
-        groupId: params.runContext.groupId,
-        groupChannel: params.runContext.groupChannel,
-        groupSpace: params.runContext.groupSpace,
-        spawnedBy: params.spawnedBy,
         senderId: params.runContext.senderId,
-        senderIsOwner: params.opts.senderIsOwner,
         modelProvider: params.providerOverride,
         modelId: params.modelOverride,
         sandboxToolPolicy: completionSandboxStatus?.sandboxed
@@ -644,7 +636,6 @@ export function runAgentAttempt(params: {
           : undefined,
         inputProvenance: params.opts.inputProvenance,
         trustedInternalHandoff: params.opts.trustedInternalHandoff,
-        scheduledToolPolicy: params.opts.scheduledToolPolicy,
       })
     : undefined;
   const completionToolPolicies = completionCapabilityProfile
@@ -657,20 +648,13 @@ export function runAgentAttempt(params: {
         additionalInheritedAllow: ["message"],
       })
     : undefined;
-  const completionRuntimeRestrictions = params.opts.toolsAllow
-    ? (readToolAllowlistIntersection(params.opts.toolsAllow) ?? [params.opts.toolsAllow])
-    : undefined;
   // Forced private delivery is not authority: retain every parent/operator cap
   // and mint only the source-bound message capability from a verified envelope.
   const completionNeedsMessageDelivery =
     completionCapabilityProfile?.policy.requesterPolicySource === "completion-handoff" &&
     completionToolPolicies !== undefined &&
     isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
-    (params.opts.toolsAllow === undefined ||
-      (completionRuntimeRestrictions?.every(
-        (allow) => allow.length > 0 && isToolAllowedByPolicies("message", [{ allow }]),
-      ) ??
-        false));
+    isRuntimeToolAllowed("message", params.opts.toolsAllow);
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -952,6 +936,7 @@ export function runAgentAttempt(params: {
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             sessionEntry: params.sessionEntry,
+            chatType: params.sessionEntry?.chatType,
             agentId: params.sessionAgentId,
             trigger: "user",
             sessionFile: params.sessionFile,
@@ -969,6 +954,7 @@ export function runAgentAttempt(params: {
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
             lifecycleGeneration: params.lifecycleGeneration,
+            onExecutionStarted: params.opts.onExecutionStarted,
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
@@ -1150,6 +1136,7 @@ export function runAgentAttempt(params: {
   const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    chatType: params.sessionEntry?.chatType,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -1245,6 +1232,7 @@ export function runAgentAttempt(params: {
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: (info) => {
+      params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
         params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
       }
@@ -1263,6 +1251,7 @@ export function runAgentAttempt(params: {
 
 export function buildAcpResult(params: {
   payloadText: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
   startedAt: number;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
@@ -1280,6 +1269,7 @@ export function buildAcpResult(params: {
       durationMs: Date.now() - params.startedAt,
       aborted: abortFields.aborted ?? resultCancelled,
       stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   };
 }
@@ -1642,6 +1632,7 @@ export function emitAcpLifecycleEnd(params: {
   abortSignal?: AbortSignal;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
 }) {
   finalizeAcpToolsForRun(
@@ -1665,6 +1656,7 @@ export function emitAcpLifecycleEnd(params: {
       phase: "end",
       endedAt: Date.now(),
       ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   });
 }

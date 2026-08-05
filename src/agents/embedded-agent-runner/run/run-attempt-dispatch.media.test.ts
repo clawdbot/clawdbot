@@ -10,7 +10,6 @@ import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
-
 describe("plugin harness prompt media", () => {
   it("does not hydrate marker or bare paths from recalled memory context", async () => {
     const recalledMemory = [
@@ -35,6 +34,82 @@ describe("plugin harness prompt media", () => {
         pluginHarnessOwnsTransport: true,
       } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
     ).resolves.toEqual({ images: undefined, imageOrder: undefined, media: undefined });
+  });
+
+  it.each([
+    {
+      name: "filename-only SVG",
+      fileName: "diagram.svg",
+      contentType: undefined,
+      kind: undefined,
+      bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      expectedImages: 0,
+    },
+    {
+      name: "unknown-kind PDF metadata over valid PNG bytes",
+      fileName: "report.png",
+      contentType: "application/pdf",
+      kind: "unknown" as const,
+      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
+      expectedImages: 0,
+    },
+    {
+      name: "filename-only authentic PNG",
+      fileName: "scan.png",
+      contentType: undefined,
+      kind: undefined,
+      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
+      expectedImages: 1,
+    },
+    {
+      name: "generic-binary authentic PNG",
+      fileName: "scan.png",
+      contentType: "application/octet-stream",
+      kind: undefined,
+      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
+      expectedImages: 1,
+    },
+  ])("applies canonical $name rules at the actual plugin-harness boundary", async (testCase) => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-canonical-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const imagePath = path.join(inboundDir, testCase.fileName);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(imagePath, testCase.bytes);
+    const media = [{ path: imagePath, contentType: testCase.contentType, kind: testCase.kind }];
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const result = await preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "main",
+          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+          media,
+          sessionId: "session-canonical-media",
+          userTurnTranscriptRecorder: {
+            message: { role: "user", content: "inspect", __openclaw: { media } },
+          },
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-canonical-media",
+          workspaceDir,
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+      expect(result.images ?? []).toHaveLength(testCase.expectedImages);
+      if (testCase.expectedImages > 0) {
+        expect(result.images?.[0]?.mimeType).toBe("image/png");
+      } else {
+        expect(result.media).toEqual(media);
+      }
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("hydrates plugin images and preserves serialized replay order with non-image facts", async () => {

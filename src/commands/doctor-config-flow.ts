@@ -2,6 +2,7 @@
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
@@ -31,6 +32,7 @@ import {
 import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role-materialization.js";
 import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
+import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
@@ -153,9 +155,33 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     repairPrefixedConfig: shouldRepair,
     recoverCorruptTargetStore: shouldRepair,
     doctorOnlyStateMigrations: shouldRepair,
+    preparePluginMetadataSnapshot: true,
   });
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
+  const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
+    current: preflight.pluginMetadataSnapshot,
+  };
+  const { createDoctorPluginMetadataSnapshotScope } =
+    await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
+  const pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
+    getBaseSnapshot: () => pluginMetadataSnapshotState.current,
+    env: process.env,
+  });
+  const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
+  const invalidatePluginMetadataSnapshot = () => {
+    // Filesystem/install repairs replace the authoritative plugin generation.
+    pluginMetadataSnapshotState.current = undefined;
+    pluginMetadataSnapshotScope.invalidate();
+  };
+  const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T =>
+    runWithPluginMetadataSnapshot(
+      {
+        config,
+        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+      },
+      run,
+    );
   let state: DoctorConfigMutationState = {
     cfg: baseCfg,
     candidate: structuredClone(baseCfg),
@@ -164,6 +190,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   const explicitSetPaths: string[][] = [];
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
+  let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
@@ -188,14 +215,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const sourceLastTouchedVersion =
     typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
-  const legacyStep = applyLegacyCompatibilityStep({
-    snapshot,
-    state,
-    shouldRepair,
-    doctorFixCommand,
-  });
+  const legacyStep = runWithCurrentPluginMetadata(state.candidate, () =>
+    applyLegacyCompatibilityStep({
+      snapshot,
+      state,
+      shouldRepair,
+      doctorFixCommand,
+    }),
+  );
   state = legacyStep.state;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
+  const legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
   const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
     (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
   );
@@ -255,7 +285,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
     const { findDoctorLegacyConfigIssues } =
       await import("./doctor/shared/legacy-config-issues.js");
-    return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
+    return runWithCurrentPluginMetadata(state.candidate, () =>
+      findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed),
+    );
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
@@ -308,10 +340,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   // Parsed config supplies invalid-key evidence only; migrations still mutate the
   // include/env-resolved candidate so doctor never writes unresolved source values.
-  const normalized = normalizeCompatibilityConfigValues(state.candidate, {
-    blockedModelIdentities: blockedCodexModelIdentities,
-    sourceRaw: snapshot.parsed,
-  });
+  const normalized = runWithCurrentPluginMetadata(state.candidate, () =>
+    normalizeCompatibilityConfigValues(state.candidate, {
+      blockedModelIdentities: blockedCodexModelIdentities,
+      sourceRaw: snapshot.parsed,
+    }),
+  );
   applyConfigMutation(normalized, {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
   });
@@ -341,14 +375,24 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const pluginActivationSourceConfig = state.candidate;
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
-  applyConfigMutation(applyPluginAutoEnable({ config: state.candidate, env: process.env }), {
-    fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
-  });
+  applyConfigMutation(
+    runWithCurrentPluginMetadata(state.candidate, () =>
+      applyPluginAutoEnable({
+        config: state.candidate,
+        env: process.env,
+      }),
+    ),
+    {
+      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+    },
+  );
 
   if (!shouldRepair) {
     const { repairStaleAgentModelRefs } =
       await import("./doctor/shared/stale-agent-model-ref-repair.js");
-    const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
+    const staleAgentModelRepair = runWithCurrentPluginMetadata(state.candidate, () =>
+      repairStaleAgentModelRefs(state.candidate, { env: process.env }),
+    );
     applyConfigMutation(staleAgentModelRepair, {
       fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
       sanitize: true,
@@ -358,10 +402,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
-  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
-    cfg: state.candidate,
-    env: process.env,
-  });
+  const pluginToolAllowlistWarnings = runWithCurrentPluginMetadata(state.candidate, () =>
+    collectPluginToolAllowlistWarnings({
+      cfg: state.candidate,
+      env: process.env,
+    }),
+  );
   if (pluginToolAllowlistWarnings.length > 0) {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
@@ -373,21 +419,25 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (hasConfiguredChannels) {
     const channelDoctor = await import("./doctor/shared/channel-doctor.js");
     collectMutableAllowlistWarnings = channelDoctor.collectChannelDoctorMutableAllowlistWarnings;
-    const channelDoctorSequence = await channelDoctor.runChannelDoctorConfigSequences({
-      cfg: state.candidate,
-      env: process.env,
-      shouldRepair,
-    });
+    const channelDoctorSequence = await runWithCurrentPluginMetadata(state.candidate, () =>
+      channelDoctor.runChannelDoctorConfigSequences({
+        cfg: state.candidate,
+        env: process.env,
+        shouldRepair,
+      }),
+    );
     emitDoctorNotes({
       note,
       changeNotes: channelDoctorSequence.changeNotes,
       warningNotes: channelDoctorSequence.warningNotes,
     });
 
-    for (const staleCleanup of await channelDoctor.collectChannelDoctorStaleConfigMutations(
-      state.candidate,
-      { env: process.env },
-    )) {
+    const staleChannelCleanups = await runWithCurrentPluginMetadata(state.candidate, () =>
+      channelDoctor.collectChannelDoctorStaleConfigMutations(state.candidate, {
+        env: process.env,
+      }),
+    );
+    for (const staleCleanup of staleChannelCleanups) {
       applyConfigMutation(staleCleanup, {
         fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
         sanitize: true,
@@ -408,8 +458,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       doctorFixCommand,
       env: process.env,
       blockedCodexProviderPlan,
+      pluginMetadataSnapshotState,
+      runWithPluginMetadataSnapshot,
     });
     state = repairSequence.state;
+    pluginMetadataSnapshotState.current = repairSequence.pluginMetadataSnapshot;
+    openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
@@ -420,14 +474,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   } else {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
-    const previewNotes = await collectDoctorPreviewNotes({
-      cfg: state.candidate,
-      activationSourceConfig: pluginActivationSourceConfig,
-      doctorFixCommand,
-      env: process.env,
-      allowExec: params.options.allowExec === true,
-      blockedCodexProviderPlan,
-    });
+    const collectPreviewNotes = async () =>
+      await collectDoctorPreviewNotes({
+        cfg: state.candidate,
+        activationSourceConfig: pluginActivationSourceConfig,
+        doctorFixCommand,
+        env: process.env,
+        allowExec: params.options.allowExec === true,
+        blockedCodexProviderPlan,
+        runWithPluginMetadataSnapshot,
+      });
+    const previewNotes = await runWithCurrentPluginMetadata(state.candidate, collectPreviewNotes);
     emitDoctorNotes({
       note,
       infoNotes: previewNotes.infoNotes,
@@ -436,10 +493,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   const mutableAllowlistWarnings = collectMutableAllowlistWarnings
-    ? await collectMutableAllowlistWarnings({
-        cfg: state.candidate,
-        env: process.env,
-      })
+    ? await runWithCurrentPluginMetadata(state.candidate, () =>
+        collectMutableAllowlistWarnings({
+          cfg: state.candidate,
+          env: process.env,
+        }),
+      )
     : [];
   if (mutableAllowlistWarnings.length > 0) {
     note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
@@ -472,8 +531,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
   });
   const cfg = finalized.cfg;
+  const shouldWriteConfig = finalized.shouldWriteConfig && !legacyMigrationBlocksWrite;
   const singleTopLevelIncludeWrite =
-    finalized.shouldWriteConfig &&
+    shouldWriteConfig &&
     isSingleTopLevelIncludeMigration({
       parsed: snapshot.parsed,
       sourceConfig: snapshot.sourceConfig,
@@ -486,13 +546,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       : undefined,
     cfg.models?.providers?.["opencode-go"] ? "opencode-go" : undefined,
   ].filter((pluginId): pluginId is string => pluginId !== undefined);
-  const activeOpencodePluginIds =
-    configuredOpencodePluginIds.length > 0
-      ? (await import("../plugins/providers.js")).resolveEnabledProviderPluginIds({
-          config: cfg,
-          onlyPluginIds: configuredOpencodePluginIds,
-        })
-      : [];
+  let activeOpencodePluginIds: string[] = [];
+  if (configuredOpencodePluginIds.length > 0) {
+    const { resolveEnabledProviderPluginIds } = await import("../plugins/providers.js");
+    activeOpencodePluginIds = runWithCurrentPluginMetadata(cfg, () =>
+      resolveEnabledProviderPluginIds({
+        config: cfg,
+        onlyPluginIds: configuredOpencodePluginIds,
+      }),
+    );
+  }
   noteOpencodeProviderOverrides(cfg, {
     opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
     opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),
@@ -503,11 +566,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig: finalized.shouldWriteConfig,
+    shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
-    ...(finalized.shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
+    ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
     ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
@@ -520,5 +583,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(blockedCodexProviderPlan.blockedModelIdentities.length > 0
       ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
       : {}),
+    ...(openAICodexAuthProfileIdMap?.size ? { openAICodexAuthProfileIdMap } : {}),
+    ...(pluginMetadataSnapshotState.current
+      ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
+      : {}),
+    runWithPluginMetadataSnapshot,
+    invalidatePluginMetadataSnapshot,
   };
 }

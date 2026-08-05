@@ -164,7 +164,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   let broadcastQueue = Promise.resolve();
-  return (update: InternalSessionTranscriptUpdate): void => {
+  return (update: InternalSessionTranscriptUpdate): Promise<void> => {
     // Capture legacy ownership before the async queue can cross a same-id reset;
     // committed producer ownership always wins over a later session-store read.
     const lifecycleRevision =
@@ -175,9 +175,9 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
     // Preserve transcript update order even when counting messages requires an
     // async read from the session file.
-    broadcastQueue = broadcastQueue
-      .then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate))
-      .catch(() => undefined);
+    const task = broadcastQueue.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate));
+    broadcastQueue = task.catch(() => undefined);
+    return task;
   };
 }
 

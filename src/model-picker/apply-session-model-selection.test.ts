@@ -194,6 +194,32 @@ describe("applySessionModelSelection", () => {
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
+  it("preserves a compatible auth profile when changing models within a provider", async () => {
+    const sessionEntry = createEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 3,
+    });
+
+    await applySessionModelSelection(
+      createParams({
+        sessionEntry,
+        currentProvider: "openai",
+        currentModel: "gpt-4.1",
+      }),
+    );
+
+    expect(sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 3,
+    });
+  });
+
   it("keeps an accepted selection session-scoped without config authority", async () => {
     const sessionEntry = createEntry();
 

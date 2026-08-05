@@ -104,6 +104,7 @@ function createBundledChannelEntry(params: {
   pluginId: string;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
+  registerCapabilities?: (api: OpenClawPluginApi) => void;
 }) {
   return defineBundledChannelEntry({
     id: params.pluginId,
@@ -114,6 +115,7 @@ function createBundledChannelEntry(params: {
     runtime: { specifier: "./runtime.cjs", exportName: "setRuntime" },
     registerCliMetadata: params.registerCliMetadata,
     registerFull: params.registerFull,
+    registerCapabilities: params.registerCapabilities,
   });
 }
 
@@ -128,6 +130,7 @@ describe("defineBundledChannelEntry", () => {
       runtimeMarker,
     });
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
       api.registerTool(
         {
@@ -145,6 +148,7 @@ describe("defineBundledChannelEntry", () => {
       pluginId,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("tool-discovery");
@@ -153,6 +157,7 @@ describe("defineBundledChannelEntry", () => {
     expect(api.registerChannel).not.toHaveBeenCalled();
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).toHaveBeenCalledWith(api);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
     expect(api.registerTool).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
@@ -168,11 +173,13 @@ describe("defineBundledChannelEntry", () => {
     });
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = createBundledChannelEntry({
       importerPath,
       pluginId,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("discovery");
@@ -181,6 +188,7 @@ describe("defineBundledChannelEntry", () => {
     expect(api.registerChannel).toHaveBeenCalledTimes(1);
     expect(registerCliMetadata).toHaveBeenCalledWith(api);
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
     expect(fs.existsSync(runtimeMarker)).toBe(true);
   });
 
@@ -195,17 +203,31 @@ describe("defineBundledChannelEntry", () => {
     });
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = createBundledChannelEntry({
       importerPath,
       pluginId,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
+
+    const cliApi = createApi("cli-metadata");
+    entry.register(cliApi);
+    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
+    expect(registerCapabilities).not.toHaveBeenCalled();
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
+    registerCliMetadata.mockClear();
+
+    entry.register(createApi("setup-only"));
+    expect(registerCapabilities).not.toHaveBeenCalled();
+    fs.rmSync(runtimeMarker, { force: true });
 
     entry.register(createApi("setup-runtime"));
     expect(fs.existsSync(runtimeMarker)).toBe(true);
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).not.toHaveBeenCalled();
 
     fs.rmSync(runtimeMarker, { force: true });
     const fullApi = createApi("full");
@@ -213,6 +235,7 @@ describe("defineBundledChannelEntry", () => {
     expect(fs.existsSync(runtimeMarker)).toBe(true);
     expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
     expect(registerFull).toHaveBeenCalledWith(fullApi);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
   });
 });
 

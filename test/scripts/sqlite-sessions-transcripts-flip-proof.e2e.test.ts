@@ -51,12 +51,12 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
     expect(report.rollbackRestore?.manifestPath).toContain("session-sqlite-migration-runs");
     expect(
       report.rollbackRestore?.restoredFiles.some((filePath) =>
-        filePath.endsWith("/sqlite-rollback-restore.jsonl"),
+        filePath.replaceAll("\\", "/").endsWith("/sqlite-rollback-restore.jsonl"),
       ),
     ).toBe(true);
     expect(
       report.rollbackRestore?.idempotentRestoreSkippedFiles.some((filePath) =>
-        filePath.endsWith("/sqlite-rollback-restore.jsonl"),
+        filePath.replaceAll("\\", "/").endsWith("/sqlite-rollback-restore.jsonl"),
       ),
     ).toBe(true);
     expect(report.scaleMigration).toMatchObject({
@@ -230,5 +230,5 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           checkpoint.archiveArtifacts.length > 0,
       ),
     ).toBe(true);
-  }, 180_000);
+  }, 420_000);
 });

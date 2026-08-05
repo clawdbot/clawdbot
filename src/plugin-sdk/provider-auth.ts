@@ -9,8 +9,10 @@ import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/ext
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
+import { resolveStoredCredentialReadOnlyAvailability } from "../agents/auth-profiles/read-only-availability.js";
 import {
   ensureAuthProfileStore,
+  findPersistedAuthProfileCredential,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
@@ -21,6 +23,15 @@ import {
   buildCopilotIdeHeaders,
 } from "../agents/copilot-dynamic-headers.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import {
+  profileTypeToAuthMode,
+  resolveDirectProviderCredentialMode,
+  resolveProviderConfig,
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+} from "../agents/model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logWarn } from "../logger.js";
@@ -398,20 +409,122 @@ export async function resolveCopilotApiToken(params: {
 }
 
 /**
- * Checks whether a provider has either env auth or matching local auth profiles configured.
+ * Checks whether a provider has usable config/env auth or matching local auth profiles.
  */
 export function isProviderApiKeyConfigured(params: {
-  /** Provider id to check for env auth or local auth profiles. */
+  /** Provider id to check for config/env auth or local auth profiles. */
   provider: string;
+  /** Optional runtime config used to resolve provider-owned API-key credentials. */
+  cfg?: OpenClawConfig;
   /** Agent directory containing auth profiles. */
   agentDir?: string;
   /** Optional allowed profile credential types. */
   profileTypes?: readonly AuthProfileCredential["type"][];
+  /** Optional provider-owned acceptance predicate for a known selected credential. */
+  acceptsApiKey?: (apiKey: string) => boolean;
 }): boolean {
+  const agentDir = params.agentDir?.trim();
+  if (params.acceptsApiKey) {
+    const { acceptsApiKey, ...availability } = params;
+    if (!isProviderApiKeyConfigured(availability)) {
+      return false;
+    }
+
+    const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+    const authoredApiKey = providerConfig?.apiKey;
+    const store = agentDir
+      ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
+      : undefined;
+    let profile =
+      typeof authoredApiKey === "string" ? store?.profiles[authoredApiKey.trim()] : undefined;
+    if (!profile && store && providerConfig?.auth !== "api-key") {
+      const [profileId] = listUsableProviderAuthProfileIds(availability).profileIds;
+      profile = profileId ? store.profiles[profileId] : undefined;
+    }
+    if (profile) {
+      const credential =
+        profile.type === "oauth"
+          ? profile.access
+          : profile.type === "token"
+            ? (profile.token ??
+              (profile.tokenRef?.source === "env" ? process.env[profile.tokenRef.id] : undefined))
+            : (profile.key ??
+              (profile.keyRef?.source === "env" ? process.env[profile.keyRef.id] : undefined));
+      // Opaque managed profile refs are validated after canonical async auth resolution.
+      return credential === undefined || acceptsApiKey(credential);
+    }
+
+    const configParams = { cfg: params.cfg, provider: params.provider };
+    const configKey =
+      resolveManagedSecretRefRuntimeProviderAuth(configParams)?.apiKey ??
+      resolveUsableCustomProviderApiKey(configParams)?.apiKey;
+    const selectedKey =
+      providerConfig?.auth === "api-key" && authoredApiKey !== undefined
+        ? configKey
+        : (resolveEnvApiKey(params.provider, process.env, { config: params.cfg })?.apiKey ??
+          configKey);
+    return selectedKey === undefined || acceptsApiKey(selectedKey);
+  }
+
+  if (params.cfg) {
+    // Capability discovery must reject synthetic auth markers and unresolved
+    // SecretRefs that the provider's runtime cannot actually authenticate with.
+    const allowsCredentialMode = (mode: ReturnType<typeof profileTypeToAuthMode>) =>
+      !params.profileTypes?.length ||
+      params.profileTypes.some((profileType) => profileTypeToAuthMode(profileType) === mode);
+    const authoredApiKey = resolveProviderConfig(params.cfg, params.provider)?.apiKey;
+    const profileId = typeof authoredApiKey === "string" ? authoredApiKey.trim() : undefined;
+    if (agentDir && profileId) {
+      const credential = findPersistedAuthProfileCredential({ agentDir, profileId });
+      if (credential) {
+        const binding = resolveProviderEntryApiKeyProfileReference({
+          cfg: params.cfg,
+          provider: params.provider,
+          store: { version: 1, profiles: { [profileId]: credential } },
+        });
+        if (binding.kind === "profile-incompatible") {
+          return false;
+        }
+        if (binding.kind === "profile") {
+          return (
+            allowsCredentialMode(binding.mode) &&
+            resolveStoredCredentialReadOnlyAvailability({
+              credential: binding.credential,
+              cfg: params.cfg,
+              env: process.env,
+            }) === true
+          );
+        }
+      }
+    }
+    const configured = resolveUsableCustomProviderApiKey({
+      cfg: params.cfg,
+      provider: params.provider,
+    });
+    if (
+      configured?.apiKey &&
+      !isNonSecretApiKeyMarker(configured.apiKey) &&
+      allowsCredentialMode(
+        resolveDirectProviderCredentialMode({
+          cfg: params.cfg,
+          provider: params.provider,
+          inferredMode: "api-key",
+        }),
+      )
+    ) {
+      return true;
+    }
+    const managed = resolveManagedSecretRefRuntimeProviderAuth({
+      cfg: params.cfg,
+      provider: params.provider,
+    });
+    if (managed?.apiKey && allowsCredentialMode(managed.mode)) {
+      return true;
+    }
+  }
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
   }
-  const agentDir = params.agentDir?.trim();
   if (!agentDir) {
     return false;
   }

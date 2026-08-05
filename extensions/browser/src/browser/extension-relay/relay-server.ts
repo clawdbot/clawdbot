@@ -168,7 +168,7 @@ export async function startExtensionRelayServer(params: {
     }
     if (req.method === "GET" && (path === "/json" || path === "/json/list")) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(bridge.sharedTabs()));
+      res.end(JSON.stringify(bridge.devtoolsTargetDescriptors()));
       return;
     }
     res.writeHead(404).end("Not found");

@@ -9,6 +9,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
+  type CliProviderClassifier,
 } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -95,15 +96,16 @@ function normalizeCliRuntimeDisplayRef(
   cfg: OpenClawConfig,
   ref: SessionDisplayModelRef,
   defaultRef: SessionDisplayModelRef,
+  classifyCliProvider: CliProviderClassifier,
 ): SessionDisplayModelRef {
-  if (!isCliProvider(ref.provider, cfg)) {
+  if (!classifyCliProvider(ref.provider)) {
     return ref;
   }
   if (ref.model.includes("/")) {
     // CLI runtimes can store the real provider/model inside the model field;
     // prefer that embedded provider when it is not another CLI runtime alias.
     const parsed = parseModelRef(ref.model, defaultRef.provider);
-    if (!isCliProvider(parsed.provider, cfg)) {
+    if (!classifyCliProvider(parsed.provider)) {
       return parsed;
     }
   }
@@ -111,13 +113,13 @@ function normalizeCliRuntimeDisplayRef(
     cfg,
     model: ref.model,
   });
-  if (inferredProvider && !isCliProvider(inferredProvider, cfg)) {
+  if (inferredProvider && !classifyCliProvider(inferredProvider)) {
     return { provider: inferredProvider, model: ref.model };
   }
   // If the CLI runtime model cannot be mapped to a concrete provider, fall
   // back to the configured default provider so rows stay comparable.
   const parsed = parseModelRef(ref.model, defaultRef.provider);
-  if (!isCliProvider(parsed.provider, cfg)) {
+  if (!classifyCliProvider(parsed.provider)) {
     return parsed;
   }
   return {
@@ -130,14 +132,16 @@ function normalizeCliRuntimeDisplayRef(
 export function resolveSessionDisplayModel(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
+  classifyCliProvider?: CliProviderClassifier,
 ): string {
-  return resolveSessionDisplayModelRef(cfg, row).model;
+  return resolveSessionDisplayModelRef(cfg, row, classifyCliProvider).model;
 }
 
 /** Resolves provider/model display metadata for a session row. */
 export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
+  classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
 ): SessionDisplayModelRef {
   const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
@@ -157,6 +161,7 @@ export function resolveSessionDisplayModelRef(
       cfg,
       parseModelRef(row.model, row.modelProvider ?? defaultRef.provider),
       defaultRef,
+      classifyCliProvider,
     );
   }
   return defaultRef;

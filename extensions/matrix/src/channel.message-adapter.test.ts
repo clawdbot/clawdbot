@@ -108,6 +108,45 @@ describe("matrix channel message adapter", () => {
     });
   });
 
+  it("keeps all owner-provided Matrix receipt parts across the message adapter boundary", async () => {
+    const receipt = {
+      primaryPlatformMessageId: "$image",
+      platformMessageIds: ["$image", "$overflow"],
+      parts: [
+        { platformMessageId: "$image", kind: "media" as const, index: 0, replyToId: "$reply" },
+        { platformMessageId: "$overflow", kind: "text" as const, index: 1 },
+      ],
+      replyToId: "$reply",
+      sentAt: 1,
+    };
+    mocks.sendMessageMatrix.mockResolvedValueOnce({
+      messageId: "$overflow",
+      roomId: "!room:example",
+      primaryMessageId: "$image",
+      receipt,
+      content: "image\noverflow",
+    });
+    const sendMedia = matrixPlugin.message?.send?.media;
+    if (!sendMedia) {
+      throw new Error("Expected Matrix message adapter media sender");
+    }
+
+    const result = await sendMedia({
+      cfg,
+      to: "room:!room:example",
+      text: "image\noverflow",
+      mediaUrl: "file:///tmp/photo.png",
+      replyToId: "$reply",
+      accountId: "default",
+    });
+
+    expect(result.messageId).toBe("$overflow");
+    expect(result.receipt).toBe(receipt);
+    expect(result.receipt.primaryPlatformMessageId).toBe("$image");
+    expect(result.receipt.platformMessageIds).toEqual(["$image", "$overflow"]);
+    expect(result.receipt.parts[1]).not.toHaveProperty("replyToId");
+  });
+
   it("routes the standard Matrix send action through canonical durable delivery", async () => {
     const prepareSendPayload = matrixPlugin.actions?.prepareSendPayload;
     if (!prepareSendPayload) {

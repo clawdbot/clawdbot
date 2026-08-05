@@ -1,7 +1,7 @@
-import type { LegacyPluginInternalHookRegistration } from "./legacy-internal-hook-state.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginRegistryParams } from "./registry-types.js";
 import type { PluginHookName } from "./types.js";
 
@@ -58,6 +58,7 @@ export function resolveTypedHookTimeoutMs(params: {
 
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
+  bindPluginRegistryRuntime(registry, registryParams.runtime);
   const coreGatewayMethodNames = Array.from(
     new Set([
       ...(registryParams.coreGatewayMethodNames ?? []),
@@ -79,13 +80,6 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     registryParams,
     coreGatewayMethods: new Set(coreGatewayMethodNames),
     getHostCronService: () => registryParams.hostServices?.cron,
-    pluginHookRollback: new Map<
-      string,
-      Array<{
-        name: string;
-        previousRegistrations: LegacyPluginInternalHookRegistration[];
-      }>
-    >(),
     pluginsWithChannelRegistrationConflict: new Set<string>(),
     pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
     pushDiagnostic,

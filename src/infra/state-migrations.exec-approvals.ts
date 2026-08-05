@@ -6,7 +6,6 @@ import {
   resolveExecApprovalsPath,
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
-import { resetLegacyExecApprovalsPresenceCache } from "./exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -21,10 +20,10 @@ import {
   resolveLegacyMigrationSourceKey,
 } from "./state-migrations.receipts.js";
 import {
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
-  resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
@@ -56,10 +55,6 @@ export function detectLegacyExecApprovals(params: {
     sourcePath,
     hasLegacy: params.doctorOnlyStateMigrations === true && sourcePresent,
   };
-}
-
-function relativeLegacyPath(stateDir: string, filePath: string): string {
-  return resolveLegacyMigrationRelativePath(stateDir, filePath, "exec approvals", false);
 }
 
 async function readLegacySourceSnapshot(
@@ -194,54 +189,6 @@ function decideAndRecordMigration(params: {
   );
 }
 
-async function restoreClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-}): Promise<string | null> {
-  const claimPath = `${params.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  try {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))) {
-      return null;
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.sourcePath))) {
-      return `source path already exists: ${params.sourcePath}`;
-    }
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, claimPath),
-      relativeLegacyPath(params.stateDir, params.sourcePath),
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
-}
-
-async function recoverInterruptedClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-}): Promise<void> {
-  const claimPath = `${params.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  const claimRelative = relativeLegacyPath(params.stateDir, claimPath);
-  if (!(await params.stateRoot.exists(claimRelative))) {
-    return;
-  }
-  const sourceRelative = relativeLegacyPath(params.stateDir, params.sourcePath);
-  if (!(await params.stateRoot.exists(sourceRelative))) {
-    await params.stateRoot.move(claimRelative, sourceRelative);
-    return;
-  }
-  const [source, claim] = await Promise.all([
-    readLegacySourceSnapshot(params.stateRoot, params.stateDir, params.sourcePath),
-    readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath),
-  ]);
-  if (source.sha256 !== claim.sha256 || source.size !== claim.size) {
-    throw new Error("legacy exec approvals source and interrupted claim both exist");
-  }
-  await params.stateRoot.remove(claimRelative);
-}
-
 function decisionMessage(decision: MigrationDecision, removeSource: boolean): string {
   switch (decision) {
     case "legacy-imported":
@@ -271,42 +218,48 @@ async function migrateWithExclusiveStateOwnership(params: {
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   const sourcePath = params.detected.sourcePath;
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "exec approvals",
+    includeFilePath: false,
+    claimSuffix: DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
+  });
   try {
-    await recoverInterruptedClaim({ ...params, sourcePath });
+    await source.recover("legacy exec approvals source and interrupted claim both exist");
   } catch (error) {
     return {
       changes: [],
       warnings: [`Failed recovering a legacy exec approvals Doctor claim: ${String(error)}`],
     };
   }
-  const sourceRelative = relativeLegacyPath(params.stateDir, sourcePath);
-  if (!(await params.stateRoot.exists(sourceRelative))) {
+  if (!(await source.exists())) {
     return { changes: [], warnings: [] };
   }
 
   let snapshot: LegacySourceSnapshot;
   try {
-    snapshot = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
+    snapshot = await source.read();
   } catch (error) {
     return { changes: [], warnings: [`Failed reading legacy exec approvals: ${String(error)}`] };
   }
 
-  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  const claimRelative = relativeLegacyPath(params.stateDir, claimPath);
   try {
     params.beforeVerify?.();
-    const current = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
+    const current = await source.read();
     if (!snapshotsMatch(current, snapshot)) {
       throw new Error("legacy exec approvals changed after migration loaded them");
     }
-    params.beforeClaim?.();
-    await params.stateRoot.move(sourceRelative, claimRelative);
-    const claimed = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath);
-    if (!snapshotsMatch(claimed, snapshot)) {
-      throw new Error("legacy exec approvals changed before migration could claim them");
-    }
+    await source.claim({
+      snapshot,
+      mismatchMessage: "legacy exec approvals changed before migration could claim them",
+      beforeClaim: params.beforeClaim,
+    });
   } catch (error) {
-    const restoreError = await restoreClaim({ ...params, sourcePath });
+    const restoreError = await source.restore();
     return {
       changes: [],
       warnings: [
@@ -323,7 +276,7 @@ async function migrateWithExclusiveStateOwnership(params: {
       snapshot,
     });
   } catch (error) {
-    const restoreError = await restoreClaim({ ...params, sourcePath });
+    const restoreError = await source.restore();
     return {
       changes: [],
       warnings: [
@@ -332,9 +285,8 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
 
-  const preserveSource = !result.removeSource;
-  if (preserveSource) {
-    const restoreError = await restoreClaim({ ...params, sourcePath });
+  if (!result.removeSource) {
+    const restoreError = await source.restore();
     return {
       changes: [],
       warnings: [
@@ -344,20 +296,11 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (await params.stateRoot.exists(sourceRelative)) {
-      throw new Error("legacy exec approvals reappeared during migration cleanup");
-    }
-    if (params.removeSource) {
-      await params.removeSource(claimPath);
-    } else {
-      await params.stateRoot.remove(claimRelative);
-    }
-    if (
-      (await params.stateRoot.exists(sourceRelative)) ||
-      (await params.stateRoot.exists(claimRelative))
-    ) {
-      throw new Error("legacy exec approvals remain after migration cleanup");
-    }
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: "legacy exec approvals reappeared during migration cleanup",
+      remainingMessage: "legacy exec approvals remain after migration cleanup",
+    });
   } catch (error) {
     return {
       changes: [],
@@ -377,7 +320,6 @@ async function migrateWithExclusiveStateOwnership(params: {
       `Legacy exec approvals were removed, but their receipt could not be finalized: ${String(error)}`,
     );
   }
-  resetLegacyExecApprovalsPresenceCache(params.env);
   return {
     changes: [decisionMessage(result.decision, result.removeSource)],
     warnings,

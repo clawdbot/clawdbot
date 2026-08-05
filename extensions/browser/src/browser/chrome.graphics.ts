@@ -5,6 +5,7 @@
  * exact RunningChrome instance that owns the process.
  */
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { asRecord, isRecord } from "../record-shared.js";
 import { redactCdpErrorText, withCdpSocket } from "./cdp.helpers.js";
 import { getChromeWebSocketUrl, type RunningChrome } from "./chrome.js";
 import type {
@@ -15,20 +16,12 @@ import type {
   BrowserVideoEncodeCapability,
 } from "./client.types.js";
 
-type UnknownRecord = Record<string, unknown>;
-
 type ChromeGraphicsProbeOptions = {
   httpTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   commandTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
 };
-
-function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
-}
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -63,65 +56,36 @@ function readSize(value: unknown): { width: number; height: number } {
   };
 }
 
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
 function readDevices(value: unknown): BrowserGraphicsDevice[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    const device = asRecord(item);
-    if (!device) {
-      return [];
-    }
-    return [
-      {
-        vendorId: readNumber(device.vendorId),
-        deviceId: readNumber(device.deviceId),
-        vendor: readString(device.vendorString),
-        device: readString(device.deviceString),
-        driverVendor: readString(device.driverVendor),
-        driverVersion: readString(device.driverVersion),
-      },
-    ];
-  });
+  return readRecordArray(value).map((device) => ({
+    vendorId: readNumber(device.vendorId),
+    deviceId: readNumber(device.deviceId),
+    vendor: readString(device.vendorString),
+    device: readString(device.deviceString),
+    driverVendor: readString(device.driverVendor),
+    driverVersion: readString(device.driverVersion),
+  }));
 }
 
 function readVideoDecoding(value: unknown): BrowserVideoDecodeCapability[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    const capability = asRecord(item);
-    if (!capability) {
-      return [];
-    }
-    return [
-      {
-        profile: readString(capability.profile),
-        minResolution: readSize(capability.minResolution),
-        maxResolution: readSize(capability.maxResolution),
-      },
-    ];
-  });
+  return readRecordArray(value).map((capability) => ({
+    profile: readString(capability.profile),
+    minResolution: readSize(capability.minResolution),
+    maxResolution: readSize(capability.maxResolution),
+  }));
 }
 
 function readVideoEncoding(value: unknown): BrowserVideoEncodeCapability[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    const capability = asRecord(item);
-    if (!capability) {
-      return [];
-    }
-    return [
-      {
-        profile: readString(capability.profile),
-        maxResolution: readSize(capability.maxResolution),
-        maxFramerateNumerator: readNumber(capability.maxFramerateNumerator),
-        maxFramerateDenominator: readNumber(capability.maxFramerateDenominator),
-      },
-    ];
-  });
+  return readRecordArray(value).map((capability) => ({
+    profile: readString(capability.profile),
+    maxResolution: readSize(capability.maxResolution),
+    maxFramerateNumerator: readNumber(capability.maxFramerateNumerator),
+    maxFramerateDenominator: readNumber(capability.maxFramerateDenominator),
+  }));
 }
 
 function firstAttribute(

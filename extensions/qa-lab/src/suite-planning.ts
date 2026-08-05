@@ -223,9 +223,13 @@ function collectQaSuiteGatewayConfigPatch(
 function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
+  let allowUnhealthyStartup = false;
   let forwardHostHome = false;
   let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
+    if (scenario.gatewayRuntime?.allowUnhealthyStartup === true) {
+      allowUnhealthyStartup = true;
+    }
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
@@ -233,8 +237,9 @@ function collectQaSuiteGatewayRuntimeOptions(
       preserveDebugArtifacts = true;
     }
   }
-  return forwardHostHome || preserveDebugArtifacts
+  return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts
     ? {
+        ...(allowUnhealthyStartup ? { allowUnhealthyStartup: true } : {}),
         ...(forwardHostHome ? { forwardHostHome: true } : {}),
         ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
       }
@@ -283,10 +288,8 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
     (params.concurrency > 1 ||
       params.scenarios.some(
         (scenario) =>
-          isQaMergePatchObject(scenario.gatewayConfigPatch) ||
-          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined) ||
-          (scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined) ||
-          (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
+          scenarioRequiresIsolatedQaSuiteWorker(scenario) ||
+          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined),
       ))
   );
 }

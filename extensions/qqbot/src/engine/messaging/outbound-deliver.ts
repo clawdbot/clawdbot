@@ -6,13 +6,13 @@
  * `DeliverDeps.mediaSender`.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   sendPayloadMediaSequence,
   sendPayloadTextChunkSequence,
 } from "openclaw/plugin-sdk/reply-payload";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { isLocalPath as isLocalFilePath } from "../utils/platform.js";

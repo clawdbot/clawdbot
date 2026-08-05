@@ -1,5 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatMatrixErrorMessage } from "../errors.js";
 import { loadMatrixCryptoRuntime } from "./client-base.js";
 import { MatrixClientCore } from "./client-core.js";
 import {
@@ -65,7 +65,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
           try {
             await crypto.loadSessionBackupPrivateKeyFromSecretStorage(); // pragma: allowlist secret
           } catch (err) {
-            keyLoadError = formatMatrixErrorMessage(err);
+            keyLoadError = formatErrorMessage(err);
           }
         } else {
           keyLoadError =

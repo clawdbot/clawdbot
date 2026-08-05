@@ -2,18 +2,12 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isAssistantCommentaryCompletionNotification } from "./app-server/attempt-notifications.js";
-import {
-  isCodexNotificationForTurn,
-  readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
-} from "./app-server/notification-correlation.js";
+import { isCodexNotificationForTurn } from "./app-server/notification-correlation.js";
 import {
   isJsonObject,
   type CodexServerNotification,
   type JsonObject,
 } from "./app-server/protocol.js";
-
-const MAX_PENDING_NOTIFICATIONS_PER_TURN = 100;
 
 /** Identifies a timer that expired in the bound-turn collector itself. */
 export class CodexConversationTurnTimeoutError extends Error {
@@ -26,14 +20,11 @@ export class CodexConversationTurnTimeoutError extends Error {
 export function createCodexConversationTurnCollector(threadId: string) {
   let turnId: string | undefined;
   let completed = false;
-  let terminalReceived = false;
   let failedError: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const assistantTextByItem = new Map<string, string>();
-  const pendingNotificationsByTurnId = new Map<string, CodexServerNotification[]>();
   let resolveCompletion: ((value: { replyText: string }) => void) | undefined;
   let rejectCompletion: ((error: Error) => void) | undefined;
-  let resolveTerminal: (() => void) | undefined;
 
   const collectReplyText = (): string => {
     const texts = [...assistantTextByItem.values()].map((text) => text.trim()).filter(Boolean);
@@ -62,33 +53,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
 
   const handleNotification = (notification: CodexServerNotification) => {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || readCodexNotificationThreadId(params) !== threadId) {
-      return;
-    }
-    if (!turnId) {
-      const pendingTurnId = readCodexNotificationTurnId(params);
-      if (pendingTurnId) {
-        const pending = pendingNotificationsByTurnId.get(pendingTurnId) ?? [];
-        if (pending.length === MAX_PENDING_NOTIFICATIONS_PER_TURN) {
-          const incomingPriority = pendingNotificationPriority(notification);
-          // Keep the facts that classify assistant output and terminate the turn;
-          // otherwise retained progress deltas can impersonate a final answer.
-          const expiredPriority = Math.min(...pending.map(pendingNotificationPriority));
-          const maxReplaceablePriority = incomingPriority >= 2 ? 2 : incomingPriority - 1;
-          if (expiredPriority > maxReplaceablePriority) {
-            return;
-          }
-          pending.splice(
-            pending.findIndex((item) => pendingNotificationPriority(item) === expiredPriority),
-            1,
-          );
-        }
-        pending.push(notification);
-        pendingNotificationsByTurnId.set(pendingTurnId, pending);
-      }
-      return;
-    }
-    if (!isCodexNotificationForTurn(params, threadId, turnId)) {
+    if (!params || !turnId || !isCodexNotificationForTurn(params, threadId, turnId)) {
       return;
     }
     if (notification.method === "item/agentMessage/delta") {
@@ -116,8 +81,6 @@ export function createCodexConversationTurnCollector(threadId: string) {
       return;
     }
     if (notification.method === "turn/completed") {
-      terminalReceived = true;
-      resolveTerminal?.();
       const turn = isJsonObject(params.turn) ? params.turn : undefined;
       const status = readString(turn, "status");
       if (status === "failed") {
@@ -151,33 +114,8 @@ export function createCodexConversationTurnCollector(threadId: string) {
   return {
     setTurnId(nextTurnId: string) {
       turnId = nextTurnId;
-      const pending = pendingNotificationsByTurnId.get(nextTurnId) ?? [];
-      pendingNotificationsByTurnId.clear();
-      for (const notification of pending) {
-        handleNotification(notification);
-      }
     },
     handleNotification,
-    waitForTerminal(params: { timeoutMs: number }): Promise<void> {
-      if (terminalReceived) {
-        return Promise.resolve();
-      }
-      return new Promise<void>((resolve, reject) => {
-        const terminalTimeout = setTimeout(
-          () => {
-            resolveTerminal = undefined;
-            reject(new Error("codex app-server interrupted turn did not complete"));
-          },
-          resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
-        );
-        terminalTimeout.unref?.();
-        resolveTerminal = () => {
-          clearTimeout(terminalTimeout);
-          resolveTerminal = undefined;
-          resolve();
-        };
-      });
-    },
     wait(params: { timeoutMs: number }): Promise<{ replyText: string }> {
       if (completed) {
         return failedError
@@ -199,17 +137,6 @@ export function createCodexConversationTurnCollector(threadId: string) {
       });
     },
   };
-}
-
-function pendingNotificationPriority(notification: CodexServerNotification) {
-  if (notification.method === "turn/completed") {
-    return 3;
-  }
-  const item = readRecord(readRecord(notification.params)?.item);
-  if (notification.method !== "item/completed" || item?.type !== "agentMessage") {
-    return 0;
-  }
-  return isAssistantCommentaryCompletionNotification(notification) ? 1 : 2;
 }
 
 function readString(record: Record<string, unknown> | JsonObject | undefined, key: string) {

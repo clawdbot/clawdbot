@@ -117,6 +117,31 @@ export const resolveTelegramRuntimeGroupPolicy = (params: {
     defaultGroupPolicy: params.defaultGroupPolicy,
   });
 
+export const resolveTelegramEffectiveGroupPolicy = (params: {
+  cfg: OpenClawConfig;
+  telegramCfg: TelegramAccountConfig;
+  groupConfig?: TelegramGroupConfig;
+  topicConfig?: TelegramTopicConfig;
+  useTopicAndGroupOverrides: boolean;
+}) => {
+  const { groupPolicy: runtimeFallbackPolicy } = resolveTelegramRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.telegram !== undefined,
+    groupPolicy: params.telegramCfg.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
+  const fallbackPolicy =
+    firstDefined(params.telegramCfg.groupPolicy, params.cfg.channels?.defaults?.groupPolicy) ??
+    runtimeFallbackPolicy;
+  return params.useTopicAndGroupOverrides
+    ? (firstDefined(
+        params.topicConfig?.groupPolicy,
+        params.groupConfig?.groupPolicy,
+        params.telegramCfg.groupPolicy,
+        params.cfg.channels?.defaults?.groupPolicy,
+      ) ?? runtimeFallbackPolicy)
+    : fallbackPolicy;
+};
+
 export const evaluateTelegramGroupPolicyAccess = (params: {
   isGroup: boolean;
   chatId: string | number;
@@ -135,22 +160,7 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   requireSenderForAllowlistAuthorization: boolean;
   checkChatAllowlist: boolean;
 }): TelegramGroupPolicyAccessResult => {
-  const { groupPolicy: runtimeFallbackPolicy } = resolveTelegramRuntimeGroupPolicy({
-    providerConfigPresent: params.cfg.channels?.telegram !== undefined,
-    groupPolicy: params.telegramCfg.groupPolicy,
-    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
-  });
-  const fallbackPolicy =
-    firstDefined(params.telegramCfg.groupPolicy, params.cfg.channels?.defaults?.groupPolicy) ??
-    runtimeFallbackPolicy;
-  const groupPolicy = params.useTopicAndGroupOverrides
-    ? (firstDefined(
-        params.topicConfig?.groupPolicy,
-        params.groupConfig?.groupPolicy,
-        params.telegramCfg.groupPolicy,
-        params.cfg.channels?.defaults?.groupPolicy,
-      ) ?? runtimeFallbackPolicy)
-    : fallbackPolicy;
+  const groupPolicy = resolveTelegramEffectiveGroupPolicy(params);
 
   if (!params.isGroup || !params.enforcePolicy) {
     return { allowed: true, groupPolicy };

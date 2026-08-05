@@ -197,7 +197,7 @@ const baseParams = () => ({
   runtime: {} as RuntimeEnv,
   botUserId: "B1",
   botId: "B1",
-  identityHealth: { healthState: "healthy" as const, lastError: null },
+  identityHealth: { lifecycle: "ready" as const, lastError: null },
   teamId: "T1",
   apiAppId: "A1",
   historyLimit: 0,

@@ -12,23 +12,9 @@ import type { AgentMessage } from "./runtime/index.js";
 
 /** Serializable request accepted by the compaction planning worker. */
 export type CompactionPlanningWorkerInput =
-  | {
-      kind: "summaryChunks";
-      messages: AgentMessage[];
-      maxChunkTokens: number;
-    }
-  | {
-      kind: "oversizedFallback";
-      messages: AgentMessage[];
-      contextWindow: number;
-    }
-  | {
-      kind: "stageSplit";
-      messages: AgentMessage[];
-      maxChunkTokens: number;
-      parts?: number;
-      minMessagesForSplit?: number;
-    }
+  | ({ kind: "summaryChunks" } & Parameters<typeof buildSummaryChunks>[0])
+  | ({ kind: "oversizedFallback" } & Parameters<typeof buildOversizedFallbackPlan>[0])
+  | ({ kind: "stageSplit" } & Parameters<typeof buildStageSplitPlan>[0])
   | {
       kind: "adaptiveChunkRatio";
       messages: AgentMessage[];
@@ -46,15 +32,7 @@ export type CompactionPlanningWorkerValue =
       smallMessageIndexes: number[];
       oversizedNotes: string[];
     }
-  | {
-      kind: "stageSplit";
-      mode: "single";
-    }
-  | {
-      kind: "stageSplit";
-      mode: "split";
-      chunkIndexes: number[][];
-    }
+  | ({ kind: "stageSplit" } & ({ mode: "single" } | { mode: "split"; chunkIndexes: number[][] }))
   | {
       kind: "adaptiveChunkRatio";
       ratio: number;
@@ -142,19 +120,13 @@ function planCompactionWorkerInput(
 /** Run one compaction planning request and return a serializable result. */
 export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlanningWorkerResult {
   if (!isWorkerInput(input)) {
-    return {
-      status: "failed",
-      error: "invalid compaction planning worker input",
-    };
+    return { status: "failed", error: "invalid compaction planning worker input" };
   }
 
   try {
     return { status: "ok", value: planCompactionWorkerInput(input) };
   } catch (error) {
-    return {
-      status: "failed",
-      error: error instanceof Error ? error.message : String(error),
-    };
+    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
   }
 }
 

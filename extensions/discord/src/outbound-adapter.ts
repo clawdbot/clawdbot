@@ -199,6 +199,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
           reply: options.reply,
           accountId: ctx.accountId ?? undefined,
           silent: ctx.silent ?? undefined,
+          mediaAccess: ctx.mediaAccess,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
         });
       }
       const mediaOptions = {

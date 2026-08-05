@@ -8,14 +8,12 @@ import { Worker } from "node:worker_threads";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { toErrorObject } from "../infra/errors.js";
 import {
-  buildHistoryPrunePlan,
   buildOversizedFallbackPlan,
   buildStageSplitPlan,
   buildSummaryChunks,
   computeAdaptiveChunkRatio,
   projectCompactionMessagesForPlanning,
   sanitizeCompactionMessages,
-  type HistoryPrunePlan,
   type OversizedFallbackPlan,
   type StageSplitPlan,
 } from "./compaction-planning.js";
@@ -60,13 +58,13 @@ function runCompactionPlanningWorker(params: {
   timeoutMs?: number;
   workerUrl?: URL;
 }): Promise<CompactionPlanningWorkerValue> {
-  if (params.signal?.aborted) {
-    return Promise.reject(
-      toErrorObject(
-        params.signal.reason ?? new Error("compaction planning aborted"),
-        "Non-Error rejection",
-      ),
+  const abortError = () =>
+    toErrorObject(
+      params.signal?.reason ?? new Error("compaction planning aborted"),
+      "Non-Error rejection",
     );
+  if (params.signal?.aborted) {
+    return Promise.reject(abortError());
   }
 
   const workerUrl = params.workerUrl ?? resolveCompactionPlanningWorkerUrl();
@@ -91,30 +89,11 @@ function runCompactionPlanningWorker(params: {
   return new Promise<CompactionPlanningWorkerValue>((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(
-      () => {
-        settle(
-          () =>
-            reject(
-              new CompactionPlanningWorkerError("compaction planning worker timed out", "timeout"),
-            ),
-          true,
-        );
-      },
+      () =>
+        fail(new CompactionPlanningWorkerError("compaction planning worker timed out", "timeout")),
       resolveTimerTimeoutMs(params.timeoutMs, COMPACTION_PLANNING_WORKER_TIMEOUT_MS),
     );
-
-    const abort = () => {
-      settle(
-        () =>
-          reject(
-            toErrorObject(
-              params.signal?.reason ?? new Error("compaction planning aborted"),
-              "Non-Error rejection",
-            ),
-          ),
-        true,
-      );
-    };
+    const abort = () => fail(abortError());
 
     const settle = (finish: () => void, terminate: boolean) => {
       if (settled) {
@@ -129,6 +108,7 @@ function runCompactionPlanningWorker(params: {
       }
       finish();
     };
+    const fail = (error: Error, terminate = true) => settle(() => reject(error), terminate);
 
     params.signal?.addEventListener("abort", abort, { once: true });
 
@@ -143,20 +123,17 @@ function runCompactionPlanningWorker(params: {
     });
     worker.once("error", (error) => {
       const message = error instanceof Error ? error.message : String(error);
-      settle(() => reject(new CompactionPlanningWorkerError(message, "unavailable")), true);
+      fail(new CompactionPlanningWorkerError(message, "unavailable"));
     });
     worker.once("exit", (code) => {
       if (code === 0) {
         return;
       }
-      settle(
-        () =>
-          reject(
-            new CompactionPlanningWorkerError(
-              `compaction planning worker exited with code ${code}`,
-              "unavailable",
-            ),
-          ),
+      fail(
+        new CompactionPlanningWorkerError(
+          `compaction planning worker exited with code ${code}`,
+          "unavailable",
+        ),
         false,
       );
     });
@@ -222,14 +199,11 @@ export async function buildSummaryChunksWithWorker(params: {
   maxChunkTokens: number;
   signal?: AbortSignal;
 }): Promise<AgentMessage[][]> {
+  const { signal, ...planningInput } = params;
   return runCompactionPlan({
-    input: {
-      kind: "summaryChunks",
-      messages: params.messages,
-      maxChunkTokens: params.maxChunkTokens,
-    },
-    signal: params.signal,
-    fallback: (messages) => buildSummaryChunks({ messages, maxChunkTokens: params.maxChunkTokens }),
+    input: { kind: "summaryChunks", ...planningInput },
+    signal,
+    fallback: (messages) => buildSummaryChunks({ ...planningInput, messages }),
     restore: (value, messages) =>
       value.chunkIndexes.map((indexes) => restoreIndexedMessages(messages, indexes)),
   });
@@ -241,15 +215,11 @@ export async function buildOversizedFallbackPlanWithWorker(params: {
   contextWindow: number;
   signal?: AbortSignal;
 }): Promise<OversizedFallbackPlan> {
+  const { signal, ...planningInput } = params;
   return runCompactionPlan({
-    input: {
-      kind: "oversizedFallback",
-      messages: params.messages,
-      contextWindow: params.contextWindow,
-    },
-    signal: params.signal,
-    fallback: (messages) =>
-      buildOversizedFallbackPlan({ messages, contextWindow: params.contextWindow }),
+    input: { kind: "oversizedFallback", ...planningInput },
+    signal,
+    fallback: (messages) => buildOversizedFallbackPlan({ ...planningInput, messages }),
     restore: (value, messages) => ({
       smallMessages: restoreIndexedMessages(messages, value.smallMessageIndexes),
       oversizedNotes: value.oversizedNotes,
@@ -265,22 +235,11 @@ export async function buildStageSplitPlanWithWorker(params: {
   minMessagesForSplit?: number;
   signal?: AbortSignal;
 }): Promise<StageSplitPlan> {
+  const { signal, ...planningInput } = params;
   return runCompactionPlan({
-    input: {
-      kind: "stageSplit",
-      messages: params.messages,
-      maxChunkTokens: params.maxChunkTokens,
-      parts: params.parts,
-      minMessagesForSplit: params.minMessagesForSplit,
-    },
-    signal: params.signal,
-    fallback: (messages) =>
-      buildStageSplitPlan({
-        messages,
-        maxChunkTokens: params.maxChunkTokens,
-        parts: params.parts,
-        minMessagesForSplit: params.minMessagesForSplit,
-      }),
+    input: { kind: "stageSplit", ...planningInput },
+    signal,
+    fallback: (messages) => buildStageSplitPlan({ ...planningInput, messages }),
     restore: (value, messages) =>
       value.mode === "split"
         ? {
@@ -291,38 +250,17 @@ export async function buildStageSplitPlanWithWorker(params: {
   });
 }
 
-/**
- * Builds a history-pruning plan on the owner thread.
- *
- * Pruning repairs tool-result pairs and returns exact retained/dropped messages,
- * so a bounded selection projection cannot reconstruct every result faithfully.
- */
-export async function buildHistoryPrunePlanWithWorker(params: {
-  messagesToSummarize: AgentMessage[];
-  turnPrefixMessages: AgentMessage[];
-  tokensBefore: number;
-  contextWindowTokens: number;
-  maxHistoryShare: number;
-  parts?: number;
-  signal?: AbortSignal;
-}): Promise<HistoryPrunePlan> {
-  return buildHistoryPrunePlan(params);
-}
-
 /** Computes the adaptive compaction chunk ratio with worker fallback. */
 export async function computeAdaptiveChunkRatioWithWorker(params: {
   messages: AgentMessage[];
   contextWindow: number;
   signal?: AbortSignal;
 }): Promise<number> {
+  const { signal, ...planningInput } = params;
   return runCompactionPlan({
-    input: {
-      kind: "adaptiveChunkRatio",
-      messages: params.messages,
-      contextWindow: params.contextWindow,
-    },
-    signal: params.signal,
-    fallback: () => computeAdaptiveChunkRatio(params.messages, params.contextWindow),
+    input: { kind: "adaptiveChunkRatio", ...planningInput },
+    signal,
+    fallback: () => computeAdaptiveChunkRatio(planningInput.messages, planningInput.contextWindow),
     restore: (value) => value.ratio,
   });
 }
@@ -330,7 +268,6 @@ export async function computeAdaptiveChunkRatioWithWorker(params: {
 const compactionPlanningWorkerTesting = {
   resolveCompactionPlanningWorkerUrl,
   runCompactionPlanningWorker,
-  CompactionPlanningWorkerError,
 };
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

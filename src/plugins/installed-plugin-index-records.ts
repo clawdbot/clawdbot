@@ -12,6 +12,9 @@ import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-s
 import {
   refreshPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndexSync,
+  refreshPersistedInstalledPluginIndexWithLeaseSync,
+  type InstalledPluginIndexWriteLease,
+  type InstalledPluginIndexWriteReceipt,
 } from "./installed-plugin-index-store.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
 import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
@@ -57,6 +60,20 @@ export async function writePersistedInstalledPluginIndexInstallRecords(
     installRecords: records,
   });
   return resolveInstalledPluginIndexRecordsStorePath(options);
+}
+
+/** Refresh persisted install records while holding the plugin lifecycle lease. */
+export async function writePersistedInstalledPluginIndexInstallRecordsWithLease(
+  records: Record<string, PluginInstallRecord>,
+  options: InstalledPluginIndexRecordRefreshOptions & {
+    lease: InstalledPluginIndexWriteLease;
+  },
+): Promise<InstalledPluginIndexWriteReceipt> {
+  return refreshPersistedInstalledPluginIndexWithLeaseSync({
+    ...options,
+    reason: "source-changed",
+    installRecords: records,
+  });
 }
 
 /** Refreshes persisted installed plugin index records synchronously. */

@@ -1,15 +1,14 @@
 // Resolves interactive plugin entries from registry metadata.
 import {
-  resolvePluginInteractiveNamespaceMatch,
   resolvePluginInteractiveRegistrationsMatch,
+  type RegisteredInteractiveHandler,
 } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
   releasePluginInteractiveCallbackDedupe,
-  type RegisteredInteractiveHandler,
 } from "./interactive-state.js";
-import { collectLivePluginRegistries } from "./runtime.js";
+import { getActivePluginRegistry } from "./runtime.js";
 
 type InteractiveDispatchResult<TResult = unknown> =
   | { matched: false; handled: false; duplicate: false }
@@ -32,25 +31,12 @@ export {
   registerPluginInteractiveHandler,
 } from "./interactive-registry.js";
 
-function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
-  const existing = resolvePluginInteractiveNamespaceMatch(channel, data);
-  if (existing && existing.registration.registryOwned !== true) {
-    return existing;
-  }
-
-  // Registry membership is lifecycle-owned. Resolve registry registrations only
-  // through live owners so a replaced or released registry cannot keep executing.
-  for (const registry of collectLivePluginRegistries()) {
-    const match = resolvePluginInteractiveRegistrationsMatch(
-      registry.interactiveHandlers,
-      channel,
-      data,
-    );
-    if (match) {
-      return match;
-    }
-  }
-  return null;
+function resolveActivePluginInteractiveNamespaceMatch(channel: string, data: string) {
+  return resolvePluginInteractiveRegistrationsMatch(
+    getActivePluginRegistry()?.interactiveHandlers ?? [],
+    channel,
+    data,
+  );
 }
 
 /** Dispatches one interactive callback payload to a matching plugin handler. */
@@ -65,7 +51,7 @@ export async function dispatchPluginInteractiveHandler<
   invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
   afterInvoke?: (result: TResult) => Promise<void> | void;
 }): Promise<InteractiveDispatchResult<TResult>> {
-  const match = resolveLivePluginInteractiveNamespaceMatch(params.channel, params.data);
+  const match = resolveActivePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }

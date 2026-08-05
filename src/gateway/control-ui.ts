@@ -14,10 +14,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
-import {
-  isPackageProvenControlUiRootSync,
-  resolveControlUiRootSync,
-} from "../infra/control-ui-assets.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
@@ -121,9 +117,12 @@ type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "bundled"; path: string }
-  | { kind: "resolved"; path: string }
+  | { kind: "bundled"; path: string; realPath?: string }
+  | { kind: "resolved"; path: string; realPath?: string }
   | { kind: "invalid"; path: string }
+  | { kind: "preparing" }
+  // The document route is unauthenticated; build diagnostics stay in Gateway logs.
+  | { kind: "failed" }
   | { kind: "missing" };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
@@ -205,17 +204,31 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 function respondControlUiAssetsUnavailable(
   res: ServerResponse,
-  options?: { configuredRootPath?: string },
+  options?: {
+    configuredRootPath?: string;
+    failed?: boolean;
+    head?: boolean;
+    preparing?: boolean;
+  },
 ) {
-  if (options?.configuredRootPath) {
-    respondPlainText(
-      res,
-      503,
-      `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
-    );
+  const message = options?.preparing
+    ? "Control UI assets are being prepared. Try again shortly."
+    : options?.failed
+      ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
+      : options?.configuredRootPath
+        ? `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
+        : CONTROL_UI_ASSETS_MISSING_MESSAGE;
+  if (options?.preparing) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Retry-After", "1");
+  }
+  if (options?.head) {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end();
     return;
   }
-  respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
+  respondPlainText(res, 503, message);
 }
 
 function isValidAgentId(agentId: string): boolean {
@@ -892,6 +905,9 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    // Symlinked assets that resolve inside the root are served; fs-safe still
+    // rejects hops whose canonical target escapes the control-ui root.
+    rejectSymlinks: false,
     rejectHardlinks,
   });
   if (!opened.ok) {
@@ -1001,6 +1017,7 @@ export async function handleControlUiHttpRequest(
     pathname,
     search: url.search,
     method: req.method,
+    accept: req.headers?.accept,
   });
   if (route.kind === "not-control-ui") {
     return false;
@@ -1084,28 +1101,36 @@ export async function handleControlUiHttpRequest(
 
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
-    respondControlUiAssetsUnavailable(res, { configuredRootPath: rootState.path });
+    respondControlUiAssetsUnavailable(res, {
+      configuredRootPath: rootState.path,
+      head: req.method === "HEAD",
+    });
     return true;
   }
-  if (rootState?.kind === "missing") {
-    respondControlUiAssetsUnavailable(res);
+  if (rootState?.kind === "preparing") {
+    respondControlUiAssetsUnavailable(res, {
+      head: req.method === "HEAD",
+      preparing: true,
+    });
+    return true;
+  }
+  if (rootState?.kind === "failed") {
+    respondControlUiAssetsUnavailable(res, {
+      failed: true,
+      head: req.method === "HEAD",
+    });
+    return true;
+  }
+  if (!rootState || rootState.kind === "missing") {
+    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
     return true;
   }
 
-  const root =
-    rootState?.kind === "resolved" || rootState?.kind === "bundled"
-      ? rootState.path
-      : resolveControlUiRootSync({
-          moduleUrl: import.meta.url,
-          argv1: process.argv[1],
-          cwd: process.cwd(),
-        });
-  if (!root) {
-    respondControlUiAssetsUnavailable(res);
-    return true;
-  }
-
+  const root = rootState.path;
   const rootReal = (() => {
+    if (rootState.realPath) {
+      return rootState.realPath;
+    }
     try {
       return fs.realpathSync(root);
     } catch (error) {
@@ -1116,7 +1141,7 @@ export async function handleControlUiHttpRequest(
     }
   })();
   if (!rootReal) {
-    respondControlUiAssetsUnavailable(res);
+    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
     return true;
   }
 
@@ -1155,14 +1180,7 @@ export async function handleControlUiHttpRequest(
     return true;
   }
 
-  const isBundledRoot =
-    rootState?.kind === "bundled" ||
-    (rootState === undefined &&
-      isPackageProvenControlUiRootSync(root, {
-        moduleUrl: import.meta.url,
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-      }));
+  const isBundledRoot = rootState.kind === "bundled";
   // Bundled sidecars are implementation artifacts selected through
   // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
   if (
@@ -1237,6 +1255,10 @@ export async function handleControlUiHttpRequest(
   if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
+  }
+
+  if (!route.spaFallback) {
+    return false;
   }
 
   // SPA fallback (client-side router): serve index.html for unknown paths.

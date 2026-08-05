@@ -290,8 +290,18 @@ describe("applyServerUiPrefs", () => {
 
   it("ignores a server custom theme until this browser imported one", () => {
     const onApplied = vi.fn();
-    expect(applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied })).toBe(false);
+    const onThemeChanged = vi.fn();
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied, onThemeChanged }),
+    ).toBe(false);
     expect(loadSettings().theme).toBe("claw");
+    expect(onThemeChanged).toHaveBeenLastCalledWith("custom");
+
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "claw" }), { onApplied, onThemeChanged }),
+    ).toBe(false);
+    expect(onThemeChanged).toHaveBeenLastCalledWith("claw");
+    expect(onApplied).not.toHaveBeenCalled();
   });
 });
 
@@ -456,6 +466,37 @@ describe("pushServerUiPrefs", () => {
   const readPending = (scope: string) =>
     JSON.parse(localStorage.getItem(pendingKey(scope)) ?? "{}") as Record<string, unknown>;
   const createClient = createServerPrefsWriter;
+
+  it("does not publish a server theme change shadowed by pending local intent", async () => {
+    const scope = "ws://gw";
+    const requestGate = deferred();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      () => requestGate.promise,
+    );
+    const client = createClient(request, scope);
+    const onApplied = vi.fn();
+    const onThemeChanged = vi.fn();
+    applyServerUiPrefs(configWithPrefs({ theme: "claw" }), {
+      scope,
+      onApplied,
+      onThemeChanged,
+    });
+    onThemeChanged.mockClear();
+
+    pushServerUiPrefs(client, { theme: "knot" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "knot" }), {
+        scope,
+        onApplied,
+        onThemeChanged,
+      }),
+    ).toBe(false);
+    expect(onThemeChanged).not.toHaveBeenCalled();
+
+    requestGate.resolve({});
+    await vi.waitFor(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
+  });
 
   it("keeps a synced default reset as a pending offline null intent", () => {
     const scope = "ws://gw";

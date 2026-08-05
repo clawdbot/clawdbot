@@ -158,6 +158,56 @@ describe("ensureGatewayReadyForOperation", () => {
     expect(installGateway).not.toHaveBeenCalled();
   });
 
+  it("does not recover a diagnostic-only native service for an active external target", async () => {
+    const status = createStatus({
+      service: {
+        label: "systemd user",
+        loaded: true,
+        loadedText: "enabled",
+        notLoadedText: "disabled",
+        targetRole: "diagnostic-only",
+        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
+        runtime: { status: "running" },
+      },
+      gateway: {
+        bindMode: "loopback",
+        bindHost: "127.0.0.1",
+        port: 18900,
+        portSource: "env/config",
+        probeUrl: "ws://127.0.0.1:18900",
+      },
+      port: { port: 18900, status: "free", listeners: [], hints: [] },
+      rpc: {
+        ok: false,
+        error: "connect ECONNREFUSED 127.0.0.1:18900",
+        url: "ws://127.0.0.1:18900",
+      },
+    });
+    const confirm = vi.fn().mockResolvedValue(false);
+    const installGateway = vi.fn();
+    const startGateway = vi.fn();
+
+    const result = await ensureGatewayReadyForOperation({
+      runtime,
+      operation: "open the dashboard",
+      interactive: true,
+      deps: {
+        gatherStatus: vi.fn().mockResolvedValue(status),
+        confirm,
+        installGateway,
+        startGateway,
+      },
+    });
+
+    expect(result).toMatchObject({ ready: false, recoverable: false });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installGateway).not.toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
+    expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+      "owning environment or supervisor to start or repair",
+    );
+  });
+
   it("does not prompt to start when the gateway is reachable but unhealthy", async () => {
     const status = createStatus({
       service: {

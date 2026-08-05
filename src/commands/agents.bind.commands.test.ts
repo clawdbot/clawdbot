@@ -181,6 +181,7 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindingsCommand({}, runtime);
 
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(runtime.log).toHaveBeenCalledWith(
       ["Routing bindings:", "- main <- matrix", "- ops <- telegram accountId=work"].join("\n"),
     );

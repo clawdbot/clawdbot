@@ -175,7 +175,7 @@ import {
   getMemorySearchManager,
   type MemoryIndexManager,
 } from "./index.js";
-import { isolateMemoryManagerTestConfig } from "./test-manager-helpers.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;

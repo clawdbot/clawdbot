@@ -44,6 +44,10 @@ describe("telegramMessageActions", () => {
   });
 
   it("forwards only host-owned mutation context to the runtime", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-root"],
+      workspaceDir: "/tmp/agent-root",
+    };
     await telegramMessageActions.handleAction?.({
       channel: "telegram",
       action: "delete",
@@ -51,9 +55,12 @@ describe("telegramMessageActions", () => {
         messageId: "9001",
         to: "-1001:topic:77",
         conversationReadOrigin: "direct-operator",
+        mediaAccess: { localRoots: ["/tmp/forged-root"], workspaceDir: "/tmp/forged-root" },
       },
       cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
       accountId: "work",
+      mediaAccess,
+      mediaLocalRoots: ["/tmp/conflicting-root"],
       requesterAccountId: "work",
       conversationReadOrigin: "delegated",
       toolContext: {
@@ -68,6 +75,7 @@ describe("telegramMessageActions", () => {
       expect.anything(),
       expect.objectContaining({
         conversationReadOrigin: "delegated",
+        mediaAccess,
         requesterAccountId: "work",
         toolContext: expect.objectContaining({ currentMessageId: "9001" }),
       }),
@@ -76,6 +84,8 @@ describe("telegramMessageActions", () => {
       action: "deleteMessage",
       messageId: "9001",
     });
+    expect(handleTelegramActionMock.mock.calls[0]?.[0]).not.toHaveProperty("mediaAccess");
+    expect(handleTelegramActionMock.mock.calls[0]?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 
   it("allows interactive-only sends", async () => {
@@ -453,7 +463,7 @@ describe("telegramMessageActions", () => {
     expect(discovery?.actions).not.toContain("react");
   });
 
-  it("advertises poll duration as a positive integer in message tool schema", () => {
+  it("advertises poll duration and public vote routing in message tool schema", () => {
     const cfg = {
       channels: {
         telegram: {
@@ -469,6 +479,14 @@ describe("telegramMessageActions", () => {
     expect(schema?.properties.pollDurationSeconds).toMatchObject({
       type: "integer",
       minimum: 1,
+    });
+    expect(schema?.properties.pollAnonymous).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("do not create agent turns"),
+    });
+    expect(schema?.properties.pollPublic).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("route into the originating agent conversation"),
     });
   });
 

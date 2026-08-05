@@ -9,10 +9,8 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
-import {
-  clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
@@ -404,6 +402,14 @@ export async function handleChatSend(
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.
+                onFollowupQueueDisposition: (reason) => {
+                  context.logGateway.info("chat queue turn intentionally skipped", {
+                    runId: clientRunId,
+                    sessionKey,
+                    outcome: "skipped",
+                    reason,
+                  });
+                },
                 turnAdoptionLifecycle: {
                   // Gateway cancel identity only — share collect key via ownerKey.
                   admission: "cancel-only",

@@ -2,7 +2,10 @@ import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.js";
+import {
+  getPreparedModelCatalogSnapshot,
+  loadResolvedPublishedModelCatalogOwner,
+} from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
@@ -127,6 +130,15 @@ function createLocalGatewayRequestContext(
         workspaceDir: owner.workspaceDir,
         config: owner.config,
       };
+    },
+    readPreparedGatewayModelCatalog: async (loadParams) =>
+      getPreparedModelCatalogSnapshot({
+        ...loadParams,
+        config: params.getRuntimeConfig(),
+        readOnly: true,
+      })?.entries,
+    readChatMetadata: async () => {
+      throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
     },
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>

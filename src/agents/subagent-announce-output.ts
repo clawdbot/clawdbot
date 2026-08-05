@@ -40,7 +40,6 @@ const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
   "functionCall",
   "function_call",
 ]);
-
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -215,7 +214,10 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
   return snapshot;
 }
 
-function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | undefined {
+function selectSubagentOutputText(
+  snapshot: SubagentOutputSnapshot,
+  outcome?: SubagentRunOutcome,
+): string | undefined {
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
@@ -225,7 +227,13 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
   if (snapshot.latestAssistantText) {
     return snapshot.latestAssistantText;
   }
-  if (snapshot.latestToolCallCount && snapshot.latestToolCallCount > 0) {
+  // Tool activity is partial-progress evidence only for a timed-out run. It is
+  // not authoritative completion output when producer terminal facts are absent.
+  if (
+    outcome?.status === "timeout" &&
+    snapshot.latestToolCallCount &&
+    snapshot.latestToolCallCount > 0
+  ) {
     return `${snapshot.latestToolCallCount} tool call(s) made without visible output.`;
   }
   return undefined;
@@ -233,7 +241,7 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
 
 export async function readSubagentOutput(
   sessionKey: string,
-  _outcome?: SubagentRunOutcome,
+  outcome?: SubagentRunOutcome,
   options?: { sessionTarget?: SessionTranscriptRuntimeTarget },
 ): Promise<string | undefined> {
   let messages: unknown[] | undefined;
@@ -257,7 +265,7 @@ export async function readSubagentOutput(
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
   const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  const selected = selectSubagentOutputText(snapshot);
+  const selected = selectSubagentOutputText(snapshot, outcome);
   if (selected?.trim()) {
     return selected;
   }
@@ -276,6 +284,20 @@ export async function readLatestSubagentOutputWithRetry(params: {
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput,
   });
+}
+
+export async function readSubagentTimeoutProgress(
+  sessionKey: string,
+  maxWaitMs: number,
+  outcome: SubagentRunOutcome,
+): Promise<string | undefined> {
+  const initial = await readSubagentOutput(sessionKey, outcome);
+  const progress = initial?.trim()
+    ? initial
+    : await readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs, outcome });
+  return progress && !isAnnounceSkip(progress) && !isSilentReplyText(progress, SILENT_REPLY_TOKEN)
+    ? progress
+    : undefined;
 }
 
 export async function waitForSubagentRunOutcome(
@@ -392,24 +414,19 @@ function truncateChildCompletionField(value: string): string {
     : value;
 }
 
+type ChildCompletionExecution = { endedAt?: number; outcome?: SubagentRunOutcome };
+
 type ChildCompletionRow = {
   childSessionKey: string;
   task: string;
   label?: string;
   createdAt: number;
-  endedAt?: number;
+  execution: ChildCompletionExecution;
   frozenResultText?: string | null;
   completion?: {
     resultText?: string | null;
     fallbackResultText?: string | null;
   };
-  delivery?: {
-    payload?: {
-      frozenResultText?: string | null;
-      fallbackFrozenResultText?: string | null;
-    };
-  };
-  outcome?: SubagentRunOutcome;
 };
 
 type ChildCompletionSection = {
@@ -419,12 +436,9 @@ type ChildCompletionSection = {
 };
 
 function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  const primary = child.completion?.resultText ?? child.delivery?.payload?.frozenResultText;
-  const fallback =
-    child.completion?.fallbackResultText ??
-    child.delivery?.payload?.fallbackFrozenResultText ??
-    child.frozenResultText;
-  if (child.outcome?.status === "ok") {
+  const primary = child.completion?.resultText;
+  const fallback = child.completion?.fallbackResultText ?? child.frozenResultText;
+  if (child.execution.outcome?.status === "ok") {
     return selectDeliverableSessionsReply(primary, fallback);
   }
   return (primary ?? fallback)?.trim() || undefined;
@@ -433,9 +447,7 @@ function selectChildCompletionResultText(child: ChildCompletionRow): string | un
 function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
   return [
     child.completion?.resultText,
-    child.delivery?.payload?.frozenResultText,
     child.completion?.fallbackResultText,
-    child.delivery?.payload?.fallbackFrozenResultText,
     child.frozenResultText,
   ].some((value) => Boolean(value?.trim()));
 }
@@ -447,8 +459,10 @@ export function buildChildCompletionFindings(
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
     }
-    const aEnded = typeof a.endedAt === "number" ? a.endedAt : Number.MAX_SAFE_INTEGER;
-    const bEnded = typeof b.endedAt === "number" ? b.endedAt : Number.MAX_SAFE_INTEGER;
+    const aEnded =
+      typeof a.execution.endedAt === "number" ? a.execution.endedAt : Number.MAX_SAFE_INTEGER;
+    const bEnded =
+      typeof b.execution.endedAt === "number" ? b.execution.endedAt : Number.MAX_SAFE_INTEGER;
     if (aEnded !== bEnded) {
       return aEnded - bEnded;
     }
@@ -464,8 +478,12 @@ export function buildChildCompletionFindings(
   const sections: ChildCompletionSection[] = [];
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
-    const outcome = describeSubagentOutcome(child.outcome);
-    if (child.outcome?.status === "ok" && !resultText && hasCapturedChildCompletionReply(child)) {
+    const outcome = describeSubagentOutcome(child.execution.outcome);
+    if (
+      child.execution.outcome?.status === "ok" &&
+      !resultText &&
+      hasCapturedChildCompletionReply(child)
+    ) {
       continue;
     }
     const title =
@@ -476,7 +494,7 @@ export function buildChildCompletionFindings(
     const displayIndex = sections.length + 1;
     sections.push({
       index: displayIndex,
-      actionable: child.outcome?.status !== "ok",
+      actionable: child.execution.outcome?.status !== "ok",
       text: [
         `${displayIndex}. ${truncateChildCompletionField(title)}`,
         `status: ${truncateChildCompletionField(outcome)}`,
@@ -539,19 +557,12 @@ export function dedupeLatestChildCompletionRows(
     label?: string;
     generation?: number;
     createdAt: number;
-    endedAt?: number;
+    execution: ChildCompletionExecution;
     frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
       fallbackResultText?: string | null;
     };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
-    };
-    outcome?: SubagentRunOutcome;
   }>,
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
@@ -572,19 +583,12 @@ export function filterCurrentDirectChildCompletionRows(
     task: string;
     label?: string;
     createdAt: number;
-    endedAt?: number;
+    execution: ChildCompletionExecution;
     frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
       fallbackResultText?: string | null;
     };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
-    };
-    outcome?: SubagentRunOutcome;
   }>,
   params: {
     requesterSessionKey: string;

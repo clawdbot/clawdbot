@@ -12,6 +12,8 @@ import {
   type NodeMatchCandidate,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  addTimerTimeoutGraceMs,
+  clampPositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -79,6 +81,9 @@ export type CanvasCliDependencies = {
 
 type CanvasNodeCandidate = NodeMatchCandidate;
 type CanvasSnapshotRequestFormat = "png" | "jpeg";
+
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
 
 function parseCanvasSnapshotRequestFormat(raw: unknown): CanvasSnapshotRequestFormat {
   const format = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "jpg");
@@ -257,18 +262,24 @@ async function invokeCanvas(
   command: string,
   params?: Record<string, unknown>,
 ) {
-  const timeoutMs = deps.parseTimeoutMs(opts.invokeTimeout);
+  const timeoutMs =
+    clampPositiveTimerTimeoutMs(
+      deps.parseTimeoutMs(opts.invokeTimeout) ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+    ) ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
   const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-  return await deps.callGatewayCli(
-    "node.invoke",
-    opts,
-    deps.buildNodeInvokeParams({
-      nodeId,
-      command,
-      params,
-      timeoutMs: typeof timeoutMs === "number" ? timeoutMs : undefined,
-    }),
+  const invokeParams = deps.buildNodeInvokeParams({ nodeId, command, params, timeoutMs });
+  const configuredGatewayTimeoutMs = parseStrictPositiveInteger(opts.timeout ?? 10_000);
+  if (configuredGatewayTimeoutMs === undefined) {
+    // Preserve the existing Gateway parser's actionable invalid --timeout error.
+    return await deps.callGatewayCli("node.invoke", opts, invokeParams);
+  }
+  // Node work owns its deadline; Gateway transport needs extra time to deliver that result.
+  const transportTimeoutMs = Math.max(
+    clampPositiveTimerTimeoutMs(configuredGatewayTimeoutMs) ??
+      DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+    addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs,
   );
+  return await deps.callGatewayCli("node.invoke", opts, invokeParams, { transportTimeoutMs });
 }
 
 /** Prints the complete invocation response for machines or the existing human acknowledgement. */

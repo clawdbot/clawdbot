@@ -153,7 +153,8 @@ Gateway responds with `hello-ok`:
     "policy": {
       "maxPayload": 26214400,
       "maxBufferedBytes": 52428800,
-      "tickIntervalMs": 15000
+      "tickIntervalMs": 15000,
+      "attachments": { "maxBytes": 20971520, "maxImageBytes": 6291456 }
     }
   }
 }
@@ -162,7 +163,32 @@ Gateway responds with `hello-ok`:
 `server`, `features`, `snapshot`, `policy`, and `auth` are all required by
 `HelloOkSchema` (`packages/gateway-protocol/src/schema/frames.ts`). `auth`
 reports the negotiated role/scopes even when no device token is issued (shape
-above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
+above). `policy.attachments` is optional (older gateways omit it) and advertises
+the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
+and session-creation initial turns:
+
+| Field           | Meaning                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------- |
+| `maxBytes`      | Largest decoded size accepted for a single attachment (`agents.defaults.mediaMaxMb`, default 20 MB) |
+| `maxImageBytes` | Largest decoded size accepted for a single image: `min(maxBytes, 6 MB agent-hydration cap)`         |
+
+Validating before send:
+
+1. Check each file's decoded size against `maxImageBytes` for images and
+   `maxBytes` for everything else.
+2. Serialize the whole request and check its encoded size against
+   `policy.maxPayload`. `policy.attachments` is a per-attachment ceiling, never a
+   promise the frame fits: attachments travel as base64, so a 20 MB file is about
+   26.7 MB on the wire and exceeds the default 25 MiB frame limit on its own.
+3. Treat the server as authoritative for everything else. Accepted MIME types and
+   per-message handling are deliberately not advertised because they depend on
+   the entrypoint, the resolved model, and payload sniffing. The gateway can
+   return a typed rejection, while text-only model runs can omit additional
+   images after their offload cap and still complete the request.
+4. Re-read the values on every reconnect. They are a connection-time snapshot, so
+   a live `mediaMaxMb` edit reaches existing connections only after they reconnect.
+
+`pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `canvas`) to scoped hosted URLs; it may expire, so nodes call
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
@@ -576,7 +602,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.list` returns gateway-visible agent entries, including effective model/runtime metadata and optional semantic `kind` (`agent` or `system`). Clients advertise the `agent-kind` handshake capability to receive the complete typed roster; clients without it keep the legacy selector-safe roster without system rows. Kind-aware clients exclude `system` rows from ordinary selectors while retaining them in diagnostic views. Older v4 gateways may return rows without `kind`.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
-    - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.list` remains the compatibility-safe run/tool RPC.
+    - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.run.inspect` discovers execution ids or inspects one exact execution identity context; `audit.list` remains the compatibility-safe run/tool RPC.
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
@@ -815,6 +841,16 @@ recording is separately controlled by `logging.audit.messages` and defaults to
 recording is disabled, `audit.activity.list` keeps serving records written
 earlier until they expire.
 
+`audit.run.inspect` also requires `operator.read`. Its closed request selects
+exactly one `executionId` for exact inspection or one `runId` for bounded
+execution discovery. One run match resolves directly; multiple matches return
+an explicit `ambiguous` result with at most 50 candidates and require exact
+execution selection. Decision pages contain at most 100 receipts. Execution
+identity collection is separately off by default and requires
+`logging.audit.executionIdentity: true` plus an enabled audit ledger after
+Gateway restart. Missing best-effort evidence never proves that a run did not
+occur.
+
 The shipped `audit.list` request, result, and `AuditEvent` schemas remain
 unchanged and return only agent-run and tool-action records. New operator
 clients should call `audit.activity.list` when the Gateway advertises it. Older
@@ -1034,10 +1070,13 @@ third-party clients.
 | Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `packages/gateway-client/src/client.ts`                                                                                   |
 | Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `packages/gateway-client/src/client.ts`                                                                                   |
 | `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                                                         |
+| Chat attachment ceiling                   | `agents.defaults.mediaMaxMb`, default 20 MB decoded   | `src/gateway/chat-attachment-policy.ts`                                                                                   |
+| Chat attachment image ceiling             | `min(attachment ceiling, 6 MB)`                       | `src/gateway/chat-attachment-policy.ts`, `packages/media-core/src/constants.ts`                                           |
 
 The server advertises the effective `policy.tickIntervalMs`,
-`policy.maxPayload`, and `policy.maxBufferedBytes` in `hello-ok`; clients
-should honor those values rather than the pre-handshake defaults.
+`policy.maxPayload`, `policy.maxBufferedBytes`, and `policy.attachments` in
+`hello-ok`; clients should honor those values rather than the pre-handshake
+defaults or hardcoded attachment sizes.
 
 The reference client lets finite requests own their configured deadline when
 every pending request has one. An `expectFinal` request without a finite

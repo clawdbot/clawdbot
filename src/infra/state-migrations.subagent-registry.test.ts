@@ -46,6 +46,7 @@ describe("legacy subagent registry Doctor migration", () => {
       task: `task ${runId}`,
       cleanup: "keep",
       createdAt: 100,
+      execution: { status: "running" },
     };
   }
 

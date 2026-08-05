@@ -390,6 +390,7 @@ export async function createVoiceCallRuntime(params: {
       realtimeHandler.registerToolHandler(
         REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         async (args, callId, handlerContext) => {
+          handlerContext.abortSignal?.throwIfAborted();
           const call = manager.getCall(callId);
           if (!call) {
             return { error: `Call "${callId}" not found` };
@@ -422,6 +423,7 @@ export async function createVoiceCallRuntime(params: {
             args,
             logger: log,
           });
+          handlerContext.abortSignal?.throwIfAborted();
           if (fastContext.handled) {
             assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
             return fastContext.result;
@@ -463,6 +465,7 @@ export async function createVoiceCallRuntime(params: {
               effectiveConfig.realtime.toolPolicy,
             ),
             extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
+            abortSignal: handlerContext.abortSignal,
           });
         },
       );

@@ -208,7 +208,11 @@ async function applyLocalStatusRpcFallback(params: {
   if (!shouldTryLocalStatusRpcFallback(params)) {
     return params.gatewayProbe;
   }
-  const boundedFallbackTimeoutMs = Math.min(2000, Math.max(1000, params.timeoutMs));
+  // Explicit probe budgets are operator-owned; only implicit fallback defaults get a floor.
+  const boundedFallbackTimeoutMs = Math.min(
+    2000,
+    params.timeoutMsExplicit ? params.timeoutMs : Math.max(1000, params.timeoutMs),
+  );
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
   const status = await loadGatewayCallModule()
     .then(({ callGateway }) =>
