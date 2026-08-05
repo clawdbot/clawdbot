@@ -460,9 +460,6 @@ export async function downloadDashscopeGeneratedVideos(params: {
             `${params.providerLabel} generated video download stalled: no data received for ${chunkTimeoutMs}ms`,
           ),
       });
-      if (buffer.byteLength === 0) {
-        throw new Error(`${downloadLabel}: malformed video response`);
-      }
       mimeType = result.response.headers.get("content-type")?.trim() || "video/mp4";
     } finally {
       await result.release();

@@ -18,7 +18,6 @@ const invalidGeneratedVideos = [
   { name: "HTML error", contentType: "text/html; charset=utf-8", body: "<html>error</html>" },
   { name: "image", contentType: "image/png", body: "image-bytes" },
   { name: "audio", contentType: "audio/mp4", body: "audio-bytes" },
-  { name: "empty video", contentType: "video/mp4", body: "" },
 ] as const;
 
 function neverChunkingVideoResponse(): Response {
