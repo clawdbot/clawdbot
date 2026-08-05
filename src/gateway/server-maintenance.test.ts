@@ -27,16 +27,6 @@ vi.mock("../media/store.js", async () => {
   };
 });
 
-vi.mock("./managed-image-attachments.js", async () => {
-  const actual = await vi.importActual<typeof import("./managed-image-attachments.js")>(
-    "./managed-image-attachments.js",
-  );
-  return {
-    ...actual,
-    cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingMediaRecordsMock,
-  };
-});
-
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
 const ABORTED_RUN_TTL_MS = 60 * 60_000;
 
@@ -58,8 +48,10 @@ function createActiveRun(
 function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
+    logHealth: { error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
+    runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
 }
 
@@ -156,6 +148,11 @@ describe("startGatewayMaintenanceTimers", () => {
     vi.clearAllMocks();
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
+    cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
+      deletedRecordCount: 0,
+      deletedFileCount: 0,
+      retainedCount: 0,
+    });
   });
 
   it("runs playback cache cleanup at startup and hourly without an attachment ttl", async () => {
@@ -171,6 +168,23 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
     expect(cleanOldMediaMock).not.toHaveBeenCalled();
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("runs managed outgoing cleanup without enabling the general media ttl", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+
+    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    });
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(2);
+    });
 
     stopMaintenanceTimers(timers);
   });
@@ -317,21 +331,27 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
-  it("runs the managed outgoing reaper after each media sweep", async () => {
+  it("runs managed outgoing cleanup when the general media sweep fails", async () => {
     vi.useFakeTimers();
+    cleanOldMediaMock.mockRejectedValueOnce(new Error("synthetic media sweep failure"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
 
     const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
+      ...deps,
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
 
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+      expect(deps.logHealth.error).toHaveBeenCalledWith(
+        expect.stringContaining("synthetic media sweep failure"),
+      );
     });
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     await vi.waitFor(() => {
+      expect(cleanOldMediaMock).toHaveBeenCalledTimes(2);
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(2);
     });
 
@@ -375,15 +395,13 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
-  it("skips overlapping configured attachment cleanup runs", async () => {
+  it("keeps managed outgoing cleanup independent of a hung general media sweep", async () => {
     vi.useFakeTimers();
     let resolveCleanup = () => {};
-    let cleanupReady = false;
     cleanOldMediaMock.mockImplementation(
       () =>
         new Promise<void>((resolve) => {
           resolveCleanup = resolve;
-          cleanupReady = true;
         }),
     );
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
@@ -393,18 +411,24 @@ describe("startGatewayMaintenanceTimers", () => {
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
 
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    });
     expect(cleanOldMediaMock).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(cleanOldMediaMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(2);
+    });
 
-    if (cleanupReady) {
-      resolveCleanup();
-    }
-    await Promise.resolve();
-
+    resolveCleanup();
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(cleanOldMediaMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(3);
+    });
 
     resolveCleanup();
     await vi.advanceTimersByTimeAsync(0);
@@ -436,6 +460,35 @@ describe("startGatewayMaintenanceTimers", () => {
 
     resolveCleanup();
     await vi.advanceTimersByTimeAsync(0);
+    stopMaintenanceTimers(timers);
+  });
+
+  it("skips overlapping managed outgoing cleanup runs", async () => {
+    vi.useFakeTimers();
+    let resolveCleanup = () => {};
+    cleanupManagedOutgoingMediaRecordsMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCleanup = () =>
+            resolve({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+        }),
+    );
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+
+    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    });
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+
+    resolveCleanup();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(2);
+
+    resolveCleanup();
     stopMaintenanceTimers(timers);
   });
 

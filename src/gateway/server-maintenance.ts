@@ -73,6 +73,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
+  runManagedOutgoingMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
   runSkillCuratorSweep?: () => Promise<unknown>;
   registerSkillUsageTracking?: () => () => void;
@@ -318,6 +319,21 @@ export function startGatewayMaintenanceTimers(params: {
       playbackTranscodeCacheCleanupLoader.clear();
     }
   });
+  const runManagedOutgoingMediaGc =
+    params.runManagedOutgoingMediaGc ??
+    (async () => {
+      const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
+      return await cleanupManagedOutgoingMediaRecords();
+    });
+  const managedOutgoingCleanupLoader = createLazyPromiseLoader(async () => {
+    try {
+      await runManagedOutgoingMediaGc();
+    } catch (err) {
+      params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
+    } finally {
+      managedOutgoingCleanupLoader.clear();
+    }
+  });
 
   let mediaCleanupInFlight: Promise<void> | null = null;
   const runConfiguredMediaCleanup = () => {
@@ -329,15 +345,6 @@ export function startGatewayMaintenanceTimers(params: {
       recursive: true,
       pruneEmptyDirs: true,
     })
-      .then(async () => {
-        // The mtime sweep skips the SQLite-managed outgoing tree; the
-        // database-aware reaper owns it, so run it on the same cadence or
-        // transient records and unindexed originals would have no cleanup
-        // path in sessions that never read chat history.
-        const { cleanupManagedOutgoingMediaRecords } =
-          await import("./managed-image-attachments.js");
-        await cleanupManagedOutgoingMediaRecords();
-      })
       .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })
@@ -348,9 +355,10 @@ export function startGatewayMaintenanceTimers(params: {
   };
 
   const runMediaMaintenance = () => {
-    // Playback has a fixed cache lifecycle and must not depend on the optional
-    // attachment-retention sweep being enabled or completing successfully.
+    // Playback and managed outgoing have fixed owner lifecycles and must not
+    // depend on the optional attachment-retention sweep being configured or healthy.
     void playbackTranscodeCacheCleanupLoader.load();
+    void managedOutgoingCleanupLoader.load();
     void runConfiguredMediaCleanup();
   };
   const mediaCleanup = setInterval(runMediaMaintenance, 60 * 60_000);
