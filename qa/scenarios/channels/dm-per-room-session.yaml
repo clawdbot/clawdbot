@@ -48,7 +48,6 @@ flow:
             senderName: QA Driver
             text:
               expr: "`Reply exactly: ${config.primaryMarker}`"
-          saveAs: primaryInbound
         - waitForOutbound:
             conversation:
               id:
@@ -71,7 +70,8 @@ flow:
                   entry.delivery.context?.channel === 'matrix' &&
                   entry.delivery.context?.accountId === transport.accountId &&
                   entry.delivery.origin?.chatType === 'direct' &&
-                  entry.delivery.origin?.nativeDirectUserId === primaryInbound.senderId &&
+                  typeof entry.delivery.origin?.nativeDirectUserId === 'string' &&
+                  entry.delivery.origin.nativeDirectUserId.length > 0 &&
                   typeof entry.delivery.origin?.nativeChannelId === 'string' &&
                   typeof entry.sessionId === 'string')
                 .toSorted(([, left], [, right]) => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))[0]
@@ -115,7 +115,7 @@ flow:
                   entry.delivery.context?.channel === 'matrix' &&
                   entry.delivery.context?.accountId === transport.accountId &&
                   entry.delivery.origin?.chatType === 'direct' &&
-                  entry.delivery.origin?.nativeDirectUserId === primaryInbound.senderId &&
+                  entry.delivery.origin?.nativeDirectUserId === primarySession[1].delivery.origin.nativeDirectUserId &&
                   entry.delivery.origin?.nativeChannelId !== primarySession[1].delivery.origin.nativeChannelId &&
                   typeof entry.delivery.origin?.nativeChannelId === 'string' &&
                   typeof entry.sessionId === 'string')

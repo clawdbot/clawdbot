@@ -10,7 +10,12 @@ const sharedSessionKey = `agent:qa:matrix:direct:${matrixDriverId}`;
 
 type MatrixScenarioId = "dm-per-room-session" | "dm-shared-session";
 
-function createMatrixSessionEntry(sessionId: string, roomId: string, updatedAt: number) {
+function createMatrixSessionEntry(
+  sessionId: string,
+  roomId: string,
+  updatedAt: number,
+  nativeDirectUserId = matrixDriverId,
+) {
   return {
     sessionId,
     updatedAt,
@@ -35,10 +40,10 @@ function createMatrixSessionEntry(sessionId: string, roomId: string, updatedAt: 
         surface: "matrix",
         accountId: "sut",
         chatType: "direct",
-        from: `matrix:${matrixDriverId}`,
+        from: `matrix:${nativeDirectUserId}`,
         to: `room:${roomId}`,
         nativeChannelId: roomId,
-        nativeDirectUserId: matrixDriverId,
+        nativeDirectUserId,
       },
     },
   };
@@ -49,6 +54,8 @@ async function runMatrixSessionScenario(params: {
   sharedSessionIdentity: boolean;
   sharedSessionKey?: boolean;
   sharedTranscriptId?: boolean;
+  returnedSenderId?: string;
+  secondaryNativeSenderId?: string;
 }) {
   const scenario = readQaScenarioById(params.scenarioId);
   const config = scenario.execution.config as {
@@ -83,12 +90,22 @@ async function runMatrixSessionScenario(params: {
     }
     if (usesSharedSessionKey) {
       return {
-        [sharedSessionKey]: createMatrixSessionEntry(secondarySessionId, secondaryRoomId, 2),
+        [sharedSessionKey]: createMatrixSessionEntry(
+          secondarySessionId,
+          secondaryRoomId,
+          2,
+          params.secondaryNativeSenderId,
+        ),
       };
     }
     return {
       [primarySessionKey]: createMatrixSessionEntry(primarySessionId, primaryRoomId, 1),
-      [secondarySessionKey]: createMatrixSessionEntry(secondarySessionId, secondaryRoomId, 2),
+      [secondarySessionKey]: createMatrixSessionEntry(
+        secondarySessionId,
+        secondaryRoomId,
+        2,
+        params.secondaryNativeSenderId,
+      ),
     };
   });
 
@@ -104,7 +121,7 @@ async function runMatrixSessionScenario(params: {
       state.addInboundMessage({
         ...input,
         accountId: "sut",
-        senderId: matrixDriverId,
+        senderId: params.returnedSenderId ?? matrixDriverId,
       }),
     waitForOutbound: async (input: {
       conversation?: { id: string; kind: string };
@@ -164,14 +181,21 @@ async function runMatrixSessionScenario(params: {
 }
 
 describe("Matrix DM scenario session identity evidence", () => {
-  it("accepts distinct room-owned sessions when per-room replies have no shared notice", async () => {
-    await expect(
-      runMatrixSessionScenario({
-        scenarioId: "dm-per-room-session",
-        sharedSessionIdentity: false,
-      }),
-    ).resolves.toMatchObject({ status: "pass" });
-  });
+  it.each([
+    { lane: "live", returnedSenderId: matrixDriverId },
+    { lane: "crabline", returnedSenderId: "driver" },
+  ])(
+    "accepts distinct room-owned sessions on the $lane Matrix lane",
+    async ({ returnedSenderId }) => {
+      await expect(
+        runMatrixSessionScenario({
+          scenarioId: "dm-per-room-session",
+          sharedSessionIdentity: false,
+          returnedSenderId,
+        }),
+      ).resolves.toMatchObject({ status: "pass" });
+    },
+  );
 
   it("rejects a shared session in per-room mode even when both replies and notice policy pass", async () => {
     await expect(
@@ -193,14 +217,21 @@ describe("Matrix DM scenario session identity evidence", () => {
     ).rejects.toThrow(/session|room|isolat|shared/i);
   });
 
-  it("accepts one shared user-owned session when both rooms receive the notice and replies", async () => {
-    await expect(
-      runMatrixSessionScenario({
-        scenarioId: "dm-shared-session",
-        sharedSessionIdentity: true,
-      }),
-    ).resolves.toMatchObject({ status: "pass" });
-  });
+  it.each([
+    { lane: "live", returnedSenderId: matrixDriverId },
+    { lane: "crabline", returnedSenderId: "driver" },
+  ])(
+    "accepts one shared user-owned session on the $lane Matrix lane",
+    async ({ returnedSenderId }) => {
+      await expect(
+        runMatrixSessionScenario({
+          scenarioId: "dm-shared-session",
+          sharedSessionIdentity: true,
+          returnedSenderId,
+        }),
+      ).resolves.toMatchObject({ status: "pass" });
+    },
+  );
 
   it("rejects separate sessions in shared mode even when the expected notice is emitted", async () => {
     await expect(
@@ -218,6 +249,19 @@ describe("Matrix DM scenario session identity evidence", () => {
         sharedSessionIdentity: true,
         sharedSessionKey: false,
         sharedTranscriptId: true,
+      }),
+    ).rejects.toThrow(/session|room|isolat|shared/i);
+  });
+
+  it.each([
+    { scenarioId: "dm-per-room-session" as const, sharedSessionIdentity: false },
+    { scenarioId: "dm-shared-session" as const, sharedSessionIdentity: true },
+  ])("rejects a different persisted Matrix sender in $scenarioId", async (scenario) => {
+    await expect(
+      runMatrixSessionScenario({
+        ...scenario,
+        returnedSenderId: "driver",
+        secondaryNativeSenderId: "@intruder:matrix.test",
       }),
     ).rejects.toThrow(/session|room|isolat|shared/i);
   });
