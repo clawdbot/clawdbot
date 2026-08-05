@@ -25,6 +25,7 @@ const installPackageDirMock = vi.fn();
 const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
 const digestClawHubSkillTreeMock = vi.fn(async () => `sha256:${"a".repeat(64)}`);
+const markClawPackageIndependentlyOwnedMock = vi.fn();
 const tempDirs = createTrackedTempDirs();
 
 vi.mock("../../infra/clawhub.js", async (importOriginal) => ({
@@ -64,6 +65,10 @@ vi.mock("../../infra/fs-safe.js", () => ({
 
 vi.mock("./skill-tree-digest.js", () => ({
   digestClawHubSkillTree: digestClawHubSkillTreeMock,
+}));
+
+vi.mock("../../state/claw-package-adoption.js", () => ({
+  markClawPackageIndependentlyOwned: markClawPackageIndependentlyOwnedMock,
 }));
 
 const {
@@ -211,6 +216,7 @@ describe("skills-clawhub", () => {
     installPackageDirMock.mockReset();
     evaluateSkillInstallPolicyMock.mockReset();
     pathExistsMock.mockReset();
+    markClawPackageIndependentlyOwnedMock.mockReset();
 
     resolveClawHubBaseUrlMock.mockImplementation((baseUrl?: string) =>
       (baseUrl ?? "https://clawhub.ai").replace(/\/+$/, ""),
@@ -1136,6 +1142,13 @@ describe("skills-clawhub", () => {
       slug: "weather",
       ownerHandle: "demo-owner",
       installedVersion: "1.0.0",
+    });
+    expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
+      kind: "skill",
+      source: "clawhub",
+      ref: "@demo-owner/weather",
+      version: "1.0.0",
+      workspace: workspaceDir,
     });
     expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
       baseUrl: undefined,
