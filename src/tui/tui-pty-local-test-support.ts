@@ -34,7 +34,7 @@ export function createChatTerminalObserver() {
   const keyFor = (sessionKey: string, runId: string) => `${sessionKey}\u0000${runId}`;
 
   return {
-    onEvent: ({ event, payload }: { event: string; payload: unknown }) => {
+    onEvent: ({ event, payload }: { event: string; payload?: unknown }) => {
       if (event !== "chat" || !payload || typeof payload !== "object") {
         return;
       }

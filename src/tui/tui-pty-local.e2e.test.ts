@@ -1662,12 +1662,13 @@ export default {
           registerCleanup: onTestFinished,
           sessionKey,
         });
-        await attached.run.waitForOutput(assistantMarker, LOCAL_STARTUP_TIMEOUT_MS);
+        const attachedRun = attached.run;
+        await attachedRun.waitForOutput(assistantMarker, LOCAL_STARTUP_TIMEOUT_MS);
         const output = await waitFor({
           timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
           read: () => {
             const screen =
-              synchronizedFrameRows(attached.run.output(), attached.run)[0]?.join("\n") ?? "";
+              synchronizedFrameRows(attachedRun.output(), attachedRun)[0]?.join("\n") ?? "";
             return screen.includes(userMarker) && screen.includes(assistantMarker) ? screen : null;
           },
           onTimeout: () => new Error("history did not reach a final synchronized TUI screen"),
