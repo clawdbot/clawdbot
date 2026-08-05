@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import nodePath from "node:path";
+import { isDeepStrictEqual } from "node:util";
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
@@ -251,6 +252,13 @@ export function startGatewayConfigReloader(opts: {
   let currentReapplyRuntimeOverlays =
     initialCandidate?.reapplyRuntimeOverlays ?? ((config: OpenClawConfig) => config);
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
+  // Source-space config the running process has actually applied. Unlike the
+  // reload baseline (currentCompareConfig), this does NOT advance when a
+  // restart-required candidate is merely accepted: the gateway keeps running
+  // the previous config until the deferred restart is emitted. Comparing a
+  // settled candidate against this value lets an exact revert cancel the
+  // pending restart instead of being planned as a new bounce.
+  let runtimeAppliedCompareConfig = currentCompareConfig;
   const resolveSettings = (config: OpenClawConfig) => {
     const resolved = resolveGatewayReloadSettings(config);
     return opts.testDebounceMs === undefined
@@ -507,6 +515,7 @@ export function startGatewayConfigReloader(opts: {
         committedRuntimeConfig = runtimeConfig;
         currentConfig = runtimeConfig;
         currentCompareConfig = nextCompareConfig;
+        runtimeAppliedCompareConfig = nextCompareConfig;
         currentSourceConfig = nextSourceConfig;
         currentRuntimeEnvSourceConfig = nextSourceConfig;
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
@@ -692,6 +701,20 @@ export function startGatewayConfigReloader(opts: {
       forceChangedPaths: pluginInstallWholeRecordPaths,
       candidateConfig: nextConfig,
     });
+    // A restart-required edit that settles back to the config the runtime is
+    // currently running. The reload baseline advanced when the earlier
+    // candidate was accepted as a deferred restart, so changedPaths diff
+    // against a superseded state and the settled candidate is not a real
+    // change. Commit it as a no-op: the acceptance path retires the pending
+    // deferred restart instead of re-arming it, and the baseline still
+    // advances so the next edit diffs against the settled bytes. Config-space
+    // only: plugin install record changes still need the restart even when
+    // the config bytes are identical to the running ones.
+    const revertsToRunningConfig =
+      changedPaths.length > 0 &&
+      pluginInstallRecordChangedPaths.length === 0 &&
+      (plan.restartGateway || followUp.requiresRestart) &&
+      isDeepStrictEqual(nextCompareConfig, runtimeAppliedCompareConfig);
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       await commitReloadBaseline({ runtimeApplied: false });
@@ -705,6 +728,23 @@ export function startGatewayConfigReloader(opts: {
       assertCurrent();
       await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
+      return;
+    }
+    if (revertsToRunningConfig) {
+      opts.log.info(
+        `config change detected; reverted to running config, cancelling pending restart (${changedPaths.join(", ")})`,
+      );
+      const revertPlan: GatewayReloadPlan = {
+        ...plan,
+        restartGateway: false,
+        restartReasons: [],
+      };
+      await opts.onConfigChange?.(revertPlan, nextConfig);
+      await opts.onNoopConfigCommit(revertPlan, nextConfig, ownership, nextSourceConfig);
+      assertCurrent();
+      await appliedRevision.apply(revertPlan, nextConfig, nextConfigRevisionHash);
+      await commitReloadBaseline();
+      runtimeAppliedCompareConfig = nextCompareConfig;
       return;
     }
     if (followUp.requiresRestart) {

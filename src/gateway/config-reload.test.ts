@@ -3425,6 +3425,52 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("cancels a pending restart when a restart-required edit reverts to the running config", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18790 } } satisfies OpenClawConfig;
+    const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+    });
+    const harness = createReloaderHarness(vi.fn(async () => makeSnapshot()), {
+      initialConfig: configA,
+    });
+
+    // Restart-required edit A -> B plans a (deferred) restart.
+    harness.emitWrite(makeWrite(configB, "hash-b"));
+    await vi.runAllTimersAsync();
+    const [firstPlan, firstConfig] = getOnlyRestartCall(harness);
+    expect(firstPlan.restartGateway).toBe(true);
+    expect(firstConfig).toEqual(configB);
+
+    // Exact revert B -> A must cancel the pending restart instead of planning
+    // a new one: the settled candidate equals the config the runtime still runs.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+    expect(harness.onConfigAccepted).toHaveBeenCalled();
+
+    // The revert still advanced the reload baseline, so a later genuine edit
+    // A -> B plans the restart again.
+    harness.emitWrite(makeWrite(configB, "hash-b2"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configB);
+
+    await harness.reloader.stop();
+  });
+
   it.each([
     {
       label: "none",
