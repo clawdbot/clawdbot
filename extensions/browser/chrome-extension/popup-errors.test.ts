@@ -77,6 +77,24 @@ function popupElement(id: string): HTMLElement {
   return element;
 }
 
+async function expectVisibleErrorAfterStatusRefresh(
+  error: string,
+  sendMessage: Awaited<ReturnType<typeof loadPopup>>["sendMessage"],
+) {
+  const initialPollCount = sendMessage.mock.calls.filter(
+    ([message]) => message.type === "getStatus",
+  ).length;
+
+  await vi.advanceTimersByTimeAsync(2_000);
+
+  const refreshedPollCount = sendMessage.mock.calls.filter(
+    ([message]) => message.type === "getStatus",
+  ).length;
+  expect(refreshedPollCount).toBeGreaterThan(initialPollCount);
+  expect(popupElement("statusLine").textContent).toBe(error);
+  expect(popupElement("statusLine").closest(".hidden")).toBeNull();
+}
+
 describe("Chrome extension popup action errors", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -93,7 +111,11 @@ describe("Chrome extension popup action errors", () => {
 
   it("keeps a rejected unpair visible while preserving the open settings panel", async () => {
     const error = "Could not remove browser pairing.";
-    const { sendMessage } = await loadPopup({ failures: { unpair: error } });
+    const popup = {
+      paired: true,
+      failures: { unpair: error } as Partial<Record<"unpair", string>>,
+    };
+    const { sendMessage } = await loadPopup(popup);
 
     popupElement("settingsButton").click();
     await vi.waitFor(() => {
@@ -107,11 +129,24 @@ describe("Chrome extension popup action errors", () => {
       expect(popupElement("statusLine").closest(".hidden")).toBeNull();
       expect(popupElement("settingsSection").classList.contains("hidden")).toBe(false);
     });
+
+    await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
+    expect(popupElement("settingsSection").classList.contains("hidden")).toBe(false);
+
+    delete popup.failures.unpair;
+    popup.paired = false;
+    popupElement("unpairButton").click();
+
+    await vi.waitFor(() => {
+      expect(popupElement("statusLine").textContent).toBe("Not paired with a gateway");
+      expect(popupElement("settingsSection").classList.contains("hidden")).toBe(true);
+    });
   });
 
   it("shows a rejected share-toggle error in the visible connected popup", async () => {
     const error = "No tab with id: 44.";
-    const { sendMessage } = await loadPopup({ failures: { toggleShareTab: error } });
+    const failures: Partial<Record<"toggleShareTab", string>> = { toggleShareTab: error };
+    const { sendMessage } = await loadPopup({ failures });
 
     popupElement("shareButton").click();
 
@@ -119,6 +154,17 @@ describe("Chrome extension popup action errors", () => {
       expect(sendMessage).toHaveBeenCalledWith({ type: "toggleShareTab", tabId: 44 });
       expect(popupElement("statusLine").textContent).toBe(error);
       expect(popupElement("statusLine").closest(".hidden")).toBeNull();
+      expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+    });
+
+    await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
+    expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+
+    delete failures.toggleShareTab;
+    popupElement("shareButton").click();
+
+    await vi.waitFor(() => {
+      expect(popupElement("statusLine").textContent).toBe("Connected · 0 tabs shared");
       expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
     });
   });
