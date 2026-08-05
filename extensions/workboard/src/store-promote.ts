@@ -15,9 +15,7 @@ import { clearDiagnostics, normalizeBoundedString, normalizeStatus } from "./sto
 // attempts, and mark a live execution terminal (issue #119592). The terminal
 // statuses are also valid WorkboardExecutionStatus values, so the mapping is
 // identity: a card moved to "review" gets execution status "review", etc.
-function terminalExecutionStatus(
-  status: WorkboardStatus,
-): WorkboardExecutionStatus | undefined {
+function terminalExecutionStatus(status: WorkboardStatus): WorkboardExecutionStatus | undefined {
   if (status === "done" || status === "blocked" || status === "review") {
     return status;
   }
