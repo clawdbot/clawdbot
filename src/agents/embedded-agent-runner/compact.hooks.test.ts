@@ -4048,6 +4048,39 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it.each([
+    [
+      "400 then 503",
+      Object.assign(new Error("primary compaction rejected"), { status: 400 }),
+      Object.assign(new Error("fallback compaction unavailable"), {
+        status: 503,
+        code: "upstream_unavailable",
+      }),
+      { reason: "format", status: 400 },
+    ],
+    [
+      "401 then timeout",
+      Object.assign(new Error("primary compaction unauthorized"), { status: 401 }),
+      Object.assign(new Error("fallback compaction timed out"), {
+        status: 408,
+        code: "ETIMEDOUT",
+      }),
+      { reason: "auth", status: 401 },
+    ],
+  ])(
+    "keeps the terminal failure across %s fallback exhaustion",
+    async (_caseName, primaryError, fallbackError, expectedFailure) => {
+      sessionCompactImpl.mockRejectedValueOnce(primaryError).mockRejectedValueOnce(fallbackError);
+
+      const result = await compactEmbeddedAgentSessionDirect({
+        ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+        modelFallbacksOverride: ["anthropic/claude-fallback"],
+      });
+
+      expect(result).toMatchObject({ ok: false, failure: expectedFailure });
+    },
+  );
+
   it("forces engine-owned compaction for preflight-required budget compaction", async () => {
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({

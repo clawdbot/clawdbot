@@ -27,6 +27,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
+import { isTransientCompactionFailureResult } from "./compact-reasons.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
@@ -107,6 +108,7 @@ function classifyCompactionFallbackResult(
         code: failoverError.code,
         rawError: failoverError.rawError,
         preserveResultOnExhaustion: true,
+        preserveResultPriority: isTransientCompactionFailureResult(result) ? 0 : 1,
       }
     : null;
 }
