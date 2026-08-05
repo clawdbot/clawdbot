@@ -76,6 +76,51 @@ function toTimestampMs(value: number | LongLike | null | undefined): number | un
 }
 
 /**
+ * `decryptPollVote`'s AAD/key-derivation must be given the same address
+ * space (LID or PN) the two participants actually used when WhatsApp
+ * encrypted the vote client-side — mixing forms (or using the Alt/PN
+ * cross-reference `getKeyAuthor` prefers) fails GCM authentication even
+ * though the vote is genuinely ours. Baileys attaches the LID/PN alternate
+ * on `remoteJidAlt`/`participantAlt`, so `getKeyAuthor`'s default preference
+ * for the Alt form is right for authorship display but wrong for this
+ * decrypt — the primary `participant`/`remoteJid` field (whichever space
+ * the conversation is natively in) is what the encryptor actually signed.
+ */
+function resolvePollVoterJidForDecrypt(key: proto.IMessageKey): string | undefined {
+  return key.participant || key.remoteJid || undefined;
+}
+
+/**
+ * Mirrors the voter-side resolution above for the poll's own creator (us,
+ * `fromMe`): match our identity to whichever address space the poll's
+ * `participant`/`remoteJid` (i.e. the conversation itself) is natively in,
+ * rather than always using one fixed form.
+ */
+function resolvePollCreatorJidForDecrypt(
+  creationKey: proto.IMessageKey,
+  selfJid: string | null | undefined,
+  selfLid: string | null | undefined,
+): string | undefined {
+  const referenceJid = creationKey.participant || creationKey.remoteJid || "";
+  return referenceJid.endsWith("@lid")
+    ? (selfLid ?? selfJid ?? undefined)
+    : (selfJid ?? selfLid ?? undefined);
+}
+
+/**
+ * `messageContextInfo.messageSecret` is typed as `bytes` and normally
+ * arrives as a `Uint8Array`, but the echo of a poll we just sent ourselves
+ * (still in-memory, not yet round-tripped through the wire) carries it as a
+ * base64 string instead. Decode defensively so both shapes work.
+ */
+function toPollEncKeyBuffer(value: Uint8Array | string | null | undefined): Buffer | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return typeof value === "string" ? Buffer.from(value, "base64") : Buffer.from(value);
+}
+
+/**
  * Decodes an incoming `pollUpdateMessage` (still encrypted as delivered on
  * `messages.upsert`) into a plain vote payload. Baileys 7.0.0-rc13 itself
  * never performs this decode+emit (the relevant branch in its own
@@ -96,6 +141,8 @@ export function decodeWhatsAppPollVote(params: {
   getCachedMessage: (remoteJid: string, messageId: string) => proto.IMessage | undefined;
   /** Our own jid, to disambiguate `fromMe` key authorship. */
   selfJid?: string | null;
+  /** Our own LID-space identity, when this account has one (LID-migrated). */
+  selfLid?: string | null;
 }): WhatsAppDecodedPollVote | undefined {
   const pollUpdateMessage = params.message?.pollUpdateMessage;
   const creationKey = pollUpdateMessage?.pollCreationMessageKey;
@@ -105,20 +152,30 @@ export function decodeWhatsAppPollVote(params: {
     return undefined;
   }
   const pollCreationMessage = params.getCachedMessage(remoteJid, creationKey.id);
-  const pollEncKey = pollCreationMessage?.messageContextInfo?.messageSecret;
+  const pollEncKey = toPollEncKeyBuffer(pollCreationMessage?.messageContextInfo?.messageSecret);
   if (!pollCreationMessage || !pollEncKey) {
     return undefined;
   }
   const meIdNormalized = params.selfJid ? jidNormalizedUser(params.selfJid) : undefined;
-  const pollCreatorJid = getKeyAuthor(creationKey, meIdNormalized);
+  // Reported to hook consumers: the human-recognizable PN-preferring form.
   const voterJid = getKeyAuthor(params.key, meIdNormalized);
+  // Used only for the crypto call: the conversation's native address space.
+  const decryptCreatorJid = resolvePollCreatorJidForDecrypt(
+    creationKey,
+    params.selfJid,
+    params.selfLid,
+  );
+  const decryptVoterJid = resolvePollVoterJidForDecrypt(params.key);
   let decodedVote: proto.Message.PollVoteMessage;
   try {
+    if (!decryptCreatorJid || !decryptVoterJid) {
+      throw new Error("missing creator/voter jid for poll vote decrypt");
+    }
     decodedVote = decryptPollVote(vote, {
-      pollCreatorJid,
+      pollCreatorJid: decryptCreatorJid,
       pollMsgId: creationKey.id,
       pollEncKey,
-      voterJid,
+      voterJid: decryptVoterJid,
     });
   } catch {
     return undefined;
@@ -266,6 +323,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   key: proto.IMessageKey;
   getCachedMessage: (remoteJid: string, messageId: string) => proto.IMessage | undefined;
   selfJid?: string | null;
+  selfLid?: string | null;
 }): void {
   if (!shouldEmitWhatsAppPollVoteHooks({ cfg: params.cfg, accountId: params.accountId })) {
     return;
@@ -301,6 +359,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     key: params.key,
     getCachedMessage: params.getCachedMessage,
     selfJid: params.selfJid,
+    selfLid: params.selfLid,
   });
   if (decoded) {
     emitWhatsAppPollVoteReceivedHook({

@@ -52,16 +52,25 @@ export function buildPollCreationMessageForTests(params: {
   question?: string;
   options: string[];
   pollEncKey?: Uint8Array;
+  /**
+   * Store `messageContextInfo.messageSecret` as a base64 string instead of
+   * raw bytes, mirroring the shape observed on the `messages.upsert` echo of
+   * a poll we just sent ourselves (not yet round-tripped through the wire).
+   */
+  messageSecretAsBase64String?: boolean;
 }): { message: proto.IMessage; pollEncKey: Uint8Array } {
   const pollEncKey = params.pollEncKey ?? randomBytes(32);
   const pollCreation: proto.Message.IPollCreationMessage = {
     name: params.question ?? "Test poll?",
     options: params.options.map((optionName) => ({ optionName })),
   };
+  const messageSecret = params.messageSecretAsBase64String
+    ? (Buffer.from(pollEncKey).toString("base64") as unknown as Uint8Array)
+    : pollEncKey;
   return {
     message: {
       [params.section]: pollCreation,
-      messageContextInfo: { messageSecret: pollEncKey },
+      messageContextInfo: { messageSecret },
     },
     pollEncKey,
   };

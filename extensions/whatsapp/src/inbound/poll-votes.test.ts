@@ -178,6 +178,81 @@ describe("decodeWhatsAppPollVote", () => {
     expect(decoded).toBeUndefined();
   });
 
+  it("decodes a vote when messageSecret arrives as a base64 string instead of raw bytes", () => {
+    // Mirrors the messages.upsert echo of a poll we just sent ourselves,
+    // before it round-trips through the wire as proper Uint8Array bytes.
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["A", "B"],
+      messageSecretAsBase64String: true,
+    });
+    const creationKey = creationKeyFor(POLL_MSG_ID);
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["A"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: POLL_MSG_ID,
+      voterJid: VOTER_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+
+    const decoded = decodeWhatsAppPollVote({
+      message: voteMessage,
+      key: voteKeyFor("VOTE-BASE64-SECRET"),
+      getCachedMessage: () => pollCreationMessage,
+      selfJid: POLL_CREATOR_JID,
+    });
+
+    expect(decoded?.selectedOptions).toEqual(["A"]);
+  });
+
+  it("decodes a vote in a LID-addressed DM using selfLid, not the PN-preferring getKeyAuthor default", () => {
+    // A LID-migrated DM: the conversation's own remoteJid is the @lid form,
+    // and Baileys attaches the PN cross-reference on remoteJidAlt. Using the
+    // Alt (PN) form for the crypto call — what getKeyAuthor prefers for
+    // authorship display — fails GCM auth; only the primary @lid form
+    // (matching what WhatsApp actually signed) decrypts successfully.
+    const DM_LID_JID = "999999111@lid";
+    const SELF_JID = "15550001111@s.whatsapp.net";
+    const SELF_LID = "15550009999@lid";
+    const VOTER_PN_ALT = "15550002222@s.whatsapp.net";
+
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Yes", "No"],
+    });
+    const creationKey: WAMessageKey = {
+      remoteJid: DM_LID_JID,
+      id: POLL_MSG_ID,
+      fromMe: true,
+    };
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Yes"],
+      pollEncKey,
+      pollCreatorJid: SELF_LID,
+      pollMsgId: POLL_MSG_ID,
+      voterJid: DM_LID_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+
+    const decoded = decodeWhatsAppPollVote({
+      message: voteMessage,
+      key: {
+        remoteJid: DM_LID_JID,
+        remoteJidAlt: VOTER_PN_ALT,
+        id: "VOTE-LID-DM",
+        fromMe: false,
+      } as proto.IMessageKey,
+      getCachedMessage: (remoteJid, messageId) =>
+        remoteJid === DM_LID_JID && messageId === POLL_MSG_ID ? pollCreationMessage : undefined,
+      selfJid: SELF_JID,
+      selfLid: SELF_LID,
+    });
+
+    expect(decoded?.selectedOptions).toEqual(["Yes"]);
+    expect(decoded?.chatJid).toBe(DM_LID_JID);
+  });
+
   it("returns undefined when decryption fails (wrong key / tampered payload)", () => {
     const { message: pollCreationMessage } = buildPollCreationMessageForTests({
       section: "pollCreationMessage",
