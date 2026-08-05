@@ -81,7 +81,7 @@ export function startGatewayMaintenanceTimers(params: {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
-  mediaCleanup: ReturnType<typeof setInterval> | null;
+  stopMediaCleanup: () => Promise<void>;
   worktreeCleanup: ReturnType<typeof setInterval>;
   skillCuratorCleanup: () => void;
 } {
@@ -354,7 +354,11 @@ export function startGatewayMaintenanceTimers(params: {
     return mediaCleanupInFlight;
   };
 
+  let mediaCleanupStopped = false;
   const runMediaMaintenance = () => {
+    if (mediaCleanupStopped) {
+      return;
+    }
     // Playback and managed outgoing have fixed owner lifecycles and must not
     // depend on the optional attachment-retention sweep being configured or healthy.
     void playbackTranscodeCacheCleanupLoader.load();
@@ -362,6 +366,16 @@ export function startGatewayMaintenanceTimers(params: {
     void runConfiguredMediaCleanup();
   };
   const mediaCleanup = setInterval(runMediaMaintenance, 60 * 60_000);
+  const stopMediaCleanup = async () => {
+    mediaCleanupStopped = true;
+    clearInterval(mediaCleanup);
+    const pending = [
+      playbackTranscodeCacheCleanupLoader.peek(),
+      managedOutgoingCleanupLoader.peek(),
+      mediaCleanupInFlight,
+    ].filter((promise): promise is Promise<void> => promise !== undefined && promise !== null);
+    await Promise.allSettled(pending);
+  };
 
   runMediaMaintenance();
 
@@ -369,7 +383,7 @@ export function startGatewayMaintenanceTimers(params: {
     tickInterval,
     healthInterval,
     dedupeCleanup,
-    mediaCleanup,
+    stopMediaCleanup,
     worktreeCleanup,
     skillCuratorCleanup,
   };

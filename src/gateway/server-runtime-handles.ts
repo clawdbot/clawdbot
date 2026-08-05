@@ -23,7 +23,7 @@ export type GatewayServerMutableState = {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
-  mediaCleanup: ReturnType<typeof setInterval> | null;
+  stopMediaCleanup: () => Promise<void>;
   worktreeCleanup: ReturnType<typeof setInterval> | null;
   skillCuratorCleanup: () => void;
   heartbeatRunner: HeartbeatRunner;
@@ -59,7 +59,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     tickInterval: noopInterval(),
     healthInterval: noopInterval(),
     dedupeCleanup: noopInterval(),
-    mediaCleanup: null as ReturnType<typeof setInterval> | null,
+    stopMediaCleanup: async () => {},
     worktreeCleanup: null as ReturnType<typeof setInterval> | null,
     skillCuratorCleanup: () => {},
     heartbeatRunner: {

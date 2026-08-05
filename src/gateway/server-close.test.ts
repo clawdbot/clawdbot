@@ -136,7 +136,7 @@ function createGatewayCloseTestDeps(
     tickInterval: setInterval(() => undefined, 60_000),
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
-    mediaCleanup: null,
+    stopMediaCleanup: vi.fn(async () => undefined),
     worktreeCleanup: null,
     skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
@@ -231,7 +231,30 @@ describe("createGatewayCloseHandler", () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+    expect(deps.stopMediaCleanup).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for in-flight media cleanup before shutdown completes", async () => {
+    let releaseMediaCleanup = () => {};
+    const stopMediaCleanup = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseMediaCleanup = resolve;
+        }),
+    );
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));
+
+    let closed = false;
+    const closing = close({ reason: "test" }).then(() => {
+      closed = true;
+    });
+    await vi.waitFor(() => expect(stopMediaCleanup).toHaveBeenCalledTimes(1));
+    expect(closed).toBe(false);
+
+    releaseMediaCleanup();
+    await closing;
+    expect(closed).toBe(true);
   });
 
   it("clears the process-root plugin registry after teardown", async () => {

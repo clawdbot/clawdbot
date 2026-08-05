@@ -408,7 +408,7 @@ export async function prepareGatewayLifecycle(params: {
       tickInterval: runtimeState.tickInterval,
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
-      mediaCleanup: runtimeState.mediaCleanup,
+      stopMediaCleanup: runtimeState.stopMediaCleanup,
       worktreeCleanup: runtimeState.worktreeCleanup,
       skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,

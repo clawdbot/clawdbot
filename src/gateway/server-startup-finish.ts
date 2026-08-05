@@ -646,14 +646,12 @@ export async function finishGatewayStartup(params: {
         }
         return earlyRuntime.startMaintenance();
       },
-      applyMaintenance: (maintenance) => {
+      applyMaintenance: async (maintenance) => {
         if (lifecycle.closePreludeStarted) {
           clearInterval(maintenance.tickInterval);
           clearInterval(maintenance.healthInterval);
           clearInterval(maintenance.dedupeCleanup);
-          if (maintenance.mediaCleanup) {
-            clearInterval(maintenance.mediaCleanup);
-          }
+          await maintenance.stopMediaCleanup();
           clearInterval(maintenance.worktreeCleanup);
           maintenance.skillCuratorCleanup();
           return;
@@ -661,7 +659,7 @@ export async function finishGatewayStartup(params: {
         runtimeState.tickInterval = maintenance.tickInterval;
         runtimeState.healthInterval = maintenance.healthInterval;
         runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
-        runtimeState.mediaCleanup = maintenance.mediaCleanup;
+        runtimeState.stopMediaCleanup = maintenance.stopMediaCleanup;
         runtimeState.worktreeCleanup = maintenance.worktreeCleanup;
         runtimeState.skillCuratorCleanup = maintenance.skillCuratorCleanup;
       },
