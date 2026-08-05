@@ -73,6 +73,9 @@ export function resolveMissingOfficialExternalChannelPluginRepairHints(
     channelIds: readonly string[];
   },
 ): MissingOfficialExternalChannelPluginRepairHint[] {
+  if (params.channelIds.length === 0) {
+    return [];
+  }
   const policiesByChannelId = new Map(
     resolveConfiguredChannelPresencePolicy({
       config: params.config,

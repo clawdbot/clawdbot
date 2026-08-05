@@ -82,17 +82,15 @@ export function buildProviderSummaryMetadataIndex(
       },
     ]),
   );
-  const missingHintsByChannelId = new Map(
-    resolveMissingOfficialExternalChannelPluginRepairHints({
-      config: cfg,
-      channelIds: listExplicitConfiguredChannelIdsForConfig(cfg),
-    }).map((hint) => [hint.channelId, hint]),
+  const missingChannelIds = listExplicitConfiguredChannelIdsForConfig(cfg).filter(
+    (channelId) => !metadata.has(channelId as ChannelId),
   );
-  for (const [channelId, hint] of missingHintsByChannelId) {
-    if (metadata.has(channelId)) {
-      continue;
-    }
-    metadata.set(channelId as ChannelId, {
+  const missingHints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    channelIds: missingChannelIds,
+  });
+  for (const hint of missingHints) {
+    metadata.set(hint.channelId as ChannelId, {
       label: hint.label,
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       visibleInConfiguredLists: true,

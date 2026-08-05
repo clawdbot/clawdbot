@@ -375,6 +375,27 @@ describe("buildProviderStatusIndex", () => {
     );
   });
 
+  it("skips missing-plugin resolution for channels already represented in metadata", () => {
+    const plugin = {
+      id: "feishu",
+      meta: { label: "Feishu" },
+      config: {
+        listAccountIds: () => ["default"],
+      },
+    } as never;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+    mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue(["feishu"]);
+
+    expect(
+      buildProviderSummaryMetadataIndex({ channels: { feishu: { appId: "cli_xxx" } } } as never)
+        .size,
+    ).toBe(1);
+    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHints).toHaveBeenCalledWith({
+      config: { channels: { feishu: { appId: "cli_xxx" } } },
+      channelIds: [],
+    });
+  });
+
   it("uses repair hints instead of unknown for bound missing external channels", () => {
     const lines = listProvidersForAgent({
       summaryIsDefault: false,

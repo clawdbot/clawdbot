@@ -74,6 +74,16 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
     expect(mocks.resolveConfiguredChannelPresencePolicy).toHaveBeenCalledTimes(1);
   });
 
+  it("skips presence policy when no channel ids need repair hints", () => {
+    expect(
+      resolveMissingOfficialExternalChannelPluginRepairHints({
+        config: {},
+        channelIds: [],
+      }),
+    ).toEqual([]);
+    expect(mocks.resolveConfiguredChannelPresencePolicy).not.toHaveBeenCalled();
+  });
+
   it("prefers the ClawHub install hint for externalized WhatsApp", () => {
     mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
       {
