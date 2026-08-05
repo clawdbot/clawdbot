@@ -240,6 +240,11 @@ export function startGatewayConfigReloader(opts: {
   });
   let currentConfig = initialCandidate?.runtimeConfig ?? opts.initialConfig;
   let currentCompareConfig = initialCandidate?.compareConfig ?? initialSourceConfig;
+  // Tracks the compare config that was last applied to the running gateway
+  // process. When a restart is deferred (not yet executed), this stays on
+  // the pre-restart baseline so a later revert-to-identical is detected as
+  // a no-op rather than planned as a second restart (#119360).
+  let appliedGatewayCompareConfig = currentCompareConfig;
   let currentSourceConfig = initialSourceConfig;
   let currentRawHash = opts.initialSnapshotRawHash;
   let lastObservedRawHash = opts.initialSnapshotRawHash;
@@ -667,6 +672,7 @@ export function startGatewayConfigReloader(opts: {
         publishedSource?.commit?.();
       }
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
+      appliedGatewayCompareConfig = nextCompareConfig;
       return;
     }
 
@@ -705,20 +711,47 @@ export function startGatewayConfigReloader(opts: {
       assertCurrent();
       await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
+      appliedGatewayCompareConfig = nextCompareConfig;
       return;
     }
+    // When the config bytes diffed against the current baseline produce a
+    // restart plan, check whether the next config is actually identical to
+    // what the running process already has. If so, this is a revert-to-
+    // identical (#119360): cancel the pending restart.
+    const isRevertToAppliedGatewayConfig =
+      configChangedPaths.length > 0
+        ? (nextCfg: OpenClawConfig): boolean => {
+            const paths = diffGatewayReloadPaths(appliedGatewayCompareConfig, nextCfg);
+            if (paths.length > 0) {
+              return false;
+            }
+            opts.log.info(
+              "config reload no-op: settled config is identical to the running gateway config",
+            );
+            return true;
+          }
+        : () => false;
+
     if (followUp.requiresRestart) {
       const restartPlan = {
         ...plan,
         restartGateway: true,
         restartReasons: [...plan.restartReasons, followUp.reason],
       };
+      if (isRevertToAppliedGatewayConfig(nextCompareConfig)) {
+        await commitReloadBaseline();
+        return;
+      }
       await opts.onConfigChange?.(restartPlan, nextConfig);
       await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       return;
     }
     if (plan.restartGateway) {
+      if (isRevertToAppliedGatewayConfig(nextCompareConfig)) {
+        await commitReloadBaseline();
+        return;
+      }
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
@@ -735,6 +768,7 @@ export function startGatewayConfigReloader(opts: {
     assertCurrent();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
+    appliedGatewayCompareConfig = nextCompareConfig;
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
