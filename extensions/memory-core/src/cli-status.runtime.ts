@@ -295,7 +295,11 @@ export async function runMemoryStatus(
       }
       allResults.push({
         agentId,
-        status,
+        status: {
+          ...status,
+          dirty:
+            status.dirty || (scan?.totalFiles != null && (status.files ?? 0) < scan.totalFiles),
+        },
         embeddingProbe,
         indexError,
         scan,

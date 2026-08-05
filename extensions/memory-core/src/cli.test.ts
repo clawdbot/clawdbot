@@ -573,6 +573,30 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("marks dirty when on-disk files exceed indexed files (#119411)", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-08-05", ["sentinel probe"]);
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () =>
+          makeMemoryStatus({
+            workspaceDir,
+            files: 0,
+            dirty: false,
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      // scan finds 1 on-disk file; manager reports 0 indexed + dirty: false.
+      // The CLI must override dirty to yes because indexed < on-disk.
+      expectLogged(log, "Dirty: yes");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("keeps plain status from probing vector or embeddings", async () => {
     const close = vi.fn(async () => {});
     const probeVectorAvailability = vi.fn(async () => {
