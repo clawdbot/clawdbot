@@ -26,6 +26,13 @@ function unknownActivityMethodError() {
   });
 }
 
+function unknownRunInspectMethodError() {
+  return Object.assign(new Error("unknown method: audit.run.inspect"), {
+    name: "GatewayClientRequestError",
+    gatewayCode: "INVALID_REQUEST",
+  });
+}
+
 function oldGatewayUnknownMethodScopeError() {
   return Object.assign(new Error("missing scope: operator.admin"), {
     name: "GatewayClientRequestError",
@@ -306,5 +313,220 @@ describe("audit command gateway compatibility", () => {
 
     await expect(auditListCommand({ limit: "10" }, runtime)).rejects.toBe(error);
     expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("audit run explanation", () => {
+  beforeEach(() => {
+    callGateway.mockReset();
+    vi.mocked(runtime.log).mockClear();
+  });
+
+  it("rejects --execution without --explain before querying the Gateway", async () => {
+    await expect(auditListCommand({ executionId: "execution-1" }, runtime)).rejects.toThrow(
+      "--execution requires --explain",
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("requires one exact run and keeps decision queries bounded", async () => {
+    await expect(auditListCommand({ explain: true }, runtime)).rejects.toThrow(
+      "exactly one of --run <id> or --execution <id>",
+    );
+    await expect(
+      auditListCommand({ explain: true, runId: "run-1", executionId: "execution-1" }, runtime),
+    ).rejects.toThrow("exactly one");
+    await expect(
+      auditListCommand({ explain: true, runId: "run-1", agentId: "main" }, runtime),
+    ).rejects.toThrow("remove activity-list filters");
+    expect(testApi.parseAuditDecisionLimit(undefined)).toBe(50);
+    expect(testApi.parseAuditDecisionLimit("100")).toBe(100);
+    expect(() => testApi.parseAuditDecisionLimit("101")).toThrow("with --explain");
+    expect(testApi.parseAuditExecutionLimit("50")).toBe(50);
+    expect(() => testApi.parseAuditExecutionLimit("51")).toThrow("run discovery");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("queries audit.run.inspect and renders all identity fields with explicit state", async () => {
+    const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
+    callGateway.mockResolvedValue({
+      schemaVersion: 1,
+      run: { runId: "run-1", executionId: "execution-1", status: "known" },
+      identity: {
+        state: "present",
+        context: {
+          schemaVersion: 1,
+          contextId: "context-1",
+          executionId: "execution-1",
+          runId: "run-1",
+          createdAt: 1,
+          trustDomain: { kind: "gateway-cell", domainRef: hmacRef, state: "present" },
+          invoker: { state: "absent" },
+          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+          agentPrincipal: { kind: "agent", domainRef: hmacRef, principalRef: "main" },
+          agentDefinition: { definitionRef: "main", state: "present" },
+          runtimeInstance: { runtimeRef: hmacRef, kind: "embedded", state: "present" },
+          applicableGrants: [],
+          assurance: [
+            {
+              kind: "runtime-binding",
+              evidenceRef: hmacRef,
+              strength: "boundary-verified",
+            },
+          ],
+          coverageState: "unattributed",
+          missingEvidence: ["invoker.principal"],
+        },
+      },
+      decisions: [
+        {
+          schemaVersion: 1,
+          receiptId: "context-1:admission",
+          contextId: "context-1",
+          executionId: "execution-1",
+          runId: "run-1",
+          occurredAt: 1,
+          action: { family: "run", operation: "admission" },
+          decision: {
+            outcome: "not-applicable",
+            reasonCode: "run_admission_identity_not_evaluated",
+          },
+          enforcement: {
+            coverageState: "unattributed",
+            policyRefs: [],
+            grantRefs: [],
+            contextFieldsUsed: [],
+          },
+          source: {
+            owner: "agent-command",
+            recordRef: "context-1",
+            decisionBoundary: "agent-command.run-admission",
+          },
+          missingEvidence: ["invoker.principal"],
+          remediation: [{ code: "no_claim", text: "Treat this receipt as attribution only." }],
+        },
+      ],
+      coverage: { state: "unattributed", missingEvidence: ["invoker.principal"] },
+    });
+
+    await auditListCommand({ explain: true, runId: "run-1", cursor: "1", limit: "25" }, runtime);
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "audit.run.inspect",
+      params: {
+        runId: "run-1",
+        executionCursor: "1",
+        executionLimit: 25,
+        decisionCursor: "1",
+        decisionLimit: 25,
+      },
+    });
+    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    for (const label of [
+      "Trust domain [present]",
+      "Invoker [absent]",
+      "Ingress [present]",
+      "Agent principal [present]",
+      "Agent definition [present]",
+      "Runtime instance [present]",
+      "Represented subject [absent]",
+      "Sponsor [absent]",
+      "Applicable grants [absent]",
+      "Assurance [present]",
+      "Parent [absent]",
+    ]) {
+      expect(output).toContain(label);
+    }
+    expect(output).toContain("not-applicable");
+    expect(output).toContain("run_admission_identity_not_evaluated");
+  });
+
+  it("renders ambiguous run discovery and selects an exact execution", async () => {
+    callGateway.mockResolvedValueOnce({
+      schemaVersion: 1,
+      run: { runId: "session-run", status: "known" },
+      identity: {
+        state: "ambiguous",
+        reasonCode: "execution_selection_required",
+        candidates: [
+          { executionId: "execution-1", contextId: "context-1", createdAt: 1 },
+          { executionId: "execution-2", contextId: "context-2", createdAt: 2 },
+        ],
+        missingEvidence: ["execution.selection"],
+        remediation: [
+          {
+            code: "select_execution_id",
+            text: "Select one candidate with openclaw audit --execution <id> --explain.",
+          },
+        ],
+      },
+      decisions: [],
+      coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
+    });
+
+    await auditListCommand({ explain: true, runId: "session-run" }, runtime);
+    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    expect(output).toContain("Candidate: execution-1");
+    expect(output).toContain("--execution <id> --explain");
+
+    callGateway.mockReset();
+    callGateway.mockResolvedValue({
+      schemaVersion: 1,
+      run: { runId: "session-run", executionId: "execution-2", status: "unknown" },
+      identity: {
+        state: "unknown",
+        reasonCode: "execution_not_found",
+        missingEvidence: ["identity.context"],
+        remediation: [{ code: "verify_execution_id", text: "Verify the exact execution id." }],
+      },
+      decisions: [],
+      coverage: { state: "unknown", missingEvidence: ["identity.context"] },
+    });
+    await auditListCommand({ explain: true, executionId: "execution-2", json: true }, runtime);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "audit.run.inspect",
+      params: { executionId: "execution-2", decisionLimit: 50 },
+    });
+  });
+
+  it("renders expired identity as unsupported without context fields or decisions", async () => {
+    callGateway.mockResolvedValue({
+      schemaVersion: 1,
+      run: { runId: "expired-run", status: "known" },
+      identity: {
+        state: "unsupported",
+        reasonCode: "identity_context_unavailable",
+        missingEvidence: ["identity.context"],
+        remediation: [
+          {
+            code: "run_again_after_expiry",
+            text: "This run's identity context is outside the 30-day retention window; run the operation again to record a new context.",
+          },
+        ],
+      },
+      decisions: [],
+      coverage: { state: "unsupported", missingEvidence: ["identity.context"] },
+    });
+
+    await auditListCommand({ explain: true, runId: "expired-run" }, runtime);
+
+    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    expect(output).toContain("Ingress [unsupported]");
+    expect(output).toContain("none [absent]");
+    expect(output).toContain("outside the 30-day retention window");
+    expect(output).not.toContain("Context:");
+    expect(output).not.toContain("run_admission_identity_not_evaluated");
+  });
+
+  it("returns an explicit upgrade state from an older Gateway", async () => {
+    callGateway.mockRejectedValue(unknownRunInspectMethodError());
+
+    await auditListCommand({ explain: true, runId: "old-run", json: true }, runtime);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    expect(output).toContain('"state": "unsupported"');
+    expect(output).toContain("gateway_upgrade_required");
+    expect(output).toContain("upgrade_gateway");
   });
 });

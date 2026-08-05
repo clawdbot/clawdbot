@@ -19,6 +19,7 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
+import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
 import {
   findOpenClawStateDatabaseSchemaMigrationRequiredError,
   OpenClawStateDatabaseSchemaMigrationRequiredError,
@@ -56,6 +57,16 @@ let canonicalStateDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
+}
+
+function createInitialStateSchemaShape() {
+  const shape = createSqliteSchemaShapeFromSql(
+    new URL("./openclaw-state-schema.sql", import.meta.url),
+  );
+  for (const tableName of FIRST_USE_STATE_TABLES) {
+    delete shape[tableName];
+  }
+  return shape;
 }
 
 function expectStateSchemaMigrationRequired(
@@ -1076,9 +1087,12 @@ describe("openclaw state database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(collectSqliteSchemaShape(database.db)).toEqual(
-      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
-    );
+    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     expect(
       database.db
@@ -1187,9 +1201,7 @@ INSERT INTO device_identities VALUES (
       updated_at_ms: 20,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(database.db)).toEqual(
-      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
-    );
+    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
   });
 
   it("adopts a canonical native PortGuardian seed without losing records", () => {
@@ -1226,9 +1238,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       timestamp: 42.5,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(database.db)).toEqual(
-      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
-    );
+    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
   });
 
   it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
@@ -3404,9 +3414,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
     const databasePaths = runConcurrentSchemaProbe({ mode: "upgrade", moduleUrl, rootDir });
-    const expectedShape = createSqliteSchemaShapeFromSql(
-      new URL("./openclaw-state-schema.sql", import.meta.url),
-    );
+    const expectedShape = createInitialStateSchemaShape();
     const { DatabaseSync } = requireNodeSqlite();
 
     expect(databasePaths).toHaveLength(1);
@@ -3438,9 +3446,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
     const databasePaths = runConcurrentSchemaProbe({ mode: "fresh", moduleUrl, rootDir });
-    const expectedShape = createSqliteSchemaShapeFromSql(
-      new URL("./openclaw-state-schema.sql", import.meta.url),
-    );
+    const expectedShape = createInitialStateSchemaShape();
     const { DatabaseSync } = requireNodeSqlite();
 
     expect(databasePaths).toHaveLength(1);

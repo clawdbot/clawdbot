@@ -2934,6 +2934,11 @@ describe("ci workflow guards", () => {
     expect(warmerSource).toContain('"agentic-agents-embedded"');
     expect(warmerSource).toContain('"agentic-gateway-methods"');
     expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
+    expect(warmerSource).toContain("const groups = configs.map((config) => ({");
+    expect(warmerSource).toContain("configs: [config]");
+    expect(warmerSource).toContain("`OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`");
+    expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-actions-cache": "true",
@@ -2949,6 +2954,45 @@ describe("ci workflow guards", () => {
     expect(warmStep.if).toBeUndefined();
     expect(maintainStoreStep).toBeUndefined();
     expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
+
+    const seedRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cache-seed-"));
+    try {
+      const envPath = path.join(seedRoot, "github-env");
+      const result = runWorkflowShellScript(seedStep.run, {
+        env: {
+          ...process.env,
+          GITHUB_ENV: envPath,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const seedEnv = Object.fromEntries(
+        readFileSync(envPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      const serializedGroups = seedEnv.OPENCLAW_NODE_TEST_GROUPS_JSON;
+      if (!serializedGroups) {
+        throw new Error("cache warmer did not export OPENCLAW_NODE_TEST_GROUPS_JSON");
+      }
+      const groups = JSON.parse(serializedGroups) as Array<{
+        configs: string[];
+        shard_name: string;
+      }>;
+      expect(groups.length).toBeGreaterThan(1);
+      expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+      expect(new Set(groups.flatMap((group) => group.configs)).size).toBe(groups.length);
+      expect(groups.every((group) => group.shard_name === `cache-warm:${group.configs[0]}`)).toBe(
+        true,
+      );
+      expect(seedEnv.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
+      expect(seedEnv).not.toHaveProperty("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    } finally {
+      rmSync(seedRoot, { force: true, recursive: true });
+    }
 
     const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
     try {
@@ -4778,7 +4822,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
-  it("parallelizes gateway watch only on the large self-hosted build runner", () => {
+  it("parallelizes gateway watch only on the large self-hosted runner and isolates TUI PTY", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const builtArtifactChecks = buildArtifactSteps.find(
@@ -4798,8 +4842,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run).toContain(
       'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
+    const firstWait = run.indexOf("\nwait_checks\n");
+    const hostedGatewayWatch = run.indexOf(
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
+    );
+    const tuiPty = run.indexOf('if [ "$RUN_TUI_PTY" = "true" ]; then');
+    const hostedGatewayWait = run.indexOf("\n  wait_checks\n", hostedGatewayWatch);
+    const tuiPtyWait = run.indexOf("\n  wait_checks\n", tuiPty);
+    expect(firstWait).toBeGreaterThan(run.indexOf('start_check "core-support-boundary"'));
+    expect(hostedGatewayWatch).toBeGreaterThan(firstWait);
+    expect(hostedGatewayWait).toBeGreaterThan(hostedGatewayWatch);
+    expect(tuiPty).toBeGreaterThan(hostedGatewayWait);
+    expect(tuiPtyWait).toBeGreaterThan(tuiPty);
     expect(run).toContain("wait_checks()");
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(2);
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(3);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {

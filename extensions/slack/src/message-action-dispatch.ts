@@ -172,15 +172,12 @@ export async function handleSlackMessageAction(params: {
     const messageId = readStringParam(actionParams, "messageId", {
       required: true,
     });
-    const limit = readPositiveIntegerParam(actionParams, "limit", {
-      message: "limit must be a positive integer.",
-    });
     return await invoke(
       {
         action: "reactions",
         channelId: resolveChannelId(),
         messageId,
-        limit,
+        limit: actionParams.limit,
         accountId,
       },
       cfg,
@@ -189,13 +186,10 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "read") {
-    const limit = readPositiveIntegerParam(actionParams, "limit", {
-      message: "limit must be a positive integer.",
-    });
     const readAction: Record<string, unknown> = {
       action: "readMessages",
       channelId: resolveChannelId(),
-      limit,
+      limit: actionParams.limit,
       before: readStringParam(actionParams, "before"),
       after: readStringParam(actionParams, "after"),
       messageId: readStringParam(actionParams, "messageId"),

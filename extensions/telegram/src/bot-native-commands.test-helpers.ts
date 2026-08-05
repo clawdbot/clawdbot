@@ -180,6 +180,10 @@ export function createNativeCommandsHarness(params?: {
     getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
+    sendMessageTelegram: vi.fn(async (_to, text) => {
+      await sendMessage(100, text, {});
+      return { messageId: "999", chatId: "100" };
+    }),
   };
   const bot = {
     api: {
