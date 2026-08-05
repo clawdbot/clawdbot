@@ -39,6 +39,7 @@ import {
   createQaSuiteTransportAdapter,
   buildQaSuiteRuntimeMetrics,
   captureGatewayHeapSnapshotCheckpoint,
+  isQaSuiteNestedRun,
   requireQaSuiteStartLab,
   resolveQaSuiteTransportReadyTimeoutMs,
   runQaFlowSuiteCleanupPlan,
@@ -107,6 +108,9 @@ export async function runQaFlowSuiteStandard(
   let preserveGatewayRuntimeDir: string | undefined;
   let runFailed = false;
   let runError: unknown;
+  let result: QaSuiteResult | undefined;
+  let completionProgress: string | undefined;
+  let evidenceWritten = false;
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
     const activeMock = await startQaProviderServer(providerMode, {
@@ -267,7 +271,7 @@ export async function runQaFlowSuiteStandard(
       };
       const scenarioRetryCount =
         scenario.execution.kind === "flow" ? scenario.execution.retryCount : undefined;
-      let result: QaSuiteScenarioResult =
+      let scenarioResult: QaSuiteScenarioResult =
         params?.captureRuntimeParityCell || scenarioRetryCount === 0
           ? await runSelectedScenario()
           : await runQaScenarioWithFlakeRetry(runSelectedScenario, () =>
@@ -276,19 +280,19 @@ export async function runQaFlowSuiteStandard(
                 `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
               ),
             );
-      if (result.status === "pass" && params?.roundTripProbe?.scenarioId === scenario.id) {
+      if (scenarioResult.status === "pass" && params?.roundTripProbe?.scenarioId === scenario.id) {
         const probeResult = await runQaSuiteRoundTripProbe({
           probe: params.roundTripProbe,
           transport,
         });
         const probePassed = probeResult.passed >= params.roundTripProbe.count;
-        result = {
-          ...result,
+        scenarioResult = {
+          ...scenarioResult,
           status: probePassed ? "pass" : "fail",
-          details: [result.details, probeResult.details].filter(Boolean).join(" | "),
+          details: [scenarioResult.details, probeResult.details].filter(Boolean).join(" | "),
           timing: probeResult.timing,
           steps: [
-            ...result.steps,
+            ...scenarioResult.steps,
             {
               name: "Round-trip samples",
               status: probePassed ? "pass" : "fail",
@@ -306,17 +310,17 @@ export async function runQaFlowSuiteStandard(
         });
       }
       sampleGatewayProcessRss(`scenario:${scenario.id}:finish`);
-      scenarios.push(result);
+      scenarios.push(scenarioResult);
       writeQaSuiteProgress(
         progressEnabled,
-        `scenario ${result.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
+        `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
       );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
         name: scenario.title,
-        status: result.status,
-        details: result.details,
-        steps: result.steps,
+        status: scenarioResult.status,
+        details: scenarioResult.details,
+        steps: scenarioResult.steps,
         startedAt: liveScenarioOutcomes[index]?.startedAt,
         finishedAt: new Date().toISOString(),
       };
@@ -326,7 +330,7 @@ export async function runQaFlowSuiteStandard(
         startedAt: startedAt.toISOString(),
         scenarios: [...liveScenarioOutcomes],
       });
-      if (params?.failFast === true && result.status === "fail") {
+      if (params?.failFast === true && scenarioResult.status === "fail") {
         break;
       }
     }
@@ -407,12 +411,9 @@ export async function runQaFlowSuiteStandard(
       generatedAt: finishedAt.toISOString(),
     } satisfies QaLabLatestReport;
     lab.setLatestReport(latestReport);
-    writeQaSuiteProgress(
-      progressEnabled,
-      `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`,
-    );
-
-    return {
+    completionProgress = `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`;
+    evidenceWritten = evidence !== undefined && (params?.writeEvidenceFile ?? true);
+    result = {
       outputDir,
       evidence,
       evidencePath,
@@ -433,7 +434,7 @@ export async function runQaFlowSuiteStandard(
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     const activeGateway = gateway;
     const activeMock = mock;
-    const cleanupErrors = await runQaFlowSuiteCleanupPlan({
+    const cleanupFailures = await runQaFlowSuiteCleanupPlan({
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
@@ -457,6 +458,13 @@ export async function runQaFlowSuiteStandard(
             }
           },
     });
-    throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
   }
+  if (!result || !completionProgress) {
+    throw new Error("QA suite completed without terminal result metadata");
+  }
+  if (!params?.captureRuntimeParityCell && !isQaSuiteNestedRun(params)) {
+    writeQaSuiteProgress(progressEnabled, completionProgress);
+  }
+  return result;
 }

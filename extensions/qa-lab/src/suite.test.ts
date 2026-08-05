@@ -7,6 +7,7 @@ import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summa
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import type { QaSuiteResult } from "./suite-types.js";
 import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
@@ -39,7 +40,8 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 describe("qa suite", () => {
   it("runs the production cleanup plan in dependency order after a failure", async () => {
     const calls: string[] = [];
-    const failure = new Error("transport close failed");
+    const transportFailure = new Error("transport close failed");
+    const providerFailure = new Error("provider close failed");
     const step = (name: string, error?: Error) => async () => {
       calls.push(name);
       if (error) {
@@ -47,13 +49,13 @@ describe("qa suite", () => {
       }
     };
 
-    const errors = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+    const failures = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
       closeWebSessions: step("web sessions"),
-      cleanupTransportBeforeGatewayStop: step("transport before gateway", failure),
+      cleanupTransportBeforeGatewayStop: step("transport before gateway", transportFailure),
       cleanupTransportAfterGatewayStop: step("transport after gateway"),
       stopGateway: step("gateway"),
       disposeAgentHarnesses: step("agent harnesses"),
-      stopProvider: step("provider"),
+      stopProvider: step("provider", providerFailure),
       finishLab: step("lab"),
     });
 
@@ -66,19 +68,97 @@ describe("qa suite", () => {
       "provider",
       "lab",
     ]);
-    expect(errors).toEqual([failure]);
+    expect(failures).toEqual([
+      { phase: "transport before gateway stop", error: transportFailure },
+      { phase: "provider stop", error: providerFailure },
+    ]);
   });
 
   it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
     const runError = new Error("gateway infrastructure failed");
+    const cleanupError = new Error("transport cleanup failed");
 
-    expect(() =>
+    let thrown: unknown;
+    try {
       qaSuiteProgressTesting.throwQaSuiteCleanupErrors({
-        cleanupErrors: [new Error("transport cleanup failed")],
+        cleanupFailures: [{ phase: "transport before gateway stop", error: cleanupError }],
         runFailed: true,
         runError,
-      }),
-    ).toThrow(expect.objectContaining({ cause: runError }));
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      cause: runError,
+      errors: [runError, cleanupError],
+    });
+    expect((thrown as Error).message.split("\n")[0]).toBe("QA suite and cleanup failed");
+    expect((thrown as Error).message).toContain(
+      "failed cleanup phases: transport before gateway stop: transport cleanup failed",
+    );
+  });
+
+  it("reports cleanup failure before scenarios completed when no result exists", () => {
+    const cleanupError = new Error("stop failed");
+    let thrown: unknown;
+    try {
+      qaSuiteProgressTesting.throwQaSuiteCleanupErrors({
+        cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
+        runFailed: false,
+        runError: undefined,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as Error).message.split("\n")[0]).toBe(
+      "QA suite cleanup failed before scenarios completed",
+    );
+    expect((thrown as Error).cause).toBe(cleanupError);
+  });
+
+  it("reports completed counts, labeled failures, and only written artifact paths", () => {
+    const result = {
+      outputDir: "/qa-output\nretained",
+      evidencePath: "/qa-output/qa-evidence.json",
+      reportPath: "/qa-output/qa-suite-report.md",
+      summaryPath: "/qa-output/qa-suite-summary.json",
+      report: "",
+      scenarios: [
+        { name: "pass", status: "pass", steps: [] },
+        { name: "fail", status: "fail", steps: [] },
+        { name: "skip", status: "skip", steps: [] },
+      ],
+      watchUrl: "http://127.0.0.1:43123",
+    } satisfies QaSuiteResult;
+
+    let thrown: unknown;
+    try {
+      qaSuiteProgressTesting.throwQaSuiteCleanupErrors({
+        cleanupFailures: [
+          { phase: "agent\nharnesses", error: new Error("dispose failed") },
+          { phase: "lab stop", error: new Error("stop failed") },
+        ],
+        runFailed: false,
+        runError: undefined,
+        result,
+        evidenceWritten: false,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as Error).message).toBe(
+      [
+        "QA scenarios completed, but cleanup failed",
+        "scenario counts: passed=1 failed=1 skipped=1 total=3",
+        "failed cleanup phases: agent harnesses: dispose failed; lab stop: stop failed",
+        "retained artifacts: output=/qa-output retained report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
+      ].join("\n"),
+    );
+    expect("cause" in (thrown as object)).toBe(false);
+    expect((thrown as Error).message).not.toContain("evidence=");
   });
 
   it("does not release transport credentials when gateway teardown fails", async () => {
@@ -91,7 +171,7 @@ describe("qa suite", () => {
       }
     };
 
-    const errors = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+    const failures = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
       cleanupTransportBeforeGatewayStop: step("transport before gateway"),
       cleanupTransportAfterGatewayStop: step("transport after gateway"),
       stopGateway: step("gateway", gatewayFailure),
@@ -100,7 +180,7 @@ describe("qa suite", () => {
     });
 
     expect(calls).toEqual(["transport before gateway", "gateway", "agent harnesses", "lab"]);
-    expect(errors).toEqual([gatewayFailure]);
+    expect(failures).toEqual([{ phase: "gateway stop", error: gatewayFailure }]);
   });
 
   it("rejects unsupported transport ids before starting the lab", async () => {

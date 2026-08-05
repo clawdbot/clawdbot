@@ -108,6 +108,8 @@ export async function runQaRuntimeParitySuite(params: {
   let runFailed = false;
   let runError: unknown;
   let parentTransportCleaned = false;
+  let result: QaSuiteResult | undefined;
+  let evidenceWritten = false;
   try {
     if (params.channelDriver === "live") {
       // The parent only contributes aggregate metadata; release its exclusive
@@ -217,16 +219,16 @@ export async function runQaRuntimeParitySuite(params: {
           },
         });
 
-        const result = buildRuntimeParityScenarioResult({
+        const parityScenarioResult = buildRuntimeParityScenarioResult({
           scenarioName: scenario.title,
           result: parity,
         });
         liveScenarioOutcomes[index] = {
           id: scenario.id,
           name: scenario.title,
-          status: result.status,
-          details: result.details,
-          steps: result.steps,
+          status: parityScenarioResult.status,
+          details: parityScenarioResult.details,
+          steps: parityScenarioResult.steps,
           startedAt: liveScenarioOutcomes[index]?.startedAt,
           finishedAt: new Date().toISOString(),
         };
@@ -238,9 +240,9 @@ export async function runQaRuntimeParitySuite(params: {
         });
         writeQaSuiteProgress(
           params.progressEnabled,
-          `runtime pair ${result.status} (${index + 1}/${params.selectedScenarios.length}): ${scenarioIdForLog}`,
+          `runtime pair ${parityScenarioResult.status} (${index + 1}/${params.selectedScenarios.length}): ${scenarioIdForLog}`,
         );
-        return result;
+        return parityScenarioResult;
       },
       {
         startStaggerMs: resolveQaSuiteWorkerStartStaggerMs(params.concurrency),
@@ -285,7 +287,8 @@ export async function runQaRuntimeParitySuite(params: {
       finishedAt: finishedAt.toISOString(),
       scenarios: [...liveScenarioOutcomes],
     });
-    return {
+    evidenceWritten = evidence !== undefined && (params.writeEvidenceFile ?? true);
+    result = {
       outputDir: params.outputDir,
       evidence,
       evidencePath,
@@ -300,10 +303,17 @@ export async function runQaRuntimeParitySuite(params: {
     runError = error;
     throw error;
   } finally {
-    const cleanupErrors = await runQaSuiteCleanupSteps([
-      ...(!parentTransportCleaned ? [() => transportFactoryResult.cleanupWithoutGateway()] : []),
-      ...(ownsLab ? [() => lab.stop()] : []),
+    const cleanupFailures = await runQaSuiteCleanupSteps([
+      ...(!parentTransportCleaned
+        ? [{ phase: "parent transport", run: () => transportFactoryResult.cleanupWithoutGateway() }]
+        : []),
+      ...(ownsLab ? [{ phase: "lab stop", run: () => lab.stop() }] : []),
     ]);
-    throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
   }
+  if (!result) {
+    throw new Error("QA runtime parity suite completed without a result");
+  }
+  writeQaSuiteProgress(params.progressEnabled, "run complete");
+  return result;
 }

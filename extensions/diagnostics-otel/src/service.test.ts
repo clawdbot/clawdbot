@@ -229,12 +229,20 @@ const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
 const OTEL_TEST_USERINFO = ["operator", "example-fixture"].join(":");
 const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
 const ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
-const ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
 const ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
 const ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
+const OTEL_PROTOCOL_ENV_KEYS = [
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+] as const;
+const ORIGINAL_OTEL_PROTOCOL_ENV = Object.fromEntries(
+  OTEL_PROTOCOL_ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof OTEL_PROTOCOL_ENV_KEYS)[number], string | undefined>;
 const OTEL_CERT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
@@ -583,7 +591,9 @@ describe("diagnostics-otel service", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     delete process.env.OPENCLAW_OTEL_PRELOADED;
-    delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
+    for (const key of OTEL_PROTOCOL_ENV_KEYS) {
+      delete process.env[key];
+    }
     delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
@@ -628,10 +638,13 @@ describe("diagnostics-otel service", () => {
     } else {
       process.env.OTEL_EXPORTER_OTLP_ENDPOINT = ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT;
     }
-    if (ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL === undefined) {
-      delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
-    } else {
-      process.env.OTEL_EXPORTER_OTLP_PROTOCOL = ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL;
+    for (const key of OTEL_PROTOCOL_ENV_KEYS) {
+      const value = ORIGINAL_OTEL_PROTOCOL_ENV[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
     if (ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN === undefined) {
       delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
@@ -1292,6 +1305,9 @@ describe("diagnostics-otel service", () => {
 
   test("keeps explicit HTTP exporters canonical when ambient protocol is gRPC", async () => {
     process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/json";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "grpc";
     const { ctx } = await startOtelService({
       protocol: "http/protobuf",
       traces: true,
@@ -1352,13 +1368,198 @@ describe("diagnostics-otel service", () => {
       { signal: "metrics", status: "failure", reason: "unsupported_protocol" },
       { signal: "logs", status: "failure", reason: "unsupported_protocol" },
     ]);
-    expect(ctx.logger.warn).toHaveBeenCalledWith("diagnostics-otel: unsupported protocol grpc");
+    expect(vi.mocked(ctx.logger.warn).mock.calls).toEqual(
+      ["traces", "metrics", "logs"].map((signal) => [
+        `diagnostics-otel: unsupported ${signal} protocol grpc; OTLP export disabled`,
+      ]),
+    );
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(metricExporterCtor).not.toHaveBeenCalled();
     expect(logExporterCtor).not.toHaveBeenCalled();
     expect(sdkStart).not.toHaveBeenCalled();
 
     unsubscribe();
+  });
+
+  test("uses signal protocol overrides without disabling supported siblings", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "http/protobuf";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/json";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "http/protobuf";
+
+    const { ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      configure: (context) => {
+        delete context.config.diagnostics?.otel?.protocol;
+      },
+    });
+
+    expect(traceExporterCtor).toHaveBeenCalledTimes(1);
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).toHaveBeenCalledTimes(1);
+    expect(sdkStart).toHaveBeenCalledTimes(1);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: unsupported metrics protocol http/json; OTLP export disabled",
+    );
+    expect(
+      events.map((event) => ({
+        signal: event.signal,
+        status: event.status,
+        reason: event.reason,
+      })),
+    ).toEqual([
+      { signal: "metrics", status: "failure", reason: "unsupported_protocol" },
+      { signal: "traces", status: "started", reason: "configured" },
+      { signal: "logs", status: "started", reason: "configured" },
+    ]);
+
+    unsubscribe();
+  });
+
+  test("keeps rejected traces disabled when metrics still start NodeSDK", async () => {
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/protobuf";
+
+    const { ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: false,
+      configure: (context) => {
+        delete context.config.diagnostics?.otel?.protocol;
+      },
+    });
+
+    const options = mockCallArg(sdkCtor, 0) as {
+      metricReaders?: unknown[];
+      spanProcessors?: unknown[];
+    };
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).toHaveBeenCalledTimes(1);
+    expect(options.spanProcessors).toEqual([]);
+    expect(options.metricReaders).toHaveLength(1);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: unsupported traces protocol grpc; OTLP export disabled",
+    );
+  });
+
+  test("keeps stdout logs active when the OTLP branch of both is unsupported", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "grpc";
+    const capture = captureStdoutWrites();
+
+    try {
+      const { ctx } = await startOtelService({
+        traces: false,
+        metrics: false,
+        logs: true,
+        logsExporter: "both",
+        configure: (context) => {
+          delete context.config.diagnostics?.otel?.protocol;
+        },
+      });
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "INFO",
+        message: "stdout fallback log",
+      });
+      await flushDiagnosticEvents();
+
+      expect(logExporterCtor).not.toHaveBeenCalled();
+      expect(parseSingleStdoutDiagnosticLogLine(capture.writes).body).toBe("log");
+      expect(ctx.logger.warn).toHaveBeenCalledWith(
+        "diagnostics-otel: unsupported logs protocol grpc; OTLP export disabled",
+      );
+      expect(ctx.logger.info).toHaveBeenCalledWith(
+        "diagnostics-otel: logs exporter enabled (stdout JSONL)",
+      );
+      expect(
+        events.map((event) => ({
+          signal: event.signal,
+          status: event.status,
+          reason: event.reason,
+        })),
+      ).toEqual([
+        { signal: "logs", status: "failure", reason: "unsupported_protocol" },
+        { signal: "logs", status: "started", reason: "configured" },
+      ]);
+    } finally {
+      capture.spy.mockRestore();
+      unsubscribe();
+    }
+  });
+
+  test("does not validate externally owned trace and metric protocols", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "http/json";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "grpc";
+
+    const { ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: false,
+      configure: (context) => {
+        delete context.config.diagnostics?.otel?.protocol;
+      },
+    });
+
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(ctx.logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("unsupported"));
+    expect(
+      events.map((event) => ({
+        signal: event.signal,
+        status: event.status,
+        reason: event.reason,
+      })),
+    ).toEqual([
+      { signal: "traces", status: "started", reason: "configured" },
+      { signal: "metrics", status: "started", reason: "configured" },
+    ]);
+
+    unsubscribe();
+  });
+
+  test("ignores blank signal protocol overrides in favor of the shared fallback", async () => {
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = " \t ";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "\u2000";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "\ufeff";
+
+    await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      configure: (context) => {
+        delete context.config.diagnostics?.otel?.protocol;
+      },
+    });
+
+    expect(traceExporterCtor).toHaveBeenCalledTimes(1);
+    expect(metricExporterCtor).toHaveBeenCalledTimes(1);
+    expect(logExporterCtor).toHaveBeenCalledTimes(1);
   });
 
   test("starts stdout-only logs when OTLP protocol env override is unsupported", async () => {
@@ -1404,7 +1605,7 @@ describe("diagnostics-otel service", () => {
       name: "preserves nonblank OTLP protocol env overrides",
       value: " http/protobuf ",
       exporterCalls: 0,
-      warning: "diagnostics-otel: unsupported protocol  http/protobuf ",
+      warning: " http/protobuf ",
     },
   ])("$name", async ({ value, exporterCalls, warning }) => {
     process.env.OTEL_EXPORTER_OTLP_PROTOCOL = value;
@@ -1419,11 +1620,13 @@ describe("diagnostics-otel service", () => {
     expect(traceExporterCtor).toHaveBeenCalledTimes(exporterCalls);
     expect(metricExporterCtor).toHaveBeenCalledTimes(exporterCalls);
     if (warning) {
-      expect(ctx.logger.warn).toHaveBeenCalledWith(warning);
-    } else {
-      expect(ctx.logger.warn).not.toHaveBeenCalledWith(
-        "diagnostics-otel: unsupported protocol    ",
+      expect(vi.mocked(ctx.logger.warn).mock.calls).toEqual(
+        ["traces", "metrics"].map((signal) => [
+          `diagnostics-otel: unsupported ${signal} protocol ${warning}; OTLP export disabled`,
+        ]),
       );
+    } else {
+      expect(ctx.logger.warn).not.toHaveBeenCalled();
     }
   });
 

@@ -46,6 +46,10 @@ const ENDPOINT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
   "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
   "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_KEY",
@@ -326,6 +330,76 @@ test("uses real signal-specific exporter endpoints verbatim", async () => {
 
     expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
       new Set(["/custom-traces?tenant=red", "/custom-metrics/", "/v1/traces"]),
+    );
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
+
+test("exports only signals whose resolved protocol is supported", async () => {
+  const receiver = await startOtlpReceiver();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
+  process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "http/protobuf";
+  process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/json";
+  process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "http/protobuf";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: true,
+    logs: true,
+    configure: (serviceContext) => {
+      delete serviceContext.config.diagnostics!.otel!.protocol;
+    },
+  });
+
+  try {
+    await emitRealSdkSignals();
+    await service.stop?.(ctx);
+
+    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
+      new Set(["/v1/traces", "/v1/logs"]),
+    );
+    expect(
+      receiver.requests.every(
+        (request) => request.method === "POST" && request.contentType === "application/x-protobuf",
+      ),
+    ).toBe(true);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: unsupported metrics protocol http/json; OTLP export disabled",
+    );
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
+
+test("does not auto-enable rejected traces when metrics start the real SDK", async () => {
+  const receiver = await startOtlpReceiver();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
+  process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
+  process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/protobuf";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: true,
+    logs: false,
+    configure: (serviceContext) => {
+      delete serviceContext.config.diagnostics!.otel!.protocol;
+    },
+  });
+
+  try {
+    await emitRealSdkSignals();
+    await service.stop?.(ctx);
+
+    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
+      new Set(["/v1/metrics"]),
+    );
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: unsupported traces protocol grpc; OTLP export disabled",
     );
   } finally {
     await service.stop?.(ctx);
