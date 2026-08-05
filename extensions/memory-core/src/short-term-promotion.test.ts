@@ -45,6 +45,7 @@ import {
   repairShortTermPromotionArtifacts,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
+import { isContaminatedDreamingSnippet } from "./short-term-promotion-utils.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -588,6 +589,31 @@ describe("short-term promotion", () => {
     const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
     expect(store.version).toBe(1);
     expect(store.entries).toEqual({});
+  });
+
+  it("classifies transient diagnostics and secrets as contaminated promotion snippets", () => {
+    const rejected = [
+      "Output Directory Path: /home/user/data/temp/feishu_project_issues/7058806450",
+      "summary.md: **Not generated.** The pipeline aborted before reaching the summary step because no log files were downloaded.",
+      "Worktree: **Not created.** `.monorepo_worktree.json` does not exist after step 6/9.",
+      "| Method | Error | Root Cause | | drfile download | [400] incorrect username or password | password=*** placeholder |",
+      "Error: boom\n    at run (/tmp/openclaw-run/index.js:1:2)",
+      "2026-08-05T03:00:00Z ERROR failed to download logs",
+      "```json\n{\"error\":\"timeout\"}\n```",
+      "OPENAI_API_KEY=sk-proj_123456789abcdefghijklmnop",
+      "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghijklmnopqrstuvwxyz.123456789abcd",
+    ];
+    for (const snippet of rejected) {
+      expect(isContaminatedDreamingSnippet(snippet), snippet).toBe(true);
+    }
+
+    const retained = [
+      "User prefers concise status updates during long debugging work.",
+      "Analyze each driver case by downloading trip logs, creating a release worktree, and cross-checking logs with source code.",
+    ];
+    for (const snippet of retained) {
+      expect(isContaminatedDreamingSnippet(snippet), snippet).toBe(false);
+    }
   });
 
   it("ignores raw session and transcript snippets when recording short-term recalls", async (workspaceDir) => {

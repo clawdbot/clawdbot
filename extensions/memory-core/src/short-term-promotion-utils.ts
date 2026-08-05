@@ -30,6 +30,28 @@ const MEMORY_FLUSH_PROMPT_RE =
   /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
 const PROMOTION_SCORE_METADATA_RE =
   /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
+const SECRET_LIKE_PROMOTION_RE =
+  /(?:^|[^a-z0-9_])(?:sk-[a-z0-9_-]{12,}|ghp_[a-z0-9_]{12,}|api[_ -]?key|access[_ -]?token|auth[_ -]?token|secret|passwd|password\s*[=:]|token\s*[=:]|authorization\s*[=:]|bearer\s+[a-z0-9._-]{12,})/i;
+const PRIVATE_KEY_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+const JWT_LIKE_RE = /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\b/;
+const AWS_ACCESS_KEY_RE = /\bAKIA[0-9A-Z]{16}\b/;
+const TRANSIENT_ERROR_RE =
+  /\b(?:not generated|not created|pipeline aborted|exit code\s+\d+|http\s*\d{3}|stack trace|traceback|exception|unhandledpromiserejection|econnreset|etimedout|epipe|enoent|eacces|429 too many requests|5\d\d server error|all \d+ .* retries .* failed|attempt \d+\/\d+ failed|user account is locked|incorrect username or password|authentication failure)\b/i;
+const RAW_LOG_LINE_RE =
+  /^\s*(?:\[[^\]]+\]\s*)?(?:DEBUG|INFO|WARN|ERROR|TRACE)\b[:\s]|\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*\b(?:debug|info|warn|error|trace)\b/im;
+const STACK_FRAME_RE = /^\s*at\s+\S+\s+\(.+:\d+:\d+\)/m;
+const RAW_DUMP_RE = /```|^\s*[{[]\s*["'\w-]+["']?\s*[:=]|^\s*(?:\$|>|npm ERR!|pnpm ERR!|yarn error|curl: \(\d+\))/im;
+const LOW_VALUE_PROMOTION_LEAD_RE =
+  /^(?:output directory path|summary\.md:|worktree:|result:|error details|verdict|file state|what failed|what works)\b/i;
+const TEMP_OR_CACHE_PATH_RE =
+  /(?:^|\s)(?:\/tmp\/|\/var\/tmp\/|\/private\/var\/folders\/|\/home\/[^\s`]+\/data\/temp\/|[A-Za-z]:\\[^\s`]*\\AppData\\Local\\Temp\\)/;
+const PATH_CONTEXT_RE = /\b(?:output|directory|path|contents|file|logs?|temp|temporary)\b/i;
+const FAILURE_ARTIFACT_RE =
+  /\b(?:config\.ini|\.monorepo_worktree\.json|download_logs\.log|decompress_logs\.log|summary\.md)\b/i;
+const FAILURE_CONTEXT_RE =
+  /\b(?:failed|not generated|not created|password|token|error|aborted|download|auth)\b/i;
+const ERROR_TABLE_CONTEXT_RE =
+  /\b(?:failed|failure|error|root cause|status|result|check|method|download|auth|token|password)\b/i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
   frequency: 0.24,
@@ -156,6 +178,43 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
+function isLowValueLongTermMemorySnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  if (!snippet) {
+    return true;
+  }
+  if (
+    SECRET_LIKE_PROMOTION_RE.test(snippet) ||
+    PRIVATE_KEY_RE.test(raw) ||
+    JWT_LIKE_RE.test(raw) ||
+    AWS_ACCESS_KEY_RE.test(raw)
+  ) {
+    return true;
+  }
+  if (
+    TRANSIENT_ERROR_RE.test(snippet) ||
+    RAW_LOG_LINE_RE.test(raw) ||
+    STACK_FRAME_RE.test(raw) ||
+    RAW_DUMP_RE.test(raw)
+  ) {
+    return true;
+  }
+  const pipeCount = (snippet.match(/\|/g) ?? []).length;
+  if (pipeCount >= 8 && ERROR_TABLE_CONTEXT_RE.test(snippet)) {
+    return true;
+  }
+  if (LOW_VALUE_PROMOTION_LEAD_RE.test(snippet)) {
+    return true;
+  }
+  if (TEMP_OR_CACHE_PATH_RE.test(snippet) && PATH_CONTEXT_RE.test(snippet)) {
+    return true;
+  }
+  if (FAILURE_ARTIFACT_RE.test(snippet) && FAILURE_CONTEXT_RE.test(snippet)) {
+    return true;
+  }
+  return false;
+}
+
 export function isContaminatedDreamingSnippet(
   raw: string,
   opts: { allowTranscriptTurnSnippet?: boolean } = {},
@@ -163,6 +222,9 @@ export function isContaminatedDreamingSnippet(
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
+  }
+  if (isLowValueLongTermMemorySnippet(raw)) {
+    return true;
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
