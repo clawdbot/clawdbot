@@ -28,6 +28,7 @@ import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { buildFeishuPayloadCard } from "./outbound.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -46,7 +47,12 @@ import {
 } from "./reply-dispatcher-runtime-api.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  type CardHeaderConfig,
+} from "./send.js";
 import {
   FeishuStreamingFinalizationError,
   FeishuStreamingSession,
@@ -1272,6 +1278,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           : reply.text;
       const hasText = reply.hasText;
       const hasMedia = reply.hasMedia;
+      // Interactive/presentation replies (plugin bind approvals, exec
+      // approvals, command replies carrying buttons) must render as a Feishu
+      // card. The outbound push path already renders them via
+      // `buildFeishuPayloadCard`; the reply path used to forward only `text`
+      // and silently discard the buttons (#119616).
+      const presentationCard = buildFeishuPayloadCard({
+        payload: { ...payload, text: payloadText },
+        text: payloadText,
+        identity,
+      });
       const ttsSupplement = getReplyPayloadTtsSupplement(payload);
       const ttsTextAlreadyVisible = ttsSupplement?.visibleTextAlreadyDelivered === true;
       const hasVoiceMedia =
@@ -1341,6 +1357,41 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
       if (shouldDiscardStreamingPreview) {
         await discardStreamingPreview();
+      }
+
+      if (presentationCard) {
+        // Interactive content is delivered as one card; the fallback text lives
+        // inside it, so no text chunks are sent alongside. Discard any
+        // streaming preview first so the card is the single visible reply.
+        if (streaming?.isActive() || streamingStartPromise) {
+          await discardStreamingPreview();
+        }
+        deliveredResults.push(
+          createFeishuReplyDeliveryResult({
+            results: [
+              await sendCardFeishu({
+                cfg,
+                to: sendTarget,
+                card: presentationCard,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
+                accountId,
+              }),
+            ],
+            visibleReplySent: true,
+            content: text,
+            kind: "card",
+          }),
+        );
+        markVisibleReplySent();
+        if (info?.kind === "final") {
+          deliveredFinalTexts.add(text);
+        }
+        if (hasMedia) {
+          await collectMediaDelivery(payload);
+        }
+        return mergeFeishuReplyDeliveryResults(deliveredResults, text);
       }
 
       if (shouldDeliverText) {

@@ -24,6 +24,7 @@ const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
@@ -94,6 +95,7 @@ vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
+  sendCardFeishu: sendCardFeishuMock,
 }));
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -187,6 +189,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
+    sendCardFeishuMock.mockResolvedValue({ messageId: "om_card" });
     getGlobalHookRunnerMock.mockReturnValue(null);
 
     resolveFeishuAccountMock.mockReturnValue({
@@ -531,6 +534,72 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       to: "user:ou_sender",
       replyToMessageId: undefined,
     });
+  });
+
+  it("renders interactive replies as a button card instead of dropping the buttons", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+
+    const delivery = await options.deliver(
+      {
+        text: "Plugin bind request from acme",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Allow once", value: "allow-once", style: "primary" },
+                { label: "Deny", value: "deny", style: "danger" },
+              ],
+            },
+          ],
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const cardArgs = firstMockArg(sendCardFeishuMock, "card send params");
+    expect(cardArgs).toMatchObject({ to: "oc_chat" });
+    const serialized = JSON.stringify(cardArgs.card);
+    expect(serialized).toContain("Allow once");
+    expect(serialized).toContain("Deny");
+    expect(serialized).toContain("Plugin bind request from acme");
+    expect(delivery?.visibleReplySent).toBe(true);
+  });
+
+  it("renders presentation replies as a card with title and fallback text", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+
+    const delivery = await options.deliver(
+      {
+        text: "Fallback text",
+        presentation: {
+          title: "Approve?",
+          blocks: [{ type: "text", text: "Allow acme to read files?" }],
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const serialized = JSON.stringify(firstMockArg(sendCardFeishuMock, "card send params").card);
+    expect(serialized).toContain("Approve?");
+    expect(serialized).toContain("Allow acme to read files?");
+    expect(delivery?.visibleReplySent).toBe(true);
+  });
+
+  it("keeps plain text replies on the message path without a card", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
   });
 
   it("streams auto mode plain final text when streaming is enabled", async () => {
