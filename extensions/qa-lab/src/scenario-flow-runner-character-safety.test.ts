@@ -5,6 +5,24 @@ import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
 const characterScenarioIds = ["character-vibes-gollum", "character-vibes-c3po"] as const;
+const classifiedFailureReplies = [
+  {
+    failureName: "provider failure",
+    failureText: '⚠️ No API key found for provider "openai".',
+  },
+  {
+    failureName: "delivery failure",
+    failureText: "⚠️ ✉️ Message failed",
+  },
+  {
+    failureName: "missing tool failure",
+    failureText: "Read: AGENT.md\nEvidence snippet: Tool read not found\nStatus: blocked",
+  },
+  {
+    failureName: "internal coordination leak",
+    failureText: "checking thread context; then post a tight progress reply here.",
+  },
+] as const;
 
 function createCharacterScenarioApi(
   onWaitForOutboundMessage?: (state: ReturnType<typeof createQaBusState>) => void,
@@ -61,6 +79,39 @@ describe("character scenario transcript safety", () => {
       true,
     );
   });
+
+  it.each(
+    characterScenarioIds.flatMap((scenarioId) =>
+      classifiedFailureReplies.map((failure) => ({ scenarioId, ...failure })),
+    ),
+  )(
+    "rejects a $failureName after an actual reply in $scenarioId",
+    async ({ scenarioId, failureText }) => {
+      const state = createQaBusState();
+      const firstReply = "The build is green, and I am here.";
+      let waitCount = 0;
+
+      await expect(
+        runLoadedScenarioFlow(scenarioId, {
+          state,
+          api: createCharacterScenarioApi((currentState) => {
+            currentState.addOutboundMessage({
+              accountId: "qa-channel",
+              to: "dm:alice",
+              text: waitCount++ === 0 ? firstReply : failureText,
+            });
+          }),
+        }),
+      ).rejects.toThrow(failureText);
+
+      expect(
+        state
+          .getSnapshot()
+          .messages.filter((message) => message.direction === "outbound")
+          .map((message) => message.text),
+      ).toEqual([firstReply, failureText]);
+    },
+  );
 
   it.each(characterScenarioIds)(
     "rejects an entirely unanswered character conversation in %s",

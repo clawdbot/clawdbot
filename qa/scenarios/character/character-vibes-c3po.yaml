@@ -118,6 +118,11 @@ flow:
                             ref: beforeOutboundCount
                   catchAs: turnError
                   catch:
+                    - if:
+                        expr: "!(turnError instanceof Error) || turnError.message !== `timed out after ${resolveQaLiveTurnTimeoutMs(env, 45000)}ms`"
+                        then:
+                          - throw:
+                              expr: turnError
                     - set: latestTurnError
                       value:
                         ref: turnError
