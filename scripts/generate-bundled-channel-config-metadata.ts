@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { loadChannelConfigSurfaceModule } from "./load-channel-config-surface.ts";
 
 const GENERATED_BY = "scripts/generate-bundled-channel-config-metadata.ts";
@@ -341,7 +342,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = JSON.parse(
   });
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? "", "file://").href) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const check = process.argv.includes("--check");
   const result = await writeBundledChannelConfigMetadataModule({ check });
   if (!result.changed) {

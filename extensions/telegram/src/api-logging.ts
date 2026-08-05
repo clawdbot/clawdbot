@@ -8,14 +8,14 @@ type TelegramApiLogger = (message: string) => void;
 type TelegramApiLoggingParams<T> = {
   operation: string;
   fn: () => Promise<T>;
-  runtime?: RuntimeEnv;
+  runtime?: Pick<RuntimeEnv, "error">;
   logger?: TelegramApiLogger;
   shouldLog?: (err: unknown) => boolean;
 };
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogger) {
+function resolveTelegramApiLogger(runtime?: Pick<RuntimeEnv, "error">, logger?: TelegramApiLogger) {
   if (logger) {
     return logger;
   }

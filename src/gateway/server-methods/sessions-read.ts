@@ -35,7 +35,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
@@ -70,7 +70,7 @@ import {
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
+import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import {
   collectTrackedActiveSessionRuns,
   resolveVisibleActiveSessionRunState,
@@ -244,7 +244,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             loaded?: {
               durableStorePath?: string;
               listStore: Record<string, SessionEntry>;
-              modelCatalog: Awaited<ReturnType<typeof loadOptionalServerMethodModelCatalog>>;
+              modelCatalog: Awaited<ReturnType<typeof readPreparedServerMethodModelCatalog>>;
               storePath: string;
             };
             rowRepairAttempted?: boolean;
@@ -255,10 +255,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             const modelCatalog = await measureDiagnosticsTimelineSpan(
               "gateway.sessions.list.model_catalog",
               () =>
-                loadOptionalServerMethodModelCatalog(
+                readPreparedServerMethodModelCatalog(
                   context,
-                  "sessions.list",
-                  p.agentId ? { loadParams: { agentId: p.agentId } } : undefined,
+                  p.agentId ? { agentId: p.agentId } : undefined,
                 ),
               {
                 config: cfg,

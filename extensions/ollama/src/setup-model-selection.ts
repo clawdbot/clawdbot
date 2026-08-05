@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
 import { OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
 import {
   buildDefaultOllamaCloudModelDefinition,
@@ -12,6 +13,7 @@ import {
 
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
+export const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
 type OllamaCloudDefaultModel = (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number];
 
@@ -59,6 +61,38 @@ export function findAvailableOllamaModelName(
     }
   }
   return undefined;
+}
+
+export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string[] {
+  const remaining = [...modelIds];
+  const ordered: string[] = [];
+  while (remaining.length > 0) {
+    const preferredId = selectPreferredLocalModelId(remaining);
+    const preferredIndex = preferredId ? remaining.indexOf(preferredId) : 0;
+    const [candidate] = remaining.splice(Math.max(preferredIndex, 0), 1);
+    if (candidate) {
+      ordered.push(candidate);
+    }
+  }
+  return ordered;
+}
+
+export function selectAppGuidedOllamaModelId(
+  models: Iterable<{
+    id: string;
+    contextWindow?: number;
+    supportsTools?: boolean;
+  }>,
+): string | undefined {
+  const eligibleIds = [...models]
+    .filter(
+      (model) =>
+        model.supportsTools === true &&
+        model.contextWindow !== undefined &&
+        model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
+    )
+    .map((model) => model.id);
+  return orderPreferredOllamaModelIds(eligibleIds)[0];
 }
 
 export function buildOllamaModelsConfig(

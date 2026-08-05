@@ -9,8 +9,8 @@ describe("imessageDoctor.collectPreviewWarnings", () => {
         channels: {
           imessage: {
             accounts: {
-              "swang430-gmail-com": {},
-              default: {},
+              "swang430-gmail-com": { enabled: true },
+              default: { enabled: true },
             },
           },
         },

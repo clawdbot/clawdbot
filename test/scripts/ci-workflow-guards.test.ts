@@ -2979,6 +2979,9 @@ describe("ci workflow guards", () => {
 
     expect(source).toContain("createNodeTestShardBundles");
     expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-32vcpu-ubuntu-2404");
+    expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
+      "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 35 || 20 }}",
+    );
     expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
       "blacksmith-16vcpu-ubuntu-2404",
     );
@@ -4698,6 +4701,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
+  it("runs the Doctor plugin-index persistence proof against the built CLI", () => {
+    const workflow = readCiWorkflow();
+    const proofStep = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify built Doctor plugin index persistence",
+    );
+
+    expect(proofStep.run).toContain(
+      "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+    );
+    expect(proofStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
+    expect(proofStep.run).toContain("Selected target predates");
+  });
+
   it("restores the dist build cache before building and saves only cache misses", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -4762,7 +4778,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
-  it("parallelizes gateway watch only on the large self-hosted build runner", () => {
+  it("parallelizes gateway watch only on the large self-hosted runner and isolates TUI PTY", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const builtArtifactChecks = buildArtifactSteps.find(
@@ -4782,8 +4798,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run).toContain(
       'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
+    const firstWait = run.indexOf("\nwait_checks\n");
+    const hostedGatewayWatch = run.indexOf(
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
+    );
+    const tuiPty = run.indexOf('if [ "$RUN_TUI_PTY" = "true" ]; then');
+    const hostedGatewayWait = run.indexOf("\n  wait_checks\n", hostedGatewayWatch);
+    const tuiPtyWait = run.indexOf("\n  wait_checks\n", tuiPty);
+    expect(firstWait).toBeGreaterThan(run.indexOf('start_check "core-support-boundary"'));
+    expect(hostedGatewayWatch).toBeGreaterThan(firstWait);
+    expect(hostedGatewayWait).toBeGreaterThan(hostedGatewayWatch);
+    expect(tuiPty).toBeGreaterThan(hostedGatewayWait);
+    expect(tuiPtyWait).toBeGreaterThan(tuiPty);
     expect(run).toContain("wait_checks()");
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(2);
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(3);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {

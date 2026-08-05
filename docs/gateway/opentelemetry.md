@@ -59,7 +59,20 @@ openclaw plugins install clawhub:@openclaw/diagnostics-otel
 Or enable the plugin from the CLI: `openclaw plugins enable diagnostics-otel`.
 
 <Note>
-`protocol` supports `http/protobuf` only. Since `traces` and `metrics` default to enabled, any other value (including `grpc`) aborts the entire diagnostics-otel subscription with an `unsupported protocol` warning - this also stops stdout log export. Explicitly set `traces: false` and `metrics: false` if you only want `logsExporter: "stdout"` with a non-OTLP protocol value.
+`diagnostics.otel.protocol` accepts only `http/protobuf`. If a persisted config,
+including a value supplied through `${VAR}` interpolation, still resolves this
+field to the retired `grpc` value, run
+[`openclaw doctor --fix`](/cli/doctor). Doctor repairs directly authored values
+and a sole internal single-file include that owns the top-level `diagnostics`
+section. For root or array includes, nested include chains, sibling overrides,
+external include targets, or another ambiguous source, Doctor leaves the files
+unchanged and lists the candidate source file or files to edit manually.
+
+`OTEL_EXPORTER_OTLP_PROTOCOL` is a process-environment fallback used only when
+`diagnostics.otel.protocol` is unset. Doctor does not rewrite process
+environment variables. An unsupported fallback is rejected at runtime when an
+OTLP signal is enabled; set it to `http/protobuf` or unset it. A stdout-only log
+configuration does not use the OTLP transport and continues to work.
 </Note>
 
 ## Signals exported
@@ -76,6 +89,27 @@ and export only when `diagnostics.otel.logs` is explicitly `true`. Log export
 defaults to OTLP; set `diagnostics.otel.logsExporter` to `stdout` for JSONL on
 stdout, or `both` for both.
 
+## Which processes export
+
+- **Gateway** starts the exporter at startup and exports from the Gateway
+  process for every run it executes, including `openclaw agent` turns
+  dispatched to it.
+- **One-shot local runs** (`openclaw agent --local`) execute in the CLI
+  process. When OTel export is configured and
+  the plugin is enabled, that same CLI process starts one exporter instance for
+  the run and flushes buffered spans, metrics, and logs before the process exits.
+  The CLI waits at most 5 seconds for the diagnostic-event queue to drain and 10
+  more for the flush, so an unreachable collector cannot hold the command open.
+  A collector that accepts the connection but never answers can still delay exit
+  until the exporter's own request timeout (`OTEL_EXPORTER_OTLP_TIMEOUT`).
+  In JSON output mode, these one-shot runs suppress only the stdout JSONL log
+  sink so command stdout stays reserved for the JSON response; OTLP traces,
+  metrics, and logs continue when configured.
+- `openclaw agent exec` also runs the agent embedded in the CLI process, but
+  does not yet start this exporter, so its runs export no telemetry. Dispatch
+  through the Gateway, or use `openclaw agent --local`, when you need traces
+  from a headless run.
+
 ## Configuration reference
 
 ```json5
@@ -88,7 +122,7 @@ stdout, or `both` for both.
       tracesEndpoint: "http://otel-collector:4318/v1/traces",
       metricsEndpoint: "http://otel-collector:4318/v1/metrics",
       logsEndpoint: "http://otel-collector:4318/v1/logs",
-      protocol: "http/protobuf", // grpc disables OTLP export
+      protocol: "http/protobuf",
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
       metricNamePrefix: "acme.", // optional; include the separator
       headers: { "x-collector-token": "..." },
@@ -123,7 +157,7 @@ dashboards, alerts, and recording rules that query the old names.
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                         |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                         |
 | `OTEL_SERVICE_NAME`                                                                                               | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                  |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Fallback for the wire protocol when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables export.                                                                                                                                                                                                 |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Process-environment fallback used only when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables OTLP export; unsupported values are rejected when an OTLP signal is enabled and are not rewritten by Doctor.                                                                                    |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless. |
 | `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                    |
 
@@ -486,19 +520,93 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above or are available for direct
-plugin subscription. `run.progress` and `run.execution_phase` are direct-only
-lifecycle signals; the diagnostics-otel plugin does not export them as
-standalone OTLP signals. Event kinds and `run.execution_phase.phase` values are
-additive. TypeScript consumers should keep default branches instead of assuming
-either union is permanently exhaustive.
+The events below back the metrics and spans above. Public events are also
+available for direct plugin subscription; trusted core events such as
+`model.usage` are restricted to authorized internal consumers.
+`run.progress` and `run.execution_phase` are direct-only lifecycle signals;
+the diagnostics-otel plugin does not export them as standalone OTLP signals.
+Event kinds and `run.execution_phase.phase` values are additive. TypeScript
+consumers should keep default branches instead of assuming either union is
+permanently exhaustive.
 
 **Model usage**
 
-- `model.usage` - tokens, cost, duration, context, provider/model/channel,
-  session ids. `usage` is provider/turn accounting for cost and telemetry;
-  `context.used` is the current prompt/context snapshot and can be lower than
-  provider `usage.total` when cached input or tool-loop calls are involved.
+`model.usage` is a trusted, in-process diagnostic event, not a JSONL log
+record. A representative event has this shape:
+
+```json
+{
+  "type": "model.usage",
+  "ts": 1735689600000,
+  "seq": 42,
+  "provider": "openai",
+  "model": "gpt-5.4",
+  "channel": "webchat",
+  "agentId": "main",
+  "sessionId": "session-123",
+  "sessionKey": "agent:main:main",
+  "usage": {
+    "input": 120,
+    "output": 40,
+    "cacheRead": 30,
+    "cacheWrite": 10,
+    "promptTokens": 160,
+    "total": 200
+  },
+  "lastCallUsage": {
+    "input": 120,
+    "output": 40,
+    "cacheRead": 30,
+    "cacheWrite": 10,
+    "total": 200
+  },
+  "context": { "limit": 128000, "used": 160 },
+  "costUsd": 0.0012,
+  "durationMs": 850,
+  "trace": {
+    "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "spanId": "00f067aa0ba902b7",
+    "traceFlags": "01"
+  }
+}
+```
+
+- `ts` is a Unix timestamp in milliseconds; `seq` is process-local.
+- `usage` holds turn-level token counts. `promptTokens` includes `input`,
+  `cacheRead`, and `cacheWrite`; `lastCallUsage`, when available, describes the
+  final model call.
+- `context.used` is the current prompt/context snapshot and can be lower than
+  `usage.total` when cached input or tool-loop calls are involved.
+- Provider/model/session identifiers, token buckets, `lastCallUsage`,
+  `context`, `costUsd`, `durationMs`, and `trace` fields are optional.
+  `costUsd` is an estimate and can be absent when model pricing is unavailable;
+  it is not provider-reported billing. Trace context can also include
+  `parentSpanId`.
+
+The Gateway's `/tmp/openclaw/openclaw-YYYY-MM-DD.log` JSONL file and
+`diagnostics.otel.logsExporter: "stdout"` contain ordinary log records, not raw
+`model.usage` events. Public diagnostic subscriptions and
+`diagnostics.stability` do not expose trusted core usage events. The
+diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
+`openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
+and spans intentionally omit session identifiers.
+
+For an external integration that needs session-correlated usage, query the
+authenticated Gateway instead:
+
+```bash
+openclaw gateway call sessions.usage --params '{"range":"30d","agentScope":"all"}' --json
+openclaw gateway usage-cost --days 30 --all-agents --json
+```
+
+Both commands require `operator.read`. `sessions.usage` can include per-session
+`sessionId`, provider/model details, and token/cost summaries; per-session usage
+can be temporarily `null` while its cache refreshes. `usage-cost` provides
+aggregate estimates. Omit `agentScope` or `--all-agents` to scope the report
+to the default agent. For continuously updated clients,
+[subscribe to session changes instead of polling usage reports](/gateway/clients#subscribe-instead-of-polling-usage).
+See the [Gateway RPC method reference](/gateway/protocol#rpc-method-families)
+for usage methods and request options.
 
 **Message flow**
 

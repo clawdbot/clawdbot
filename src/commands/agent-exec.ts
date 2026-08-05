@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
-import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
+import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -550,6 +551,7 @@ export async function agentExecCommand(
   let restoreRuntimeConfigSnapshot: (() => void) | undefined;
   let runtimePaths: typeof import("../config/paths.js") | undefined;
   let configIo: typeof import("../config/io.js") | undefined;
+  let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   try {
     const prompt = await resolveAgentExecPrompt(
       positionalMessage,
@@ -623,6 +625,15 @@ export async function agentExecCommand(
     // env-substituted provider keys to disk where the run's own exec tool
     // could read them.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
+    if (isExecutionIdentityCollectionEnabled(runConfig)) {
+      try {
+        stopLocalAuditWriter = (await import("./agent-local-audit.js")).startAgentLocalAuditWriter({
+          stateDir,
+        });
+      } catch {
+        // Admission emits a bounded warning if the direct-process writer is unavailable.
+      }
+    }
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },
@@ -695,6 +706,7 @@ export async function agentExecCommand(
   }
 
   let cleanupError: unknown;
+  await stopLocalAuditWriter?.().catch(() => undefined);
   const runCleanupStep = (step: () => void) => {
     try {
       step();

@@ -26,6 +26,7 @@ export type QaSuiteScenarioResult = {
 
 export type QaSuiteEnvironment = {
   lab: QaLabServerHandle;
+  runtimeId: RuntimeId;
   webSessionIds: Set<string>;
 } & QaSuiteRuntimeEnv;
 

@@ -6,6 +6,7 @@ scenario:
   coverage:
     primary:
       - agent-runtime.failure-recovery-empty-response-recovery
+      - agent-runtime.progress-visibility-failure-recovery
     secondary:
       - agent-runtime.failure-recovery-retry-policy
   objective: Verify repeated empty GPT turns exhaust each configured model's retry budget after one continuation attempt.

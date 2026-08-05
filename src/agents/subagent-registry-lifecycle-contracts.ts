@@ -33,12 +33,15 @@ export type SubagentRegistryLifecycleParams = {
     isCurrent?: () => boolean;
   }): Promise<void>;
   emitSubagentProgressEndedForRun(entry: SubagentRunRecord): Promise<void>;
-  notifyContextEngineSubagentEnded(args: {
-    childSessionKey: string;
-    reason: "completed" | "deleted";
-    agentDir?: string;
-    workspaceDir?: string;
-  }): Promise<void>;
+  notifyContextEngineSubagentEnded(
+    args: {
+      childSessionKey: string;
+      reason: "completed" | "deleted";
+      agentDir?: string;
+      workspaceDir?: string;
+    },
+    options?: { isCurrent?: () => boolean },
+  ): Promise<void>;
   retireSupersededRun(runId: string, entry: SubagentRunRecord): Promise<void>;
   resumeSubagentRun(runId: string): void;
   callGateway: typeof defaultCallGateway;

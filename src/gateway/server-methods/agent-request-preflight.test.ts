@@ -358,7 +358,11 @@ describe("agent request Swarm preflight", () => {
 });
 
 describe("agent request restart recovery preflight", () => {
-  function runRestartRecoveryPreflight(backend: boolean, sourceTool: string) {
+  function runRestartRecoveryPreflight(
+    backend: boolean,
+    sourceTool: string,
+    internalExecutionIdentityRetry?: boolean,
+  ) {
     const respond = vi.fn();
     const result = prepareAgentRequestPreflight({
       params: {
@@ -366,6 +370,7 @@ describe("agent request restart recovery preflight", () => {
         idempotencyKey: "restart-recovery-run",
         forceRestartSafeTools: true,
         forceCodeModeTools: true,
+        ...(internalExecutionIdentityRetry !== undefined ? { internalExecutionIdentityRetry } : {}),
         inputProvenance: {
           kind: "internal_system",
           sourceSessionKey: "agent:main:main",
@@ -385,10 +390,24 @@ describe("agent request restart recovery preflight", () => {
   }
 
   it("accepts the Code Mode override only for backend restart recovery", () => {
-    const accepted = runRestartRecoveryPreflight(true, "main_session_restart_recovery");
+    const accepted = runRestartRecoveryPreflight(true, "main_session_restart_recovery", true);
 
     expect(accepted.result).toBeDefined();
     expect(accepted.respond).not.toHaveBeenCalled();
+  });
+
+  it("rejects private execution retry mode outside backend restart recovery", () => {
+    const rejected = runRestartRecoveryPreflight(false, "main_session_restart_recovery", true);
+
+    expect(rejected.result).toBeUndefined();
+    expect(rejected.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("execution identity retry mode"),
+      }),
+    );
   });
 
   it.each([

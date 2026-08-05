@@ -49,6 +49,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
+  "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs!",
   "scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs!",
   "scripts/e2e/lib/release-scenarios/write-marketplace.mjs!",
   "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
@@ -121,14 +122,16 @@ const rootEntries = [
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/audit/audit-event-writer.worker.ts!",
+  // Loaded by URL from the SQLite lifecycle archive owner.
+  "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagent-registry.runtime.ts!",
-  // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
-  "src/agents/subagent-orphan-recovery.ts!",
+  // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
+  "src/agents/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
@@ -619,11 +622,6 @@ const config = {
     "packages/memory-host-sdk": {
       entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
-    },
-    "packages/speech-core": {
-      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
-      project: ["**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
     },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
   inspectPortUsage: vi.fn(),
   ensureGatewayReadyForOperation: vi.fn(),
+  waitForControlUiDocument: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -40,6 +41,11 @@ vi.mock("../infra/ports-inspect.js", () => ({
 
 vi.mock("./gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
+}));
+
+vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
+  waitForControlUiDocument: mocks.waitForControlUiDocument,
 }));
 
 const runtime = {
@@ -134,6 +140,8 @@ describe("dashboardCommand bind selection", () => {
       status: {},
       recovered: false,
     });
+    mocks.waitForControlUiDocument.mockReset();
+    mocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -230,6 +238,40 @@ describe("dashboardCommand bind selection", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
   });
 
+  it("does not issue browser credentials when the dashboard document is unavailable", async () => {
+    mockSnapshot();
+    mocks.waitForControlUiDocument.mockResolvedValue({
+      ready: false,
+      reason: "Control UI assets are missing from the configured root.",
+      status: 503,
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Control UI assets are missing from the configured root.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects invalid configuration before probing or issuing browser credentials", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(mocks.ensureGatewayReadyForOperation).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("re-probes a changed endpoint after recovery before URL delivery", async () => {
     mockSnapshot({ bind: "custom", customBindHost: "10.0.0.5" });
     mocks.readConfigFileSnapshot
@@ -272,6 +314,7 @@ describe("dashboardCommand bind selection", () => {
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([

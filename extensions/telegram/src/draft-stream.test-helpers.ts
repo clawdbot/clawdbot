@@ -8,6 +8,7 @@ type TelegramDraftMessageSnapshot = NonNullable<
 
 type TestDraftStream = {
   update: ReturnType<typeof vi.fn<(text: string) => void>>;
+  updateLazy: ReturnType<typeof vi.fn<(resolveText: () => string | undefined) => void>>;
   updatePreview: ReturnType<typeof vi.fn<(preview: TelegramDraftPreview) => void>>;
   flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
   messageId: ReturnType<typeof vi.fn<() => number | undefined>>;
@@ -40,13 +41,20 @@ export function createTestDraftStream(params?: {
   let messageId = params?.messageId;
   let lastDeliveredText = "";
   let stopped = false;
+  const update = vi.fn().mockImplementation((text: string) => {
+    if (stopped) {
+      return;
+    }
+    lastDeliveredText = text.trimEnd();
+    params?.onUpdate?.(text);
+  });
   return {
-    update: vi.fn().mockImplementation((text: string) => {
-      if (stopped) {
-        return;
+    update,
+    updateLazy: vi.fn().mockImplementation((resolveText: () => string | undefined) => {
+      const text = resolveText();
+      if (text !== undefined) {
+        update(text);
       }
-      lastDeliveredText = text.trimEnd();
-      params?.onUpdate?.(text);
     }),
     updatePreview: vi.fn().mockImplementation((preview: TelegramDraftPreview) => {
       if (stopped) {
@@ -113,12 +121,19 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
   let activeMessageId: number | undefined;
   let nextMessageId = startMessageId;
   let lastDeliveredText = "";
+  const update = vi.fn().mockImplementation((text: string) => {
+    if (activeMessageId == null) {
+      activeMessageId = nextMessageId++;
+    }
+    lastDeliveredText = text.trimEnd();
+  });
   return {
-    update: vi.fn().mockImplementation((text: string) => {
-      if (activeMessageId == null) {
-        activeMessageId = nextMessageId++;
+    update,
+    updateLazy: vi.fn().mockImplementation((resolveText: () => string | undefined) => {
+      const text = resolveText();
+      if (text !== undefined) {
+        update(text);
       }
-      lastDeliveredText = text.trimEnd();
     }),
     updatePreview: vi.fn().mockImplementation((preview: TelegramDraftPreview) => {
       if (activeMessageId == null) {

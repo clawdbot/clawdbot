@@ -245,6 +245,7 @@ export type {
 } from "./session-accessor.sqlite-active-events.js";
 export {
   readSessionTranscriptWatermark,
+  readSessionTranscriptWatermarkBatch,
   type SessionTranscriptWatermark,
 } from "./session-accessor.sqlite-transcript-watermark.js";
 export {

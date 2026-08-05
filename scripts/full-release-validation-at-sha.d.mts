@@ -19,13 +19,6 @@ export function releaseProfileForTarget(
   readPackageJson?: (sha: string) => string,
 ): "beta" | "stable";
 export function releaseEvidenceVerificationArgs(parentRunId: unknown): string[];
-export function runGhRead(
-  args: string[],
-  params?: {
-    execFileSyncImpl?: (...args: unknown[]) => unknown;
-    timeoutMs?: number;
-  },
-): string;
 export function shouldDeleteTemporaryWorkflowRef(params: {
   keepBranch: boolean;
   dryRun: boolean;

@@ -504,13 +504,19 @@ export async function removeAgentJobsTransactional<T>(
     state.store.jobs = state.store.jobs.filter(
       (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
     );
-    recomputeNextRunsForMaintenance(state);
+    const postPersistNotifications: DeferredCronNotifications = [];
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
+    // Cron is durable first, but notifications stay speculative until the roster commits.
     await persistOrRestore(state, snapshot);
     let result: T;
     try {
       result = await commit();
     } catch (error) {
       if (error instanceof AgentDeletionCommitUncertainError) {
+        // Uncertain roster writes intentionally keep the cron deletion durable.
+        for (const notify of postPersistNotifications) {
+          notify();
+        }
         armTimer(state);
         for (const job of removedJobs) {
           noteActiveCronJobRemoval(job.id);
@@ -533,6 +539,9 @@ export async function removeAgentJobsTransactional<T>(
         );
       }
       throw error;
+    }
+    for (const notify of postPersistNotifications) {
+      notify();
     }
     for (const job of removedJobs) {
       noteActiveCronJobRemoval(job.id);

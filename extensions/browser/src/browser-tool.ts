@@ -18,6 +18,7 @@ import {
   executeDownloadAction,
   executeExtractAction,
   executeTabsAction,
+  formatBrowserExternalToolResult,
 } from "./browser-tool.actions.js";
 import {
   type AnyAgentTool,
@@ -625,7 +626,10 @@ export function createBrowserTool(opts?: {
             }
           };
           await sessionTabs.trackOpened(opened, closeOpenedTab);
-          return jsonResult(stripBrowserOpenInternalMetadata(opened));
+          return formatBrowserExternalToolResult({
+            kind: "tabs",
+            payload: stripBrowserOpenInternalMetadata(opened),
+          });
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -815,10 +819,13 @@ export function createBrowserTool(opts?: {
             }
           } catch (err) {
             // Fall back to returning the raw image block so the agent loop can
-            // still recover. Provider/runtime error messages are untrusted
-            // input too, so defang line-start final-reply media directives.
+            // still recover. Provider/runtime errors are untrusted page input;
+            // preserve their trust boundary and defang reply-media directives.
             const rawReason = err instanceof Error ? err.message : String(err);
-            const reason = neutralizeMediaDirectives(rawReason);
+            const reason = wrapExternalContent(neutralizeMediaDirectives(rawReason), {
+              source: "browser",
+              includeWarning: false,
+            });
             const extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
             return await browserToolDeps.imageResultFromFile({
               label: "browser:screenshot",
@@ -857,13 +864,17 @@ export function createBrowserTool(opts?: {
           const navigatedTargetId =
             readStringValue((result as { targetId?: unknown }).targetId) ?? targetId;
           sessionTabs.touch(navigatedTargetId);
+          const formatted = formatBrowserExternalToolResult({
+            kind: (result as { download?: unknown }).download ? "download" : "act",
+            payload: result,
+          });
           // A navigation that resolved to a download leaves the document
           // unchanged, so inline page state would describe the wrong thing.
           if ((result as { download?: unknown }).download) {
-            return jsonResult(result);
+            return formatted;
           }
           return await appendNavigatedPageState({
-            result: jsonResult(result),
+            result: formatted,
             targetId: navigatedTargetId,
             baseUrl,
             profile,

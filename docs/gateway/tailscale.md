@@ -114,7 +114,7 @@ This tokenless flow assumes the gateway host is trusted. If untrusted local code
 
 Scope of the bypass:
 
-- Applies only to the Control UI WebSocket auth surface. HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth; they always follow the gateway's normal HTTP auth mode.
+- Applies to the Control UI WebSocket auth surface and read-only `GET`/`HEAD` requests for Control UI profile avatars. Other HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth; they always follow the gateway's normal HTTP auth mode.
 - For Control UI operator sessions that already carry browser device identity, a verified Tailscale identity skips the bootstrap-token/QR pairing round trip.
 - It does not bypass device identity itself: device-less clients are still rejected, and node-role connections still go through normal pairing and auth checks.
 

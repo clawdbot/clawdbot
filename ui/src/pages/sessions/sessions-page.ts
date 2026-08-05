@@ -26,6 +26,7 @@ import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
@@ -152,7 +153,15 @@ class SessionsPage extends OpenClawLightDomElement {
   private hasBoundGatewaySource = false;
   private sessionsSource?: ApplicationContext["sessions"];
   private hasBoundSessionsSource = false;
-  private observedAgentScopeId: string | null | undefined;
+  private readonly observeAgentScope = watchAgentScope(() => {
+    this.resetTranscriptSearchState(this.transcriptSearchQuery);
+    if (this.routeDataInitialized && !this.deepLinkSessionKey) {
+      this.page = 0;
+      this.selectedKeys = new Set();
+      void this.loadSessions();
+    }
+    this.requestUpdate();
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.sessions,
@@ -198,24 +207,7 @@ class SessionsPage extends OpenClawLightDomElement {
     )
     .effect(
       () => this.context?.agentSelection,
-      (agentSelection) => {
-        const sync = () => {
-          const nextScopeId = agentSelection.state.scopeId;
-          if (this.observedAgentScopeId === nextScopeId) {
-            return;
-          }
-          this.observedAgentScopeId = nextScopeId;
-          this.resetTranscriptSearchState(this.transcriptSearchQuery);
-          if (this.routeDataInitialized && !this.deepLinkSessionKey) {
-            this.page = 0;
-            this.selectedKeys = new Set();
-            void this.loadSessions();
-          }
-          this.requestUpdate();
-        };
-        sync();
-        return agentSelection.subscribe(sync);
-      },
+      (agentSelection) => this.observeAgentScope(agentSelection),
     )
     .effect(
       () => this.context?.gateway,

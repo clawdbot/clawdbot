@@ -68,6 +68,10 @@ type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Pr
 type BenchmarkRun = {
   controlUi: ControlUiProbe[];
   durationMs: number;
+  probeWarmup: {
+    durationMs: number;
+    samples: GatewaySample[];
+  };
   readyz: ReadyProbe[];
   sessionsList: TimedProbe[];
   turnCount: number;
@@ -98,6 +102,10 @@ const MAX_WARMUP = 10;
 const MAX_SAMPLES_PER_RUN = 2_048;
 const MAX_HTTP_BODY_BYTES = 1_048_576;
 const HTTP_TIMEOUT_MS = 20_000;
+const PROBE_WARMUP_TIMEOUT_MS = 60_000;
+const PROBE_WARMUP_TARGET_MS = 1_000;
+const PROBE_WARMUP_RETRY_DELAY_MS = 100;
+const GATEWAY_STDERR_TAIL_LINES = 20;
 const AGENT_WAIT_RPC_GRACE_MS = 5_000;
 const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set([
@@ -182,7 +190,7 @@ Options:
   --runs <n>         Measured gateway runs (default: ${DEFAULT_RUNS})
   --warmup <n>       Warmup gateway runs (default: ${DEFAULT_WARMUP})
   --cadence-ms <ms>  Probe cadence (default: ${DEFAULT_CADENCE_MS})
-  --timeout-ms <ms>  Whole benchmark wall-clock cap (default: ${DEFAULT_TIMEOUT_MS})
+  --timeout-ms <ms>  Per-run cap, excluding probe warmup (default: ${DEFAULT_TIMEOUT_MS})
   --entry <path>     Gateway CLI entry file (default: ${DEFAULT_ENTRY})
   --output <path>    Write machine-readable JSON to a file
   --json             Emit machine-readable JSON
@@ -231,11 +239,23 @@ async function requestHttp(params: {
   port: number;
 }): Promise<{ body: string; latencyMs: number; status: number }> {
   const startedAt = performance.now();
-  const timeoutMs = Math.max(
-    1,
-    Math.min(HTTP_TIMEOUT_MS, requireRemainingMs(params.deadlineAt, `requesting ${params.path}`)),
-  );
+  const requestDeadlineAt = Math.min(params.deadlineAt, startedAt + HTTP_TIMEOUT_MS);
+  requireRemainingMs(requestDeadlineAt, `requesting ${params.path}`);
   return await new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (run: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      run();
+    };
+    const fail = (error: Error) =>
+      settle(() => {
+        req.destroy();
+        reject(error);
+      });
     const req = request(
       {
         headers: { accept: params.accept },
@@ -243,7 +263,6 @@ async function requestHttp(params: {
         method: "GET",
         path: params.path,
         port: params.port,
-        timeout: timeoutMs,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -251,22 +270,31 @@ async function requestHttp(params: {
         res.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
           if (bytes > MAX_HTTP_BODY_BYTES) {
-            req.destroy(new Error(`${params.path} response exceeded ${MAX_HTTP_BODY_BYTES} bytes`));
+            fail(new Error(`${params.path} response exceeded ${MAX_HTTP_BODY_BYTES} bytes`));
             return;
           }
           chunks.push(chunk);
         });
-        res.on("end", () => {
-          resolve({
-            body: Buffer.concat(chunks).toString("utf8"),
-            latencyMs: performance.now() - startedAt,
-            status: res.statusCode ?? 0,
-          });
-        });
+        res.once("aborted", () => fail(new Error(`${params.path} response aborted`)));
+        res.once("error", fail);
+        res.once("end", () =>
+          settle(() =>
+            resolve({
+              body: Buffer.concat(chunks).toString("utf8"),
+              latencyMs: performance.now() - startedAt,
+              status: res.statusCode ?? 0,
+            }),
+          ),
+        );
       },
     );
-    req.once("error", reject);
-    req.once("timeout", () => req.destroy(new Error(`${params.path} request timed out`)));
+    req.once("error", fail);
+    // Request/socket timeouts measure inactivity; this timer owns the wall-clock deadline.
+    const timer = setTimeout(
+      () => fail(new Error(`${params.path} request timed out`)),
+      Math.max(1, Math.ceil(remainingMs(requestDeadlineAt))),
+    );
+    timer.unref?.();
     req.end();
   });
 }
@@ -281,31 +309,58 @@ function describeProbeError(error: unknown): string {
 }
 
 function formatProbeResult(name: string, probe: TimedProbe & { status?: number }): string {
-  const status = probe.status === undefined ? (probe.ok ? "ok" : "failed") : probe.status;
-  return `${name}(ok=${probe.ok} status=${status} error=${probe.error ? JSON.stringify(probe.error) : "none"} latencyMs=${probe.latencyMs.toFixed(1)})`;
+  const status = probe.status === undefined ? "n/a" : probe.status;
+  return `${name}: ok=${probe.ok} status=${status} latencyMs=${probe.latencyMs.toFixed(1)} error=${probe.error ? JSON.stringify(probe.error) : "none"}`;
 }
 
-function assertBaselineProbes(baseline: GatewaySample): void {
-  if (baseline.readyz.ok && baseline.sessionsList.ok && baseline.controlUi.ok) {
-    return;
-  }
-  throw new Error(
-    `gateway probes did not pass before concurrent load: ${[
-      formatProbeResult("readyz", baseline.readyz),
-      formatProbeResult("sessionsList", baseline.sessionsList),
-      formatProbeResult("controlUi", baseline.controlUi),
-    ].join("; ")}`,
-  );
+function formatProbeFailure(sample: GatewaySample): string {
+  return [
+    "gateway probes did not become fast and healthy before concurrent load",
+    formatProbeResult("readyz", sample.readyz),
+    formatProbeResult("sessionsList", sample.sessionsList),
+    formatProbeResult("controlUi", sample.controlUi),
+  ].join("\n  ");
 }
 
-function captureChildOutput(child: ChildProcessWithoutNullStreams): () => string {
+function tailLines(output: string, lineCount: number): string {
+  return output.trimEnd().split(/\r?\n/u).slice(-lineCount).join("\n");
+}
+
+function captureChildOutput(child: ChildProcessWithoutNullStreams): {
+  readOutput: () => string;
+  readStderrTail: () => string;
+} {
   let output = "";
-  const append = (chunk: Buffer) => {
+  let stderr = "";
+  const appendOutput = (chunk: Buffer) => {
     output = `${output}${chunk.toString("utf8")}`.slice(-64 * 1_024);
   };
-  child.stdout.on("data", append);
-  child.stderr.on("data", append);
-  return () => output;
+  child.stdout.on("data", appendOutput);
+  child.stderr.on("data", (chunk: Buffer) => {
+    appendOutput(chunk);
+    stderr = `${stderr}${chunk.toString("utf8")}`.slice(-64 * 1_024);
+  });
+  return {
+    readOutput: () => output,
+    readStderrTail: () => tailLines(stderr, GATEWAY_STDERR_TAIL_LINES),
+  };
+}
+
+function formatRunFailure(
+  error: unknown,
+  gatewayOutput: { readOutput: () => string; readStderrTail: () => string },
+  mockOutput: { readOutput: () => string },
+): string {
+  return [
+    error instanceof Error ? error.message : String(error),
+    gatewayOutput.readStderrTail()
+      ? `gateway stderr tail:\n${gatewayOutput.readStderrTail()}`
+      : "gateway stderr tail: (empty)",
+    gatewayOutput.readOutput() ? `gateway output tail:\n${gatewayOutput.readOutput()}` : "",
+    mockOutput.readOutput() ? `mock provider output tail:\n${mockOutput.readOutput()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function waitForMockServer(port: number, deadlineAt: number): Promise<void> {
@@ -371,6 +426,7 @@ function buildConfig(root: string, mockPort: number, concurrency: number): strin
 }
 
 async function connectGateway(port: number, deadlineAt: number) {
+  let requestDeadlineAt = deadlineAt;
   const client = createGatewayWsClient({
     handshakeTimeoutMs: Math.min(8_000, requireRemainingMs(deadlineAt, "connecting WebSocket")),
     openTimeoutMs: Math.min(8_000, requireRemainingMs(deadlineAt, "opening WebSocket")),
@@ -390,7 +446,7 @@ async function connectGateway(port: number, deadlineAt: number) {
         1,
         Math.min(
           requestedTimeoutMs ?? 65_000,
-          requireRemainingMs(deadlineAt, `waiting for ${method}`),
+          requireRemainingMs(requestDeadlineAt, `waiting for ${method}`),
         ),
       ),
     );
@@ -418,7 +474,13 @@ async function connectGateway(port: number, deadlineAt: number) {
     scopes: ["operator.read", "operator.write", "operator.admin"],
     caps: [],
   });
-  return { close: client.close, request: requestRpc };
+  return {
+    close: client.close,
+    request: requestRpc,
+    setDeadlineAt: (value: number) => {
+      requestDeadlineAt = value;
+    },
+  };
 }
 
 async function runTurn(rpc: GatewayRpc, index: number, deadlineAt: number): Promise<void> {
@@ -490,7 +552,11 @@ async function sampleGateway(params: {
   const probeSessions = async () => {
     const startedAt = performance.now();
     try {
-      const payload = await params.rpc("sessions.list", {}, HTTP_TIMEOUT_MS);
+      const payload = await params.rpc(
+        "sessions.list",
+        {},
+        Math.min(HTTP_TIMEOUT_MS, requireRemainingMs(params.deadlineAt, "probing sessions.list")),
+      );
       return { error: null, latencyMs: performance.now() - startedAt, ok: true, payload };
     } catch (error) {
       return {
@@ -548,6 +614,40 @@ async function sampleGateway(params: {
   };
 }
 
+async function warmGatewayProbes(params: {
+  deadlineAt: number;
+  sample: (deadlineAt: number) => Promise<GatewaySample>;
+  retryDelayMs?: number;
+  targetMs?: number;
+}): Promise<{ durationMs: number; samples: GatewaySample[] }> {
+  const startedAt = performance.now();
+  const samples: GatewaySample[] = [];
+  const targetMs = params.targetMs ?? PROBE_WARMUP_TARGET_MS;
+  while (remainingMs(params.deadlineAt) > 0) {
+    const sample = await params.sample(params.deadlineAt);
+    samples.push(sample);
+    const healthy = sample.readyz.ok && sample.sessionsList.ok && sample.controlUi.ok;
+    const fast =
+      Math.max(
+        sample.readyz.latencyMs,
+        sample.sessionsList.latencyMs,
+        sample.controlUi.latencyMs,
+      ) <= targetMs;
+    if (healthy && fast) {
+      return { durationMs: performance.now() - startedAt, samples };
+    }
+    await delay(
+      Math.min(params.retryDelayMs ?? PROBE_WARMUP_RETRY_DELAY_MS, remainingMs(params.deadlineAt)),
+    );
+  }
+  const lastSample = samples.at(-1);
+  throw new Error(
+    lastSample
+      ? formatProbeFailure(lastSample)
+      : "gateway probes did not run before the warmup deadline",
+  );
+}
+
 async function runGatewaySample(options: {
   cadenceMs: number;
   concurrency: number;
@@ -560,8 +660,8 @@ async function runGatewaySample(options: {
   let gateway: ChildProcessWithoutNullStreams | undefined;
   let mockProvider: ChildProcessWithoutNullStreams | undefined;
   let client: Awaited<ReturnType<typeof connectGateway>> | undefined;
-  let gatewayOutput = () => "";
-  let mockOutput = () => "";
+  let gatewayOutput = { readOutput: () => "", readStderrTail: () => "" };
+  let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
 
   try {
     const configPath = buildConfig(root, mockPort, options.concurrency);
@@ -598,19 +698,28 @@ async function runGatewaySample(options: {
       startAt: runStartedAt,
     });
     if (ready.status !== 200) {
-      throw new Error(`gateway did not become ready\n${gatewayOutput()}`);
+      throw new Error(`gateway did not become ready\n${gatewayOutput.readOutput()}`);
     }
-    await waitForGatewayDispatchReady(gatewayOutput, options.deadlineAt);
+    await waitForGatewayDispatchReady(gatewayOutput.readOutput, options.deadlineAt);
     client = await connectGateway(port, options.deadlineAt);
     const rpc = client.request;
-    const baseline = await sampleGateway({
-      deadlineAt: options.deadlineAt,
-      port,
-      rpc,
-      runStartedAt,
-      serial: true,
+    // The first authenticated RPC lazily imports the server-method graph. It measured 6.9s
+    // on an idle M4 Pro (previously 18.4s) and crossed 20s on Linux; hot probes took 15-40ms.
+    // Keep that cold work out of the load-phase deadline and latency distributions.
+    const probeWarmupDeadlineAt = performance.now() + PROBE_WARMUP_TIMEOUT_MS;
+    client.setDeadlineAt(probeWarmupDeadlineAt);
+    const probeWarmup = await warmGatewayProbes({
+      deadlineAt: probeWarmupDeadlineAt,
+      sample: (deadlineAt) =>
+        sampleGateway({
+          deadlineAt,
+          port,
+          rpc,
+          runStartedAt,
+        }),
     });
-    assertBaselineProbes(baseline);
+    const loadDeadlineAt = options.deadlineAt + probeWarmup.durationMs;
+    client.setDeadlineAt(loadDeadlineAt);
 
     const controlUi: ControlUiProbe[] = [];
     const readyz: ReadyProbe[] = [];
@@ -619,7 +728,7 @@ async function runGatewaySample(options: {
     const turnsStartedAt = performance.now();
     const turns = Promise.all(
       Array.from({ length: options.concurrency }, (_, index) =>
-        runTurn(rpc, index, options.deadlineAt),
+        runTurn(rpc, index, loadDeadlineAt),
       ),
     ).finally(() => {
       turnsDone = true;
@@ -628,7 +737,7 @@ async function runGatewaySample(options: {
       for (;;) {
         const sampleStartedAt = performance.now();
         const sample = await sampleGateway({
-          deadlineAt: options.deadlineAt,
+          deadlineAt: loadDeadlineAt,
           port,
           rpc,
           runStartedAt,
@@ -642,7 +751,7 @@ async function runGatewaySample(options: {
         await delay(
           Math.min(
             Math.max(0, options.cadenceMs - (performance.now() - sampleStartedAt)),
-            requireRemainingMs(options.deadlineAt, "sampling gateway load"),
+            requireRemainingMs(loadDeadlineAt, "sampling gateway load"),
           ),
         );
       }
@@ -653,19 +762,14 @@ async function runGatewaySample(options: {
     return {
       controlUi,
       durationMs: performance.now() - runStartedAt,
+      probeWarmup,
       readyz,
       sessionsList,
       turnCount: options.concurrency,
       turnsDurationMs,
     };
   } catch (error) {
-    const detail = [
-      error instanceof Error ? error.message : String(error),
-      gatewayOutput() ? `gateway output:\n${gatewayOutput()}` : "",
-      mockOutput() ? `mock provider output:\n${mockOutput()}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const detail = formatRunFailure(error, gatewayOutput, mockOutput);
     throw new Error(detail, { cause: error });
   } finally {
     client?.close();
@@ -710,6 +814,35 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
   };
 }
 
+async function runBenchmarkSamples(params: {
+  now?: () => number;
+  onProgress?: (message: string) => void;
+  options: CliOptions;
+  runSample?: typeof runGatewaySample;
+}): Promise<BenchmarkRun[]> {
+  const now = params.now ?? performance.now.bind(performance);
+  const runSample = params.runSample ?? runGatewaySample;
+  const runs: BenchmarkRun[] = [];
+  const total = params.options.runs + params.options.warmup;
+  for (let index = 0; index < total; index += 1) {
+    // Each sample gets the same budget so earlier runs cannot shrink later agent waits.
+    // runGatewaySample extends this deadline by its probe warmup before load starts.
+    const deadlineAt = now() + params.options.timeoutMs;
+    const run = await runSample({ ...params.options, deadlineAt });
+    if (index >= params.options.warmup) {
+      runs.push(run);
+      params.onProgress?.(
+        `[bench-gateway-concurrency] run ${runs.length}/${params.options.runs}: turns=${run.turnCount} samples=${run.readyz.length} duration=${run.durationMs.toFixed(1)}ms`,
+      );
+    } else {
+      params.onProgress?.(
+        `[bench-gateway-concurrency] warmup ${index + 1}/${params.options.warmup}: duration=${run.durationMs.toFixed(1)}ms`,
+      );
+    }
+  }
+  return runs;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (hasHelpFlag(argv)) {
@@ -717,23 +850,7 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(argv);
-  const deadlineAt = performance.now() + options.timeoutMs;
-  const runs: BenchmarkRun[] = [];
-  const total = options.runs + options.warmup;
-  for (let index = 0; index < total; index += 1) {
-    requireRemainingMs(deadlineAt, "starting gateway run");
-    const run = await runGatewaySample({ ...options, deadlineAt });
-    if (index >= options.warmup) {
-      runs.push(run);
-      console.error(
-        `[bench-gateway-concurrency] run ${runs.length}/${options.runs}: turns=${run.turnCount} samples=${run.readyz.length} duration=${run.durationMs.toFixed(1)}ms`,
-      );
-    } else {
-      console.error(
-        `[bench-gateway-concurrency] warmup ${index + 1}/${options.warmup}: duration=${run.durationMs.toFixed(1)}ms`,
-      );
-    }
-  }
+  const runs = await runBenchmarkSamples({ onProgress: console.error, options });
   const payload = {
     cadenceMs: options.cadenceMs,
     concurrency: options.concurrency,
@@ -754,11 +871,16 @@ async function main(): Promise<void> {
 
 export const testing = {
   parseOptions,
-  assertBaselineProbes,
+  formatProbeFailure,
+  formatRunFailure,
+  requestHttp,
+  runBenchmarkSamples,
   runTurn,
   sampleGateway,
   summarizeNumbers,
   summarizeRuns,
+  tailLines,
+  warmGatewayProbes,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

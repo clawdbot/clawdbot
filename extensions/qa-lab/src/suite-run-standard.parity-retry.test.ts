@@ -131,6 +131,27 @@ beforeEach(() => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
+  it.each([
+    { forcedRuntime: undefined, expectedRuntime: "openclaw" },
+    { forcedRuntime: "codex" as const, expectedRuntime: "codex" },
+  ])(
+    "records $expectedRuntime as the selected runtime fact",
+    async ({ forcedRuntime, expectedRuntime }) => {
+      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async (env) => {
+        expect(env.runtimeId).toBe(expectedRuntime);
+        return makeRetryTestResult("pass");
+      });
+
+      await runQaFlowSuiteStandard(
+        { lab: makeRetryTestLab(), ...(forcedRuntime ? { forcedRuntime } : {}) },
+        makeRetryTestContext(),
+        runScenario,
+      );
+
+      expect(runScenario).toHaveBeenCalledOnce();
+    },
+  );
+
   it("skips connected-transport readiness for intentionally unhealthy startup", async () => {
     const context = makeRetryTestContext();
     context.gatewayRuntimeOptions = { allowUnhealthyStartup: true };

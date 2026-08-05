@@ -186,9 +186,6 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
-        if let nodeHostWorker, await nodeHostWorker.supports(command) {
-            return await nodeHostWorker.invoke(req)
-        }
         if self.isCanvasCommand(command), !Self.canvasEnabled() {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -230,6 +227,9 @@ actor MacNodeRuntime {
                  MacNodeClaudeSessionCatalogContract.readCommand:
                 return try await self.handleClaudeSessionInvoke(req)
             default:
+                if let nodeHostWorker, await nodeHostWorker.supports(command) {
+                    return await nodeHostWorker.invoke(req)
+                }
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {

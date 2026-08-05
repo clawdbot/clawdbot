@@ -2586,6 +2586,48 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
   });
 
+  it("renders one live card when active history contains the same tool call block", () => {
+    const groups = messageGroups({
+      runId: "run-live",
+      messages: [
+        { role: "user", content: "Read the file.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I will read it." },
+            {
+              type: "toolCall",
+              id: "call-read",
+              name: "read",
+              arguments: { path: "README.md" },
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      toolMessages: [
+        {
+          role: "assistant",
+          runId: "run-live",
+          toolCallId: "call-read",
+          content: [{ type: "toolcall", name: "read", arguments: { path: "README.md" } }],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const cards = groups.flatMap((group, index) =>
+      group.messages.flatMap((entry) => extractToolCards(entry.message, `restored-${index}`)),
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ callId: "call-read", name: "read" });
+    expect(
+      groups.some((group) =>
+        firstMessageContent(group).some((block) => requireRecord(block).text === "I will read it."),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
     const items = buildCachedChatItems(
       createProps({

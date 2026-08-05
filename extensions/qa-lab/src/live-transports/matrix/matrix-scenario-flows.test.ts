@@ -221,6 +221,7 @@ describe("Matrix QA Lab scenario flows", () => {
   });
 
   it("loads the voice preflight provider and media overrides", () => {
+    expect(readQaScenarioById("matrix-voice-preflight-mention").plugins).toEqual(["openai"]);
     expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
       kind: "flow",
       providerMode: "mock-openai",
@@ -254,6 +255,22 @@ describe("Matrix QA Lab scenario flows", () => {
           prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
         },
         groupMentionPatterns: ["matrix\\W+qa\\W+voice\\W+pre[ -]?flight\\W+ok(?:ay)?"],
+      },
+    });
+  });
+
+  it("loads the generated-image provider and model selection", () => {
+    const scenario = readQaScenarioById("matrix-room-generated-image-delivery");
+    expect(scenario.plugins).toEqual(["openai"]);
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      agents: {
+        defaults: {
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-1",
+            },
+          },
+        },
       },
     });
   });

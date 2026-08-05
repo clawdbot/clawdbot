@@ -186,23 +186,30 @@ export function broadcastToOwner(
   context: GatewayRequestContext,
   connId: string,
   event: TalkRealtimeRelayEvent,
-  options: { dropIfSlow?: boolean } = { dropIfSlow: true },
 ): void {
-  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), options);
+  // Classify the materialized Talk event so final results cannot be mistaken
+  // for transient tool progress by individual provider callback paths.
+  const delivery = relayEventDeliveryOptions(event, event.talkEvent);
+  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), delivery);
 }
 
-export function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload): {
+function relayEventDeliveryOptions(
+  event: TalkRealtimeRelayEventPayload,
+  talkEvent?: TalkEvent,
+): {
   dropIfSlow?: boolean;
 } {
   switch (event.type) {
-    case "ready":
-    case "error":
-    case "close":
-    case "mark":
-    case "toolCallCancelled":
-      return { dropIfSlow: false };
-    default:
+    case "audio":
+    case "inputAudio":
       return { dropIfSlow: true };
+    case "transcript":
+      return { dropIfSlow: !event.final };
+    case "toolProgress":
+    case "toolResult":
+      return { dropIfSlow: talkEvent?.final !== true };
+    default:
+      return { dropIfSlow: false };
   }
 }
 

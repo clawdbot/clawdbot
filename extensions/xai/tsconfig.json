@@ -548,6 +548,9 @@
       "@openclaw/qa-channel/api.js": [
         "../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"
       ],
+      "@openclaw/memory-core/api.js": [
+        "../../dist/plugin-sdk/extensions/memory-core/api.d.ts"
+      ],
       "@openclaw/ai": [
         "../../dist/plugin-sdk/packages/ai/src/index.d.ts"
       ],
@@ -845,9 +848,6 @@
       ],
       "@openclaw/ollama/runtime-api.js": [
         "./.boundary-stubs/ollama-runtime-api.d.ts"
-      ],
-      "@openclaw/speech-core/runtime-api.js": [
-        "./.boundary-stubs/speech-core-runtime-api.d.ts"
       ]
     }
   }

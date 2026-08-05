@@ -6,17 +6,38 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
 
-const mocks = vi.hoisted(() => ({
-  loadInstalledPluginIndexInstallRecords: vi.fn(),
-  replaceConfigFile: vi.fn(),
-  transformConfigFileWithRetry: vi.fn(),
-  writePersistedInstalledPluginIndexInstallRecords: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const lease = {
+    databasePath: "/tmp/openclaw-plugin-index.sqlite",
+    signal: new AbortController().signal,
+    assertOwned: vi.fn(),
+    assertOwnedInTransaction: vi.fn(),
+  };
+  return {
+    lease,
+    loadInstalledPluginIndexInstallRecords: vi.fn(),
+    replaceConfigFile: vi.fn(),
+    restorePersistedInstalledPluginIndexIfCurrent:
+      vi.fn<
+        typeof import("./installed-plugin-index-store.js").restorePersistedInstalledPluginIndexIfCurrent
+      >(),
+    transformConfigFileWithRetry: vi.fn(),
+    withPluginLifecycleLease: vi.fn(
+      async (_options: unknown, run: (activeLease: typeof lease) => Promise<unknown>) =>
+        await run(lease),
+    ),
+    writePersistedInstalledPluginIndexInstallRecordsWithLease:
+      vi.fn<
+        typeof import("./installed-plugin-index-records.js").writePersistedInstalledPluginIndexInstallRecordsWithLease
+      >(),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   replaceConfigFile: mocks.replaceConfigFile,
@@ -29,19 +50,51 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
   return {
     ...actual,
     loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
-    writePersistedInstalledPluginIndexInstallRecords:
-      mocks.writePersistedInstalledPluginIndexInstallRecords,
+    writePersistedInstalledPluginIndexInstallRecordsWithLease:
+      mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
   };
 });
+
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+  return {
+    ...actual,
+    restorePersistedInstalledPluginIndexIfCurrent:
+      mocks.restorePersistedInstalledPluginIndexIfCurrent,
+  };
+});
+
+vi.mock("./plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: mocks.withPluginLifecycleLease,
+}));
 
 import {
   commitConfigWithPendingPluginInstalls,
   commitConfigWriteWithPendingPluginInstalls,
+  commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,
   stripPendingPluginInstallRecords,
   transformConfigWithPendingPluginInstalls,
   unchangedPendingPluginInstallRecordIds,
 } from "./install-record-commit.js";
+
+function createTestInstalledPluginIndex(params: {
+  policyHash: string;
+  installRecords: Record<string, PluginInstallRecord>;
+}): InstalledPluginIndex {
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: params.policyHash,
+    generatedAtMs: 0,
+    refreshReason: "source-changed",
+    installRecords: structuredClone(params.installRecords),
+    plugins: [],
+    diagnostics: [],
+  };
+}
 
 describe("commitConfigWithPendingPluginInstalls", () => {
   beforeEach(() => {
@@ -56,7 +109,11 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       afterWrite: { mode: "auto" },
       followUp: { mode: "auto", requiresRestart: false },
     }));
-    mocks.writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
+    mocks.restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
+      previous: null,
+      revision: 1,
+    });
   });
 
   it("moves pending plugin install records into the plugin index before writing stripped config", async () => {
@@ -87,10 +144,23 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       baseHash: "config-1",
     });
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      ...existingRecords,
-      ...pendingRecords,
-    });
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      {
+        ...existingRecords,
+        ...pendingRecords,
+      },
+      {
+        config: {
+          plugins: {
+            entries: {
+              demo: { enabled: true },
+            },
+          },
+        },
+        filePath: mocks.lease.databasePath,
+        lease: mocks.lease,
+      },
+    );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: {
         plugins: {
@@ -120,6 +190,40 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       movedInstallRecords: true,
       persistedHash: "test-config-hash",
     });
+  });
+
+  it("uses the effective config for records-only index commits", async () => {
+    const nextConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: false },
+        },
+      },
+    };
+    const nextInstallRecords: Record<string, PluginInstallRecord> = {
+      demo: {
+        source: "npm",
+        spec: "demo@2.0.0",
+      },
+    };
+    const verifyConfigFresh = vi.fn(async () => undefined);
+
+    await commitPluginInstallRecordsOnly({
+      nextConfig,
+      nextInstallRecords,
+      verifyConfigFresh,
+    });
+
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      nextInstallRecords,
+      {
+        config: nextConfig,
+        filePath: mocks.lease.databasePath,
+        lease: mocks.lease,
+      },
+    );
+    expect(verifyConfigFresh).toHaveBeenCalledOnce();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("migrates source records below the canonical index and explicit pending records", async () => {
@@ -154,12 +258,19 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       commit,
     });
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      stale: existingRecords.stale,
-      missing: sourceConfig.plugins?.installs?.missing,
-      codex: nextConfig.plugins?.installs?.codex,
-      concurrent: nextConfig.plugins?.installs?.concurrent,
-    });
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      {
+        stale: existingRecords.stale,
+        missing: sourceConfig.plugins?.installs?.missing,
+        codex: nextConfig.plugins?.installs?.codex,
+        concurrent: nextConfig.plugins?.installs?.concurrent,
+      },
+      {
+        config: {},
+        filePath: mocks.lease.databasePath,
+        lease: mocks.lease,
+      },
+    );
     expect(commit).toHaveBeenCalledWith(
       {},
       {
@@ -204,10 +315,17 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       }),
     });
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      other: sourceConfig.plugins?.installs?.other,
-      codex: codexRecord,
-    });
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      {
+        other: sourceConfig.plugins?.installs?.other,
+        codex: codexRecord,
+      },
+      {
+        config: {},
+        filePath: mocks.lease.databasePath,
+        lease: mocks.lease,
+      },
+    );
   });
 
   it("strips only selected pending plugin install records", () => {
@@ -660,7 +778,15 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         spec: "existing@1.0.0",
       },
     };
+    const previousPersistedIndex = createTestInstalledPluginIndex({
+      policyHash: "previous-policy",
+      installRecords: existingRecords,
+    });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
+      previous: previousPersistedIndex,
+      revision: 17,
+    });
     mocks.replaceConfigFile.mockRejectedValue(new Error("config changed"));
 
     await expect(
@@ -678,20 +804,73 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       }),
     ).rejects.toThrow("config changed");
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(1, {
-      existing: {
-        source: "npm",
-        spec: "existing@1.0.0",
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      {
+        existing: {
+          source: "npm",
+          spec: "existing@1.0.0",
+        },
+        demo: {
+          source: "npm",
+          spec: "demo@1.0.0",
+        },
       },
-      demo: {
-        source: "npm",
-        spec: "demo@1.0.0",
+      {
+        config: {},
+        filePath: mocks.lease.databasePath,
+        lease: mocks.lease,
       },
-    });
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      2,
-      existingRecords,
     );
+    expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      17,
+      {
+        filePath: mocks.lease.databasePath,
+        lease: mocks.lease,
+      },
+    );
+  });
+
+  it("leaves marker state intact when a successor owns the plugin index", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(installPath, { recursive: true });
+    await markRetainedManagedNpmInstall({
+      packageDir: installPath,
+      pluginId: "codex",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-successor-owned-marker",
+    });
+    mocks.restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValueOnce(false);
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+
+    try {
+      await expect(
+        commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {},
+          nextInstallRecords: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@2.0.0",
+              installPath,
+            },
+          },
+          nextConfig: {},
+        }),
+      ).rejects.toThrow("config changed");
+
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("uses a plain config write when no pending plugin install records exist", async () => {
@@ -704,7 +883,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     const result = await commitConfigWithPendingPluginInstalls({ nextConfig });
 
     expect(mocks.loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig,
     });

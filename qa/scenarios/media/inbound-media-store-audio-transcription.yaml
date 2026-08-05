@@ -3,6 +3,8 @@ title: Inbound media-store audio transcription
 scenario:
   id: inbound-media-store-audio-transcription
   surface: media-understanding
+  plugins:
+    - openai
   coverage:
     primary:
       - media.inbound-media-store

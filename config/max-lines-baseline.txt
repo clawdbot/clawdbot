@@ -190,7 +190,6 @@ extensions/openai/realtime-voice-provider.ts
 extensions/openrouter/index.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
-extensions/policy/src/cli.test.ts
 extensions/policy/src/doctor/register.base.test-utils.ts
 extensions/policy/src/doctor/register.gateway-data-and-approvals.test-utils.ts
 extensions/policy/src/doctor/register.ingress-and-secrets.test-utils.ts
@@ -278,7 +277,6 @@ extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
 extensions/voice-call/index.test.ts
-extensions/voice-call/index.ts
 extensions/voice-call/src/cli.ts
 extensions/voice-call/src/media-stream.ts
 extensions/voice-call/src/webhook.test.ts
@@ -321,7 +319,6 @@ packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
-packages/speech-core/src/tts.test.ts
 packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
@@ -393,7 +390,6 @@ src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/replay-history.ts
 src/agents/embedded-agent-runner/run.incomplete-turn.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
-src/agents/embedded-agent-runner/run.overflow-compaction.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
@@ -533,7 +529,6 @@ src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
 src/channels/message/ingress-queue.ts
 src/channels/plugins/bundled.shape-guard.test.ts
-src/channels/plugins/bundled.ts
 src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
@@ -634,7 +629,6 @@ src/config/mutate.ts
 src/config/plugin-auto-enable.core.test.ts
 src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
-src/config/redact-snapshot.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
 src/config/schema.ts
@@ -861,7 +855,6 @@ src/plugins/discovery.ts
 src/plugins/hook-types.ts
 src/plugins/hooks.ts
 src/plugins/install-security-scan.runtime.ts
-src/plugins/install.npm-spec.e2e.test.ts
 src/plugins/install.npm-spec.test.ts
 src/plugins/install.test.ts
 src/plugins/installed-plugin-index.test.ts

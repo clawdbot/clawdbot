@@ -928,6 +928,7 @@ describe("dreaming controller", () => {
     expect(config.patch).toHaveBeenCalledWith({
       note: "Dreaming settings updated from the Dreaming tab.",
       raw: expect.any(Object),
+      canDispatch: expect.any(Function),
     });
     expect(getConfigPatchRawPayload(config)).toEqual({
       plugins: {
@@ -944,6 +945,25 @@ describe("dreaming controller", () => {
     });
     expect(state.dreamingModeSaving).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("does not patch after the caller lifecycle expires during schema lookup", async () => {
+    const { state } = createState();
+    const config = createConfig(state);
+    const lookup = createDeferred<unknown>();
+    let canDispatch = true;
+    vi.mocked(config.lookupSchemaPath).mockReturnValue(lookup.promise);
+
+    const update = updateDreamingEnabled(state, config, false, () => canDispatch);
+    await vi.waitFor(() => expect(config.lookupSchemaPath).toHaveBeenCalledOnce());
+    canDispatch = false;
+    lookup.resolve({
+      schema: { type: "object", additionalProperties: true },
+      children: [],
+    });
+
+    await expect(update).resolves.toBe(false);
+    expect(config.patch).not.toHaveBeenCalled();
   });
 
   it("falls back to memory-core when selected memory slot is blank", async () => {
@@ -1296,6 +1316,19 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(state.dreamDiaryContent).toBe("backfilled diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("does not run a write action with read-only operator access", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["doctor.memory.backfillDreamDiary"] },
+    };
+
+    await expect(backfillDreamDiary(state)).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("runs dream diary actions and reloads state for the selected agent", async () => {

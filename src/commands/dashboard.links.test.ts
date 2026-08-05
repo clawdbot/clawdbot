@@ -12,6 +12,7 @@ const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const issueDeviceBootstrapTokenMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const ensureGatewayReadyForOperationMock = vi.hoisted(() => vi.fn());
+const waitForControlUiDocumentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -35,6 +36,11 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 
 vi.mock("./gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
+}));
+
+vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
+  waitForControlUiDocument: waitForControlUiDocumentMock,
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -105,6 +111,8 @@ describe("dashboardCommand", () => {
       status: {},
       recovered: false,
     });
+    waitForControlUiDocumentMock.mockReset();
+    waitForControlUiDocumentMock.mockResolvedValue({ ready: true });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });

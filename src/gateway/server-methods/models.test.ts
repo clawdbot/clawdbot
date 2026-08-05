@@ -1274,6 +1274,83 @@ describe("models.list", () => {
     );
   });
 
+  it("hides inline provider keys during billing cooldown from model browsing", async () => {
+    // Regression: the models.list availability checker loaded the auth store
+    // for profile checks but did not pass it to the runtime availability check,
+    // so inline provider keys in billing cooldown stayed browseable.
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-inline-cooldown-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        const runtimeConfig = {
+          models: {
+            providers: {
+              cliproxyapi: {
+                api: "openai-responses",
+                baseUrl: "https://cliproxy.example/v1",
+                apiKey: "sk-inline-cooldown", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+        const catalog = [{ id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi" }];
+        const writeCooldown = (disabledUntil: number) =>
+          state.writeAuthProfiles({
+            version: 1,
+            profiles: {},
+            usageStats: {
+              "inline-api-key:cliproxyapi": {
+                disabledUntil,
+                disabledReason: "billing",
+              },
+            },
+          });
+
+        await writeCooldown(Date.now() + 60_000);
+        const cooled = requestModelsList({
+          view: "all",
+          runtimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+          reqId: "req-models-list-inline-cooldown-active",
+        });
+        await cooled.request;
+        expect(cooled.respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: false },
+            ],
+          },
+          undefined,
+        );
+
+        // Expired cooldown proves the store reaches the runtime check instead
+        // of the row being unavailable for an unrelated reason.
+        await writeCooldown(Date.now() - 60_000);
+        const recovered = requestModelsList({
+          view: "all",
+          runtimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+          reqId: "req-models-list-inline-cooldown-expired",
+        });
+        await recovered.request;
+        expect(recovered.respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: true },
+            ],
+          },
+          undefined,
+        );
+      },
+    );
+  });
+
   it("uses an exact hydrated runtime profile SecretRef as read-only proof", async () => {
     await withOpenClawTestState(
       {

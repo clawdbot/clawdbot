@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalUiSessionKeyForPersistence,
+  isUiSelectedGlobalSessionKey,
   parseSessionKeyParts,
   resolveUiSessionNavigationParentKey,
   uiSessionEventMatches,
@@ -86,6 +87,9 @@ describe("UI session identity", () => {
     expect(uiSessionEventMatches(host, "agent:ops:main")).toBe(true);
     expect(canonicalUiSessionKeyForPersistence(host, "main")).toBe("agent:ops:home");
     expect(canonicalUiSessionKeyForPersistence(host, "agent:ops:main")).toBe("agent:ops:home");
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:home")).toBe(true);
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:main")).toBe(true);
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:other")).toBe(false);
   });
 
   it.each([
