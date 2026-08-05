@@ -155,11 +155,21 @@ function commonAncestorDir(roots: string[]): string {
 // Mirror Node fs.glob's default dot behavior while walking: `*` and `**` never
 // match a path segment that begins with ".", so a dot directory can only hold a
 // match when the pattern explicitly names a literal-dot segment at the aligned
-// depth. Returns whether `dirSegments` can be a prefix of some path the pattern
-// matches; used to prune dot-directory subtrees (`.git`, `.openclaw`, …) the
-// glob could never reach. matchesGlob applies the dot rule per single segment,
-// so the only extra rule here is that `**` cannot consume a leading-dot segment.
-function globPrefixCanDescend(dirSegments: string[], patternSegments: string[]): boolean {
+// depth. Braces expand to independent concrete alternatives in Node's globber,
+// and its dot rule runs per alternative, so a dot subtree is prunable only when
+// NO brace-free expansion could descend into it — OR the per-expansion check.
+function globPrefixCanDescend(dirSegments: string[], patternExpansions: string[][]): boolean {
+  return patternExpansions.some((patternSegments) =>
+    expansionPrefixCanDescend(dirSegments, patternSegments),
+  );
+}
+
+// Per-expansion dot-prefix descent check for one brace-free pattern. Returns
+// whether `dirSegments` can be a prefix of some path this expansion matches;
+// used to prune dot-directory subtrees (`.git`, `.openclaw`, …) the glob could
+// never reach. matchesGlob applies the dot rule per single segment, so the only
+// extra rule here is that `**` cannot consume a leading-dot segment.
+function expansionPrefixCanDescend(dirSegments: string[], patternSegments: string[]): boolean {
   const dirLength = dirSegments.length;
   const patternLength = patternSegments.length;
   const match = (dirIndex: number, patternIndex: number): boolean => {
@@ -203,8 +213,20 @@ function globPrefixCanDescend(dirSegments: string[], patternSegments: string[]):
 // search over the walked path reproduces the same match set. `**` may match zero
 // or more segments but never consumes the symlink segment itself (that is the
 // wildcard-reached case) and never crosses a leading-dot segment, matching the
-// dot rule in globPrefixCanDescend.
-function symlinkDescentAllowed(dirSegments: string[], patternSegments: string[]): boolean {
+// dot rule in globPrefixCanDescend. Braces expand to independent literal
+// alternatives in Node's globber (`pkg/{linked,other}/**` follows the `linked`
+// symlink via the `linked` alternative), so descent is allowed when ANY
+// brace-free expansion's alignment allows it; each expansion is brace-free, so
+// the literal / **-taint / leading-dot rules below classify each concrete
+// alternative correctly rather than mis-reading a raw `{…}` segment as magic.
+function symlinkDescentAllowed(dirSegments: string[], patternExpansions: string[][]): boolean {
+  return patternExpansions.some((patternSegments) =>
+    expansionAllowsSymlinkDescent(dirSegments, patternSegments),
+  );
+}
+
+// Per-expansion symlink-descent alignment for one brace-free pattern.
+function expansionAllowsSymlinkDescent(dirSegments: string[], patternSegments: string[]): boolean {
   const dirLength = dirSegments.length;
   const patternLength = patternSegments.length;
   const lastDirIndex = dirLength - 1;
@@ -299,7 +321,16 @@ async function* walkWorkspaceFiles(
   matcher: Minimatch,
   normalizedPattern: string,
 ): AsyncGenerator<string> {
-  const patternSegments = normalizedPattern.split("/");
+  // Brace alternations expand to separate concrete alternatives in Node's
+  // globber (`pkg/{linked,other}/**` -> `pkg/linked/**` and `pkg/other/**`), and
+  // its symlink and dot-prefix rules run per alternative. Expand once here, off
+  // the symlink hot path, so the descent checks classify each brace-free
+  // alternative independently instead of mis-reading a raw `{…}` segment as a
+  // magic segment. A brace-free pattern expands to a single alternative, so
+  // existing single-path behavior is preserved.
+  const patternExpansions = braceExpand(normalizedPattern, extraBootstrapMagicOptions()).map(
+    (expansion) => expansion.split("/"),
+  );
   // Canonical workspace root bounds symlink descent (see resolveSymlinkDescent).
   let workspaceRealpath: string;
   try {
@@ -354,7 +385,7 @@ async function* walkWorkspaceFiles(
         // fs.glob's default dot behavior instead of walking `.git`/`.openclaw`.
         if (
           entry.name.startsWith(".") &&
-          !globPrefixCanDescend(normalizedChildPath.split("/"), patternSegments)
+          !globPrefixCanDescend(normalizedChildPath.split("/"), patternExpansions)
         ) {
           continue;
         }
@@ -384,7 +415,7 @@ async function* walkWorkspaceFiles(
         // stays off the stack.
         const childSegments = normalizedChildPath.split("/");
         if (
-          symlinkDescentAllowed(childSegments, patternSegments) &&
+          symlinkDescentAllowed(childSegments, patternExpansions) &&
           matcher.match(normalizedChildPath, true)
         ) {
           const descendFrame = await resolveSymlinkDescent(

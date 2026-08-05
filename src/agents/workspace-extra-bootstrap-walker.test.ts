@@ -296,4 +296,122 @@ describe("resolveExtraBootstrapPatternPaths symlink descent parity", () => {
       expect(matches).toStrictEqual([]);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "follows a literal brace-alternative symlink (per-expansion alignment)",
+    async () => {
+      // Regression (P1): `pkg/{linked,other}/**/AGENTS.md` expands in Node's
+      // globber to literal `linked` and `other` alternatives, so a `pkg/linked`
+      // dir symlink is named by a literal and followed. Classifying the raw
+      // `{linked,other}` segment as magic left the symlink terminal and dropped
+      // these matches; expanding braces per-alternative restores descent.
+      const workspaceDir = await createWorkspaceDir("brace-alt-literal");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      const otherDir = path.join(pkgDir, "other");
+      const target = path.join(workspaceDir, "target");
+      const targetNested = path.join(target, "nested");
+      await fs.mkdir(otherDir, { recursive: true });
+      await fs.mkdir(targetNested, { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "top", "utf-8");
+      await fs.writeFile(path.join(targetNested, "AGENTS.md"), "nested", "utf-8");
+      await fs.writeFile(path.join(otherDir, "AGENTS.md"), "other", "utf-8");
+      if (!(await trySymlink(path.join("..", "target"), path.join(pkgDir, "linked")))) {
+        return;
+      }
+
+      const pattern = "pkg/{linked,other}/**/AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual([
+        "pkg/linked/AGENTS.md",
+        "pkg/linked/nested/AGENTS.md",
+        "pkg/other/AGENTS.md",
+      ]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a brace-alternative wildcard-reached symlink terminal",
+    async () => {
+      // `pkg/{*,other}/AGENTS.md`: the `*` alternative reaches the `pkg/linked`
+      // symlink by wildcard (descent refused) and the `other` alternative does
+      // not name it, so no expansion follows the link.
+      const workspaceDir = await createWorkspaceDir("brace-alt-wildcard");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      const target = path.join(workspaceDir, "target");
+      await fs.mkdir(pkgDir, { recursive: true });
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "tgt", "utf-8");
+      if (!(await trySymlink(path.join("..", "target"), path.join(pkgDir, "linked")))) {
+        return;
+      }
+
+      const pattern = "pkg/{*,other}/AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual([]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "follows a cross-slash brace alternative that names the symlink via a literal prefix",
+    async () => {
+      // `{**/linked,pkg/linked}/**/AGENTS.md`: the `**/linked` alternative reaches
+      // `pkg/linked` directly after `**` (wildcard-reached, refused) but the
+      // `pkg/linked` alternative names it via literal `pkg`, so descent is allowed
+      // through that expansion. Pins per-expansion ** taint under OR-combining.
+      const workspaceDir = await createWorkspaceDir("brace-alt-crossslash-follow");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      const target = path.join(workspaceDir, "target");
+      const targetNested = path.join(target, "nested");
+      await fs.mkdir(pkgDir, { recursive: true });
+      await fs.mkdir(targetNested, { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "top", "utf-8");
+      await fs.writeFile(path.join(targetNested, "AGENTS.md"), "nested", "utf-8");
+      if (!(await trySymlink(path.join("..", "target"), path.join(pkgDir, "linked")))) {
+        return;
+      }
+
+      const pattern = "{**/linked,pkg/linked}/**/AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual(["pkg/linked/AGENTS.md", "pkg/linked/nested/AGENTS.md"]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not follow a cross-slash brace alternative when every expansion is **-tainted or misses",
+    async () => {
+      // `{**/linked,other}/**/AGENTS.md`: `**/linked` reaches `pkg/linked` directly
+      // after `**` (wildcard-reached, refused) and `other` never names it, so no
+      // expansion follows the link. Confirms OR-combining does not leak descent
+      // from a **-tainted alternative.
+      const workspaceDir = await createWorkspaceDir("brace-alt-crossslash-refuse");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      const target = path.join(workspaceDir, "target");
+      await fs.mkdir(pkgDir, { recursive: true });
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "tgt", "utf-8");
+      if (!(await trySymlink(path.join("..", "target"), path.join(pkgDir, "linked")))) {
+        return;
+      }
+
+      const pattern = "{**/linked,other}/**/AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual([]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+  );
 });
