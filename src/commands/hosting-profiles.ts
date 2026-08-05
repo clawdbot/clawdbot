@@ -5,12 +5,11 @@ import { callGateway } from "../gateway/call.js";
 import {
   formatHostingProfileIds,
   getStandardHostingProfile,
-  HOSTING_PROFILE_IDS,
-  HOSTING_PROFILE_CONTRACT_VERSION,
   listStandardHostingProfiles,
   parseHostingProfileId,
   type HostingProfileDescriptor,
 } from "../hosting/profiles.js";
+import { HOSTING_PROFILE_CONTRACT_VERSION, HOSTING_PROFILE_IDS } from "../hosting/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
