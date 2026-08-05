@@ -515,6 +515,10 @@ own trust.
 - `parentPath`: optional parent command path for nested command groups, such as
   `["nodes"]`
 
+Nested plugin CLI registrations are only for extension points that core
+documents as plugin-extensible. The `tools` root is reserved for OpenClaw's
+read-only inventory commands and does not load plugin-owned child commands.
+
 For paired-node features, prefer
 `api.registerNodeCliFeature(registrar, opts?)`. It is a small wrapper around
 `api.registerCli(..., { parentPath: ["nodes"] })` and makes commands such as

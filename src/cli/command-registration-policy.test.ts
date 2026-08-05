@@ -74,6 +74,13 @@ describe("command-registration-policy", () => {
     ).toBe(true);
     expect(
       shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "tools", "commands", "list"],
+        primary: "tools",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
         argv: ["node", "openclaw", "googlemeet", "login"],
         primary: "googlemeet",
         hasBuiltinPrimary: false,
