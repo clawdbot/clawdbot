@@ -1,15 +1,18 @@
 // Whatsapp plugin module decodes WhatsApp poll votes for the poll_vote_received hook.
 import { createHash } from "node:crypto";
+import path from "node:path";
 import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   rememberWhatsAppBaileysCacheEntry,
   readWhatsAppBaileysCacheEntry,
 } from "./baileys-cache.js";
 import { findMessageSection } from "./extract.js";
+import { getWhatsAppPollStore, type WhatsAppPollStore } from "./poll-durable-store.js";
 
 export type WhatsAppDecodedPollVote = {
   /** Id of the poll creation message this vote applies to. */
@@ -143,6 +146,8 @@ export function decodeWhatsAppPollVote(params: {
   selfJid?: string | null;
   /** Our own LID-space identity, when this account has one (LID-migrated). */
   selfLid?: string | null;
+  /** Scopes the durable-store fallback lookup below; omit to skip it (e.g. in isolated unit tests). */
+  accountId?: string;
 }): WhatsAppDecodedPollVote | undefined {
   const pollUpdateMessage = params.message?.pollUpdateMessage;
   const creationKey = pollUpdateMessage?.pollCreationMessageKey;
@@ -151,7 +156,13 @@ export function decodeWhatsAppPollVote(params: {
   if (!pollUpdateMessage || !creationKey?.id || !vote?.encPayload || !vote?.encIv || !remoteJid) {
     return undefined;
   }
-  const pollCreationMessage = params.getCachedMessage(remoteJid, creationKey.id);
+  // Falls back to the durable store when the in-memory general message cache
+  // missed (e.g. the poll creation echo was cached before a gateway restart).
+  const pollCreationMessage =
+    params.getCachedMessage(remoteJid, creationKey.id) ??
+    (params.accountId
+      ? resolvePollStore().readPollCreationMessage(params.accountId, remoteJid, creationKey.id)
+      : undefined);
   const pollEncKey = toPollEncKeyBuffer(pollCreationMessage?.messageContextInfo?.messageSecret);
   if (!pollCreationMessage || !pollEncKey) {
     return undefined;
@@ -200,13 +211,43 @@ export function isWhatsAppPollCreationMessage(message: proto.IMessage | null | u
   return Boolean(findMessageSection(message, POLL_CREATION_SECTIONS));
 }
 
-// Poll retention (both of the caches below) is intentionally in-memory only,
-// bounded, and does not survive a process restart. Persisting poll state
-// durably is an open design question (tracked in the issue this hook shipped
-// with) that needs a maintainer-set retention/privacy contract before this
-// module invents one unilaterally.
-const OWN_POLL_CREATION_TTL_MS = 10 * 60 * 1000;
+// Poll retention: an in-memory cache for the common case (no restart between
+// creation and vote) backed by a durable, bounded, extension-local SQLite
+// store (see poll-durable-store.ts) so a gateway restart doesn't lose the
+// ability to recognize/decode a vote that arrives afterward. The retention
+// window is configurable (channels.whatsapp.pollVoteRetentionMs, per-account
+// override); this remains the sole privacy control — see
+// docs/channels/whatsapp.md for the tradeoff this makes.
+const DEFAULT_POLL_VOTE_RETENTION_MS = 10 * 60 * 1000;
 const recentOwnPollCreationKeys: Map<string, { expiresAt: number; value: true }> = new Map();
+
+/** Resolves the configured poll-state retention window, account overriding channel, defaulting to 10 minutes. */
+export function resolveWhatsAppPollVoteRetentionMs(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): number {
+  const channelConfig = cfg.channels?.whatsapp;
+  const accountConfig = accountId ? channelConfig?.accounts?.[accountId] : undefined;
+  return (
+    accountConfig?.pollVoteRetentionMs ??
+    channelConfig?.pollVoteRetentionMs ??
+    DEFAULT_POLL_VOTE_RETENTION_MS
+  );
+}
+
+let pollStoreOverride: WhatsAppPollStore | undefined;
+
+/** Test-only hook to inject an isolated store instead of the process-wide singleton. */
+export function setWhatsAppPollStoreForTests(store: WhatsAppPollStore | undefined): void {
+  pollStoreOverride = store;
+}
+
+function resolvePollStore(): WhatsAppPollStore {
+  if (pollStoreOverride) {
+    return pollStoreOverride;
+  }
+  return getWhatsAppPollStore(path.join(resolveStateDir(), "whatsapp", "poll-state"));
+}
 
 /**
  * Record that a poll creation message at `remoteJid:messageId` was sent by
@@ -219,28 +260,55 @@ export function rememberWhatsAppOwnPollCreation(
   accountId: string,
   remoteJid: string | null | undefined,
   messageId: string | null | undefined,
+  cfg: OpenClawConfig,
 ): void {
   if (!remoteJid || !messageId) {
     return;
   }
+  const ttlMs = resolveWhatsAppPollVoteRetentionMs(cfg, accountId);
   rememberWhatsAppBaileysCacheEntry(
     recentOwnPollCreationKeys,
     `${accountId}:${remoteJid}:${messageId}`,
     true,
-    OWN_POLL_CREATION_TTL_MS,
+    ttlMs,
   );
+  resolvePollStore().rememberOwnPollCreation(accountId, remoteJid, messageId, ttlMs);
+}
+
+/**
+ * Durably persists the poll creation message's own content (including the
+ * decryption key) once its `messages.upsert` echo arrives, so a vote that
+ * arrives after a gateway restart can still be decoded — the in-memory
+ * general message cache (`rememberBaileysMessage`) does not survive one.
+ */
+export function rememberWhatsAppPollCreationMessage(
+  accountId: string,
+  remoteJid: string | null | undefined,
+  messageId: string | null | undefined,
+  message: proto.IMessage | null | undefined,
+  cfg: OpenClawConfig,
+): void {
+  if (!remoteJid || !messageId || !message) {
+    return;
+  }
+  const ttlMs = resolveWhatsAppPollVoteRetentionMs(cfg, accountId);
+  resolvePollStore().rememberPollCreationMessage(accountId, remoteJid, messageId, message, ttlMs);
 }
 
 function isOwnPollCreation(accountId: string, remoteJid: string, messageId: string): boolean {
-  return (
+  if (
     readWhatsAppBaileysCacheEntry(
       recentOwnPollCreationKeys,
       `${accountId}:${remoteJid}:${messageId}`,
     ) === true
-  );
+  ) {
+    return true;
+  }
+  // Falls back to the durable store, covering the case where the in-memory
+  // cache was wiped by a gateway restart since the poll was created.
+  return resolvePollStore().isOwnPollCreation(accountId, remoteJid, messageId);
 }
 
-const POLL_VOTE_DEDUP_TTL_MS = 10 * 60 * 1000;
 const recentlyDispatchedPollVoteKeys: Map<string, { expiresAt: number; value: true }> = new Map();
 
 /**
@@ -342,17 +410,17 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     return;
   }
   const voteUpdateId = params.key.id;
+  const ttlMs = resolveWhatsAppPollVoteRetentionMs(params.cfg, params.accountId);
   if (voteUpdateId) {
     const dedupKey = `${params.accountId}:${remoteJid}:${voteUpdateId}`;
-    if (readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey)) {
+    if (
+      readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey) ||
+      resolvePollStore().isVoteDedup(params.accountId, remoteJid, voteUpdateId)
+    ) {
       return;
     }
-    rememberWhatsAppBaileysCacheEntry(
-      recentlyDispatchedPollVoteKeys,
-      dedupKey,
-      true,
-      POLL_VOTE_DEDUP_TTL_MS,
-    );
+    rememberWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey, true, ttlMs);
+    resolvePollStore().rememberVoteDedup(params.accountId, remoteJid, voteUpdateId, ttlMs);
   }
   const decoded = decodeWhatsAppPollVote({
     message: params.message,
@@ -360,6 +428,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     getCachedMessage: params.getCachedMessage,
     selfJid: params.selfJid,
     selfLid: params.selfLid,
+    accountId: params.accountId,
   });
   if (decoded) {
     emitWhatsAppPollVoteReceivedHook({

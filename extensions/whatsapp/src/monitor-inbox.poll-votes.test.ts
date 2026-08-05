@@ -326,14 +326,13 @@ describe("web monitor inbox poll vote hook", () => {
         pollMessageId,
         "VOTE-CROSS-ACCOUNT",
       );
-      // Only account A observed (and recorded) this poll as its own.
-      rememberWhatsAppOwnPollCreation(ACCOUNT_A, CHAT_JID, pollMessageId);
-
       const cfg = {
         channels: {
           whatsapp: { allowFrom: ["*"], pluginHooks: { pollVoteReceived: true } },
         },
       } as never;
+      // Only account A observed (and recorded) this poll as its own.
+      rememberWhatsAppOwnPollCreation(ACCOUNT_A, CHAT_JID, pollMessageId, cfg);
 
       // Account B, opted in, observes a vote on the same chat/poll id — must
       // not fire, since B never recorded this poll as its own.

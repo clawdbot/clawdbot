@@ -46,6 +46,7 @@ import {
   isWhatsAppPollCreationMessage,
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
+  rememberWhatsAppPollCreationMessage,
 } from "./poll-votes.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
@@ -503,7 +504,20 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
       if (msg.key?.fromMe && isWhatsAppPollCreationMessage(msg.message)) {
-        rememberWhatsAppOwnPollCreation(options.accountId, msg.key.remoteJid, msg.key.id);
+        const cfgForPollOwnership = options.loadConfig?.() ?? options.cfg;
+        rememberWhatsAppOwnPollCreation(
+          options.accountId,
+          msg.key.remoteJid,
+          msg.key.id,
+          cfgForPollOwnership,
+        );
+        rememberWhatsAppPollCreationMessage(
+          options.accountId,
+          msg.key.remoteJid,
+          msg.key.id,
+          msg.message,
+          cfgForPollOwnership,
+        );
       }
 
       if (msg.message?.pollUpdateMessage) {

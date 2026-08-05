@@ -51,6 +51,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       reactionLevels: ["off", "ack", "minimal", "extensive"],
     }),
     pluginHooks: WhatsAppPluginHooksSchema,
+    pollVoteRetentionMs: z.number().int().positive().optional(),
   };
 }
 

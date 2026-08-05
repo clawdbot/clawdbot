@@ -1,12 +1,33 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { proto, WAMessageKey } from "baileys";
-import { describe, expect, it } from "vitest";
-import { decodeWhatsAppPollVote } from "./poll-votes.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WhatsAppPollStore } from "./poll-durable-store.js";
+import {
+  decodeWhatsAppPollVote,
+  maybeEmitWhatsAppPollVoteReceivedHook,
+  rememberWhatsAppOwnPollCreation,
+  rememberWhatsAppPollCreationMessage,
+  setWhatsAppPollStoreForTests,
+} from "./poll-votes.js";
 import {
   buildPollCreationMessageForTests,
   buildPollUpdateMessageForTests,
   encryptPollVoteForTests,
   wrapAsPollCreationMessageV4ForTests,
 } from "./poll-votes.test-support.js";
+
+const { runPollVoteReceivedMock } = vi.hoisted(() => ({
+  runPollVoteReceivedMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: (hookName: string) => hookName === "poll_vote_received",
+    runPollVoteReceived: runPollVoteReceivedMock,
+  }),
+}));
 
 const CHAT_JID = "123456@g.us";
 const POLL_CREATOR_JID = "15550001111@s.whatsapp.net";
@@ -276,5 +297,104 @@ describe("decodeWhatsAppPollVote", () => {
     });
 
     expect(decoded).toBeUndefined();
+  });
+});
+
+describe("poll vote decoding survives a simulated gateway restart (durable-store-only fallback)", () => {
+  let dir: string;
+  let store: WhatsAppPollStore;
+  const CFG = {
+    channels: { whatsapp: { allowFrom: ["*"], pluginHooks: { pollVoteReceived: true } } },
+  } as never;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-poll-restart-"));
+    store = new WhatsAppPollStore(dir);
+    setWhatsAppPollStoreForTests(store);
+  });
+
+  afterEach(() => {
+    setWhatsAppPollStoreForTests(undefined);
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("decodeWhatsAppPollVote falls back to the durable store when getCachedMessage misses", () => {
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Restart-A", "Restart-B"],
+    });
+    const creationKey = creationKeyFor("POLL-RESTART-DECODE");
+    // Writes only to the durable store directly, never touching the
+    // in-memory cache — this is what "the process restarted" looks like.
+    store.rememberPollCreationMessage(
+      "acct",
+      CHAT_JID,
+      "POLL-RESTART-DECODE",
+      pollCreationMessage,
+      60_000,
+    );
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Restart-A"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: "POLL-RESTART-DECODE",
+      voterJid: VOTER_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+
+    const decoded = decodeWhatsAppPollVote({
+      message: voteMessage,
+      key: voteKeyFor("VOTE-RESTART-DECODE"),
+      getCachedMessage: () => undefined, // in-memory cache "lost" by the restart
+      selfJid: POLL_CREATOR_JID,
+      accountId: "acct",
+    });
+
+    expect(decoded?.selectedOptions).toEqual(["Restart-A"]);
+  });
+
+  it("maybeEmitWhatsAppPollVoteReceivedHook fires end-to-end from durable state alone", async () => {
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Restart-A", "Restart-B"],
+    });
+    const creationKey = creationKeyFor("POLL-RESTART-HOOK");
+    // Simulates what a live gateway would have written before restarting:
+    // ownership + the creation message, both durable, nothing in memory.
+    rememberWhatsAppOwnPollCreation("acct", CHAT_JID, "POLL-RESTART-HOOK", CFG);
+    rememberWhatsAppPollCreationMessage(
+      "acct",
+      CHAT_JID,
+      "POLL-RESTART-HOOK",
+      pollCreationMessage,
+      CFG,
+    );
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Restart-B"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: "POLL-RESTART-HOOK",
+      voterJid: VOTER_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+
+    maybeEmitWhatsAppPollVoteReceivedHook({
+      cfg: CFG,
+      accountId: "acct",
+      message: voteMessage,
+      key: voteKeyFor("VOTE-RESTART-HOOK"),
+      // The in-memory general message cache "lost" by the restart — only the
+      // durable store (populated above) can supply the creation message now.
+      getCachedMessage: () => undefined,
+      selfJid: POLL_CREATOR_JID,
+    });
+
+    await vi.waitFor(() => {
+      expect(runPollVoteReceivedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ selectedOptions: ["Restart-B"] }),
+        expect.anything(),
+      );
+    });
   });
 });

@@ -278,6 +278,59 @@ agent run — and delivers `pollMessageId`, `chatJid`, `voter`, and
 [Plugin hooks → Message hooks](/plugins/hooks#message-hooks) for the full
 payload reference.
 
+**Retention.** Decoding a vote requires the poll's decryption key, captured
+when the poll is created. That key (and the "this account created this poll"
+record) is kept in a small, extension-local SQLite database — separate from
+the main OpenClaw state database — so it survives a gateway restart, not just
+an in-memory cache. Each record expires after `pollVoteRetentionMs`
+(default: `600000`, 10 minutes) counted from poll creation; a vote arriving
+after that window (or an unrelated poll's leftover state) is not decodable
+and the hook simply does not fire for it — no error is raised. Configure the
+window channel-wide or per account:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pollVoteRetentionMs: 1800000, // 30 minutes
+      accounts: {
+        support: {
+          pollVoteRetentionMs: 3600000, // override: 1 hour for this account
+        },
+      },
+    },
+  },
+}
+```
+
+**Known limitation: a vote cast while the gateway is offline is not
+recovered when it comes back.** The durable retention above solves the half
+of this that's under OpenClaw's control — the decryption key and ownership
+record survive a restart. The other half is not: WhatsApp does not appear to
+redeliver a poll vote that arrived while this account's session was
+disconnected, at least not for a companion/linked device, and at least not
+within several minutes of reconnecting. Two approaches were tried and
+verified live against a real account:
+
+1. Passive reconnect — simply waiting after the socket reports `open` again.
+   No redelivery observed after 5–11 minutes across two independent runs.
+2. Active on-demand history sync — calling Baileys'
+   `sock.fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestampMs)`
+   (`HISTORY_SYNC_ON_DEMAND` peer-data-operation) on reconnect, anchored to
+   the poll's own creation message. The request was accepted and sent to the
+   linked primary phone, but produced no response within ~4.5 minutes. This
+   likely requires the primary phone's WhatsApp app to be foregrounded to
+   service the request (matching its normal use as an on-demand "load older
+   messages while scrolling" mechanism, not a background catch-up sync) —
+   unconfirmed.
+
+In practice this matters only for votes cast during the (typically short)
+window a gateway process is down; a gateway that stays connected sees every
+vote normally. Recovering votes cast during that window is left as a future
+improvement — candidates include retrying `fetchMessageHistory` on a
+schedule rather than once, or triggering it from a plugin hook when the
+primary phone is known to be active.
+
 ## Access control and activation
 
 <Tabs>
