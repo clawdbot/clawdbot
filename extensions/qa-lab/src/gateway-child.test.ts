@@ -421,6 +421,58 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
+  it("cleans up temp QA gateway roots when repo CLI discovery fails before startup", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-cli-discovery-fail-");
+    const emptyRepo = await tempDirs.makeTempDir("qa-gateway-empty-repo-");
+    qaTempPathState.preferredTmpDir = tempParent;
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: emptyRepo,
+        useRepoCli: true,
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("OpenClaw CLI entry not found");
+
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+  });
+
+  it.each([
+    {
+      failure: "bundled plugin staging cannot copy root package metadata",
+      packageContents: undefined,
+      expectedError: /ENOENT/u,
+    },
+    {
+      failure: "host version resolution cannot parse staged package metadata",
+      packageContents: "{",
+      expectedError: /JSON/u,
+    },
+  ])("cleans staged QA runtime roots when $failure", async ({ packageContents, expectedError }) => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-staged-runtime-fail-");
+    const repoRoot = await tempDirs.makeTempDir("qa-gateway-staged-runtime-repo-");
+    const stagedRuntimeParent = path.join(repoRoot, ".artifacts", "qa-runtime");
+    qaTempPathState.preferredTmpDir = tempParent;
+
+    if (packageContents !== undefined) {
+      await writeFile(path.join(repoRoot, "package.json"), packageContents, "utf8");
+    }
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot,
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow(expectedError);
+
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+    await expect(readdir(stagedRuntimeParent)).resolves.toStrictEqual([]);
+  });
+
   it("reports command spawn errors instead of leaking unhandled child errors", async () => {
     const preferredTempParent = await tempDirs.makeTempDir("qa-gateway-default-spawn-fail-");
     const commandTempParent = await tempDirs.makeTempDir("qa-gateway-command-spawn-fail-");
