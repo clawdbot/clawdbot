@@ -18,6 +18,7 @@ import {
   isGatewayServiceEnv,
   resolveGatewayProfileSuffix,
 } from "../../daemon/constants.js";
+import { readFutureConfigActionBlock } from "../../daemon/future-config-guard.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -589,13 +590,40 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   } catch (err) {
     // A completed package swap leaves this process older than the config it now
     // reads, so the version guard refuses the restart and the service stays
-    // stopped. Recover by starting the already-installed unit, but only after
-    // this update already recorded a rooted ownership verdict. Missing verdict
-    // is not a future-config restart refusal.
+    // stopped. Recover by starting the already-installed unit only when this
+    // update already recorded a rooted ownership verdict, the config is
+    // genuinely newer than this binary, and the managed service is still
+    // installed. Missing verdict is not a future-config restart refusal.
     if (!before.serviceUpdateVerdict || !("root" in before.serviceUpdateVerdict)) {
       defaultRuntime.error(
         `Failed to restart managed gateway service after failed update: ${String(err)}`,
       );
+      return;
+    }
+    const block = await readFutureConfigActionBlock("restart");
+    if (!block) {
+      const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+      return;
+    }
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: before.serviceEnv,
+      requireEffective: true,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+    });
+    if (!state.installed) {
+      const message =
+        `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
+        "recovery start skipped because no managed service is installed.";
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
       return;
     }
     try {

@@ -455,20 +455,20 @@ export function resolveGatewayService(): GatewayService {
 }
 
 /**
- * Restores a managed service that this process stopped for an update.
+ * Restores a managed service after a package swap installs a newer OpenClaw.
  *
- * A package swap installs a newer OpenClaw and its config, so the updater that
- * stopped the service is now older than the config and the future-config guard
- * refuses its recovery restart. Leaving the gateway stopped is the worse
- * outcome, and starting is not the action the guard protects against: it does
- * not rewrite the unit and does not act on the config, it asks the service
- * manager to run the unit already on disk, whose ExecStart points at the newly
- * installed binary. That binary applies the version guard itself at startup.
+ * Only safe when both preconditions hold:
+ * - The running config was last written by a newer OpenClaw version (the
+ *   future-config guard would refuse a regular restart, but starting an
+ *   already-installed unit is exempt because it does not rewrite the unit or
+ *   act on the config).
+ * - The managed service unit is still installed on disk, so "start" asks the
+ *   service manager to run the unit whose ExecStart points at the newly
+ *   installed binary. On launchd, start can enable or bootstrap an agent;
+ *   requiring an installed unit keeps this to "run what is already on disk."
  *
- * This is the same recovery the detached update handoff performs by invoking the
- * service manager directly; going through the platform adapter keeps launchd and
- * Scheduled Tasks working instead of only systemd. Ownership is still enforced,
- * so a service OpenClaw does not manage is never touched.
+ * Ownership is still enforced, so a service OpenClaw does not manage is never
+ * touched.
  */
 export async function startGatewayServiceAfterFailedUpdate(
   args: GatewayServiceControlArgs,
