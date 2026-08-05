@@ -79,7 +79,7 @@ describe("user profiles", () => {
       options,
     );
     const second = await ensureProfileForTailscaleIdentity(
-      { login: "Ada@github", name: "Different Provider Name" },
+      { login: "ada@github", name: "Different Provider Name" },
       options,
     );
 
@@ -94,7 +94,7 @@ describe("user profiles", () => {
           "SELECT provider, subject, profile_id FROM user_profile_identities ORDER BY provider, subject",
         )
         .all(),
-    ).toEqual([{ provider: "github", subject: "Ada", profile_id: first.id }]);
+    ).toEqual([{ provider: "github", subject: "ada", profile_id: first.id }]);
   });
 
   it("keeps dotted Tailscale logins on the email alias path", async () => {

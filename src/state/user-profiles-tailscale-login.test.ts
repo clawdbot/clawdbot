@@ -4,7 +4,7 @@ import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
 describe("Tailscale profile login classification", () => {
   it.each([
     ["user@github", { kind: "provider", provider: "github", subject: "user" }],
-    ["user@PASSKEY", { kind: "provider", provider: "passkey", subject: "user" }],
+    ["USER@PASSKEY", { kind: "provider", provider: "passkey", subject: "user" }],
     ["person@gmail.com", { kind: "email", email: "person@gmail.com" }],
     ["person@alias@gmail.com", { kind: "email", email: "person@alias@gmail.com" }],
     ["usér@github", { kind: "provider", provider: "github", subject: "usér" }],

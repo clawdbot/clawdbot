@@ -20,5 +20,5 @@ export function classifyTailscaleLogin(login: string): ClassifiedTailscaleLogin 
   const suffix = normalized.slice(separator + 1);
   return suffix.includes(".")
     ? { kind: "email", email: normalized }
-    : { kind: "provider", provider: suffix.toLowerCase(), subject };
+    : { kind: "provider", provider: suffix.toLowerCase(), subject: subject.toLowerCase() };
 }
