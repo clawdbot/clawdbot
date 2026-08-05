@@ -2,10 +2,21 @@
 // refused because the package swap already installed a newer OpenClaw.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type FutureConfigBlock = {
+  action: string;
+  currentVersion: string;
+  touchedVersion: string;
+  message: string;
+  hints: string[];
+};
+
 const mocks = vi.hoisted(() => ({
   restart: vi.fn(async () => ({ outcome: "completed" as const })),
   recoveryStart: vi.fn(async (_args?: unknown) => undefined),
-  readFutureConfigBlock: vi.fn(async () => null),
+  // Explicit return type so mockResolvedValue(block) is not narrowed to null.
+  readFutureConfigBlock: vi.fn(
+    async (_action?: string): Promise<FutureConfigBlock | null> => null,
+  ),
   readState: vi.fn(async () => ({ installed: true })),
   log: vi.fn(),
   error: vi.fn(),
