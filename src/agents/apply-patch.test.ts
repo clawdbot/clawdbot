@@ -205,14 +205,10 @@ describe("applyPatch", () => {
 
   it("writes new Windows batch files with CRLF line endings", async () => {
     const memory = createMemoryPatchSandbox();
-    const patch = `*** Begin Patch
-*** Add File: launch.cmd
-+@echo off
-+echo ready
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
+    await applyPatch(
+      "*** Begin Patch\n*** Add File: launch.cmd\n+@echo off\n+echo ready\n*** End Patch",
+      memory.options,
+    );
     expect(memory.files.get("/sandbox/launch.cmd")).toBe("@echo off\r\necho ready\r\n");
   });
 

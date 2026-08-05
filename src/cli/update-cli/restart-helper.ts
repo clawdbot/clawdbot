@@ -754,13 +754,11 @@ exit $status
       return null;
     }
 
+    scriptContent = normalizeNewWindowsBatchContent(filename, scriptContent);
     const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-"));
     const scriptPath = path.join(scriptDir, filename);
     try {
-      await fs.writeFile(scriptPath, normalizeNewWindowsBatchContent(scriptPath, scriptContent), {
-        mode: 0o755,
-        flag: "wx",
-      });
+      await fs.writeFile(scriptPath, scriptContent, { mode: 0o755, flag: "wx" });
     } catch (error) {
       await fs.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
       throw error;
