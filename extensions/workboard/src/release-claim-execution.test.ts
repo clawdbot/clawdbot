@@ -15,9 +15,13 @@
 // The fix mirrors `reclaim`: when the release moves the card out of running,
 // clear the phantom execution, close running attempts, and drop stale.
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore(): WorkboardKeyedStore {
@@ -148,5 +152,82 @@ describe("releaseClaim clears a phantom running execution", () => {
       status: "running",
       execution: { status: "running" },
     });
+  });
+
+  it("persists the release cleanup through a real sqlite-backed store and frees the dispatch slot", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-release-proof-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+
+      const holder = await store.create({
+        title: "Dispatched holder released to todo",
+        status: "ready",
+        agentId: "owner-sqlite",
+        workspaceAccess: { unrestricted: true },
+      });
+      const sibling = await store.create({
+        title: "Sibling of same owner",
+        status: "ready",
+        agentId: "owner-sqlite",
+        workspaceAccess: { unrestricted: true },
+      });
+
+      // Holder consumes owner-sqlite's single dispatch slot.
+      await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run: vi.fn().mockResolvedValue({ runId: "run-sqlite-holder" }) },
+        options: { now: 10, maxStarts: 2 },
+      });
+      expect(await store.get(holder.id)).toMatchObject({
+        status: "running",
+        execution: { status: "running" },
+      });
+      expect((await store.get(sibling.id))?.execution).toBeUndefined();
+
+      // Worker hands the dispatched card back to a non-running status.
+      await store.releaseClaim(holder.id, {
+        ownerId: "owner-sqlite",
+        status: "todo",
+      });
+
+      // The phantom execution must be gone and persisted, freeing the owner slot.
+      stores.close();
+      const reopenedStores = createWorkboardSqliteStores({ dbPath });
+      try {
+        const reopened = new WorkboardStore(reopenedStores.cards, {
+          boards: reopenedStores.boards,
+          subscriptions: reopenedStores.subscriptions,
+          attachments: reopenedStores.attachments,
+        });
+        const persisted = await reopened.get(holder.id);
+        expect(persisted?.status).toBe("todo");
+        expect(persisted?.metadata?.claim).toBeUndefined();
+        expect(persisted?.execution).toBeUndefined();
+        expect(persisted?.metadata?.attempts ?? []).not.toContainEqual(
+          expect.objectContaining({ status: "running" }),
+        );
+
+        // With the phantom execution gone on disk, the sibling can finally start.
+        await dispatchAndStartWorkboardCards({
+          store: reopened,
+          subagent: { run: vi.fn().mockResolvedValue({ runId: "run-sqlite-sibling" }) },
+          options: { now: 20, maxStarts: 2 },
+        });
+        expect(await reopened.get(sibling.id)).toMatchObject({
+          status: "running",
+          execution: { status: "running" },
+        });
+      } finally {
+        reopenedStores.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
