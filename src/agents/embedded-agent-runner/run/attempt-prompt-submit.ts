@@ -89,11 +89,14 @@ export async function submitEmbeddedAttemptPrompt(input: {
   }
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
 
-  const installProviderPromptHistoryTransform = (): (() => void) => {
+  const installProviderPromptHistoryTransform = (): {
+    cleanup: () => void;
+    settleSilentDispatch: () => void;
+  } => {
     let providerCalls = 0;
     let pendingDispatchCommit: (() => void) | undefined;
     const providerPromptState = getProviderPromptState(attempt.runId);
-    return installProviderPromptContextAdmission(
+    const cleanup = installProviderPromptContextAdmission(
       providerPromptState,
       (_model, context, accountingContext) => {
         if (pendingDispatchCommit) {
@@ -155,6 +158,19 @@ export async function submitEmbeddedAttemptPrompt(input: {
         commit?.();
       },
     );
+    return {
+      cleanup,
+      settleSilentDispatch: () => {
+        // The final provider call of a submission has no next admission to adopt its
+        // candidate. Settle it here when its transport never observed a payload; an
+        // observed but undispatched candidate means the payload chain failed: drop it.
+        if (pendingDispatchCommit && providerPromptState.attemptPayloadObserved !== true) {
+          const commit = pendingDispatchCommit;
+          pendingDispatchCommit = undefined;
+          commit();
+        }
+      },
+    };
   };
 
   input.onFinalPromptText(input.transcriptPrompt);
@@ -184,7 +200,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       captureCurrentPromptForModel = true;
     }
   };
-  const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
+  const providerPromptHistoryTransform = installProviderPromptHistoryTransform();
   try {
     if (input.runtimeOnly) {
       await input.promptActiveSession(input.transcriptPrompt, {
@@ -204,6 +220,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
         cleanupRuntimeContextMessage();
       }
     }
+    providerPromptHistoryTransform.settleSilentDispatch();
     if (pendingMidTurnPrecheckRequest) {
       const request = pendingMidTurnPrecheckRequest;
       pendingMidTurnPrecheckRequest = null;
@@ -216,7 +233,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       input.onSteeringAcknowledged();
     }
   } finally {
-    cleanupProviderPromptHistoryTransform();
+    providerPromptHistoryTransform.cleanup();
     cleanupModelPromptTransform();
   }
 }

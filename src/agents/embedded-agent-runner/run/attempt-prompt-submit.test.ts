@@ -456,4 +456,30 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(silentDispatch).toHaveBeenCalledTimes(2);
     expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(true);
   });
+
+  it("settles the final unobserved transport candidate when submission completes", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    activeSession.agent.state.messages = [
+      { role: "user", content: "only turn", idempotencyKey: "turn-final", timestamp: 1 },
+    ] as AgentMessage[];
+    const silentDispatch = vi.fn(() => undefined as never);
+    activeSession.agent.streamFn = wrapProviderBoundary(silentDispatch as unknown as StreamFn);
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+        expect(input.sessionPromptState.sentUserTurnIds.has("turn-final")).toBe(false);
+      },
+    });
+
+    expect(silentDispatch).toHaveBeenCalledOnce();
+    expect(input.sessionPromptState.sentUserTurnIds.has("turn-final")).toBe(true);
+  });
 });
