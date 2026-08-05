@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
+import { buildBrowserExtensionVersionCheck } from "../browser/doctor.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
@@ -37,6 +38,7 @@ type BrowserDoctorCheck = {
   ok: boolean;
   detail?: string;
   warning?: boolean;
+  info?: boolean;
 };
 
 function sanitizeTableCell(value: string): string {
@@ -132,7 +134,7 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
-  const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
+  const prefix = check.warning ? "WARN" : check.info ? "INFO" : check.ok ? "OK" : "FAIL";
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
@@ -191,6 +193,16 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
       : "not running; run `openclaw browser start`",
   });
+  const extensionVersionCheck = buildBrowserExtensionVersionCheck(status);
+  if (extensionVersionCheck) {
+    checks.push({
+      name: "extension-version",
+      ok: extensionVersionCheck.status !== "fail",
+      warning: extensionVersionCheck.status === "warn",
+      info: extensionVersionCheck.status === "info",
+      detail: `${extensionVersionCheck.summary}${extensionVersionCheck.fixHint ? `; ${extensionVersionCheck.fixHint}` : ""}`,
+    });
+  }
   if (status.graphics) {
     checks.push({
       name: "graphics",
@@ -351,6 +363,15 @@ export function registerBrowserManageCommands(
             `transport: ${
               usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")
             }`,
+            ...(usesExtensionTransport(status)
+              ? status.chromeExtension
+                ? [
+                    `extensionVersion: ${status.chromeExtension.runningVersion ?? "unavailable"}`,
+                    `bundledExtensionVersion: ${status.chromeExtension.bundledVersion}`,
+                    `extensionVersionState: ${status.chromeExtension.versionState}`,
+                  ]
+                : ["extensionVersion: unavailable"]
+              : []),
             ...(!usesChromeMcpTransport(status)
               ? [
                   `cdpPort: ${status.cdpPort ?? "(unset)"}`,

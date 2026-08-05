@@ -8,6 +8,7 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeChromeExtensionManifestVersion } from "../chrome-extension-version.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import {
@@ -79,7 +80,7 @@ type AuxiliaryTabSession = {
 type ExtensionIdentity = {
   userAgent: string;
   browserVersion: string;
-  extensionVersion: string;
+  extensionVersion: string | null;
 };
 
 function toErrorPayload(
@@ -191,12 +192,15 @@ export class ExtensionRelayBridge {
           return;
         }
         helloSeen = true;
+        // Keep stale unpacked workers connected so Doctor can report their missing
+        // version instead of turning an upgrade diagnostic into a relay outage.
+        const extensionVersion = normalizeChromeExtensionManifestVersion(msg.extensionVersion);
         this.extension = {
           socket,
           identity: {
             userAgent: msg.userAgent,
             browserVersion: msg.browserVersion,
-            extensionVersion: msg.extensionVersion,
+            extensionVersion,
           },
         };
         this.syncTabs(msg.tabs);

@@ -215,6 +215,25 @@ Chrome does not have to run on the Gateway host. Three topologies work:
   node): run `pair` on the node and pair locally; the Gateway proxies browser
   actions to the node over its existing authenticated node link.
 
+### Copy the extension for a direct remote Gateway
+
+For the direct remote topology, first run `openclaw browser extension path` on
+the Gateway to print the source directory. Then copy that complete directory to
+a stable directory on the Chrome machine. For example, run this on the Chrome
+machine after replacing the source path with the one printed on the Gateway:
+
+```bash
+rsync -a --delete "user@gateway-host:/absolute/path/to/chrome-extension/" \
+  "$HOME/.openclaw/chrome-extension/"
+```
+
+In `chrome://extensions`, choose **Load unpacked** and select the local
+`~/.openclaw/chrome-extension` directory. After every Gateway upgrade, repeat
+the copy before clicking **Reload**. If `rsync` is unavailable, securely
+archive and transfer the entire source directory, replacing the previous local
+copy so removed files do not linger. The Chrome machine itself does not need
+OpenClaw or its CLI.
+
 The pairing secret is per host (the Gateway's, in the direct case), validated by
 the Gateway's `/browser/extension` route. For the direct path, serve the Gateway
 over TLS (`wss://`) so the pairing secret and CDP traffic are encrypted.
@@ -231,7 +250,19 @@ openclaw browser doctor --browser-profile chrome
 ```
 
 `doctor` reports the **Chrome extension relay** check as failing until the
-extension popup shows **Connected**.
+extension popup shows **Connected**. It also compares the running extension
+version with the version bundled by the installed OpenClaw package. After an
+OpenClaw upgrade, a mismatch is a warning: open `chrome://extensions`, reload
+the OpenClaw extension, and run `doctor` again. If the versions still differ,
+fully quit and reopen Chrome, then verify that **Load unpacked** points to the
+current OpenClaw extension directory. In a direct remote-Gateway setup, repeat
+the [copy steps](#copy-the-extension-for-a-direct-remote-gateway) before
+reloading it.
+
+`openclaw browser --json status --browser-profile chrome` returns
+`chromeExtension.runningVersion`, `chromeExtension.bundledVersion`, and
+`chromeExtension.versionState` (`match`, `mismatch`, or `unavailable`) for
+scripts.
 
 ## Security model
 

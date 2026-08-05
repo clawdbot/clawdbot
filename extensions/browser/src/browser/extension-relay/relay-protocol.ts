@@ -35,7 +35,8 @@ type ExtensionHelloMessage = {
   userAgent: string;
   /** Full browser product string, e.g. "Chrome/144.0.7204.49". */
   browserVersion: string;
-  extensionVersion: string;
+  /** Missing only for stale unpacked extension workers predating version reporting. */
+  extensionVersion?: string;
   tabs: RelayTabInfo[];
 };
 

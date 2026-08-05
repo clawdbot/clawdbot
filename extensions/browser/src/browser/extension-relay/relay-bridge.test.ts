@@ -63,13 +63,17 @@ function replyFor(msg: RelayToExtensionMessage): ExtensionToRelayMessage | null 
   }
 }
 
-function sendHello(handlers: { onMessage: (raw: string) => void }, tabs = defaultTabs()) {
+function sendHello(
+  handlers: { onMessage: (raw: string) => void },
+  tabs = defaultTabs(),
+  extensionVersion: unknown = "2.0.0",
+) {
   handlers.onMessage(
     JSON.stringify({
       type: "hello",
       userAgent: "Mozilla/5.0 Chrome/144.0.0.0",
       browserVersion: "Chrome/144.0.0.0",
-      extensionVersion: "2.0.0",
+      extensionVersion,
       tabs,
     }),
   );
@@ -90,6 +94,7 @@ describe("ExtensionRelayBridge", () => {
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);
     expect(bridge.extensionConnected).toBe(true);
+    expect(bridge.identity?.extensionVersion).toBe("2.0.0");
 
     const client = new FakeSocket();
     const cdp = bridge.attachCdpClientSocket(client);
@@ -102,6 +107,46 @@ describe("ExtensionRelayBridge", () => {
       product: "Chrome/144.0.0.0",
     });
   });
+
+  it.each(["1", "0.1.0.0", "65535.65535.65535.65535"])(
+    "accepts Chrome manifest version %s",
+    (extensionVersion) => {
+      const bridge = new ExtensionRelayBridge();
+      const { handlers } = wireExtension(bridge);
+      sendHello(handlers, defaultTabs(), extensionVersion);
+
+      expect(bridge.identity?.extensionVersion).toBe(extensionVersion);
+    },
+  );
+
+  it.each([
+    undefined,
+    null,
+    " ",
+    "0.0.0.0",
+    "01.2.3",
+    "65536",
+    "1.2.3.4.5",
+    "1.2.3-beta",
+    "v2.1.0",
+    "2.1.0\nforged warning",
+    "\u001B[31m2.1.0",
+    42,
+    { malformed: true },
+  ])(
+    "keeps an extension connected when its version is unavailable or malformed: %j",
+    (extensionVersion) => {
+      const bridge = new ExtensionRelayBridge();
+      const { handlers } = wireExtension(bridge);
+      expect(() => {
+        sendHello(handlers, defaultTabs(), extensionVersion);
+      }).not.toThrow();
+
+      expect(bridge.extensionConnected).toBe(true);
+      expect(bridge.identity?.extensionVersion).toBeNull();
+      expect(bridge.sharedTabs()).toEqual(defaultTabs());
+    },
+  );
 
   it("attaches shared tabs and announces targets on Target.setAutoAttach", async () => {
     const bridge = new ExtensionRelayBridge();

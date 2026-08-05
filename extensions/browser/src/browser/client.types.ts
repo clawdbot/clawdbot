@@ -15,6 +15,12 @@ type BrowserHeadlessSource =
 
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
+export type BrowserChromeExtensionStatus = {
+  runningVersion: string | null;
+  bundledVersion: string;
+  versionState: "match" | "mismatch" | "unavailable";
+};
+
 export type BrowserGraphicsDevice = {
   vendorId: number;
   deviceId: number;
@@ -84,6 +90,8 @@ export type BrowserStatus = {
   driver?: "openclaw" | "existing-session" | "extension";
   transport?: BrowserTransport;
   running: boolean;
+  /** Version drift diagnostics for extension-backed profiles. */
+  chromeExtension?: BrowserChromeExtensionStatus;
   cdpReady?: boolean;
   cdpHttp?: boolean;
   /**

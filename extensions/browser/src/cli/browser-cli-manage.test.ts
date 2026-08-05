@@ -75,6 +75,44 @@ describe("browser manage output", () => {
     expect(output).not.toContain("cdpUrl:");
   });
 
+  it("shows running and bundled versions for extension status", async () => {
+    getBrowserManageCallBrowserRequestMock().mockResolvedValue({
+      enabled: true,
+      profile: "chrome",
+      driver: "extension",
+      transport: "extension",
+      running: true,
+      cdpReady: true,
+      cdpHttp: true,
+      pid: null,
+      cdpPort: 18799,
+      cdpUrl: "http://127.0.0.1:18799",
+      chosenBrowser: null,
+      userDataDir: null,
+      color: "#FF4500",
+      headless: false,
+      noSandbox: false,
+      executablePath: null,
+      attachOnly: true,
+      chromeExtension: {
+        runningVersion: "2.0.0",
+        bundledVersion: "2.1.0",
+        versionState: "mismatch",
+      },
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "status"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("transport: extension");
+    expect(output).toContain("extensionVersion: 2.0.0");
+    expect(output).toContain("bundledExtensionVersion: 2.1.0");
+    expect(output).toContain("extensionVersionState: mismatch");
+  });
+
   it("shows configured userDataDir for existing-session status", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/"
@@ -557,6 +595,74 @@ describe("browser manage output", () => {
     expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
     expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("warns when the running Chrome extension differs from the bundled version", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/") {
+        return {
+          enabled: true,
+          profile: "chrome",
+          driver: "extension",
+          transport: "extension",
+          running: true,
+          chromeExtension: {
+            runningVersion: "2.0.0",
+            bundledVersion: "2.1.0",
+            versionState: "mismatch",
+          },
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return { running: true, tabs: [] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("WARN extension-version: running 2.0.0; bundled 2.1.0 (mismatch)");
+    expect(output).toContain("chrome://extensions");
+    expect(output).toContain("fully quit and reopen Chrome");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("keeps missing extension version data from an older Gateway informational", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/") {
+        return {
+          enabled: true,
+          profile: "chrome",
+          driver: "extension",
+          transport: "extension",
+          running: true,
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return { running: true, tabs: [] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("INFO extension-version: version data unavailable");
+    expect(output).not.toContain("WARN extension-version");
     expect(process.exitCode).toBeUndefined();
   });
 

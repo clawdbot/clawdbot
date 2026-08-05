@@ -1,5 +1,6 @@
 // Browser tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
+import type { BrowserStatus } from "./client.types.js";
 import { buildBrowserDoctorReport } from "./doctor.js";
 
 function collectWarningCheckIds(checks: readonly { id: string; status: string }[]): string[] {
@@ -10,6 +11,32 @@ function collectWarningCheckIds(checks: readonly { id: string; status: string }[
     }
   }
   return ids;
+}
+
+function createExtensionStatus(overrides: Partial<BrowserStatus> = {}): BrowserStatus {
+  return {
+    enabled: true,
+    profile: "chrome",
+    driver: "extension",
+    transport: "extension",
+    running: true,
+    cdpReady: true,
+    cdpHttp: true,
+    pid: null,
+    cdpPort: 18799,
+    cdpUrl: "http://127.0.0.1:18799",
+    chosenBrowser: null,
+    detectedBrowser: null,
+    detectedExecutablePath: null,
+    detectError: null,
+    userDataDir: null,
+    color: "#FF4500",
+    headless: false,
+    noSandbox: false,
+    executablePath: null,
+    attachOnly: true,
+    ...overrides,
+  };
 }
 
 describe("buildBrowserDoctorReport", () => {
@@ -240,6 +267,79 @@ describe("buildBrowserDoctorReport", () => {
     expect(graphicsCheck).toMatchObject({
       status: "warn",
       summary: "unavailable: SystemInfo domain unavailable",
+    });
+  });
+
+  it("passes when the running extension matches the bundled version", () => {
+    const report = buildBrowserDoctorReport({
+      status: createExtensionStatus({
+        chromeExtension: {
+          runningVersion: "2.1.0",
+          bundledVersion: "2.1.0",
+          versionState: "match",
+        },
+      }),
+    });
+
+    expect(report.checks.find((check) => check.id === "extension-version")).toMatchObject({
+      status: "pass",
+      summary: "running 2.1.0; bundled 2.1.0 (match)",
+    });
+  });
+
+  it("warns with recovery guidance when extension versions differ", () => {
+    const report = buildBrowserDoctorReport({
+      status: createExtensionStatus({
+        chromeExtension: {
+          runningVersion: "2.0.0",
+          bundledVersion: "2.1.0",
+          versionState: "mismatch",
+        },
+      }),
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.find((check) => check.id === "extension-version")).toMatchObject({
+      status: "warn",
+      summary: "running 2.0.0; bundled 2.1.0 (mismatch)",
+      fixHint: expect.stringContaining("chrome://extensions"),
+    });
+  });
+
+  it("warns when a connected extension cannot report its version", () => {
+    const report = buildBrowserDoctorReport({
+      status: createExtensionStatus({
+        chromeExtension: {
+          runningVersion: null,
+          bundledVersion: "2.1.0",
+          versionState: "unavailable",
+        },
+      }),
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.find((check) => check.id === "extension-version")).toMatchObject({
+      status: "warn",
+      summary: "running unavailable; bundled 2.1.0 (unavailable)",
+      fixHint: expect.stringContaining("Load unpacked"),
+    });
+  });
+
+  it("reports an unavailable disconnected extension version as informational", () => {
+    const report = buildBrowserDoctorReport({
+      status: createExtensionStatus({
+        running: false,
+        chromeExtension: {
+          runningVersion: null,
+          bundledVersion: "2.1.0",
+          versionState: "unavailable",
+        },
+      }),
+    });
+
+    expect(report.checks.find((check) => check.id === "extension-version")).toMatchObject({
+      status: "info",
+      summary: "running unavailable; bundled 2.1.0 (unavailable)",
     });
   });
 });

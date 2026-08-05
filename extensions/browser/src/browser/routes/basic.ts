@@ -6,6 +6,7 @@
  */
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
+import { buildChromeExtensionVersionStatus } from "../chrome-extension-version.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import {
@@ -226,6 +227,15 @@ async function buildBrowserStatus(
           source: profileState.running.headlessSource ?? configuredHeadlessMode.source,
         }
       : configuredHeadlessMode;
+  // Reachability may start or replace the relay, so read its identity from the
+  // latest server snapshot after the probes instead of the pre-probe snapshot.
+  const chromeExtension =
+    capabilities.mode === "local-extension"
+      ? buildChromeExtensionVersionStatus(
+          ctx.state().extensionRelays?.get(profileCtx.profile.name)?.bridge.identity
+            ?.extensionVersion,
+        )
+      : null;
 
   signal.throwIfAborted();
 
@@ -239,6 +249,7 @@ async function buildBrowserStatus(
         ? ("extension" as const)
         : ("cdp" as const),
     running: cdpReady,
+    ...(chromeExtension ? { chromeExtension } : {}),
     cdpReady,
     cdpHttp,
     pageReady,

@@ -324,6 +324,17 @@ Migrates config, audits DM policies, and checks gateway health. Details: [Doctor
 openclaw gateway restart
 ```
 
+### Check the Chrome extension version (extension users)
+
+```bash
+openclaw browser doctor --browser-profile chrome
+```
+
+If Doctor reports a version mismatch, reload the OpenClaw extension from
+`chrome://extensions` and retry. If the mismatch remains, fully quit and reopen
+Chrome and verify that **Load unpacked** points to the extension directory from
+the updated OpenClaw installation. See [Chrome extension diagnostics](/tools/chrome-extension#diagnostics).
+
 ### Verify
 
 ```bash

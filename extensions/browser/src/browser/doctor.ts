@@ -27,6 +27,48 @@ export type BrowserDoctorReport = {
   status: BrowserStatus;
 };
 
+const CHROME_EXTENSION_REFRESH_HINT =
+  "Reload the OpenClaw extension from chrome://extensions, then retry. If the versions still differ, fully quit and reopen Chrome and verify that Load unpacked points to the current OpenClaw extension directory.";
+
+/** Build the extension-version check shared by HTTP/tool and CLI doctor output. */
+export function buildBrowserExtensionVersionCheck(
+  status: BrowserStatus,
+): BrowserDoctorCheck | null {
+  if (status.transport !== "extension" && status.driver !== "extension") {
+    return null;
+  }
+
+  const version = status.chromeExtension;
+  if (!version) {
+    return {
+      id: "extension-version",
+      label: "Chrome extension version",
+      status: "info",
+      summary: "version data unavailable",
+    };
+  }
+
+  const summary = `running ${version.runningVersion ?? "unavailable"}; bundled ${version.bundledVersion} (${version.versionState})`;
+  if (version.versionState === "match") {
+    return {
+      id: "extension-version",
+      label: "Chrome extension version",
+      status: "pass",
+      summary,
+    };
+  }
+
+  return {
+    id: "extension-version",
+    label: "Chrome extension version",
+    status: version.versionState === "mismatch" || status.running ? "warn" : "info",
+    summary,
+    ...(version.versionState === "mismatch" || status.running
+      ? { fixHint: CHROME_EXTENSION_REFRESH_HINT }
+      : {}),
+  };
+}
+
 /** Build a browser doctor report from a status response and environment facts. */
 export function buildBrowserDoctorReport(params: {
   status: BrowserStatus;
@@ -88,6 +130,10 @@ export function buildBrowserDoctorReport(params: {
               "Install the OpenClaw Chrome extension (openclaw browser extension path), run openclaw browser extension pair, and paste the pairing string into the extension popup.",
           }),
     });
+    const extensionVersionCheck = buildBrowserExtensionVersionCheck(status);
+    if (extensionVersionCheck) {
+      checks.push(extensionVersionCheck);
+    }
   } else {
     checks.push({
       id: "managed-executable",
