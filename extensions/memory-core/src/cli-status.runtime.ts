@@ -292,6 +292,9 @@ export async function runMemoryStatus(
             agentId,
             sources,
             extraPaths: status.extraPaths,
+            multimodal: asRecord(status.custom)?.multimodal as
+              | NonNullable<Parameters<typeof scanMemorySources>[0]["multimodal"]>
+              | undefined,
           })
         : undefined;
       let audit: ShortTermAuditSummary | undefined;

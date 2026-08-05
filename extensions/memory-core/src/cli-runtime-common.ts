@@ -266,6 +266,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
 async function scanMemoryFiles(
   workspaceDir: string,
   extraPaths: string[] = [],
+  multimodal?: NonNullable<Parameters<typeof listMemoryFiles>[2]>,
 ): Promise<SourceScan> {
   const issues: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -315,7 +316,7 @@ async function scanMemoryFiles(
   let listed: string[] = [];
   let listedOk = false;
   try {
-    listed = await listMemoryFiles(workspaceDir, resolvedExtraPaths);
+    listed = await listMemoryFiles(workspaceDir, resolvedExtraPaths, multimodal);
     listedOk = true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -348,12 +349,13 @@ export async function scanMemorySources(params: {
   agentId: string;
   sources: MemorySourceName[];
   extraPaths?: string[];
+  multimodal?: NonNullable<Parameters<typeof listMemoryFiles>[2]>;
 }): Promise<MemorySourceScan> {
   const scans: SourceScan[] = [];
   const extraPaths = params.extraPaths ?? [];
   for (const source of params.sources) {
     if (source === "memory") {
-      scans.push(await scanMemoryFiles(params.workspaceDir, extraPaths));
+      scans.push(await scanMemoryFiles(params.workspaceDir, extraPaths, params.multimodal));
     }
     if (source === "sessions") {
       scans.push(await scanSessionFiles(params.agentId));

@@ -2214,6 +2214,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
         indexIdentity: this.indexIdentityState,
+        multimodal: this.settings.multimodal,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,
           successes: this.readonlyRecoverySuccesses,
