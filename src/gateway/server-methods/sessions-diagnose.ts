@@ -18,6 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-session-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { createSessionListEntryFilter } from "../session-sharing.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -41,7 +42,7 @@ import {
   type DiagnoseTarget,
 } from "./sessions-diagnose-shared.js";
 import { loadSessionEntriesForTarget } from "./sessions-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type RequestedDiagnoseAgentIdResolution =
@@ -198,8 +199,9 @@ function buildDiagnoseCandidate(params: {
 function listExplicitDiagnoseCandidateRows(params: {
   cfg: OpenClawConfig;
   p: DiagnoseParams;
+  entryFilter?: (sessionKey: string, entry: SessionEntry) => boolean;
 }): DiagnoseCandidate[] {
-  const { cfg, p } = params;
+  const { cfg, p, entryFilter } = params;
   const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
   const targets = requestedAgentId
     ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
@@ -213,17 +215,20 @@ function listExplicitDiagnoseCandidateRows(params: {
       if (!entry) {
         continue;
       }
+      const key = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId: target.agentId,
+        sessionKey,
+      });
+      if (entryFilter?.(key, entry) === false) {
+        continue;
+      }
       if (p.label && entry.label !== p.label) {
         continue;
       }
       if (p.sessionId && entry.sessionId !== p.sessionId) {
         continue;
       }
-      const key = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId: target.agentId,
-        sessionKey,
-      });
       candidates.push(
         buildDiagnoseCandidate({
           cfg,
@@ -242,8 +247,9 @@ function listDiagnoseCandidateRows(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   p: DiagnoseParams;
+  entryFilter?: (sessionKey: string, entry: SessionEntry) => boolean;
 }) {
-  const { cfg, context, p } = params;
+  const { cfg, context, p, entryFilter } = params;
   const hasExplicitNonKeySelector = Boolean(p.sessionId || p.label);
   const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -265,6 +271,9 @@ function listDiagnoseCandidateRows(params: {
         agentId: target.agentId,
         sessionKey,
       });
+      if (entryFilter?.(key, entry) === false) {
+        continue;
+      }
       if (key === "global" && p.includeGlobal !== true && !hasExplicitNonKeySelector) {
         continue;
       }
@@ -382,8 +391,10 @@ async function resolveDiagnoseTarget(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   p: DiagnoseParams;
+  client: GatewayClient | null;
 }): Promise<DiagnoseTarget | null> {
   const { cfg, context, p } = params;
+  const entryFilter = createSessionListEntryFilter({ client: params.client });
   if (countDiagnoseSelectors(p) > 1) {
     throw new Error("choose only one of key, sessionId, or label for sessions.diagnose");
   }
@@ -402,6 +413,9 @@ async function resolveDiagnoseTarget(params: {
     if (!entry) {
       return null;
     }
+    if (entryFilter?.(target.canonicalKey, entry) === false) {
+      return null;
+    }
     return {
       key: target.canonicalKey,
       chosenBecause: "explicit key selector",
@@ -413,7 +427,7 @@ async function resolveDiagnoseTarget(params: {
   }
 
   if (p.sessionId || p.label) {
-    const candidates = listExplicitDiagnoseCandidateRows({ cfg, p });
+    const candidates = listExplicitDiagnoseCandidateRows({ cfg, p, entryFilter });
     if (candidates.length > 1) {
       throw new Error(
         p.sessionId
@@ -430,7 +444,7 @@ async function resolveDiagnoseTarget(params: {
       : null;
   }
 
-  const listed = listDiagnoseCandidateRows({ cfg, context, p });
+  const listed = listDiagnoseCandidateRows({ cfg, context, p, entryFilter });
   const candidates = listed.candidates;
   if (candidates.length === 0) {
     return null;
@@ -461,14 +475,14 @@ async function resolveDiagnoseTarget(params: {
 }
 
 export const sessionDiagnoseHandlers: GatewayRequestHandlers = {
-  "sessions.diagnose": async ({ params, respond, context }) => {
+  "sessions.diagnose": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsDiagnoseParams, "sessions.diagnose", respond)) {
       return;
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
     try {
-      const target = await resolveDiagnoseTarget({ cfg, context, p });
+      const target = await resolveDiagnoseTarget({ cfg, context, p, client });
       if (!target) {
         const hasExplicitSelector = Boolean(p.key || p.sessionId || p.label);
         respond(

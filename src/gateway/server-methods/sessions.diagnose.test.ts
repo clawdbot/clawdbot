@@ -73,6 +73,7 @@ test("sessions.diagnose returns read-only live and stored evidence without trans
               sessionId: "sess-main",
               sessionKey: "agent:main:main",
               agentId: "main",
+              ownerConnId: "conn-secret",
               startedAtMs: Date.now() - 1_000,
               expiresAtMs: Date.now() + 60_000,
               kind: "agent",
@@ -107,6 +108,8 @@ test("sessions.diagnose returns read-only live and stored evidence without trans
   const serialized = JSON.stringify(result.payload);
   expect(serialized).not.toContain(sessionFile);
   expect(serialized).not.toContain("private prompt text should stay out");
+  expect(serialized).not.toContain("ownerConnId");
+  expect(serialized).not.toContain("conn-secret");
 });
 
 test("sessions.diagnose picks a visible active session beyond the bounded newest scan", async () => {

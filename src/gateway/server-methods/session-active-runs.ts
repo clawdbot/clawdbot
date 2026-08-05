@@ -47,7 +47,6 @@ type TrackedActiveSessionRunSnapshot = {
     sessionId: string;
     sessionKey: string;
     agentId?: string;
-    ownerConnId?: string;
     kind?: "chat-send" | "agent";
     startedAtMs?: number;
     expiresAtMs?: number;
@@ -128,7 +127,6 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
       sessionId: visibleSessionId,
       sessionKey: sessionKey ?? params.canonicalKey,
       ...(projected.agentId ? { agentId: projected.agentId } : {}),
-      ...(active.ownerConnId ? { ownerConnId: active.ownerConnId } : {}),
       ...(active.kind ? { kind: active.kind } : {}),
       ...(typeof active.startedAtMs === "number"
         ? {

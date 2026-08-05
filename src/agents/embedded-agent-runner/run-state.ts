@@ -702,7 +702,9 @@ export function getEmbeddedRunDiagnosticSnapshot(params: {
     ...(handle?.sourceReplyDeliveryMode
       ? { sourceReplyDeliveryMode: handle.sourceReplyDeliveryMode }
       : {}),
-    ...(handle ? { hasTranscriptSnapshot: ACTIVE_EMBEDDED_RUN_SNAPSHOTS.has(sessionId) } : {}),
+    ...(handle && sessionId
+      ? { hasTranscriptSnapshot: ACTIVE_EMBEDDED_RUN_SNAPSHOTS.has(sessionId) }
+      : {}),
     ...(abandoned
       ? {
           abandoned: {

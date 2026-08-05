@@ -64,7 +64,6 @@ const SessionsDiagnoseGatewayRunSchema = Type.Object(
           sessionId: NonEmptyString,
           sessionKey: NonEmptyString,
           agentId: Type.Optional(NonEmptyString),
-          ownerConnId: Type.Optional(NonEmptyString),
           kind: Type.Optional(Type.Union([Type.Literal("chat-send"), Type.Literal("agent")])),
           startedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
           expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

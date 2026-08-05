@@ -17,6 +17,8 @@ type SessionsDiagnoseOptions = {
   sessionId?: string;
   label?: string;
   agent?: string;
+  includeGlobal?: boolean;
+  includeUnknown?: boolean;
   tail?: string;
   timeoutMs?: number;
   json?: boolean;
@@ -55,6 +57,8 @@ function buildDiagnoseCliParams(
         sessionId?: string;
         label?: string;
         agentId?: string;
+        includeGlobal?: boolean;
+        includeUnknown?: boolean;
         tail: number;
       };
     }
@@ -82,6 +86,8 @@ function buildDiagnoseCliParams(
       ...(sessionId.value ? { sessionId: sessionId.value } : {}),
       ...(label.value ? { label: label.value } : {}),
       ...(agent.value ? { agentId: agent.value } : {}),
+      ...(opts.includeGlobal ? { includeGlobal: true } : {}),
+      ...(opts.includeUnknown ? { includeUnknown: true } : {}),
       tail,
     },
   };

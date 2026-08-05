@@ -56,6 +56,7 @@ openclaw sessions diagnose --session-key "agent:main:telegram:direct:123"
 openclaw sessions diagnose --session-id "<session-id>" --json
 openclaw sessions diagnose --label "ops-triage"
 openclaw sessions diagnose --agent work --timeout 15000
+openclaw sessions diagnose --include-global --include-unknown
 openclaw sessions diagnose --tail 80
 ```
 
@@ -76,6 +77,10 @@ Options:
 - `--label <label>` diagnoses one labeled session when it resolves to a single
   row.
 - `--agent <id>` scopes lookup to one configured agent store.
+- `--include-global` includes agent-scoped `global` rows when automatic
+  selection runs without an explicit selector.
+- `--include-unknown` includes agent-scoped `unknown` rows when automatic
+  selection runs without an explicit selector.
 - `--tail <count>` controls bounded transcript metadata reads. The default is
   `30`; valid values are `1` through `200`.
 - `--timeout <ms>` sets the Gateway request timeout. The default is `10000`.

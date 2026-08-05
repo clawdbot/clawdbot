@@ -347,7 +347,7 @@ describe("session active runs", () => {
 });
 
 describe("collectTrackedActiveSessionRunSnapshot", () => {
-  it("projects visible active runs without exposing abort controllers", () => {
+  it("projects visible active runs without exposing internal ownership state", () => {
     const snapshot = collectTrackedActiveSessionRunSnapshot({
       context: contextWithRuns([
         [
@@ -385,7 +385,6 @@ describe("collectTrackedActiveSessionRunSnapshot", () => {
           sessionId: "session-1",
           sessionKey: "agent:main:main",
           agentId: "main",
-          ownerConnId: "conn-1",
           kind: "agent",
           startedAtMs: 1_000,
           expiresAtMs: 11_000,

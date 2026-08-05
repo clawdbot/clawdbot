@@ -433,6 +433,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-id <id>", "Stored session id to diagnose")
     .option("--label <label>", "Session label to diagnose")
     .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--include-global", "Include global rows in automatic selection")
+    .option("--include-unknown", "Include unknown rows in automatic selection")
     .option("--tail <count>", "Number of recent transcript events to summarize", "30")
     .option("--timeout <ms>", "Gateway request timeout in milliseconds", "10000")
     .option("--json", "Output JSON", false)
@@ -483,6 +485,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
               sessionId: opts.sessionId as string | undefined,
               label: opts.label as string | undefined,
               agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+              includeGlobal: Boolean(opts.includeGlobal),
+              includeUnknown: Boolean(opts.includeUnknown),
               tail: opts.tail as string | undefined,
               timeoutMs,
               json: Boolean(opts.json || parentOpts?.json),

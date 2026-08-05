@@ -397,6 +397,7 @@ describe("lazy protocol validators", () => {
       {},
       { key: "agent:main:main", tail: 30 },
       { sessionId: "sess-1" },
+      { includeGlobal: true, includeUnknown: true },
     ]);
     expectRejected(validateSessionsDiagnoseParams, [
       { key: "", tail: 30 },
@@ -404,63 +405,82 @@ describe("lazy protocol validators", () => {
       { key: "agent:main:main", transcriptPath: true },
     ]);
 
-    expectAccepted(validateSessionsDiagnoseResult, [
-      {
-        ok: true,
-        ts: 1,
-        outcome: "diagnosed",
-        selector: { key: "agent:main:main" },
-        chosenBecause: "explicit key selector",
-        summary: {
-          state: "active",
-          confidence: "high",
-          headline: "A live Gateway or embedded run is visible for this session.",
-        },
-        session: {
-          found: true,
-          key: "agent:main:main",
-          agentId: "main",
-          sessionId: "sess-1",
-          kind: "direct",
-          updatedAt: 1,
+    const diagnoseResult = {
+      ok: true,
+      ts: 1,
+      outcome: "diagnosed",
+      selector: { key: "agent:main:main" },
+      chosenBecause: "explicit key selector",
+      summary: {
+        state: "active",
+        confidence: "high",
+        headline: "A live Gateway or embedded run is visible for this session.",
+      },
+      session: {
+        found: true,
+        key: "agent:main:main",
+        agentId: "main",
+        sessionId: "sess-1",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+      },
+      live: {
+        gatewayRun: {
           hasActiveRun: true,
+          runs: [
+            {
+              runId: "run-1",
+              sessionId: "sess-1",
+              sessionKey: "agent:main:main",
+              startedAgeMs: 10,
+            },
+          ],
         },
+        embeddedRun: { active: false, sessionId: "sess-1" },
+        diagnostic: { present: true, state: "processing", queueDepth: 0 },
+        lane: {
+          lane: "session:agent:main:main",
+          queuedCount: 0,
+          activeCount: 1,
+          maxConcurrent: 0,
+          draining: false,
+          generation: 1,
+        },
+      },
+      transcript: {
+        resolved: true,
+        recentEventCount: 3,
+      },
+      findings: [
+        {
+          code: "active_run_visible",
+          severity: "info",
+          message: "A live Gateway or embedded run is visible for this session.",
+          evidence: ["gateway or embedded run projection is active"],
+        },
+      ],
+      nextChecks: ["openclaw sessions tail --session-key agent:main:main"],
+    };
+    expectAccepted(validateSessionsDiagnoseResult, [diagnoseResult]);
+    expectRejected(validateSessionsDiagnoseResult, [
+      {
+        ...diagnoseResult,
         live: {
+          ...diagnoseResult.live,
           gatewayRun: {
-            hasActiveRun: true,
+            ...diagnoseResult.live.gatewayRun,
             runs: [
               {
                 runId: "run-1",
                 sessionId: "sess-1",
                 sessionKey: "agent:main:main",
                 startedAgeMs: 10,
+                ownerConnId: "conn-secret",
               },
             ],
           },
-          embeddedRun: { active: false, sessionId: "sess-1" },
-          diagnostic: { present: true, state: "processing", queueDepth: 0 },
-          lane: {
-            lane: "session:agent:main:main",
-            queuedCount: 0,
-            activeCount: 1,
-            maxConcurrent: 0,
-            draining: false,
-            generation: 1,
-          },
         },
-        transcript: {
-          resolved: true,
-          recentEventCount: 3,
-        },
-        findings: [
-          {
-            code: "active_run_visible",
-            severity: "info",
-            message: "A live Gateway or embedded run is visible for this session.",
-            evidence: ["gateway or embedded run projection is active"],
-          },
-        ],
-        nextChecks: ["openclaw sessions tail --session-key agent:main:main"],
       },
     ]);
   });

@@ -106,6 +106,8 @@ describe("sessionsDiagnoseCommand", () => {
       {
         sessionKey: "agent:main:main",
         agent: "main",
+        includeGlobal: true,
+        includeUnknown: true,
         tail: "50",
         timeoutMs: 7000,
       },
@@ -118,6 +120,8 @@ describe("sessionsDiagnoseCommand", () => {
         params: {
           key: "agent:main:main",
           agentId: "main",
+          includeGlobal: true,
+          includeUnknown: true,
           tail: 50,
         },
         timeoutMs: 7000,
