@@ -63,11 +63,9 @@ describe("pending final delivery restart proof", () => {
       expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
       expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
       expect(entry?.restartRecoverySourceIngress).toBeUndefined();
-      expect(entry?.status).toBe(beforeAgentReplyState === "handled-reply" ? "done" : "running");
-      if (beforeAgentReplyState === "handled-reply") {
-        expect(entry?.endedAt).toBeTypeOf("number");
-        expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
-      }
+      expect(entry?.status).toBe("done");
+      expect(entry?.endedAt).toBeTypeOf("number");
+      expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
     },
   );
 

@@ -25,15 +25,18 @@ type PendingFinalDeliveryIdentity = {
 };
 
 function buildPendingFinalDeliveryCleanupPatch(entry: SessionEntry): Partial<SessionEntry> {
-  // An active receipt/claim may outlive outer reply settlement. Only claimless pending finals
-  // borrow hook provenance until their exact transport intent settles.
+  // An active receipt/claim may outlive outer reply settlement. A claimless
+  // pending final is the last owner of the visible turn, so its exact transport
+  // settlement must also close the session lifecycle.
   const clearsRestartRecoveryProof =
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined;
-  const completesHookHandledTurn =
+  const completesSettledTurn =
     clearsRestartRecoveryProof &&
-    (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+    entry.status === "running" &&
+    (entry.restartRecoveryBeforeAgentReplyState === "continue" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
       entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
-  const endedAt = completesHookHandledTurn ? Date.now() : undefined;
+  const endedAt = completesSettledTurn ? Date.now() : undefined;
   return {
     pendingFinalDelivery: undefined,
     ...(clearsRestartRecoveryProof
