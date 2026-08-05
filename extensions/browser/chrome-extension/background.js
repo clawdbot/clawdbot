@@ -681,17 +681,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
           sendResponse({ ok: false, error: "No tab." });
           return;
         }
-        if (await isTabShared(tabId)) {
+        const wasShared = await isTabShared(tabId);
+        if (wasShared) {
           await detachDebugger(tabId);
           await removeTabFromOpenClawGroup(tabId);
-          scheduleTabsSync();
-          sendResponse({ ok: true, shared: false });
         } else {
           await addTabToOpenClawGroup(tabId);
-          scheduleTabsSync();
-          sendResponse({ ok: true, shared: true });
         }
+        scheduleTabsSync();
         await copilot.onConsentChanged();
+        sendResponse({ ok: true, shared: !wasShared });
         return;
       }
       case "isTabShared": {
