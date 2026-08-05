@@ -418,6 +418,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         // then let the queued recorder reuse them instead of exporting duplicates.
         unregisterTracePropagationBridge =
           ctx.internalDiagnostics?.registerTracePropagationBridge?.({
+            shouldPrepareEvent(event) {
+              return event.type === "model.call.started" || event.type === "tool.execution.started";
+            },
             prepareEvent(event, metadata) {
               if (event.type === "model.call.started") {
                 recorders.recordModelCallStarted(event, metadata);

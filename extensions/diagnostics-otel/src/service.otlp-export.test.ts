@@ -28,13 +28,15 @@ import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
-  formatDiagnosticTraceparent,
   parseDiagnosticTraceparent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import {
+  runModelCallAndCaptureTraceparent,
+  startLocalOtlpReceiver,
+} from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   createOtelContext,
@@ -452,11 +454,9 @@ test("propagates the exported model span across two OTLP services with one roote
     const messageTrace = createChildDiagnosticTraceContext(inboundParent);
     const harnessTrace = createChildDiagnosticTraceContext(messageTrace);
     const runTrace = createChildDiagnosticTraceContext(harnessTrace);
-    const modelTrace = createChildDiagnosticTraceContext(runTrace);
     const toolTrace = createChildDiagnosticTraceContext(runTrace);
     const base = { runId: "run-live-bridge", provider: "openai", model: "gpt-5.6-luna" };
     const harnessBase = { ...base, harnessId: "openclaw" };
-    const modelBase = { ...base, callId: "call-live-bridge" };
 
     emit({
       type: "message.dispatch.started",
@@ -466,9 +466,11 @@ test("propagates the exported model span across two OTLP services with one roote
     });
     emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
     emit({ type: "run.started", ...base, trace: runTrace });
-    emit({ type: "model.call.started", ...modelBase, trace: modelTrace });
-
-    const outboundTraceparent = formatDiagnosticTraceparent(modelTrace);
+    const outboundTraceparent = runModelCallAndCaptureTraceparent({
+      ...base,
+      callId: "call-live-bridge",
+      trace: runTrace,
+    });
     const outboundContext = parseDiagnosticTraceparent(outboundTraceparent);
     expect(outboundContext).toBeDefined();
     const peerCallback = peerTracer.startSpan(
@@ -483,12 +485,6 @@ test("propagates the exported model span across two OTLP services with one roote
     );
     peerCallback.end();
 
-    emit({
-      type: "model.call.completed",
-      ...modelBase,
-      durationMs: 20,
-      trace: modelTrace,
-    });
     emit({
       type: "tool.execution.started",
       runId: base.runId,
@@ -562,22 +558,12 @@ test("propagates the exported model span across two OTLP services with one roote
 
 test("uses the real preloaded model span as the mid-turn propagation root", async () => {
   const { service, ctx } = await startOtelService({ traces: true });
-  const modelTrace = createDiagnosticTraceContext();
-  const base = {
-    type: "model.call.started" as const,
+  const outboundTraceparent = runModelCallAndCaptureTraceparent({
+    trace: createDiagnosticTraceContext(),
     runId: "run-mid-turn",
     callId: "call-mid-turn",
     provider: "openai",
     model: "gpt-5.6-luna",
-    trace: modelTrace,
-  };
-
-  emit(base);
-  const outboundTraceparent = formatDiagnosticTraceparent(modelTrace);
-  emit({
-    ...base,
-    type: "model.call.completed",
-    durationMs: 10,
   });
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);

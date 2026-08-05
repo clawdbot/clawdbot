@@ -97,7 +97,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     metadata: DiagnosticEventMetadata,
   ) => {
     if (!tracesEnabled || !metadata.trusted) {
-      return;
+      return undefined;
     }
     const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
     if (trackedSpan) {

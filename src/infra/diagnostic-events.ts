@@ -12,6 +12,7 @@ import {
   formatPropagatedDiagnosticTraceparent,
   prepareDiagnosticTracePropagation,
   resetDiagnosticTracePropagationForTest,
+  shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
@@ -1287,6 +1288,7 @@ function emitDiagnosticEventWithTrust(
     ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
   };
+  const prepareTracePropagation = trusted && shouldPrepareDiagnosticTracePropagation(enriched);
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
@@ -1300,22 +1302,20 @@ function emitDiagnosticEventWithTrust(
       }
     }
     state.asyncQueue.push({ event: enriched, metadata, privateData });
-    if (trusted) {
+    if (prepareTracePropagation) {
       prepareDiagnosticTracePropagation(
         cloneDiagnosticEventForListener(enriched),
         createDiagnosticMetadataForListener(metadata),
-        cloneDiagnosticPrivateDataForListener(privateData),
       );
     }
     scheduleAsyncDiagnosticDrain(state);
     return;
   }
 
-  if (trusted) {
+  if (prepareTracePropagation) {
     prepareDiagnosticTracePropagation(
       cloneDiagnosticEventForListener(enriched),
       createDiagnosticMetadataForListener(metadata),
-      cloneDiagnosticPrivateDataForListener(privateData),
     );
   }
   dispatchDiagnosticEvent(state, enriched, metadata, privateData);

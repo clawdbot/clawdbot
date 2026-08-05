@@ -1013,11 +1013,30 @@ describe("diagnostics-otel service", () => {
   });
 
   test("restarts without retaining prior listeners or log transports", async () => {
-    const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
+    const unregisterBridge = vi.fn();
+    const { service, ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      configure: (context) => {
+        const registerBridge = context.internalDiagnostics?.registerTracePropagationBridge;
+        context.internalDiagnostics = {
+          ...context.internalDiagnostics!,
+          registerTracePropagationBridge: (bridge) => {
+            const unregister = registerBridge!(bridge);
+            return () => {
+              unregisterBridge();
+              unregister();
+            };
+          },
+        };
+      },
+    });
     await service.start(ctx);
 
     expect(logShutdown).toHaveBeenCalledTimes(1);
     expect(sdkShutdown).toHaveBeenCalledTimes(1);
+    expect(unregisterBridge).toHaveBeenCalledTimes(1);
 
     telemetryState.tracer.startSpan.mockClear();
     emitDiagnosticEvent({
@@ -1031,6 +1050,7 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
     expect(logShutdown).toHaveBeenCalledTimes(2);
     expect(sdkShutdown).toHaveBeenCalledTimes(2);
+    expect(unregisterBridge).toHaveBeenCalledTimes(2);
 
     telemetryState.tracer.startSpan.mockClear();
     emitDiagnosticEvent({
@@ -1040,6 +1060,55 @@ describe("diagnostics-otel service", () => {
       durationMs: 10,
     });
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
+  test("surfaces bridge cleanup failure after attempting every shutdown phase", async () => {
+    const cleanupError = new Error("bridge cleanup failed");
+    const unregisterBridge = vi.fn(() => {
+      throw cleanupError;
+    });
+    const cleanupOrder: string[] = [];
+    logShutdown.mockImplementationOnce(async () => {
+      cleanupOrder.push("log-provider");
+    });
+    sdkShutdown.mockImplementationOnce(async () => {
+      cleanupOrder.push("sdk-provider");
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    const onEvent = ctx.internalDiagnostics!.onEvent;
+    ctx.internalDiagnostics = {
+      ...ctx.internalDiagnostics!,
+      onEvent: (listener) => {
+        const unsubscribe = onEvent(listener);
+        return () => {
+          cleanupOrder.push("listener");
+          unsubscribe();
+        };
+      },
+      registerTracePropagationBridge: () => () => {
+        cleanupOrder.push("bridge");
+        unregisterBridge();
+      },
+    };
+    await service.start(ctx);
+    emitRunStarted();
+    const runSpan = spanByName("openclaw.run");
+
+    const stopError = await Promise.resolve(service.stop?.(ctx)).catch((error: unknown) => error);
+
+    expect(stopError).toBe(cleanupError);
+    expect(unregisterBridge).toHaveBeenCalledOnce();
+    expect(runSpan.end).toHaveBeenCalledOnce();
+    expect(logShutdown).toHaveBeenCalledOnce();
+    expect(sdkShutdown).toHaveBeenCalledOnce();
+    expect(unhandledRejectionHandlerState.getHandlers()).toEqual([]);
+    expect(cleanupOrder.indexOf("bridge")).toBeLessThan(cleanupOrder.indexOf("log-provider"));
+    expect(cleanupOrder.indexOf("listener")).toBeLessThan(cleanupOrder.indexOf("sdk-provider"));
   });
 
   test("attempts every provider shutdown and reports every failure", async () => {
@@ -1462,6 +1531,7 @@ describe("diagnostics-otel service", () => {
     process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
     process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
     process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/protobuf";
+    const registerBridge = vi.fn(() => vi.fn());
 
     const { ctx } = await startOtelService({
       traces: true,
@@ -1469,6 +1539,10 @@ describe("diagnostics-otel service", () => {
       logs: false,
       configure: (context) => {
         delete context.config.diagnostics?.otel?.protocol;
+        context.internalDiagnostics = {
+          ...context.internalDiagnostics!,
+          registerTracePropagationBridge: registerBridge,
+        };
       },
     });
 
@@ -1483,6 +1557,7 @@ describe("diagnostics-otel service", () => {
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       "diagnostics-otel: unsupported traces protocol grpc; OTLP export disabled",
     );
+    expect(registerBridge).not.toHaveBeenCalled();
   });
 
   test("keeps stdout logs active when the OTLP branch of both is unsupported", async () => {
@@ -4048,7 +4123,9 @@ describe("diagnostics-otel service", () => {
     const modelTrace = createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID);
     const toolTrace = createTestTrace(TOOL_SPAN_ID, MODEL_CALL_SPAN_ID);
     emitRunStarted({ trace: runTrace });
-    expect(formatDiagnosticTraceparent(modelTrace)).toBeUndefined();
+    expect(formatDiagnosticTraceparent(modelTrace)).toBe(
+      `00-${modelTrace.traceId}-${modelTrace.spanId}-01`,
+    );
     emitTrustedDiagnosticEvent({
       type: "model.call.started",
       ...MODEL_CALL_FIXTURE,
@@ -4059,7 +4136,7 @@ describe("diagnostics-otel service", () => {
     const runSpanContext = spanByName("openclaw.run").spanContext();
     expect(startedSpanParentContexts("openclaw.model.call")).toEqual([runSpanContext]);
     expect(formatDiagnosticTraceparent(modelTrace)).toBe(
-      `00-${modelSpanContext.traceId}-${modelSpanContext.spanId}-01`,
+      `00-${modelTrace.traceId}-${modelTrace.spanId}-01`,
     );
 
     emitTrustedDiagnosticEvent({
@@ -4068,10 +4145,9 @@ describe("diagnostics-otel service", () => {
       toolName: "read",
       trace: toolTrace,
     });
-    const toolSpanContext = spanByName("openclaw.tool.execution").spanContext();
     expect(startedSpanParentContexts("openclaw.tool.execution")).toEqual([modelSpanContext]);
     expect(formatDiagnosticTraceparent(toolTrace)).toBe(
-      `00-${toolSpanContext.traceId}-${toolSpanContext.spanId}-01`,
+      `00-${toolTrace.traceId}-${toolTrace.spanId}-01`,
     );
 
     await waitForDiagnosticEventsDrained();

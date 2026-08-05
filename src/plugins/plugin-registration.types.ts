@@ -15,8 +15,7 @@ import type { PluginLogger } from "./logger-types.js";
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
   DiagnosticEventPayload,
-  DiagnosticEventMetadata,
-  DiagnosticEventPrivateData
+  DiagnosticEventMetadata
 >;
 
 type PluginInteractiveHandlerResult = {

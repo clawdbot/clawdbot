@@ -3,15 +3,18 @@ import {
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 
-export type DiagnosticTracePropagationBridge<TEvent, TMetadata, TPrivateData> = Readonly<{
+export type DiagnosticTracePropagationBridge<TEvent, TMetadata> = Readonly<{
+  /** Selects events that need synchronous exporter preparation. */
+  shouldPrepareEvent?: (event: TEvent) => boolean;
   /** Prepares exporter-owned state before an outbound caller can resolve it. */
-  prepareEvent?: (event: TEvent, metadata: TMetadata, privateData: TPrivateData) => void;
+  prepareEvent?: (event: TEvent, metadata: TMetadata) => void;
   /** Translates a diagnostic correlation context to an exporter-owned context. */
   resolveTraceContext: (traceContext: DiagnosticTraceContext) => DiagnosticTraceContext | undefined;
 }>;
 
 type RegisteredDiagnosticTracePropagationBridge = Readonly<{
-  prepareEvent?: (event: unknown, metadata: unknown, privateData: unknown) => void;
+  shouldPrepareEvent?: (event: unknown) => boolean;
+  prepareEvent?: (event: unknown, metadata: unknown) => void;
   resolveTraceContext: (traceContext: DiagnosticTraceContext) => DiagnosticTraceContext | undefined;
 }>;
 
@@ -69,39 +72,45 @@ function activeDiagnosticTracePropagationBridge():
   return Array.from(getDiagnosticTracePropagationState().bridges).at(-1);
 }
 
-export function registerDiagnosticTracePropagationBridge<TEvent, TMetadata, TPrivateData>(
-  bridge: DiagnosticTracePropagationBridge<TEvent, TMetadata, TPrivateData>,
+export function registerDiagnosticTracePropagationBridge(
+  bridge: DiagnosticTracePropagationBridge<never, never>,
 ): () => void {
   const state = getDiagnosticTracePropagationState();
-  const prepareEvent = bridge.prepareEvent;
   // The global registry crosses preloaded and plugin-owned SDK copies. Erase
   // event types only inside that registry; callers keep the exact typed seam.
-  const registered: RegisteredDiagnosticTracePropagationBridge = {
-    resolveTraceContext: bridge.resolveTraceContext,
-    ...(prepareEvent
-      ? {
-          prepareEvent: (event: unknown, metadata: unknown, privateData: unknown) =>
-            prepareEvent(event as TEvent, metadata as TMetadata, privateData as TPrivateData),
-        }
-      : {}),
-  };
+  const registered = bridge as unknown as RegisteredDiagnosticTracePropagationBridge;
   state.bridges.add(registered);
   return () => {
     state.bridges.delete(registered);
   };
 }
 
-export function prepareDiagnosticTracePropagation<
-  TEvent extends { type: string; seq: number },
-  TMetadata,
-  TPrivateData,
->(event: TEvent, metadata: TMetadata, privateData: TPrivateData): void {
+export function shouldPrepareDiagnosticTracePropagation(event: unknown): boolean {
+  const bridge = activeDiagnosticTracePropagationBridge();
+  if (!bridge?.prepareEvent) {
+    return false;
+  }
+  if (!bridge.shouldPrepareEvent) {
+    return true;
+  }
+  try {
+    return bridge.shouldPrepareEvent(event);
+  } catch (error) {
+    console.error(`[diagnostic-trace-propagation] prepare filter error: ${String(error)}`);
+    return false;
+  }
+}
+
+export function prepareDiagnosticTracePropagation(
+  event: { type: string; seq: number },
+  metadata: unknown,
+): void {
   const bridge = activeDiagnosticTracePropagationBridge();
   if (!bridge?.prepareEvent) {
     return;
   }
   try {
-    bridge.prepareEvent(event, metadata, privateData);
+    bridge.prepareEvent(event, metadata);
   } catch (error) {
     console.error(
       `[diagnostic-trace-propagation] prepare error type=${event.type} seq=${event.seq}: ${String(error)}`,
