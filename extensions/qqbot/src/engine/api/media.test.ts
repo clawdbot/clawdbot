@@ -451,4 +451,45 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
     expect(client["request"]).not.toHaveBeenCalled();
   });
+
+  it("does not hang when the rejected response body cancel never settles", async () => {
+    fetchWithSsrFGuardMock.mockReset();
+    const { response, release } = mockGuardedResponse("server error", { status: 500 });
+    const captureClone = response.clone();
+    let cancelStarted = false;
+    vi.spyOn(response.body!, "cancel").mockImplementation(() => {
+      cancelStarted = true;
+      // Mimic a debug-capture tee branch: cancellation only settles after the
+      // sibling clone branch is cancelled.
+      return new Promise<void>((resolve) => {
+        void captureClone.body
+          ?.cancel()
+          .catch(() => undefined)
+          .then(resolve);
+      });
+    });
+
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    const start = Date.now();
+    await expect(
+      api.uploadMedia(
+        "c2c",
+        "user-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "https://cdn.example.com/server-error.png" },
+      ),
+    ).rejects.toThrow("Direct-upload media URL returned HTTP 500");
+
+    // The rejection must return promptly; without the fire-and-forget fix this
+    // would wait indefinitely for the capture sibling branch to cancel.
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(cancelStarted).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+    expect(client["request"]).not.toHaveBeenCalled();
+  });
 });
