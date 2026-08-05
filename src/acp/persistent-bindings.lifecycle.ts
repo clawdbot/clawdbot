@@ -1,5 +1,6 @@
 /** Ensures configured channel-to-ACP bindings have live sessions and matching runtime options. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentExplicitModelPrimary } from "../agents/agent-scope.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -50,6 +51,16 @@ function sessionMatchesConfiguredBinding(params: {
       return false;
     }
   }
+
+  const desiredModel = normalizeText(
+    resolveAgentExplicitModelPrimary(params.cfg, params.spec.acpAgentId ?? params.spec.agentId),
+  );
+  if (desiredModel !== undefined) {
+    const currentModel = (params.meta.runtimeOptions?.model ?? "").trim();
+    if (desiredModel !== currentModel) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -90,13 +101,16 @@ export async function ensureConfiguredAcpBindingSession(params: {
       });
     }
 
+    const agentId = params.spec.acpAgentId ?? params.spec.agentId;
+    const configuredModel = resolveAgentExplicitModelPrimary(params.cfg, agentId);
     await acpManager.initializeSession({
       cfg: params.cfg,
       sessionKey,
-      agent: params.spec.acpAgentId ?? params.spec.agentId,
+      agent: agentId,
       mode: params.spec.mode,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,
+      ...(configuredModel ? { runtimeOptions: { model: configuredModel } } : {}),
     });
 
     return {

@@ -59,6 +59,7 @@ function createPersistentSpec(
 function mockReadySession(params: {
   spec: ConfiguredAcpBindingSpec;
   cwd: string;
+  model?: string;
   state?: "idle" | "running" | "error";
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
@@ -70,7 +71,10 @@ function mockReadySession(params: {
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
       mode: params.spec.mode,
-      runtimeOptions: { cwd: params.cwd },
+      runtimeOptions: {
+        cwd: params.cwd,
+        ...(params.model ? { model: params.model } : {}),
+      },
       state: params.state ?? "idle",
       lastActivityAt: Date.now(),
     },
@@ -170,5 +174,93 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(ensured.ok).toBe(true);
     const initializeArgs = expectInitializeArgs();
     expect(initializeArgs.agent).toBe("codex");
+  });
+
+  it("passes the agent's explicit model as runtimeOptions.model when initializing", async () => {
+    const spec = createPersistentSpec();
+    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "codex", model: { primary: "deepseek/deepseek-v4-pro" } }, { id: "claude" }],
+      },
+    } satisfies OpenClawConfig;
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg,
+      spec,
+    });
+
+    expect(ensured.ok).toBe(true);
+    const initializeArgs = expectInitializeArgs();
+    expect(initializeArgs.runtimeOptions).toEqual({
+      model: "deepseek/deepseek-v4-pro",
+    });
+  });
+
+  it("does not set runtimeOptions.model when the agent has no explicit model config", async () => {
+    const spec = createPersistentSpec();
+    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured.ok).toBe(true);
+    const initializeArgs = expectInitializeArgs();
+    expect(initializeArgs.runtimeOptions).toBeUndefined();
+  });
+
+  it("keeps a ready session whose runtime model matches the configured explicit model", async () => {
+    const spec = createPersistentSpec();
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      model: "deepseek/deepseek-v4-pro",
+    });
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "codex", model: { primary: "deepseek/deepseek-v4-pro" } }, { id: "claude" }],
+      },
+    } satisfies OpenClawConfig;
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).not.toHaveBeenCalled();
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+  });
+
+  it("reinitializes a ready session when the configured explicit model differs from the runtime model", async () => {
+    const spec = createPersistentSpec();
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      model: "mimo-v2.5-pro",
+    });
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "codex", model: { primary: "deepseek/deepseek-v4-pro" } }, { id: "claude" }],
+      },
+    } satisfies OpenClawConfig;
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    const closeArgs = expectCloseArgs();
+    expect(closeArgs.sessionKey).toBe(sessionKey);
+    const initializeArgs = expectInitializeArgs();
+    expect(initializeArgs.runtimeOptions).toEqual({
+      model: "deepseek/deepseek-v4-pro",
+    });
   });
 });
