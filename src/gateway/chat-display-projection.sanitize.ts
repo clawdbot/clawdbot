@@ -6,6 +6,7 @@ import {
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { stripInternalRuntimeScaffolding } from "../infra/outbound/protocol-scaffolding.js";
 import {
   isToolHistoryBlockType,
   isToolResultHistoryBlockType,
@@ -52,7 +53,9 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(
+      stripInternalRuntimeScaffolding(entry.text),
+    );
     if (preserveExactToolPayload) {
       entry.text = stripped.text;
       changed ||= stripped.changed;
@@ -63,7 +66,9 @@ export function sanitizeChatHistoryContentBlock(
     }
   }
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const stripped = stripInlineDirectiveTagsForDisplay(
+      stripInternalRuntimeScaffolding(entry.content),
+    );
     if (preserveExactToolPayload) {
       entry.content = stripped.text;
       changed ||= stripped.changed;
@@ -361,7 +366,9 @@ export function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const stripped = stripInlineDirectiveTagsForDisplay(
+      stripInternalRuntimeScaffolding(entry.content),
+    );
     const controlStripped = stripAssistantControlTokens
       ? stripSuppressedControlReplyToken(stripped.text)
       : stripped.text;
@@ -420,7 +427,9 @@ export function sanitizeChatHistoryMessage(
   }
 
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(
+      stripInternalRuntimeScaffolding(entry.text),
+    );
     const controlStripped = stripAssistantControlTokens
       ? stripSuppressedControlReplyToken(stripped.text)
       : stripped.text;
