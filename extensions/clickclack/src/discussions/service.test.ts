@@ -208,9 +208,7 @@ describe("ClickClack discussion service", () => {
       legacyCreateResponse(input),
     );
     await legacy.service.open("agent:main:unconfirmed-title");
-    expect(legacy.store.lookup("agent:main:unconfirmed-title")).toMatchObject({
-      displayTitle: undefined,
-    });
+    expect(legacy.store.lookup("agent:main:unconfirmed-title")).not.toHaveProperty("displayTitle");
   });
 
   it("backfills an unchanged title after a sibling confirms server support", async () => {
@@ -560,7 +558,6 @@ describe("ClickClack discussion service", () => {
         external_ref: externalRef,
         external_url: "https://control.example/control/chat/main/release-planning-12345678",
         sidebar_section: "Projects",
-        archived: false,
         created_at: "2026-07-19T00:00:00.000Z",
       },
     ]);
@@ -574,7 +571,6 @@ describe("ClickClack discussion service", () => {
       external_ref: patch.external_ref,
       external_url: patch.external_url,
       sidebar_section: patch.sidebar_section,
-      archived: patch.archived,
       created_at: "2026-07-19T00:00:00.000Z",
     }));
 
@@ -585,6 +581,7 @@ describe("ClickClack discussion service", () => {
       "chn_recovered",
       expect.objectContaining({ external_ref: externalRef, external_managed: true }),
     );
+    expect(harness.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
     expect(opened).toEqual({
       state: "open",
       embedUrl:

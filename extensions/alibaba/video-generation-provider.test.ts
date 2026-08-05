@@ -282,10 +282,10 @@ describe("alibaba video generation provider", () => {
     expect(body.model).toBe("wan2.6-r2v-flash");
     const input = requireRecord(body.input, "DashScope request input");
     expect(input.prompt).toBe("animate this shot");
-    expect(input.img_url).toBe("https://example.com/ref.png");
+    expect(input.reference_urls).toEqual(["https://example.com/ref.png"]);
     const parameters = requireRecord(body.parameters, "DashScope request parameters");
     expect(parameters.duration).toBe(6);
-    expect(parameters.enable_audio).toBe(true);
+    expect(parameters.audio).toBe(true);
     expect(parameters.watermark).toBe(false);
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
