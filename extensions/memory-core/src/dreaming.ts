@@ -120,6 +120,7 @@ type ShortTermPromotionDreamingConfig = {
   maxPromotedSnippetTokens?: number;
   maxPriorEntryLossFraction: number;
   verboseLogging: boolean;
+  language?: string;
   storage?: {
     mode: "inline" | "separate" | "both";
     separateReports: boolean;

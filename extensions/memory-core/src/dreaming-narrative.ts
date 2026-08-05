@@ -13,11 +13,11 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
+import { getDreamingTranslations, type DreamingLanguage } from "./dreaming-i18n.js";
 import {
   DREAMING_SESSION_KEY_PREFIX,
   scrubDreamingNarrativeArtifacts,
 } from "./dreaming-session-cleanup.js";
-import { getDreamingTranslations, type DreamingLanguage } from "./dreaming-i18n.js";
 import { extractAssistantText } from "./dreaming-shared.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -430,7 +430,11 @@ function ensureDiarySection(existing: string, language?: DreamingLanguage): stri
   return diarySection + "\n" + existing;
 }
 
-function replaceDiaryContent(existing: string, diaryContent: string, language?: DreamingLanguage): string {
+function replaceDiaryContent(
+  existing: string,
+  diaryContent: string,
+  language?: DreamingLanguage,
+): string {
   const ensured = ensureDiarySection(existing, language);
   const startIdx = ensured.indexOf(DIARY_START_MARKER);
   const endIdx = ensured.indexOf(DIARY_END_MARKER);
@@ -449,7 +453,6 @@ function splitDiaryBlocks(diaryContent: string): string[] {
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
 }
-
 
 function formatNarrativeLanguageInstruction(language?: DreamingLanguage): string | null {
   switch (language) {
