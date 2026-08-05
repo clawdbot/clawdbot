@@ -497,7 +497,7 @@ export function createAgentEventHandler({
       !isStaleLifecycleEventForSession({
         owningSessionId: evt.sessionId,
         currentSessionId: row?.sessionId,
-        eventRunId: evt.runId,
+        eventRunId: evt.runId?.trim() || undefined,
         currentRunId: row?.lifecycleRunId,
         eventStartedAt: evt.data?.startedAt,
         currentStartedAt: row?.startedAt,

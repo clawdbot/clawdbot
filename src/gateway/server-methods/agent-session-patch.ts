@@ -243,6 +243,7 @@ export function buildAgentSessionPatch(params: {
     ...(shouldClearRotatedState || shouldClearTerminalState
       ? {
           status: undefined,
+          lifecycleRunId: undefined,
           startedAt: undefined,
           endedAt: undefined,
           runtimeMs: undefined,

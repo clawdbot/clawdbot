@@ -67,6 +67,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     ...entry,
     sessionFile: undefined,
     status: undefined,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,

@@ -199,8 +199,8 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     updatedAt,
     status,
     lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
-    // Terminal events keep the last known owner when they carry no run id so a
-    // same-run late duplicate cannot be re-matched against a cleared field.
+    // Terminal events without a run id keep the last known owner so restart
+    // recovery for that run can still settle the row through the same-run branch.
     lifecycleRunId: resolveLifecycleEventRunId(params.event) ?? existing?.lifecycleRunId,
     startedAt,
     endedAt,
