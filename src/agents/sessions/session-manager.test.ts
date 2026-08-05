@@ -315,7 +315,9 @@ describe("SessionManager.open", () => {
       storePath: path.join(dir, "sessions.json"),
     };
 
+    expect(loadSessionEntry(scope)).toBeUndefined();
     const manager = SessionManager.open(scope, dir);
+    expect(loadSessionEntry(scope)).toBeUndefined();
     const messageId = manager.appendMessage({
       role: "user",
       content: "first message",
@@ -334,6 +336,27 @@ describe("SessionManager.open", () => {
         type: "message",
       }),
     ]);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+  });
+
+  it("does not rewrite an existing session row when opening an empty transcript", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-empty-existing-row-target",
+      sessionKey: "agent:main:sqlite-empty-existing-row",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "sqlite-existing-row",
+      updatedAt: 123,
+      label: "preserved",
+    });
+    const before = loadSessionEntry(scope);
+
+    SessionManager.open(scope, dir);
+
+    expect(loadSessionEntry(scope)).toEqual(before);
   });
 
   it("rejects invalid entries before mutating in-memory state", () => {

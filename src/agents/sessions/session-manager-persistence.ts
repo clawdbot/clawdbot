@@ -1,6 +1,8 @@
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
+  loadSessionEntry,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import {
@@ -150,6 +152,12 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     const scope = this.persistenceTarget;
     if (this.persistenceHeaderPending) {
+      if (!loadSessionEntry(scope)) {
+        replaceSessionEntrySync(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+        });
+      }
       const header = this.fileEntries[0];
       if (!header || header.type !== "session" || !appendTranscriptEventSync(scope, header)) {
         throw new Error("Session transcript header was not persisted");
