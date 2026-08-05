@@ -307,14 +307,16 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toStrictEqual([]);
+      // User pins now inherit the fallback chain as a terminal safety net
+      // (pin stays primary) so a provider outage fails over instead of dying.
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
@@ -331,7 +333,7 @@ describe("resolveAgentConfig", () => {
         modelOverrideSource: "user",
         hasAutoFallbackProvenance: true,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
@@ -364,6 +366,69 @@ describe("resolveAgentConfig", () => {
         agentId: "linus",
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps a user-pinned session resilient via the default fallback safety net", () => {
+    // Recovery contract: a user pins a model whose provider is temporarily
+    // unavailable (e.g. OpenAI usage-capped). The pin must stay primary, but
+    // the session must still inherit the global fallback chain so failover
+    // reaches a healthy provider instead of surfacing "all models rate-limited".
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-8",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "ollama/qwen3:8b", "local/free-chat"],
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    // User explicitly pinned a model on this session.
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      }),
+    ).toEqual(["anthropic/claude-sonnet-4-6", "ollama/qwen3:8b", "local/free-chat"]);
+
+    // Auto-selected override behaves identically (unchanged).
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "auto",
+      }),
+    ).toEqual(["anthropic/claude-sonnet-4-6", "ollama/qwen3:8b", "local/free-chat"]);
+
+    // Opt-out preserved: an explicit empty fallbacks list makes a pin exclusive
+    // (no substitution), e.g. for cost control or model-specific evaluation.
+    const cfgExclusive: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-8",
+            fallbacks: [],
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg: cfgExclusive,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
       }),
     ).toStrictEqual([]);
   });
@@ -944,7 +1009,9 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toStrictEqual([]);
+      // User-pinned subagent also inherits its subagent fallback chain as a
+      // safety net (matches the auto-selected case above).
+    ).toEqual(["openai-codex/gpt-5.4", "zai/glm-5"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
