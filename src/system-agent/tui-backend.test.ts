@@ -182,9 +182,12 @@ describe("runSystemAgentTui", () => {
     expect(runTuiCalls).toBe(1);
     expect(resolveVerifiedRoute).toHaveBeenCalledOnce();
     expect(resolveVerifiedRoute).toHaveBeenCalledWith(verified.verifiedInference, verified.deps);
-    expect(resolveVerifiedRoute.mock.invocationCallOrder[0]).toBeLessThan(
-      runTui.mock.invocationCallOrder[0],
-    );
+    const [resolveOrder] = resolveVerifiedRoute.mock.invocationCallOrder;
+    const [runTuiOrder] = runTui.mock.invocationCallOrder;
+    if (resolveOrder === undefined || runTuiOrder === undefined) {
+      throw new Error("expected verified route resolution before TUI startup");
+    }
+    expect(resolveOrder).toBeLessThan(runTuiOrder);
     const options = runTuiOptions as {
       local?: boolean;
       session?: string;
