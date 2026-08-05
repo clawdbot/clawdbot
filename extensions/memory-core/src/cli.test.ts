@@ -2668,6 +2668,7 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         recallDays: ["<today>"],
         queryHashes: ["<hash>"],
+        userQueryHashes: ["<hash>"],
         claimHash: entry.claimHash ? "<claim>" : undefined,
         provenance: entry.provenance ? { ...entry.provenance, observedAt: 0 } : undefined,
       }).toEqual({
@@ -2685,6 +2686,7 @@ describe("memory cli", () => {
         firstRecalledAt: "<now>",
         lastRecalledAt: "<now>",
         queryHashes: ["<hash>"],
+        userQueryHashes: ["<hash>"],
         recallDays: ["<today>"],
         claimHash: "<claim>",
         conceptTags: ["backup", "backups", "glacier", "s3"],
