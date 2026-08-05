@@ -438,41 +438,46 @@ function resolveFixedSessionStoreTargetsReadOnly(
       env,
     });
     const sqlitePath = resolvedTarget.path;
-    if (
-      !resolvedTarget.shared &&
-      !dedupeSessionStoreTargetsBySqliteTarget(configuredTargets, {
-        defaultAgentId,
-        env,
-      }).some((target) => normalizeAgentId(target.agentId) === requested)
-    ) {
-      return {
-        available: false,
-        reason: sqlitePath && fsSync.existsSync(sqlitePath) ? "read-failed" : "database-missing",
-      };
-    }
     if (!sqlitePath) {
       return { available: false, reason: "read-failed" };
     }
     if (!fsSync.existsSync(sqlitePath)) {
       return { available: false, reason: "database-missing" };
     }
-    const databaseAgentId = resolvedTarget.shared
-      ? normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId)
-      : requested;
+    const ownerValidated =
+      resolvedTarget.shared === true ||
+      dedupeSessionStoreTargetsBySqliteTarget(configuredTargets, {
+        defaultAgentId,
+        env,
+      }).some((target) => normalizeAgentId(target.agentId) === requested);
+    const databaseAgentId = normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId);
     const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        readSqliteSessionEntryKeys(database).some((sessionKey) => {
+      (database) => {
+        let hasRequestedScopedRow = false;
+        let hasUnscopedRow = false;
+        for (const sessionKey of readSqliteSessionEntryKeys(database)) {
           const parsed = parseAgentSessionKey(sessionKey);
-          return parsed
-            ? normalizeAgentId(parsed.agentId) === requested
-            : databaseAgentId === requested;
-        }),
+          if (parsed) {
+            hasRequestedScopedRow ||= normalizeAgentId(parsed.agentId) === requested;
+          } else {
+            hasUnscopedRow = true;
+          }
+        }
+        return { hasRequestedScopedRow, hasUnscopedRow };
+      },
       { agentId: databaseAgentId, env, path: sqlitePath },
     );
     if (!result.found) {
       return { available: false, reason: result.reason };
     }
-    return { available: true, targets: result.value ? [fixedTarget] : [] };
+    if (result.value.hasRequestedScopedRow) {
+      return { available: true, targets: [fixedTarget] };
+    }
+    if (!ownerValidated) {
+      return { available: false, reason: "read-failed" };
+    }
+    const ownsUnscopedRows = databaseAgentId === requested && result.value.hasUnscopedRow;
+    return { available: true, targets: ownsUnscopedRows ? [fixedTarget] : [] };
   } catch {
     return { available: false, reason: "read-failed" };
   }
