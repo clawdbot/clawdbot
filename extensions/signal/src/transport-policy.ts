@@ -78,11 +78,14 @@ export function inferLegacyManagedNativePortFromConnectionUrl(
   }
   let connectionUrl: URL;
   try {
-    connectionUrl = new URL(sourceUrl);
+    connectionUrl = new URL(normalizeSignalTransportUrl(sourceUrl));
   } catch {
     return undefined;
   }
-  const authority = sourceUrl.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1];
+  const sourceUrlWithScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(sourceUrl)
+    ? sourceUrl
+    : `http://${sourceUrl}`;
+  const authority = sourceUrlWithScheme.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1];
   const hostPort = authority?.slice(authority.lastIndexOf("@") + 1);
   const hasExplicitPort = hostPort
     ? hostPort.startsWith("[")
@@ -92,7 +95,7 @@ export function inferLegacyManagedNativePortFromConnectionUrl(
   if (!hasExplicitPort) {
     return undefined;
   }
-  const localPort = resolveLocalSignalTransportPort(sourceUrl);
+  const localPort = resolveLocalSignalTransportPort(normalizeSignalTransportUrl(sourceUrl));
   if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
     return undefined;
   }

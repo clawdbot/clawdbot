@@ -421,6 +421,27 @@ describe("signal transport compatibility", () => {
     });
   });
 
+  it("infers a managed bind port from a bare legacy loopback httpUrl", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "127.0.0.1:8082",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082",
+      httpPort: 8082,
+    });
+    expect(resolveSignalAccount({ cfg: result.config }).transport).toMatchObject({
+      baseUrl: "http://127.0.0.1:8082",
+      httpPort: 8082,
+    });
+  });
+
   it("keeps the default managed bind for an unported legacy loopback httpUrl", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({
