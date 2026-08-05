@@ -294,6 +294,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   requester: ChatAbortRequester;
   keyPrefix: string;
   preserveSideRuns?: boolean;
+  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -312,6 +313,9 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       includeHidden: true,
     });
     if (!run) {
+      continue;
+    }
+    if (params.excludeRunIds?.has(run.runId)) {
       continue;
     }
     const runSessionKeys = [
@@ -374,6 +378,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -392,6 +397,9 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   let hasUnauthorizedProtectedRuns = false;
   let hasProtectedRuns = false;
   for (const [runId, active] of params.chatAbortControllers) {
+    if (params.excludeRunIds?.has(runId)) {
+      continue;
+    }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }

@@ -173,6 +173,7 @@ To let one agent search another agent's QMD session transcripts, add extra colle
     },
     entries: {
       main: {
+        default: true,
         workspace: "~/workspaces/main",
         memory: {
           search: {
@@ -210,10 +211,10 @@ Direct chats collapse to the agent's main session key by default, so true isolat
 ```json5
 {
   agents: {
-    list: [
-      { id: "alex", workspace: "~/.openclaw/workspace-alex" },
-      { id: "mia", workspace: "~/.openclaw/workspace-mia" },
-    ],
+    entries: {
+      alex: { default: true, workspace: "~/.openclaw/workspace-alex" },
+      mia: { workspace: "~/.openclaw/workspace-mia" },
+    },
   },
   bindings: [
     {
@@ -270,10 +271,10 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          { id: "main", workspace: "~/.openclaw/workspace-main" },
-          { id: "coding", workspace: "~/.openclaw/workspace-coding" },
-        ],
+        entries: {
+          main: { default: true, workspace: "~/.openclaw/workspace-main" },
+          coding: { workspace: "~/.openclaw/workspace-coding" },
+        },
       },
       bindings: [
         { agentId: "main", match: { channel: "discord", accountId: "default" } },
@@ -288,7 +289,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "222222222222222222": { allow: true, requireMention: false },
+                    "222222222222222222": { enabled: true, requireMention: false },
                   },
                 },
               },
@@ -298,7 +299,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "333333333333333333": { allow: true, requireMention: false },
+                    "333333333333333333": { enabled: true, requireMention: false },
                   },
                 },
               },
@@ -317,10 +318,10 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          { id: "main", workspace: "~/.openclaw/workspace-main" },
-          { id: "alerts", workspace: "~/.openclaw/workspace-alerts" },
-        ],
+        entries: {
+          main: { default: true, workspace: "~/.openclaw/workspace-main" },
+          alerts: { workspace: "~/.openclaw/workspace-alerts" },
+        },
       },
       bindings: [
         { agentId: "main", match: { channel: "telegram", accountId: "default" } },
@@ -366,21 +367,19 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```js
     {
       agents: {
-        list: [
-          {
-            id: "home",
+        entries: {
+          home: {
             default: true,
             name: "Home",
             workspace: "~/.openclaw/workspace-home",
             agentDir: "~/.openclaw/agents/home/agent",
           },
-          {
-            id: "work",
+          work: {
             name: "Work",
             workspace: "~/.openclaw/workspace-work",
             agentDir: "~/.openclaw/agents/work/agent",
           },
-        ],
+        },
       },
 
       // Deterministic routing: first match wins (most-specific first).
@@ -436,20 +435,19 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "chat",
+        entries: {
+          chat: {
+            default: true,
             name: "Everyday",
             workspace: "~/.openclaw/workspace-chat",
             model: "anthropic/claude-sonnet-4-6",
           },
-          {
-            id: "opus",
+          opus: {
             name: "Deep Work",
             workspace: "~/.openclaw/workspace-opus",
             model: "anthropic/claude-opus-4-6",
           },
-        ],
+        },
       },
       bindings: [
         { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
@@ -467,20 +465,19 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "chat",
+        entries: {
+          chat: {
+            default: true,
             name: "Everyday",
             workspace: "~/.openclaw/workspace-chat",
             model: "anthropic/claude-sonnet-4-6",
           },
-          {
-            id: "opus",
+          opus: {
             name: "Deep Work",
             workspace: "~/.openclaw/workspace-opus",
             model: "anthropic/claude-opus-4-6",
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -501,9 +498,9 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "family",
+        entries: {
+          family: {
+            default: true,
             name: "Family",
             workspace: "~/.openclaw/workspace-family",
             identity: { name: "Family Bot" },
@@ -527,7 +524,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               deny: ["write", "edit", "apply_patch", "browser", "canvas", "nodes", "cron"],
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -553,17 +550,16 @@ Each agent can have its own sandbox and tool restrictions:
 ```js
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
+        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: {
           mode: "off",  // No sandbox for personal agent
         },
         // No tool restrictions - all tools available
       },
-      {
-        id: "family",
+      family: {
         workspace: "~/.openclaw/workspace-family",
         sandbox: {
           mode: "all",     // Always sandboxed
@@ -578,7 +574,7 @@ Each agent can have its own sandbox and tool restrictions:
           deny: ["exec", "write", "edit", "apply_patch"],    // Deny others
         },
       },
-    ],
+    },
   },
 }
 ```

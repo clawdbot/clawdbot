@@ -6,14 +6,20 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
+} from "../plugins/doctor-contract-registry.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
@@ -29,6 +35,7 @@ import {
   readPersistedVapidKeyPair,
 } from "./push-web-store.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
+import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
   autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
@@ -38,6 +45,10 @@ import {
   runLegacyStateMigrations,
 } from "./state-migrations.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import {
+  migrateLegacyCurrentConversationBindings,
+  migrateLegacyPluginBindingApprovals,
+} from "./state-migrations.runtime-state.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -189,6 +200,32 @@ async function expectMissingPath(targetPath: string): Promise<void> {
   expect(statError?.path).toBe(targetPath);
   expect(statError?.syscall).toBe("stat");
 }
+
+function failArchiveRenameOnce(sourcePath: string) {
+  const actualRenameSync = fsSync.renameSync.bind(fsSync);
+  let failed = false;
+  return vi.spyOn(fsSync, "renameSync").mockImplementation((from, to) => {
+    if (!failed && String(from) === sourcePath) {
+      failed = true;
+      throw new Error("forced archive failure");
+    }
+    actualRenameSync(from, to);
+  });
+}
+
+function failNextStateDbCommit(env: NodeJS.ProcessEnv) {
+  const { db } = openOpenClawStateDatabase({ env });
+  const actualExec = db.exec.bind(db);
+  let failed = false;
+  return vi.spyOn(db, "exec").mockImplementation((sql) => {
+    if (!failed && sql.trim() === "COMMIT") {
+      failed = true;
+      throw new Error("forced commit failure");
+    }
+    actualExec(sql);
+  });
+}
+
 const createTempDir = () => tempDirs.make("openclaw-state-migrations-test-");
 
 function readUpdateCheckState(env: NodeJS.ProcessEnv):
@@ -304,6 +341,22 @@ function readPluginBindingApprovalRows(env: NodeJS.ProcessEnv): Array<{
   ).rows;
 }
 
+function insertPluginBindingApprovalRow(
+  env: NodeJS.ProcessEnv,
+  row: {
+    plugin_root: string;
+    channel: string;
+    account_id: string;
+    plugin_id: string;
+    plugin_name: string | null;
+    approved_at: number;
+  },
+): void {
+  const { db } = openOpenClawStateDatabase({ env });
+  const stateDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
+  executeSqliteQuerySync(db, stateDb.insertInto("plugin_binding_approvals").values(row));
+}
+
 function insertCurrentConversationBindingRow(
   env: NodeJS.ProcessEnv,
   params: {
@@ -367,6 +420,139 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
     ...process.env,
     HOME: path.dirname(stateDir),
     OPENCLAW_STATE_DIR: stateDir,
+  };
+}
+
+type MixedCommitFailureFixture = {
+  env: NodeJS.ProcessEnv;
+  expectedWarning: string;
+  migrate: () => { notices?: string[]; warnings: string[] };
+  readRowCount: () => number;
+  sourceFragment: string;
+  sourcePath: string;
+};
+
+async function createMixedPluginBindingCommitFailureFixture(): Promise<MixedCommitFailureFixture> {
+  const root = await createTempDir();
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
+  insertPluginBindingApprovalRow(env, {
+    plugin_root: "/plugins/conflict",
+    channel: "discord",
+    account_id: "default",
+    plugin_id: "sqlite-plugin",
+    plugin_name: "SQLite Plugin",
+    approved_at: 1,
+  });
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(
+    sourcePath,
+    JSON.stringify({
+      version: 1,
+      approvals: [
+        {
+          pluginRoot: "/plugins/conflict",
+          pluginId: "legacy-plugin",
+          pluginName: "Legacy Plugin",
+          channel: "discord",
+          accountId: "default",
+          approvedAt: 2,
+        },
+        {
+          pluginRoot: "/plugins/import",
+          pluginId: "imported-plugin",
+          pluginName: "Imported Plugin",
+          channel: "telegram",
+          accountId: "default",
+          approvedAt: 3,
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return {
+    env,
+    expectedWarning:
+      "Failed migrating legacy plugin binding approvals: Error: forced commit failure",
+    migrate: () =>
+      migrateLegacyPluginBindingApprovals({
+        detected: { sourcePath, hasLegacy: true },
+        stateDir,
+      }),
+    readRowCount: () => readPluginBindingApprovalRows(env).length,
+    sourceFragment: "Imported Plugin",
+    sourcePath,
+  };
+}
+
+async function createMixedCurrentConversationCommitFailureFixture(): Promise<MixedCommitFailureFixture> {
+  const root = await createTempDir();
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  const bindingsDir = path.join(stateDir, "bindings");
+  const sourcePath = path.join(bindingsDir, "current-conversations.json");
+  const conflictingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
+  insertCurrentConversationBindingRow(env, {
+    bindingKey: conflictingKey,
+    bindingId: `generic:${conflictingKey}`,
+    targetSessionKey: "agent:codex:acp:existing",
+    channel: "workspace",
+    accountId: "default",
+    conversationId: "user:U123",
+    recordJson: JSON.stringify({
+      bindingId: `generic:${conflictingKey}`,
+      targetSessionKey: "agent:codex:acp:existing",
+      targetKind: "session",
+      conversation: {
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      status: "active",
+      boundAt: 1,
+    }),
+  });
+  await fs.mkdir(bindingsDir, { recursive: true });
+  await fs.writeFile(
+    sourcePath,
+    JSON.stringify({
+      version: 1,
+      bindings: [
+        {
+          targetSessionKey: "agent:codex:acp:legacy-conflict",
+          conversation: {
+            channel: "workspace",
+            accountId: "default",
+            conversationId: "user:U123",
+          },
+          boundAt: 2,
+        },
+        {
+          targetSessionKey: "agent:codex:acp:legacy-missing",
+          conversation: {
+            channel: "workspace",
+            accountId: "default",
+            conversationId: "user:U456",
+          },
+          boundAt: 3,
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return {
+    env,
+    expectedWarning:
+      "Failed migrating legacy current-conversation bindings: Error: forced commit failure",
+    migrate: () =>
+      migrateLegacyCurrentConversationBindings({
+        detected: { sourcePath, hasLegacy: true },
+        stateDir,
+      }),
+    readRowCount: () => readCurrentConversationBindingRows(env).length,
+    sourceFragment: "legacy-missing",
+    sourcePath,
   };
 }
 
@@ -512,6 +698,45 @@ describe("state migrations", () => {
     detectionCase = { ...detected, stateDir, env };
   });
 
+  it("does not treat wildcard route bindings as pairing account ids", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    cfg.bindings = [
+      {
+        agentId: "worker-1",
+        match: { channel: "chatapp", accountId: "*" },
+      },
+    ];
+    const credentialsDir = path.join(stateDir, "credentials");
+    await fs.mkdir(credentialsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(credentialsDir, "chatapp-allowFrom.json"),
+      '["default-user"]\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(credentialsDir, "chatapp-alpha-allowFrom.json"),
+      '["scoped-user"]\n',
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+
+    expect(result.warnings).toEqual([]);
+    expect(readChannelPairingStateSnapshot("chatapp", env).allowFrom).toEqual({
+      alpha: ["default-user", "scoped-user"],
+    });
+    await expectMissingPath(path.join(credentialsDir, "chatapp-allowFrom.json"));
+    await expectMissingPath(path.join(credentialsDir, "chatapp-alpha-allowFrom.json"));
+  });
+
   it("keeps automatic migration read-only when the shared schema is current", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -528,6 +753,53 @@ describe("state migrations", () => {
     } finally {
       writer.exec("ROLLBACK;");
       writer.close();
+    }
+  });
+
+  it("detects no plugin-state migration warnings after the startup lease creates fresh state", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const detectLegacyState = vi.fn(async ({ context }: { context: unknown }) => {
+      const pluginState = (context as PluginDoctorStateMigrationContext).openPluginStateKeyedStore({
+        namespace: "fresh-start-detection",
+        maxEntries: 10,
+      });
+      await expect(pluginState.lookup("legacy")).resolves.toBeUndefined();
+      await expect(pluginState.entries()).resolves.toEqual([]);
+      return null;
+    });
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "fixture",
+        migration: {
+          id: "fixture-fresh-start-plugin-state",
+          label: "Fixture fresh-start plugin state",
+          detectLegacyState,
+          migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+        },
+      },
+    ];
+
+    const lease = acquireStartupMigrationLease({ env, owner: "fresh-start-test" });
+    try {
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all(),
+      ).toEqual([{ name: "schema_meta" }, { name: "state_leases" }]);
+      database.close();
+
+      const detected = await detectLegacyStateMigrations({
+        cfg: createConfig(),
+        env,
+        homedir: () => root,
+      });
+
+      expect(detectLegacyState).toHaveBeenCalledOnce();
+      expect(detected.warnings).toEqual([]);
+    } finally {
+      lease.release();
     }
   });
 
@@ -613,6 +885,88 @@ describe("state migrations", () => {
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("restores retained Memory Core host events only for explicit plugin-only Doctor repair", async () => {
+    const root = await fs.realpath(await createTempDir());
+    const stateDir = path.join(root, ".openclaw");
+    const workspaceDir = path.join(root, "workspace");
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    const env = createEnv(stateDir);
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    } as OpenClawConfig;
+    const event = {
+      type: "memory.recall.recorded",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query: "retained before upgrade",
+      resultCount: 0,
+      results: [],
+    } as const;
+    await fs.mkdir(path.dirname(eventPath), { recursive: true });
+    await fs.writeFile(eventPath, `${JSON.stringify(event)}\n`, "utf8");
+
+    const { stateMigrations } = (await import(
+      /* @vite-ignore */ new URL(
+        "../../extensions/memory-core/doctor-contract-api.ts",
+        import.meta.url,
+      ).href
+    )) as { stateMigrations: PluginDoctorStateMigration[] };
+    const migration = stateMigrations.find(
+      (candidate) => candidate.id === "memory-core-host-events-jsonl-to-sqlite",
+    );
+    expect(migration).toBeDefined();
+    if (!migration) {
+      throw new Error("Expected the bundled Memory Core host-event Doctor migration");
+    }
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: migration.id,
+          label: migration.label,
+          doctorOnly: migration.doctorOnly,
+          detectLegacyState: (params) =>
+            migration.detectLegacyState({
+              ...params,
+              context: params.context as PluginDoctorStateMigrationContext,
+            }),
+          migrateLegacyState: async (params) => {
+            const result = await migration.migrateLegacyState({
+              ...params,
+              context: params.context as PluginDoctorStateMigrationContext,
+            });
+            return { changes: result.changes, warnings: result.warnings };
+          },
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+    expect(automatic.warnings).toEqual([]);
+    expect(automatic.changes).not.toContain(
+      "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+    );
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([]);
+    await expect(fs.stat(eventPath)).resolves.toBeDefined();
+
+    const repaired = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(repaired.warnings).toEqual([]);
+    expect(repaired.changes).toContain(
+      "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+    );
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([event]);
+    await expectMissingPath(eventPath);
+    await expect(fs.stat(`${eventPath}.migrated`)).resolves.toBeDefined();
   });
 
   it("runs doctor-only repairs after the automatic migration check", async () => {
@@ -774,7 +1128,6 @@ describe("state migrations", () => {
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       "Canonicalized 3 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
-      "Rewrote migrated session transcript paths",
       "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
@@ -1183,11 +1536,12 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
     const outsideStorePath = path.join(root, "outside-sessions.json");
+    const pendingKey = "agent:main:task";
     await fs.writeFile(
       outsideStorePath,
       JSON.stringify({
-        "agent:main:task": {
-          sessionId: "canonical-acp",
+        [pendingKey]: {
+          sessionId: pendingKey,
           updatedAt: 10,
           acp: {
             backend: "test",
@@ -1213,9 +1567,17 @@ describe("state migrations", () => {
     expect((await fs.lstat(configuredStorePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
       string,
-      { sessionId: string; acp?: unknown }
+      { sessionId?: string; acp?: unknown }
     >;
-    expect(outsideStore["agent:main:task"]?.acp).toBeDefined();
+    expect(outsideStore[pendingKey]?.sessionId).toBe(pendingKey);
+    expect(outsideStore[pendingKey]?.acp).toBeDefined();
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: pendingKey,
+        entry: { sessionId: pendingKey, lifecycleRevision: undefined },
+        env,
+      }),
+    ).toBeUndefined();
     expect(result.warnings).toContain(
       `Deferred ACP metadata migration in final-component symlink store ${configuredStorePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
     );
@@ -1606,13 +1968,18 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const pendingKey = "agent:main:existing";
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(
       storePath,
       JSON.stringify({
-        "agent:main:existing": {
-          sessionId: "existing-main",
+        [pendingKey]: {
+          sessionId: pendingKey,
           updatedAt: 20,
+          displayName: "Pending ACP session",
+          providerOverride: "test-provider",
+          modelOverride: "test-model",
+          modelOverrideSource: "user",
           acp: {
             backend: "test",
             agent: "main",
@@ -1633,13 +2000,47 @@ describe("state migrations", () => {
     });
 
     expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+    const afterStore = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      {
+        sessionId?: string;
+        initializationPending?: boolean;
+        acp?: unknown;
+        displayName?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+      }
+    >;
+    expect(afterStore[pendingKey]).toMatchObject({
+      initializationPending: true,
+      displayName: "Pending ACP session",
+      providerOverride: "test-provider",
+      modelOverride: "test-model",
+      modelOverrideSource: "user",
+    });
+    expect(afterStore[pendingKey]?.sessionId).toBeUndefined();
+    expect(afterStore[pendingKey]?.acp).toBeUndefined();
     expect(
       readAcpSessionMetaForEntry({
-        sessionKey: "agent:main:existing",
-        entry: { sessionId: "existing-main", lifecycleRevision: undefined },
+        sessionKey: pendingKey,
+        entry: { lifecycleRevision: undefined },
         env,
       })?.runtimeSessionName,
     ).toBe("existing-runtime");
+
+    const firstBytes = await fs.readFile(storePath, "utf8");
+    closeOpenClawStateDatabaseForTest();
+    resetAutoMigrateLegacyStateForTest();
+    const rerun = await autoMigrateLegacyState({
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      env,
+      homedir: () => root,
+    });
+    await expect(fs.readFile(storePath, "utf8")).resolves.toBe(firstBytes);
+    expect(rerun.changes).not.toContain(
+      "Migrated 1 ACP session metadata row → shared SQLite state",
+    );
   });
 
   it("migrates existing and imported ACP metadata in one canonical session phase", async () => {
@@ -1931,6 +2332,204 @@ describe("state migrations", () => {
     await expectMissingPath(routingPath);
     await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("wake");
     await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("robot wake");
+  });
+
+  it("archives divergent legacy voice wake triggers and keeps shared SQLite canonical", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const cfg = createConfig();
+    const triggersPath = path.join(stateDir, "settings", "voicewake.json");
+    await setVoiceWakeTriggers(["sqlite wake"], stateDir);
+    await fs.mkdir(path.dirname(triggersPath), { recursive: true });
+    await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["legacy wake"] }), "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite voice wake triggers because legacy file differs: ${triggersPath}`,
+    ]);
+    await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
+      triggers: ["sqlite wake"],
+    });
+    await expectMissingPath(triggersPath);
+    await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("legacy wake");
+  });
+
+  it("keeps a failed voice wake triggers archive blocking and converges on retry", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const cfg = createConfig();
+    const triggersPath = path.join(stateDir, "settings", "voicewake.json");
+    await setVoiceWakeTriggers(["sqlite wake"], stateDir);
+    await fs.mkdir(path.dirname(triggersPath), { recursive: true });
+    await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["legacy wake"] }), "utf8");
+
+    const rename = failArchiveRenameOnce(triggersPath);
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+    rename.mockRestore();
+
+    expect(result.warnings).toStrictEqual([
+      `Failed archiving voice wake triggers legacy source ${triggersPath}: Error: forced archive failure`,
+    ]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite voice wake triggers because legacy file differs: ${triggersPath}`,
+    ]);
+    await expect(fs.readFile(triggersPath, "utf8")).resolves.toContain("legacy wake");
+    await expectMissingPath(`${triggersPath}.migrated`);
+
+    const retryDetected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
+    expect(retry.warnings).toStrictEqual([]);
+    await expectMissingPath(triggersPath);
+  });
+
+  it("leaves malformed legacy voice wake triggers in place with a warning", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const cfg = createConfig();
+    const triggersPath = path.join(stateDir, "settings", "voicewake.json");
+    await fs.mkdir(path.dirname(triggersPath), { recursive: true });
+    await fs.writeFile(triggersPath, "{ malformed", "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed reading legacy voice wake triggers");
+    expect(result.notices).toBeUndefined();
+    await expect(fs.access(triggersPath)).resolves.toBeUndefined();
+    await expectMissingPath(`${triggersPath}.migrated`);
+  });
+
+  it("archives divergent legacy voice wake routing and keeps shared SQLite canonical", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const cfg = createConfig();
+    const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
+    await setVoiceWakeRoutingConfig(
+      {
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
+      },
+      stateDir,
+    );
+    await fs.mkdir(path.dirname(routingPath), { recursive: true });
+    await fs.writeFile(
+      routingPath,
+      JSON.stringify({
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "legacy wake", target: { agentId: "main" } }],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite voice wake routing because legacy file differs: ${routingPath}`,
+    ]);
+    await expect(loadVoiceWakeRoutingConfig(stateDir)).resolves.toMatchObject({
+      routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
+    });
+    await expectMissingPath(routingPath);
+    await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("legacy wake");
+  });
+
+  it("keeps a failed voice wake routing archive blocking and converges on retry", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const cfg = createConfig();
+    const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
+    await setVoiceWakeRoutingConfig(
+      {
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
+      },
+      stateDir,
+    );
+    await fs.mkdir(path.dirname(routingPath), { recursive: true });
+    await fs.writeFile(
+      routingPath,
+      JSON.stringify({
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "legacy wake", target: { agentId: "main" } }],
+      }),
+      "utf8",
+    );
+
+    const rename = failArchiveRenameOnce(routingPath);
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+    rename.mockRestore();
+
+    expect(result.warnings).toStrictEqual([
+      `Failed archiving voice wake routing legacy source ${routingPath}: Error: forced archive failure`,
+    ]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite voice wake routing because legacy file differs: ${routingPath}`,
+    ]);
+    await expect(fs.readFile(routingPath, "utf8")).resolves.toContain("legacy wake");
+    await expectMissingPath(`${routingPath}.migrated`);
+
+    const retryDetected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
+    expect(retry.warnings).toStrictEqual([]);
+    await expectMissingPath(routingPath);
+  });
+
+  it("leaves malformed legacy voice wake routing in place with a warning", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const cfg = createConfig();
+    const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
+    await fs.mkdir(path.dirname(routingPath), { recursive: true });
+    await fs.writeFile(routingPath, "{ malformed", "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed reading legacy voice wake routing");
+    expect(result.notices).toBeUndefined();
+    await expect(fs.access(routingPath)).resolves.toBeUndefined();
+    await expectMissingPath(`${routingPath}.migrated`);
   });
 
   it("auto-migrates standalone legacy JSON settings", async () => {
@@ -3045,6 +3644,204 @@ describe("state migrations", () => {
     );
   });
 
+  it("archives conflicting plugin binding approvals without overwriting shared SQLite", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
+    insertPluginBindingApprovalRow(env, {
+      plugin_root: "/plugins/conflict",
+      channel: "discord",
+      account_id: "default",
+      plugin_id: "sqlite-plugin",
+      plugin_name: "SQLite Plugin",
+      approved_at: 1,
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        approvals: [
+          {
+            pluginRoot: "/plugins/conflict",
+            pluginId: "legacy-plugin",
+            pluginName: "Legacy Plugin",
+            channel: "discord",
+            accountId: "default",
+            approvedAt: 2,
+          },
+          {
+            pluginRoot: "/plugins/import",
+            pluginId: "imported-plugin",
+            pluginName: "Imported Plugin",
+            channel: "telegram",
+            accountId: "default",
+            approvedAt: 3,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite plugin binding approvals because 1 legacy approval conflicts: ${sourcePath}`,
+    ]);
+    expect(result.changes).toContain("Migrated 1 plugin binding approval → shared SQLite state");
+    expect(readPluginBindingApprovalRows(env)).toEqual([
+      {
+        plugin_root: "/plugins/conflict",
+        channel: "discord",
+        account_id: "default",
+        plugin_id: "sqlite-plugin",
+        plugin_name: "SQLite Plugin",
+        approved_at: 1,
+      },
+      {
+        plugin_root: "/plugins/import",
+        channel: "telegram",
+        account_id: "default",
+        plugin_id: "imported-plugin",
+        plugin_name: "Imported Plugin",
+        approved_at: 3,
+      },
+    ]);
+    await expectMissingPath(sourcePath);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("Legacy Plugin");
+  });
+
+  it("archives a legacy plugin binding approvals file when every approval conflicts", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
+    insertPluginBindingApprovalRow(env, {
+      plugin_root: "/plugins/conflict",
+      channel: "discord",
+      account_id: "default",
+      plugin_id: "sqlite-plugin",
+      plugin_name: "SQLite Plugin",
+      approved_at: 1,
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        approvals: [
+          {
+            pluginRoot: "/plugins/conflict",
+            pluginId: "legacy-plugin",
+            pluginName: "Legacy Plugin",
+            channel: "discord",
+            accountId: "default",
+            approvedAt: 2,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite plugin binding approvals because 1 legacy approval conflicts: ${sourcePath}`,
+    ]);
+    expect(result.changes.filter((change) => change.startsWith("Migrated"))).toStrictEqual([]);
+    expect(readPluginBindingApprovalRows(env)).toEqual([
+      {
+        plugin_root: "/plugins/conflict",
+        channel: "discord",
+        account_id: "default",
+        plugin_id: "sqlite-plugin",
+        plugin_name: "SQLite Plugin",
+        approved_at: 1,
+      },
+    ]);
+    await expectMissingPath(sourcePath);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("legacy-plugin");
+  });
+
+  it("keeps a failed plugin binding approvals archive blocking and converges on retry", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
+    insertPluginBindingApprovalRow(env, {
+      plugin_root: "/plugins/conflict",
+      channel: "discord",
+      account_id: "default",
+      plugin_id: "sqlite-plugin",
+      plugin_name: "SQLite Plugin",
+      approved_at: 1,
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        approvals: [
+          {
+            pluginRoot: "/plugins/conflict",
+            pluginId: "legacy-plugin",
+            pluginName: "Legacy Plugin",
+            channel: "discord",
+            accountId: "default",
+            approvedAt: 2,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const rename = failArchiveRenameOnce(sourcePath);
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+    rename.mockRestore();
+
+    expect(result.warnings).toStrictEqual([
+      `Failed archiving plugin binding approvals legacy source ${sourcePath}: Error: forced archive failure`,
+    ]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite plugin binding approvals because 1 legacy approval conflicts: ${sourcePath}`,
+    ]);
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain("legacy-plugin");
+    await expectMissingPath(`${sourcePath}.migrated`);
+
+    const retryDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
+    expect(retry.warnings).toStrictEqual([]);
+    await expectMissingPath(sourcePath);
+  });
+
+  it("leaves malformed plugin binding approvals in place with a warning", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(sourcePath, "{ malformed", "utf8");
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed reading legacy plugin binding approvals");
+    expect(result.notices).toBeUndefined();
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await expectMissingPath(`${sourcePath}.migrated`);
+  });
+
   it("never imports home-state plugin approvals into a custom state dir", async () => {
     // Regression: direct doctor repair follows the same trust boundary as
     // automatic startup migration and cannot archive another state's policy.
@@ -3202,9 +3999,10 @@ describe("state migrations", () => {
     expect(result.changes).toContain(
       "Migrated 1 current-conversation binding → shared SQLite state",
     );
-    expect(result.warnings).toContain(
-      `Left legacy current-conversation bindings in place because 1 binding conflicts with shared SQLite state: ${sourcePath}`,
-    );
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite current-conversation bindings because 1 legacy binding conflicts: ${sourcePath}`,
+    ]);
     expect(readCurrentConversationBindingRows(env)).toMatchObject([
       {
         binding_key: conflictingKey,
@@ -3215,7 +4013,197 @@ describe("state migrations", () => {
         target_session_key: "agent:codex:acp:legacy-missing",
       },
     ]);
+    await expectMissingPath(sourcePath);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain(
+      "legacy-conflict",
+    );
+  });
+
+  it.each([
+    {
+      name: "plugin binding approvals",
+      setup: createMixedPluginBindingCommitFailureFixture,
+    },
+    {
+      name: "current-conversation bindings",
+      setup: createMixedCurrentConversationCommitFailureFixture,
+    },
+  ])("keeps mixed $name retryable when SQLite commit fails", async ({ setup }) => {
+    const fixture = await setup();
+    const commit = failNextStateDbCommit(fixture.env);
+    const result = fixture.migrate();
+    commit.mockRestore();
+
+    expect(result.warnings).toEqual([fixture.expectedWarning]);
+    expect(result.notices).toBeUndefined();
+    expect(fixture.readRowCount()).toBe(1);
+    await expect(fs.readFile(fixture.sourcePath, "utf8")).resolves.toContain(
+      fixture.sourceFragment,
+    );
+    await expectMissingPath(`${fixture.sourcePath}.migrated`);
+
+    const retry = fixture.migrate();
+    expect(retry.warnings).toStrictEqual([]);
+    expect(fixture.readRowCount()).toBe(2);
+    await expectMissingPath(fixture.sourcePath);
+  });
+
+  it("archives a legacy current-conversation file when every binding conflicts", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
+    const bindingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
+    insertCurrentConversationBindingRow(env, {
+      bindingKey,
+      bindingId: `generic:${bindingKey}`,
+      targetSessionKey: "agent:codex:acp:existing",
+      channel: "workspace",
+      accountId: "default",
+      conversationId: "user:U123",
+      recordJson: JSON.stringify({
+        bindingId: `generic:${bindingKey}`,
+        targetSessionKey: "agent:codex:acp:existing",
+        targetKind: "session",
+        conversation: {
+          channel: "workspace",
+          accountId: "default",
+          conversationId: "user:U123",
+        },
+        status: "active",
+        boundAt: 1,
+      }),
+    });
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: `generic:${bindingKey}`,
+            targetSessionKey: "agent:codex:acp:legacy-conflict",
+            targetKind: "session",
+            conversation: {
+              channel: "workspace",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 2,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite current-conversation bindings because 1 legacy binding conflicts: ${sourcePath}`,
+    ]);
+    expect(readCurrentConversationBindingRows(env)).toMatchObject([
+      {
+        binding_key: bindingKey,
+        target_session_key: "agent:codex:acp:existing",
+      },
+    ]);
+    await expectMissingPath(sourcePath);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain(
+      "legacy-conflict",
+    );
+  });
+
+  it("keeps a failed current-conversation bindings archive blocking and converges on retry", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
+    const bindingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
+    insertCurrentConversationBindingRow(env, {
+      bindingKey,
+      bindingId: `generic:${bindingKey}`,
+      targetSessionKey: "agent:codex:acp:existing",
+      channel: "workspace",
+      accountId: "default",
+      conversationId: "user:U123",
+      recordJson: JSON.stringify({
+        bindingId: `generic:${bindingKey}`,
+        targetSessionKey: "agent:codex:acp:existing",
+        targetKind: "session",
+        conversation: {
+          channel: "workspace",
+          accountId: "default",
+          conversationId: "user:U123",
+        },
+        status: "active",
+        boundAt: 1,
+      }),
+    });
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: `generic:${bindingKey}`,
+            targetSessionKey: "agent:codex:acp:legacy-conflict",
+            targetKind: "session",
+            conversation: {
+              channel: "workspace",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 2,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const rename = failArchiveRenameOnce(sourcePath);
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+    rename.mockRestore();
+
+    expect(result.warnings).toStrictEqual([
+      `Failed archiving current-conversation bindings legacy source ${sourcePath}: Error: forced archive failure`,
+    ]);
+    expect(result.notices).toEqual([
+      `Kept shared SQLite current-conversation bindings because 1 legacy binding conflicts: ${sourcePath}`,
+    ]);
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain("legacy-conflict");
+    await expectMissingPath(`${sourcePath}.migrated`);
+
+    const retryDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
+    expect(retry.warnings).toStrictEqual([]);
+    await expectMissingPath(sourcePath);
+  });
+
+  it("leaves malformed current-conversation bindings in place with a warning", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "{ malformed", "utf8");
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed reading legacy current-conversation bindings");
+    expect(result.notices).toBeUndefined();
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await expectMissingPath(`${sourcePath}.migrated`);
   });
 
   it("keeps legacy delivery queue files when shared SQLite already has a conflicting row", async () => {
@@ -3406,5 +4394,234 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
   });
+
+  it("preserves a readable target store when normalization rejects an existing key", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    const targetBytes = `${JSON.stringify(
+      {
+        "agent:worker-1:desk": { sessionId: "valid-session", updatedAt: 50 },
+        "agent:worker-1:desk:invalid": { sessionId: "../invalid", updatedAt: 60 },
+      },
+      null,
+      2,
+    )}\n`;
+    const legacyBytes = await fs.readFile(legacyStorePath, "utf8");
+    await fs.writeFile(targetStorePath, targetBytes, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(targetBytes);
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toBe(legacyBytes);
+    await expect(fs.readFile(path.join(stateDir, "sessions", "trace.jsonl"), "utf8")).resolves.toBe(
+      "{}\n",
+    );
+    expect(result.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(false);
+    expect(result.changes.some((change) => change.startsWith("Moved trace.jsonl"))).toBe(false);
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("normalization rejected 1 existing target session key"),
+    );
+  });
+
+  it("still filters invalid legacy-only rows", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.writeFile(
+      legacyStorePath,
+      `${JSON.stringify(
+        {
+          invalidLegacy: { sessionId: "../invalid", updatedAt: 100 },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    const afterStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(afterStore["agent:worker-1:invalidLegacy"]).toBeUndefined();
+    expect(Object.values(afterStore).some((entry) => entry.sessionId === "group-session")).toBe(
+      true,
+    );
+    expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
+    expect(result.warnings).toStrictEqual([]);
+    await expectMissingPath(legacyStorePath);
+  });
+
+  it("defers when an invalid legacy winner would replace an existing target key", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    const conflictKey = "agent:worker-1:desk:conflict";
+    const targetBytes = `${JSON.stringify(
+      {
+        [conflictKey]: { sessionId: "target-session", updatedAt: 50 },
+      },
+      null,
+      2,
+    )}\n`;
+    const legacyBytes = `${JSON.stringify(
+      {
+        [conflictKey]: { sessionId: "../invalid", updatedAt: 100 },
+      },
+      null,
+      2,
+    )}\n`;
+    await fs.writeFile(targetStorePath, targetBytes, "utf8");
+    await fs.writeFile(legacyStorePath, legacyBytes, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(targetBytes);
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toBe(legacyBytes);
+    expect(result.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(false);
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("normalization rejected 1 existing target session key"),
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a key-shaped pending row while moving its matching legacy transcript",
+    async () => {
+      const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+      const targetStorePath = path.join(
+        stateDir,
+        "agents",
+        "worker-1",
+        "sessions",
+        "sessions.json",
+      );
+      const pendingKey = "agent:worker-1:desk";
+      const transcriptKey = "agent:worker-1:desk:transcript";
+      const ordinaryKey = "agent:worker-1:desk:ordinary";
+      const targetStore = {
+        [pendingKey]: {
+          sessionId: pendingKey,
+          updatedAt: 50,
+          displayName: "Pending desk",
+          label: "pending-label",
+          category: "triage",
+          providerOverride: "test-provider",
+          modelOverride: "test-model",
+          modelOverrideSource: "user",
+          groupActivation: "always",
+          delivery: { kind: "none" },
+        },
+        [transcriptKey]: { sessionId: "trace", updatedAt: 60 },
+        [ordinaryKey]: { sessionId: "ordinary-session", updatedAt: 70 },
+      };
+      await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "sessions", `${pendingKey}.jsonl`),
+        '{"type":"session"}\n',
+        "utf8",
+      );
+
+      const result = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        now: () => 1234,
+      });
+
+      expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
+      expect(result.changes).toContain("Moved trace.jsonl → agents/worker-1/sessions");
+      expect(result.changes).toContain(`Moved ${pendingKey}.jsonl → agents/worker-1/sessions`);
+      expect(result.changes).not.toContain("Rewrote migrated session transcript paths");
+      await expect(
+        fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
+      ).resolves.toBe("{}\n");
+      await expect(
+        fs.readFile(
+          path.join(stateDir, "agents", "worker-1", "sessions", `${pendingKey}.jsonl`),
+          "utf8",
+        ),
+      ).resolves.toBe('{"type":"session"}\n');
+
+      const afterStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+        string,
+        {
+          sessionId?: string;
+          sessionFile?: string;
+          initializationPending?: boolean;
+          updatedAt?: number;
+          displayName?: string;
+          label?: string;
+          category?: string;
+          providerOverride?: string;
+          modelOverride?: string;
+          modelOverrideSource?: string;
+          groupActivation?: string;
+          delivery?: { kind?: string };
+        }
+      >;
+      expect(afterStore[pendingKey]).toMatchObject({
+        initializationPending: true,
+        updatedAt: 50,
+        displayName: "Pending desk",
+        label: "pending-label",
+        category: "triage",
+        providerOverride: "test-provider",
+        modelOverride: "test-model",
+        modelOverrideSource: "user",
+        groupActivation: "always",
+        delivery: { kind: "none" },
+      });
+      expect(afterStore[pendingKey]?.sessionId).toBeUndefined();
+      expect(afterStore[transcriptKey]?.sessionId).toBe("trace");
+      expect(afterStore[transcriptKey]?.sessionFile).toBeUndefined();
+      expect(afterStore[ordinaryKey]?.sessionId).toBe("ordinary-session");
+
+      const firstBytes = await fs.readFile(targetStorePath, "utf8");
+      closeOpenClawStateDatabaseForTest();
+      resetAutoMigrateLegacyStateForTest();
+      const rerun = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        now: () => 1234,
+      });
+      await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(firstBytes);
+      expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(
+        false,
+      );
+      expect(rerun.changes.some((change) => change.startsWith("Moved "))).toBe(false);
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

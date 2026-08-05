@@ -501,6 +501,8 @@ export type ReplySessionInitializationCommitResult =
     };
 
 export type SessionEntryPatchOptions = {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
   /** Fully resolved maintenance settings when the caller already has config loaded. */
@@ -855,9 +857,4 @@ export type {
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
-};
-
-export type CanonicalizeSessionEntryAliasesResult = {
-  canonicalKey: string;
-  entry?: SessionEntry;
 };

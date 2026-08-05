@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
-  MODEL_CONTEXT_TOKEN_CACHE,
+  getContextWindowCaches,
   providerContextTokenCacheKey,
 } from "../../agents/context-cache.js";
 import {
@@ -16,7 +16,6 @@ import { resolveModelCandidateChain } from "../../agents/model-fallback-candidat
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 const DEFAULT_MOCK_CATALOG_ENTRIES = vi.hoisted(() => [
@@ -117,7 +116,7 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
 }));
 
 afterEach(() => {
-  MODEL_CONTEXT_TOKEN_CACHE.clear();
+  getContextWindowCaches().discoveredTokenCache.clear();
   cliBackendsTesting.resetDepsForTest();
   vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
@@ -750,8 +749,8 @@ describe("createModelSelectionState catalog loading", () => {
 
 describe("resolveContextTokens", () => {
   it("prefers provider-qualified cache keys over bare model ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("gemini-3.1-pro-preview", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set(
+    getContextWindowCaches().discoveredTokenCache.set("gemini-3.1-pro-preview", 200_000);
+    getContextWindowCaches().discoveredTokenCache.set(
       providerContextTokenCacheKey("google-gemini-cli", "gemini-3.1-pro-preview"),
       1_000_000,
     );
@@ -767,7 +766,10 @@ describe("resolveContextTokens", () => {
   });
 
   it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey("openai", "gpt-5.5"),
+      272_000,
+    );
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
@@ -780,7 +782,10 @@ describe("resolveContextTokens", () => {
   });
 
   it("allows agent contextTokens to lower a larger model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("qwen", "qwen3.6-plus"), 1_000_000);
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey("qwen", "qwen3.6-plus"),
+      1_000_000,
+    );
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
@@ -1220,7 +1225,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 
-  it("rejects automatic repair of a locked disallowed override", async () => {
+  it("preserves a locked disallowed override without resetting it", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1240,23 +1245,20 @@ describe("createModelSelectionState respects session model override", () => {
     });
     const sessionStore = { [sessionKey]: sessionEntry };
 
-    await expect(
-      createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o",
-        provider: "openai",
-        model: "gpt-4o",
-        hasModelDirective: false,
-      }),
-    ).rejects.toMatchObject({
-      name: "ModelSelectionLockedError",
-      message: MODEL_SELECTION_LOCKED_MESSAGE,
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
     });
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o-mini");
     expect(sessionStore[sessionKey]).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
@@ -2364,6 +2366,7 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
     cfg: OpenClawConfig;
     snapshotEntries: unknown[];
     authoritative: boolean;
+    modelSelectionLocked?: true;
   }): Promise<{
     state: Awaited<ReturnType<typeof createModelSelectionState>>;
     sessionEntry: SessionEntry;
@@ -2373,7 +2376,10 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
       routeVariants: params.snapshotEntries,
       authoritative: params.authoritative,
     });
-    const sessionEntry = makeOverrideEntry();
+    const sessionEntry = {
+      ...makeOverrideEntry(),
+      ...(params.modelSelectionLocked ? { modelSelectionLocked: true as const } : {}),
+    };
     const sessionStore = { [sessionKey]: sessionEntry };
     const state = await createModelSelectionState({
       cfg: params.cfg,
@@ -2405,6 +2411,20 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
     // The pin is untouched and the turn falls back to primary.
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(state.model).toBe("gpt-4o-mini");
+  });
+
+  it("keeps a locked pin active without a degraded-catalog fallback notice", async () => {
+    const { state, sessionEntry } = await run({
+      cfg: restrictiveCfg,
+      snapshotEntries: [],
+      authoritative: false,
+      modelSelectionLocked: true,
+    });
+    expect(state.resetModelOverride).toBe(false);
+    expect(state.resetModelOverrideReason).toBeUndefined();
+    expect(state.resetModelOverrideRef).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(state.model).toBe("gpt-4o");
   });
 
   it("destroys a genuinely-disallowed pin on an authoritative catalog", async () => {

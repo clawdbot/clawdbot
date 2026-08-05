@@ -11,7 +11,7 @@ import {
   GatewayClientRequestError,
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
@@ -153,7 +153,7 @@ async function resolveNodeHostGatewayCredentials(params: {
   const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
   const configForResolution =
     mode === "local" ? buildNodeHostLocalAuthConfig(params.config) : params.config;
-  return await resolveGatewayConnectionAuth({
+  return await resolveGatewayCredentialsWithSecretInputs({
     config: configForResolution,
     env: params.env,
     localPrecedence: "env-first",

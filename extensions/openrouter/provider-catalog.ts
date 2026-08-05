@@ -3,10 +3,19 @@ import {
   buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  normalizeBaseUrl,
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   asPositiveSafeInteger,
@@ -14,7 +23,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const OPENROUTER_MODELS_ENDPOINT = `${OPENROUTER_BASE_URL}/models`;
 const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 const OPENROUTER_MODELS_CACHE_TTL_MS = 60_000;
 const OPENROUTER_DEFAULT_MODEL_ID = "openrouter/auto";
@@ -49,6 +57,39 @@ export function normalizeOpenRouterBaseUrl(baseUrl: string | undefined): string 
     return OPENROUTER_BASE_URL;
   }
   return undefined;
+}
+
+export function resolveOpenRouterApiBaseUrl(baseUrl: string | undefined): string {
+  // Credentialed catalog, inference, and usage paths must share one validated provider destination.
+  const normalized =
+    normalizeOpenRouterBaseUrl(baseUrl) ?? normalizeBaseUrl(baseUrl, OPENROUTER_BASE_URL);
+  const parsed = URL.canParse(normalized) ? new URL(normalized) : undefined;
+  if (
+    !parsed ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("Invalid OpenRouter API base URL");
+  }
+  return normalized;
+}
+
+export function resolveOpenRouterSsrfPolicy(
+  requestConfig: Pick<
+    ReturnType<typeof resolveProviderHttpRequestConfig>,
+    "baseUrl" | "allowPrivateNetwork"
+  >,
+  request?: ModelProviderConfig["request"],
+) {
+  // Explicit deny must override the configured-origin trust used by normal proxy requests.
+  return requestConfig.allowPrivateNetwork
+    ? { allowPrivateNetwork: true }
+    : request?.allowPrivateNetwork === false
+      ? {}
+      : ssrfPolicyFromHttpBaseUrlAllowedOrigin(requestConfig.baseUrl);
 }
 
 export function isOpenRouterProxyReasoningUnsupportedModel(modelId: string | undefined): boolean {
@@ -168,24 +209,60 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
 export async function buildOpenrouterLiveProvider(params: {
   apiKey?: string;
   discoveryApiKey?: string;
+  baseUrl?: string;
+  request?: ModelProviderConfig["request"];
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
   const fallback = buildOpenrouterProvider();
+  const baseUrl = resolveOpenRouterApiBaseUrl(params.baseUrl);
+  const request = sanitizeConfiguredModelProviderRequest(params.request);
+  const resolveRequest = (apiKey?: string) =>
+    resolveProviderHttpRequestConfig({
+      provider: "openrouter",
+      capability: "llm",
+      baseUrl,
+      defaultBaseUrl: OPENROUTER_BASE_URL,
+      defaultHeaders: {
+        Accept: "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      request,
+    });
+  const requestConfig = resolveRequest();
+  const endpoint = `${requestConfig.baseUrl}/models`;
   return await buildLiveModelProviderConfig({
     providerId: "openrouter",
-    endpoint: OPENROUTER_MODELS_ENDPOINT,
+    endpoint,
     providerConfig: {
-      baseUrl: fallback.baseUrl,
+      baseUrl: requestConfig.baseUrl,
       api: fallback.api,
+      ...(params.request ? { request: params.request } : {}),
     },
     models: fallback.models,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
+    fetchGuard: async (fetchParams) =>
+      await (params.fetchGuard ?? fetchWithSsrFGuard)({
+        ...fetchParams,
+        ...(requestConfig.dispatcherPolicy
+          ? { dispatcherPolicy: requestConfig.dispatcherPolicy }
+          : {}),
+      }),
     signal: params.signal,
     ttlMs: OPENROUTER_MODELS_CACHE_TTL_MS,
     auditContext: "openrouter-model-discovery",
+    policy: resolveOpenRouterSsrfPolicy(requestConfig, params.request),
+    // Destination and request policy isolate cached rows between proxy tenants and auth overrides.
+    cacheKeyParts: [
+      "openrouter",
+      "model-rows",
+      endpoint,
+      params.discoveryApiKey ?? params.apiKey,
+      request ?? null,
+    ],
+    buildRequestHeaders: ({ apiKey, discoveryApiKey }) =>
+      resolveRequest(discoveryApiKey ?? apiKey).headers,
     projectRows: (rows, fallbackProvider) => {
       const liveModels = rows.flatMap((row) => {
         const model = buildOpenRouterLiveModel(row);

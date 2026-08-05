@@ -218,26 +218,39 @@ struct GeneralSettings: View {
     }
 
     private var openClawStatusPanel: some View {
-        HStack(alignment: .center, spacing: 14) {
+        let presentation = GeneralStatusPresentation.resolve(
+            mode: self.state.connectionMode,
+            isPaused: self.state.isPaused,
+            controlState: ControlChannel.shared.state)
+
+        return HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(self.state.isPaused ? Color.orange.opacity(0.18) : Color.green.opacity(0.18))
-                Image(systemName: self.state.isPaused ? "pause.fill" : "checkmark")
+                    .fill(self.statusColor(presentation.tone).opacity(0.18))
+                Image(systemName: presentation.symbolName)
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(self.state.isPaused ? .orange : .green)
+                    .foregroundStyle(self.statusColor(presentation.tone))
             }
             .frame(width: 42, height: 42)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(self.state.isPaused ? "OpenClaw paused" : "OpenClaw active")
+                Text(verbatim: presentation.title)
                     .font(.headline)
-                Text(self.generalStatusSubtitle)
+                Text(verbatim: presentation.subtitle)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 20)
+
+            if presentation.showsConnectionAction {
+                Button("Open Connection Settings") {
+                    AppNavigationActions.openSettings(tab: .connection)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
 
             Toggle("OpenClaw active", isOn: self.activeBinding)
                 .labelsHidden()
@@ -252,17 +265,11 @@ struct GeneralSettings: View {
         }
     }
 
-    private var generalStatusSubtitle: String {
-        if self.state.isPaused {
-            return "Gateway work is paused; incoming messages will wait."
-        }
-        switch self.state.connectionMode {
-        case .local:
-            return "Processing messages through the local Gateway on this Mac."
-        case .remote:
-            return "Connected to a remote Gateway configuration."
-        case .unconfigured:
-            return "Ready to run after you choose a Gateway connection."
+    private func statusColor(_ tone: GatewayConnectionTone) -> Color {
+        switch tone {
+        case .healthy: .green
+        case .transient: .orange
+        case .attention: .red
         }
     }
 
@@ -274,6 +281,14 @@ struct GeneralSettings: View {
 
             self.connectionStatusPanel
             self.gatewayModeGroup
+
+            if self.state.connectionMode != .remote,
+               self.state.gatewayConfigConflict != nil
+            {
+                SettingsCardGroup("Remote Access") {
+                    GatewayConfigConflictRecoveryView(state: self.state)
+                }
+            }
 
             switch self.state.connectionMode {
             case .unconfigured:
@@ -355,7 +370,9 @@ struct GeneralSettings: View {
 
             Spacer(minLength: 18)
 
-            if let ping = ControlChannel.shared.lastPingMs {
+            if ControlChannel.shared.state == .connected,
+               let ping = ControlChannel.shared.lastPingMs
+            {
                 Text("\(Int(ping)) ms")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8)
@@ -472,6 +489,7 @@ struct GeneralSettings: View {
                     self.remoteDirectRow
                 }
                 self.remoteTokenRow
+                GatewayConfigConflictRecoveryView(state: self.state)
             }
 
             SettingsCardGroup("Discovery & Status") {
@@ -657,7 +675,7 @@ struct GeneralSettings: View {
             SettingsCardRow(
                 title: "Gateway token",
                 subtitle: "Used when the remote gateway requires token auth.",
-                showsDivider: false)
+                showsDivider: self.state.gatewayConfigConflict != nil)
             {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
@@ -692,12 +710,7 @@ struct GeneralSettings: View {
     }
 
     private var controlStatusLine: String {
-        switch ControlChannel.shared.state {
-        case .connected: "Connected"
-        case .connecting: "Connecting…"
-        case .disconnected: "Disconnected"
-        case let .degraded(msg): msg
-        }
+        GatewayConnectionPresentation(state: ControlChannel.shared.state).statusLine
     }
 
     @ViewBuilder

@@ -459,6 +459,7 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   expectedPort?: number;
+  beforeServiceMutation?: () => void;
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
   ) => Promise<ServiceRecoveryResult<"restarted"> | null>;
@@ -531,6 +532,12 @@ export async function runServiceRestart(params: {
       );
       return false;
     }
+  }
+
+  // Loaded services cross the native mutation boundary here. Not-loaded recovery
+  // may still target a separately verified unmanaged listener.
+  if (loaded) {
+    params.beforeServiceMutation?.();
   }
 
   if (!loaded) {

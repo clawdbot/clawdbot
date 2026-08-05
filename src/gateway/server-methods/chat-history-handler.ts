@@ -9,13 +9,13 @@ import {
   validateChatHistoryParams,
   validateChatMetadataParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import {
   listAgentIds,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   resolveTranscriptSessionKeyBySessionId,
@@ -25,6 +25,7 @@ import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
@@ -56,31 +57,19 @@ import {
   readChatHistoryPage,
   readChatHistoryMessageSeq,
 } from "./chat-history-pages.js";
+import type { ChatMetadataResult } from "./chat-metadata-runtime.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
-import {
-  buildMemoizedChatStartupMetadataResult,
-  listMemoizedChatStartupAgents,
-} from "./chat-startup-projection-memo.js";
+import { listMemoizedChatStartupAgents } from "./chat-startup-projection-memo.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import {
   loadOptionalServerMethodModelCatalogSnapshot,
   startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-  GatewayRequestHandlers,
-} from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
-
-type ChatMetadataResult = {
-  commands?: unknown[];
-  models?: unknown[];
-  swarmEnabled: boolean;
-};
 
 async function handleChatMetadataRequest({
   params,
@@ -104,49 +93,12 @@ async function handleChatMetadataRequest({
     );
     return;
   }
-  try {
-    respond(
-      true,
-      await buildChatMetadataResult({
-        cfg,
-        context,
-        agentId: requestedAgentId,
-      }),
-    );
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-  }
-}
-
-async function buildChatMetadataResult(params: {
-  cfg: OpenClawConfig;
-  context: GatewayRequestContext;
-  agentId: string;
-}): Promise<ChatMetadataResult> {
-  const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
-    import("./models-list-result.js"),
-    import("./commands-list-result.js"),
-  ]);
-  const [models, commands] = await Promise.all([
-    buildModelsListResult({
-      context: params.context,
-      agentId: params.agentId,
-      params: { view: "configured" },
+  respond(
+    true,
+    await context.readChatMetadata({
+      agentId: requestedAgentId,
     }),
-    Promise.resolve(
-      buildCommandsListResult({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        includeArgs: true,
-        scope: "text",
-      }),
-    ),
-  ]);
-  return {
-    ...models,
-    ...commands,
-    swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
-  };
+  );
 }
 
 async function buildChatStartupModelCatalogProjection(params: {
@@ -385,7 +337,7 @@ async function handleChatHistoryRequest({
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
   const requested = typeof limit === "number" ? limit : 200;
-  const max = Math.min(1000, requested);
+  const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
@@ -508,16 +460,17 @@ async function handleChatHistoryRequest({
           : undefined;
         const metadata =
           includeMetadata && catalogOwnedBySessionAgent
-            ? await buildMemoizedChatStartupMetadataResult({
-                cfg: catalogConfig,
-                context,
-                agentId: sessionAgentId,
-                modelCatalog: modelCatalogSnapshot,
-                sessionEntry: entry,
-                ...(catalogProjection
-                  ? { catalogProjector: catalogProjection.sessionCatalogProjector }
-                  : {}),
-              })
+            ? await context
+                .readChatMetadata({
+                  agentId: sessionAgentId,
+                  sessionEntry: entry,
+                })
+                .catch((error: unknown) => {
+                  context.logGateway.debug(
+                    `chat.startup continuing without metadata: ${formatErrorMessage(error)}`,
+                  );
+                  return undefined;
+                })
             : undefined;
         const agentsList = includeAgentsList
           ? catalogProjection && modelCatalog && modelCatalogSnapshot

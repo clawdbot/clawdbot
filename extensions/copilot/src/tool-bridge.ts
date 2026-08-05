@@ -378,6 +378,7 @@ function buildOpenClawCodingToolsOptions(
       elevated: a.bashElevated,
     },
     messageProvider: a.messageProvider ?? a.messageChannel,
+    toolBindings: a.toolBindings,
     chatType: a.chatType,
     agentAccountId: a.agentAccountId,
     messageTo: a.messageTo,
@@ -445,6 +446,7 @@ function buildOpenClawCodingToolsOptions(
     // recordToolPrepStage intentionally omitted: copilot does not
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,
+    isTurnTainted: a.isTurnTainted,
     onYield: (message) => {
       // Notify the caller first so the final attempt result can carry
       // yieldDetected even if the abort below races a concurrent
@@ -602,11 +604,13 @@ function convertOpenClawToolToSdkTool(
       );
     }
 
-    // OpenClaw tools throw for execution failures. Error-shaped details remain
-    // lifecycle metadata; successful content uses the SDK's MCP converter.
-    const sdkResult = convertMcpCallToolResult({ content: result.content });
     const sanitizedResult = sanitizeToolResult(result);
-    const resultIsError = sdkResult.resultType === "failure" || isToolResultError(sanitizedResult);
+    const resultIsError = isToolResultError(sanitizedResult);
+    // The SDK only marks fulfilled tool results as failures when isError is forwarded.
+    const sdkResult = convertMcpCallToolResult({
+      content: result.content,
+      isError: resultIsError,
+    });
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
     ctx.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,

@@ -31,8 +31,6 @@ import {
   type NormalizedOutboundPayload,
 } from "./payloads.js";
 
-export { createMessageSentEmitter } from "./message-sent-hook.js";
-
 export type ReplyPayloadSuppressedObserver = (
   payload: ReplyPayload,
   info: Parameters<ReplyDispatchBeforeDeliver>[1],

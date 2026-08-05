@@ -222,6 +222,7 @@ export type EmbeddedRunAttemptResult = {
       | "potential_side_effect"
       | "active_item";
     diagnostics?: {
+      transportError?: string;
       idleMs?: number;
       timeoutMs?: number;
       lastActivityReason?: string;

@@ -68,4 +68,15 @@ describe("formatCliParseErrorOutput", () => {
       'Missing required argument "name".\nTry: openclaw plugins install --help\n',
     );
   });
+
+  it("prefers the parsed Commander path over option-like argv values", () => {
+    const output = formatCliParseErrorOutput("error: unknown option '--wat'\n", {
+      argv: ["node", "openclaw", "plugins", "--source", "install", "list", "--wat"],
+      commandPath: ["plugins", "list"],
+    });
+
+    expect(output).toBe(
+      'OpenClaw does not recognize option "--wat".\nTry: openclaw plugins list --help\n',
+    );
+  });
 });

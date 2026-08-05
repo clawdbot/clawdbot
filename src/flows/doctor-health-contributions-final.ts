@@ -32,6 +32,7 @@ import {
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
 import type {
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
@@ -184,7 +185,12 @@ export function resolveFinalDoctorHealthContributions(params: {
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
-          return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
+          const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
+            .runWithPluginMetadataSnapshot;
+          return collectWorkspaceStatusHealthFindings(ctx.cfg, {
+            pluginVersionDrift,
+            ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
+          });
         },
       },
       run: runWorkspaceStatusHealth,
@@ -282,7 +288,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:heartbeat-task-cron-migration",
       label: "Heartbeat task cron migration",
       healthChecks: {
-        description: "Heartbeat scratch task blocks must migrate into cron jobs.",
+        description: "Heartbeat scratch task blocks must migrate into automations.",
         defaultEnabled: true,
         async detect(ctx) {
           const { collectHeartbeatTaskMigrationFindings } =

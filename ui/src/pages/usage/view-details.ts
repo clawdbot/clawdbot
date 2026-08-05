@@ -12,14 +12,14 @@ import "../../components/tooltip.ts";
 import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { parseToolSummary } from "./helpers.ts";
-import { charsToTokens, formatCost, formatTokens } from "./metrics.ts";
+import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
   UsageSessionEntry,
 } from "./types.ts";
-import { renderInsightList } from "./view-overview.ts";
+import { renderInsightList, renderUsageToggle, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
 
 // Chart constants
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
@@ -30,10 +30,7 @@ const HANDLE_HEIGHT = 12; // Height of drag handle
 const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
 
 function pct(part: number, total: number): number {
-  if (!total || total <= 0) {
-    return 0;
-  }
-  return (part / total) * 100;
+  return total > 0 ? (part / total) * 100 : 0;
 }
 
 /** Normalize a log timestamp to milliseconds (handles seconds vs ms). */
@@ -49,7 +46,7 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
   return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
 }
 
-function dateKey(timestamp: number, timeZone: "local" | "utc"): string {
+export function usageDateKey(timestamp: number, timeZone: "local" | "utc"): string {
   const value = new Date(timestamp);
   const year = timeZone === "utc" ? value.getUTCFullYear() : value.getFullYear();
   const month = (timeZone === "utc" ? value.getUTCMonth() : value.getMonth()) + 1;
@@ -74,6 +71,25 @@ function filterLogsByRange(
   });
 }
 
+function renderUsageRefreshStatus(
+  status: PanelRefreshStatus,
+  onRetry: () => void,
+  detailKey: string,
+  kind: "timeline" | "conversation",
+) {
+  return renderPanelRefreshStatus({
+    status,
+    errorMessage: status.error
+      ? t("usage.details.loadFailed", {
+          detail: normalizeLowercaseStringOrEmpty(t(detailKey)),
+          error: status.error,
+        })
+      : undefined,
+    onRetry,
+    className: `usage-callout usage-detail-error--${kind}`,
+  });
+}
+
 function renderSessionSummary(
   session: UsageSessionEntry,
   filteredUsage?: UsageSessionEntry["usage"],
@@ -86,57 +102,67 @@ function renderSessionSummary(
 
   const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
 
-  const badges: string[] = [];
-  if (session.channel) {
-    badges.push(`channel:${session.channel}`);
-  }
-  if (session.agentId) {
-    badges.push(`agent:${session.agentId}`);
-  }
-  if (session.modelProvider || session.providerOverride) {
-    badges.push(`provider:${session.modelProvider ?? session.providerOverride}`);
-  }
-  if (session.model) {
-    badges.push(`model:${session.model}`);
-  }
+  const badges = [
+    session.channel && `channel:${session.channel}`,
+    session.agentId && `agent:${session.agentId}`,
+    (session.modelProvider || session.providerOverride) &&
+      `provider:${session.modelProvider ?? session.providerOverride}`,
+    session.model && `model:${session.model}`,
+  ].filter(Boolean);
 
   // Always use the full tool list for stable layout; update counts when filtering
   const baseTools = usage.toolUsage?.tools.slice(0, 6) ?? [];
-  let toolCallCount: number;
-  let uniqueToolCount: number;
-  let toolItems: Array<{ label: string; value: string; sub: string }>;
-
+  let toolCounts: Map<string, number> | undefined;
   if (filteredLogs) {
-    const toolCounts = new Map<string, number>();
+    toolCounts = new Map();
     for (const log of filteredLogs) {
       const { tools } = parseToolSummary(log.content);
       for (const [name] of tools) {
         toolCounts.set(name, (toolCounts.get(name) || 0) + 1);
       }
     }
-    // Keep the same tool order as the full session, just update counts
-    toolItems = baseTools.map((tool) => ({
-      label: tool.name,
-      value: `${toolCounts.get(tool.name) ?? 0}`,
-      sub: t("usage.overview.calls"),
-    }));
-    toolCallCount = [...toolCounts.values()].reduce((sum, c) => sum + c, 0);
-    uniqueToolCount = toolCounts.size;
-  } else {
-    toolItems = baseTools.map((tool) => ({
-      label: tool.name,
-      value: `${tool.count}`,
-      sub: t("usage.overview.calls"),
-    }));
-    toolCallCount = usage.toolUsage?.totalCalls ?? 0;
-    uniqueToolCount = usage.toolUsage?.uniqueTools ?? 0;
   }
+  const toolItems = baseTools.map((tool) => ({
+    label: tool.name,
+    value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : tool.count}`,
+    sub: t("usage.overview.calls"),
+  }));
+  const toolCallCount = toolCounts
+    ? [...toolCounts.values()].reduce((sum, count) => sum + count, 0)
+    : (usage.toolUsage?.totalCalls ?? 0);
+  const uniqueToolCount = toolCounts ? toolCounts.size : (usage.toolUsage?.uniqueTools ?? 0);
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
-      value: formatCost(entry.totals.totalCost),
-      sub: formatTokens(entry.totals.totalTokens),
+      value: formatUsageCost(entry.totals.totalCost),
+      sub: formatUsageTokens(entry.totals.totalTokens),
     })) ?? [];
+  const cards = [
+    {
+      labelKey: "usage.overview.messages",
+      value: usage.messageCounts?.total ?? 0,
+      meta: html`${usage.messageCounts?.user ?? 0}
+      ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
+      ${usage.messageCounts?.assistant ?? 0}
+      ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
+    },
+    {
+      labelKey: "usage.overview.toolCalls",
+      value: toolCallCount,
+      meta: html`${uniqueToolCount} ${t("usage.overview.toolsUsed")}`,
+    },
+    {
+      labelKey: "usage.overview.errors",
+      value: usage.messageCounts?.errors ?? 0,
+      meta: html`${usage.messageCounts?.toolResults ?? 0} ${t("usage.overview.toolResults")}`,
+    },
+    {
+      labelKey: "usage.details.duration",
+      value:
+        formatDurationCompact(usage.durationMs, { spaced: true }) ?? t("usage.common.emptyValue"),
+      meta: html`${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}`,
+    },
+  ];
 
   return html`
     ${badges.length > 0
@@ -145,38 +171,15 @@ function renderSessionSummary(
         </div>`
       : nothing}
     <div class="session-summary-grid">
-      <div class="stat session-summary-card">
-        <div class="session-summary-title">${t("usage.overview.messages")}</div>
-        <div class="stat-value session-summary-value">${usage.messageCounts?.total ?? 0}</div>
-        <div class="session-summary-meta">
-          ${usage.messageCounts?.user ?? 0}
-          ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
-          ${usage.messageCounts?.assistant ?? 0}
-          ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}
-        </div>
-      </div>
-      <div class="stat session-summary-card">
-        <div class="session-summary-title">${t("usage.overview.toolCalls")}</div>
-        <div class="stat-value session-summary-value">${toolCallCount}</div>
-        <div class="session-summary-meta">${uniqueToolCount} ${t("usage.overview.toolsUsed")}</div>
-      </div>
-      <div class="stat session-summary-card">
-        <div class="session-summary-title">${t("usage.overview.errors")}</div>
-        <div class="stat-value session-summary-value">${usage.messageCounts?.errors ?? 0}</div>
-        <div class="session-summary-meta">
-          ${usage.messageCounts?.toolResults ?? 0} ${t("usage.overview.toolResults")}
-        </div>
-      </div>
-      <div class="stat session-summary-card">
-        <div class="session-summary-title">${t("usage.details.duration")}</div>
-        <div class="stat-value session-summary-value">
-          ${formatDurationCompact(usage.durationMs, { spaced: true }) ??
-          t("usage.common.emptyValue")}
-        </div>
-        <div class="session-summary-meta">
-          ${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}
-        </div>
-      </div>
+      ${cards.map(
+        ({ labelKey, value, meta }) => html`
+          <div class="stat session-summary-card">
+            <div class="session-summary-title">${t(labelKey)}</div>
+            <div class="stat-value session-summary-value">${value}</div>
+            <div class="session-summary-meta">${meta}</div>
+          </div>
+        `,
+      )}
     </div>
     <div class="usage-insights-grid usage-insights-grid--tight">
       ${renderInsightList(t("usage.overview.topTools"), toolItems, t("usage.overview.noToolCalls"))}
@@ -203,36 +206,25 @@ function computeFilteredUsage(
   let totalCost = 0;
   let userMessages = 0;
   let assistantMessages = 0;
-  let totalInput = 0;
-  let totalOutput = 0;
-  let totalCacheRead = 0;
-  let totalCacheWrite = 0;
+  const tokenTotals = { output: 0, input: 0, cacheWrite: 0, cacheRead: 0 };
 
   for (const p of filtered) {
     totalTokens += p.totalTokens || 0;
     totalCost += p.cost || 0;
-    totalInput += p.input || 0;
-    totalOutput += p.output || 0;
-    totalCacheRead += p.cacheRead || 0;
-    totalCacheWrite += p.cacheWrite || 0;
-    if (p.output > 0) {
-      assistantMessages++;
+    for (const { key } of USAGE_TOKEN_CATEGORIES) {
+      tokenTotals[key] += p[key] || 0;
     }
-    if (p.input > 0) {
-      userMessages++;
-    }
+    assistantMessages += p.output > 0 ? 1 : 0;
+    userMessages += p.input > 0 ? 1 : 0;
   }
   const first = expectDefined(filtered[0], "filtered usage first point");
   const last = expectDefined(filtered.at(-1), "filtered usage last point");
 
   return {
     ...baseUsage,
+    ...tokenTotals,
     totalTokens,
     totalCost,
-    input: totalInput,
-    output: totalOutput,
-    cacheRead: totalCacheRead,
-    cacheWrite: totalCacheWrite,
     durationMs: last.timestamp - first.timestamp,
     firstActivity: first.timestamp,
     lastActivity: last.timestamp,
@@ -314,12 +306,15 @@ function renderSessionDetailPanel(
           ${usage
             ? html`
                 <span
-                  ><strong>${formatTokens(headerStats.totalTokens)}</strong>
+                  ><strong>${formatUsageTokens(headerStats.totalTokens)}</strong>
                   ${normalizeLowercaseStringOrEmpty(
                     t("usage.metrics.tokens"),
                   )}${cursorIndicator}</span
                 >
-                <span><strong>${formatCost(headerStats.totalCost)}</strong>${cursorIndicator}</span>
+                <span
+                  ><strong>${formatUsageCost(headerStats.totalCost)}</strong
+                  >${cursorIndicator}</span
+                >
               `
             : nothing}
         </div>
@@ -422,17 +417,12 @@ function renderTimeSeriesCompact(
       </div>
     `;
   }
-  const refreshStatus = renderPanelRefreshStatus({
+  const refreshStatus = renderUsageRefreshStatus(
     status,
-    errorMessage: status.error
-      ? t("usage.details.loadFailed", {
-          detail: normalizeLowercaseStringOrEmpty(t("usage.details.usageOverTime")),
-          error: status.error,
-        })
-      : undefined,
     onRetry,
-    className: "usage-callout usage-detail-error--timeline",
-  });
+    "usage.details.usageOverTime",
+    "timeline",
+  );
   if (status.error && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
@@ -461,7 +451,7 @@ function renderTimeSeriesCompact(
         return false;
       }
       if (selectedDaySet) {
-        return selectedDaySet.has(dateKey(p.timestamp, timeZone));
+        return selectedDaySet.has(usageDateKey(p.timestamp, timeZone));
       }
       return true;
     });
@@ -476,17 +466,9 @@ function renderTimeSeriesCompact(
   }
   let cumTokens = 0,
     cumCost = 0;
-  let sumOutput = 0;
-  let sumInput = 0;
-  let sumCacheRead = 0;
-  let sumCacheWrite = 0;
   points = points.map((p) => {
     cumTokens += p.totalTokens;
     cumCost += p.cost;
-    sumOutput += p.output;
-    sumInput += p.input;
-    sumCacheRead += p.cacheRead;
-    sumCacheWrite += p.cacheWrite;
     return { ...p, cumulativeTokens: cumTokens, cumulativeCost: cumCost };
   });
 
@@ -508,15 +490,11 @@ function renderTimeSeriesCompact(
   }
 
   const filteredPoints = hasSelection ? points.slice(rangeStartIdx, rangeEndIdx) : points;
-  let filteredOutput = 0,
-    filteredInput = 0,
-    filteredCacheRead = 0,
-    filteredCacheWrite = 0;
+  const filteredTokens = { output: 0, input: 0, cacheRead: 0, cacheWrite: 0 };
   for (const p of filteredPoints) {
-    filteredOutput += p.output;
-    filteredInput += p.input;
-    filteredCacheRead += p.cacheRead;
-    filteredCacheWrite += p.cacheWrite;
+    for (const { key } of USAGE_TOKEN_CATEGORIES) {
+      filteredTokens[key] += p[key];
+    }
   }
 
   const width = 400,
@@ -528,7 +506,10 @@ function renderTimeSeriesCompact(
   const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
   const timeZoneOptions: Intl.DateTimeFormatOptions = timeZone === "utc" ? { timeZone: "UTC" } : {};
 
-  const totalTypeTokens = filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite;
+  const totalTypeTokens = Object.values(filteredTokens).reduce(
+    (total, tokens) => total + tokens,
+    0,
+  );
   const barTotals = points.map((p) =>
     isCumulative
       ? p.cumulativeTokens
@@ -566,76 +547,40 @@ function renderTimeSeriesCompact(
                 </div>
               `
             : nothing}
-          <div class="chart-toggle small">
-            <button
-              class="btn btn--sm toggle-btn ${!isCumulative ? "active" : ""}"
-              @click=${() => onModeChange("per-turn")}
-            >
-              ${t("usage.details.perTurn")}
-            </button>
-            <button
-              class="btn btn--sm toggle-btn ${isCumulative ? "active" : ""}"
-              @click=${() => onModeChange("cumulative")}
-            >
-              ${t("usage.details.cumulative")}
-            </button>
-          </div>
+          ${renderUsageToggle(mode, onModeChange, [
+            { value: "per-turn", labelKey: "usage.details.perTurn" },
+            { value: "cumulative", labelKey: "usage.details.cumulative" },
+          ])}
           ${!isCumulative
-            ? html`
-                <div class="chart-toggle small">
-                  <button
-                    class="btn btn--sm toggle-btn ${breakdownMode === "total" ? "active" : ""}"
-                    @click=${() => onBreakdownChange("total")}
-                  >
-                    ${t("usage.daily.total")}
-                  </button>
-                  <button
-                    class="btn btn--sm toggle-btn ${breakdownMode === "by-type" ? "active" : ""}"
-                    @click=${() => onBreakdownChange("by-type")}
-                  >
-                    ${t("usage.daily.byType")}
-                  </button>
-                </div>
-              `
+            ? renderUsageToggle(breakdownMode, onBreakdownChange, [
+                { value: "total", labelKey: "usage.daily.total" },
+                { value: "by-type", labelKey: "usage.daily.byType" },
+              ])
             : nothing}
         </div>
       </div>
       ${refreshStatus}
       <div class="timeseries-chart-wrapper">
         <svg viewBox="0 0 ${width} ${height + 18}" class="timeseries-svg">
-          <!-- Y axis -->
-          <line
-            x1="${padding.left}"
-            y1="${padding.top}"
-            x2="${padding.left}"
-            y2="${padding.top + chartHeight}"
-            stroke="var(--border)"
-          />
-          <!-- X axis -->
-          <line
-            x1="${padding.left}"
-            y1="${padding.top + chartHeight}"
-            x2="${width - padding.right}"
-            y2="${padding.top + chartHeight}"
-            stroke="var(--border)"
-          />
-          <!-- Y axis labels -->
-          <text
-            x="${padding.left - 4}"
-            y="${padding.top + 5}"
-            text-anchor="end"
-            class="ts-axis-label"
-          >
-            ${formatTokens(maxValue)}
-          </text>
-          <text
-            x="${padding.left - 4}"
-            y="${padding.top + chartHeight}"
-            text-anchor="end"
-            class="ts-axis-label"
-          >
-            0
-          </text>
+          ${[
+            { x1: padding.left, y1: padding.top, x2: padding.left, y2: padding.top + chartHeight },
+            {
+              x1: padding.left,
+              y1: padding.top + chartHeight,
+              x2: width - padding.right,
+              y2: padding.top + chartHeight,
+            },
+          ].map(
+            ({ x1, y1, x2, y2 }) =>
+              svg`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--border)" />`,
+          )}
+          ${[
+            { y: padding.top + 5, text: formatUsageTokens(maxValue) },
+            { y: padding.top + chartHeight, text: "0" },
+          ].map(
+            ({ y, text }) =>
+              svg`<text x="${padding.left - 4}" y="${y}" text-anchor="end" class="ts-axis-label">${text}</text>`,
+          )}
           <!-- X axis labels (first and last) -->
           ${points.length > 0
             ? svg`
@@ -661,13 +606,14 @@ function renderTimeSeriesCompact(
                 },
                 "",
               ),
-              `${formatTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
+              `${formatUsageTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
             ];
             if (breakdownByType) {
-              tooltipLines.push(`Out ${formatTokens(p.output)}`);
-              tooltipLines.push(`In ${formatTokens(p.input)}`);
-              tooltipLines.push(`CW ${formatTokens(p.cacheWrite)}`);
-              tooltipLines.push(`CR ${formatTokens(p.cacheRead)}`);
+              tooltipLines.push(
+                ...USAGE_TOKEN_CATEGORIES.map(
+                  ({ key, short }) => `${short} ${formatUsageTokens(p[key])}`,
+                ),
+              );
             }
             const tooltip = tooltipLines.join(" · ");
             const isOutside = hasSelection && (i < rangeStartIdx || i >= rangeEndIdx);
@@ -675,22 +621,17 @@ function renderTimeSeriesCompact(
             if (!breakdownByType) {
               return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1"><title>${tooltip}</title></rect>`;
             }
-            const segments = [
-              { value: p.output, cls: "output" },
-              { value: p.input, cls: "input" },
-              { value: p.cacheWrite, cls: "cache-write" },
-              { value: p.cacheRead, cls: "cache-read" },
-            ];
             let yC = padding.top + chartHeight;
             const dim = isOutside ? " dimmed" : "";
             return svg`
-              ${segments.map((seg) => {
-                if (seg.value <= 0 || val <= 0) {
+              ${USAGE_TOKEN_CATEGORIES.map(({ key, className }) => {
+                const value = p[key];
+                if (value <= 0 || val <= 0) {
                   return nothing;
                 }
-                const sh = bh * (seg.value / val);
+                const sh = bh * (value / val);
                 yC -= sh;
-                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${seg.cls}${dim}" rx="1"><title>${tooltip}</title></rect>`;
+                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1"><title>${tooltip}</title></rect>`;
               })}
             `;
           })}
@@ -706,26 +647,19 @@ function renderTimeSeriesCompact(
               pointer-events="none"
             />
           `}
-          <!-- Left cursor line + handle -->
-          ${svg`
-            <line x1="${leftHandleX}" y1="${padding.top}" x2="${leftHandleX}" y2="${padding.top + chartHeight}" stroke="var(--accent)" stroke-width="0.8" opacity="0.7" />
-            <rect x="${leftHandleX - HANDLE_WIDTH / 2}" y="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 2}" width="${HANDLE_WIDTH}" height="${HANDLE_HEIGHT}" rx="1.5" fill="var(--accent)" class="cursor-handle" />
-            <line x1="${leftHandleX - HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${leftHandleX - HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-            <line x1="${leftHandleX + HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${leftHandleX + HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-          `}
-          <!-- Right cursor line + handle -->
-          ${svg`
-            <line x1="${rightHandleX}" y1="${padding.top}" x2="${rightHandleX}" y2="${padding.top + chartHeight}" stroke="var(--accent)" stroke-width="0.8" opacity="0.7" />
-            <rect x="${rightHandleX - HANDLE_WIDTH / 2}" y="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 2}" width="${HANDLE_WIDTH}" height="${HANDLE_HEIGHT}" rx="1.5" fill="var(--accent)" class="cursor-handle" />
-            <line x1="${rightHandleX - HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${rightHandleX - HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-            <line x1="${rightHandleX + HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${rightHandleX + HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-          `}
+          ${[leftHandleX, rightHandleX].map(
+            (handleX) => svg`
+              <line x1="${handleX}" y1="${padding.top}" x2="${handleX}" y2="${padding.top + chartHeight}" stroke="var(--accent)" stroke-width="0.8" opacity="0.7" />
+              <rect x="${handleX - HANDLE_WIDTH / 2}" y="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 2}" width="${HANDLE_WIDTH}" height="${HANDLE_HEIGHT}" rx="1.5" fill="var(--accent)" class="cursor-handle" />
+              ${[-HANDLE_GRIP_OFFSET, HANDLE_GRIP_OFFSET].map(
+                (offset) =>
+                  svg`<line x1="${handleX + offset}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${handleX + offset}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />`,
+              )}
+            `,
+          )}
         </svg>
         <!-- Handle drag zones (only on handles, not full chart) -->
         ${(() => {
-          const leftHandlePos = `${((leftHandleX / width) * 100).toFixed(1)}%`;
-          const rightHandlePos = `${((rightHandleX / width) * 100).toFixed(1)}%`;
-
           const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
             if (!onCursorRangeChange) {
               return;
@@ -764,19 +698,17 @@ function renderTimeSeriesCompact(
               if (!pt) {
                 return;
               }
-              if (side === "left") {
-                const endTs =
-                  cursorEnd ??
-                  expectDefined(points.at(-1), "time series right cursor point").timestamp;
-                // Don't let left go past right
-                onCursorRangeChange(Math.min(pt.timestamp, endTs), endTs);
-              } else {
-                const startTs =
-                  cursorStart ??
-                  expectDefined(points[0], "time series left cursor point").timestamp;
-                // Don't let right go past left
-                onCursorRangeChange(startTs, Math.max(pt.timestamp, startTs));
-              }
+              const left = side === "left";
+              const boundary = left
+                ? (cursorEnd ??
+                  expectDefined(points.at(-1), "time series right cursor point").timestamp)
+                : (cursorStart ??
+                  expectDefined(points[0], "time series left cursor point").timestamp);
+              // Clamp the dragged handle against its fixed sibling to preserve range ordering.
+              onCursorRangeChange(
+                left ? Math.min(pt.timestamp, boundary) : boundary,
+                left ? boundary : Math.max(pt.timestamp, boundary),
+              );
             };
 
             const handleUp = () => {
@@ -790,16 +722,14 @@ function renderTimeSeriesCompact(
           };
 
           return html`
-            <div
-              class="chart-handle-zone chart-handle-left"
-              style="left: ${leftHandlePos};"
-              @mousedown=${makeDragHandler("left")}
-            ></div>
-            <div
-              class="chart-handle-zone chart-handle-right"
-              style="left: ${rightHandlePos};"
-              @mousedown=${makeDragHandler("right")}
-            ></div>
+            ${(["left", "right"] as const).map((side) => {
+              const x = side === "left" ? leftHandleX : rightHandleX;
+              return html`<div
+                class="chart-handle-zone chart-handle-${side}"
+                style="left: ${((x / width) * 100).toFixed(1)}%;"
+                @mousedown=${makeDragHandler(side)}
+              ></div>`;
+            })}
           `;
         })()}
       </div>
@@ -823,57 +753,38 @@ function renderTimeSeriesCompact(
                 { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
                 "",
               )}
-              ·
-              ${formatTokens(
-                filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite,
-              )}
-              · ${formatCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
+              · ${formatUsageTokens(totalTypeTokens)} ·
+              ${formatUsageCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
             `
-          : html`${points.length} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(cumTokens)}
-            · ${formatCost(cumCost)}`}
+          : html`${points.length} ${t("usage.overview.messagesAbbrev")} ·
+            ${formatUsageTokens(cumTokens)} · ${formatUsageCost(cumCost)}`}
       </div>
       ${breakdownByType
         ? html`
             <div class="timeseries-breakdown">
               <div class="card-title usage-section-title">${t("usage.breakdown.tokensByType")}</div>
               <div class="cost-breakdown-bar cost-breakdown-bar--compact">
-                <div
-                  class="cost-segment output"
-                  style="width: ${pct(filteredOutput, totalTypeTokens).toFixed(1)}%"
-                ></div>
-                <div
-                  class="cost-segment input"
-                  style="width: ${pct(filteredInput, totalTypeTokens).toFixed(1)}%"
-                ></div>
-                <div
-                  class="cost-segment cache-write"
-                  style="width: ${pct(filteredCacheWrite, totalTypeTokens).toFixed(1)}%"
-                ></div>
-                <div
-                  class="cost-segment cache-read"
-                  style="width: ${pct(filteredCacheRead, totalTypeTokens).toFixed(1)}%"
-                ></div>
+                ${USAGE_TOKEN_CATEGORIES.map(
+                  ({ key, className }) => html`
+                    <div
+                      class="cost-segment ${className}"
+                      style="width: ${pct(filteredTokens[key], totalTypeTokens).toFixed(1)}%"
+                    ></div>
+                  `,
+                )}
               </div>
               <div class="cost-breakdown-legend">
-                <div class="legend-item" title=${t("usage.details.assistantOutputTokens")}>
-                  <span class="legend-dot output"></span>${t("usage.breakdown.output")}
-                  ${formatTokens(filteredOutput)}
-                </div>
-                <div class="legend-item" title=${t("usage.details.userToolInputTokens")}>
-                  <span class="legend-dot input"></span>${t("usage.breakdown.input")}
-                  ${formatTokens(filteredInput)}
-                </div>
-                <div class="legend-item" title=${t("usage.details.tokensWrittenToCache")}>
-                  <span class="legend-dot cache-write"></span>${t("usage.breakdown.cacheWrite")}
-                  ${formatTokens(filteredCacheWrite)}
-                </div>
-                <div class="legend-item" title=${t("usage.details.tokensReadFromCache")}>
-                  <span class="legend-dot cache-read"></span>${t("usage.breakdown.cacheRead")}
-                  ${formatTokens(filteredCacheRead)}
-                </div>
+                ${USAGE_TOKEN_CATEGORIES.map(
+                  ({ key, className, labelKey, hintKey }) => html`
+                    <div class="legend-item" title=${t(hintKey)}>
+                      <span class="legend-dot ${className}"></span>${t(labelKey)}
+                      ${formatUsageTokens(filteredTokens[key])}
+                    </div>
+                  `,
+                )}
               </div>
               <div class="cost-breakdown-total">
-                ${t("usage.breakdown.total")}: ${formatTokens(totalTypeTokens)}
+                ${t("usage.breakdown.total")}: ${formatUsageTokens(totalTypeTokens)}
               </div>
             </div>
           `
@@ -895,40 +806,58 @@ function renderContextPanel(
       </div>
     `;
   }
-  const systemTokens = charsToTokens(contextWeight.systemPrompt.chars);
-  const skillsTokens = charsToTokens(contextWeight.skills.promptChars);
-  const toolsTokens = charsToTokens(
-    contextWeight.tools.listChars + contextWeight.tools.schemaChars,
-  );
-  const filesTokens = charsToTokens(
-    contextWeight.injectedWorkspaceFiles.reduce((sum, f) => sum + f.injectedChars, 0),
-  );
-  const totalContextTokens = systemTokens + skillsTokens + toolsTokens + filesTokens;
-
-  let contextPct = "";
-  if (usage && usage.totalTokens > 0) {
-    const inputTokens = usage.input + usage.cacheRead;
-    if (inputTokens > 0) {
-      contextPct = `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% ${t("usage.details.ofInput")}`;
-    }
-  }
-
-  const skillsList = contextWeight.skills.entries.toSorted((a, b) => b.blockChars - a.blockChars);
-  const toolsList = contextWeight.tools.entries.toSorted(
-    (a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars),
-  );
-  const filesList = contextWeight.injectedWorkspaceFiles.toSorted(
-    (a, b) => b.injectedChars - a.injectedChars,
-  );
+  const groups = [
+    {
+      className: "skills",
+      labelKey: "usage.details.skills",
+      tokens: charsToTokens(contextWeight.skills.promptChars),
+      entries: contextWeight.skills.entries.map(({ name, blockChars }) => ({
+        name,
+        chars: blockChars,
+      })),
+    },
+    {
+      className: "tools",
+      labelKey: "usage.details.tools",
+      tokens: charsToTokens(contextWeight.tools.listChars + contextWeight.tools.schemaChars),
+      entries: contextWeight.tools.entries.map(({ name, summaryChars, schemaChars }) => ({
+        name,
+        chars: summaryChars + schemaChars,
+      })),
+    },
+    {
+      className: "files",
+      labelKey: "usage.details.files",
+      tokens: charsToTokens(
+        contextWeight.injectedWorkspaceFiles.reduce((sum, file) => sum + file.injectedChars, 0),
+      ),
+      entries: contextWeight.injectedWorkspaceFiles.map(({ name, injectedChars }) => ({
+        name,
+        chars: injectedChars,
+      })),
+    },
+  ].map(({ className, labelKey, tokens, entries }) => ({
+    className,
+    labelKey,
+    tokens,
+    entries: entries.toSorted((left, right) => right.chars - left.chars),
+  }));
+  const categories = [
+    {
+      className: "system",
+      labelKey: "usage.details.system",
+      tokens: charsToTokens(contextWeight.systemPrompt.chars),
+    },
+    ...groups,
+  ];
+  const totalContextTokens = categories.reduce((sum, { tokens }) => sum + tokens, 0);
+  const inputTokens = usage && usage.totalTokens > 0 ? usage.input + usage.cacheRead : 0;
+  const contextDescription =
+    inputTokens > 0
+      ? `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% ${t("usage.details.ofInput")}`
+      : t("usage.details.baseContextPerMessage");
   const defaultLimit = 4;
-  const showAll = expanded;
-  const skillsTop = showAll ? skillsList : skillsList.slice(0, defaultLimit);
-  const toolsTop = showAll ? toolsList : toolsList.slice(0, defaultLimit);
-  const filesTop = showAll ? filesList : filesList.slice(0, defaultLimit);
-  const hasMore =
-    skillsList.length > defaultLimit ||
-    toolsList.length > defaultLimit ||
-    filesList.length > defaultLimit;
+  const hasMore = groups.some(({ entries }) => entries.length > defaultLimit);
 
   return html`
     <div class="context-details-panel">
@@ -938,148 +867,66 @@ function renderContextPanel(
         </div>
         ${hasMore
           ? html`<button class="btn btn--sm" @click=${onToggleExpanded}>
-              ${showAll ? t("usage.details.collapse") : t("usage.details.expandAll")}
+              ${expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
             </button>`
           : nothing}
       </div>
-      <p class="context-weight-desc">${contextPct || t("usage.details.baseContextPerMessage")}</p>
+      <p class="context-weight-desc">${contextDescription}</p>
       <div class="context-stacked-bar">
-        <div
-          class="context-segment system"
-          style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%"
-          title="${t("usage.details.system")}: ~${formatTokens(systemTokens)}"
-        ></div>
-        <div
-          class="context-segment skills"
-          style="width: ${pct(skillsTokens, totalContextTokens).toFixed(1)}%"
-          title="${t("usage.details.skills")}: ~${formatTokens(skillsTokens)}"
-        ></div>
-        <div
-          class="context-segment tools"
-          style="width: ${pct(toolsTokens, totalContextTokens).toFixed(1)}%"
-          title="${t("usage.details.tools")}: ~${formatTokens(toolsTokens)}"
-        ></div>
-        <div
-          class="context-segment files"
-          style="width: ${pct(filesTokens, totalContextTokens).toFixed(1)}%"
-          title="${t("usage.details.files")}: ~${formatTokens(filesTokens)}"
-        ></div>
+        ${categories.map(
+          ({ className, labelKey, tokens }) => html`
+            <div
+              class="context-segment ${className}"
+              style="width: ${pct(tokens, totalContextTokens).toFixed(1)}%"
+              title="${t(labelKey)}: ~${formatUsageTokens(tokens)}"
+            ></div>
+          `,
+        )}
       </div>
       <div class="context-legend">
-        <span class="legend-item"
-          ><span class="legend-dot system"></span>${t("usage.details.systemShort")}
-          ~${formatTokens(systemTokens)}</span
-        >
-        <span class="legend-item"
-          ><span class="legend-dot skills"></span>${t("usage.details.skills")}
-          ~${formatTokens(skillsTokens)}</span
-        >
-        <span class="legend-item"
-          ><span class="legend-dot tools"></span>${t("usage.details.tools")}
-          ~${formatTokens(toolsTokens)}</span
-        >
-        <span class="legend-item"
-          ><span class="legend-dot files"></span>${t("usage.details.files")}
-          ~${formatTokens(filesTokens)}</span
-        >
+        ${categories.map(
+          ({ className, labelKey, tokens }) => html`
+            <span class="legend-item"
+              ><span class="legend-dot ${className}"></span>${t(
+                className === "system" ? "usage.details.systemShort" : labelKey,
+              )}
+              ~${formatUsageTokens(tokens)}</span
+            >
+          `,
+        )}
       </div>
       <div class="context-total">
-        ${t("usage.breakdown.total")}: ~${formatTokens(totalContextTokens)}
+        ${t("usage.breakdown.total")}: ~${formatUsageTokens(totalContextTokens)}
       </div>
       <div class="context-breakdown-grid">
-        ${skillsList.length > 0
-          ? (() => {
-              const more = skillsList.length - skillsTop.length;
-              return html`
-                <div class="context-breakdown-card">
-                  <div class="context-breakdown-title">
-                    ${t("usage.details.skills")} (${skillsList.length})
-                  </div>
-                  <div class="context-breakdown-list">
-                    ${skillsTop.map(
-                      (s) => html`
-                        <div class="context-breakdown-item">
-                          <span class="mono" title=${s.name}>${s.name}</span>
-                          <span class="muted">~${formatTokens(charsToTokens(s.blockChars))}</span>
-                        </div>
-                      `,
-                    )}
-                  </div>
-                  ${more > 0
-                    ? html`
-                        <div class="context-breakdown-more">
-                          ${t("usage.sessions.more", { count: String(more) })}
-                        </div>
-                      `
-                    : nothing}
+        ${groups
+          .filter(({ entries }) => entries.length > 0)
+          .map(({ labelKey, entries }) => {
+            const visible = expanded ? entries : entries.slice(0, defaultLimit);
+            const more = entries.length - visible.length;
+            return html`
+              <div class="context-breakdown-card">
+                <div class="context-breakdown-title">${t(labelKey)} (${entries.length})</div>
+                <div class="context-breakdown-list">
+                  ${visible.map(
+                    ({ name, chars }) => html`
+                      <div class="context-breakdown-item">
+                        <span class="mono" title=${name}>${name}</span>
+                        <span class="muted">~${formatUsageTokens(charsToTokens(chars))}</span>
+                      </div>
+                    `,
+                  )}
                 </div>
-              `;
-            })()
-          : nothing}
-        ${toolsList.length > 0
-          ? (() => {
-              const more = toolsList.length - toolsTop.length;
-              return html`
-                <div class="context-breakdown-card">
-                  <div class="context-breakdown-title">
-                    ${t("usage.details.tools")} (${toolsList.length})
-                  </div>
-                  <div class="context-breakdown-list">
-                    ${toolsTop.map(
-                      (tLocal) => html`
-                        <div class="context-breakdown-item">
-                          <span class="mono" title=${tLocal.name}>${tLocal.name}</span>
-                          <span class="muted"
-                            >~${formatTokens(
-                              charsToTokens(tLocal.summaryChars + tLocal.schemaChars),
-                            )}</span
-                          >
-                        </div>
-                      `,
-                    )}
-                  </div>
-                  ${more > 0
-                    ? html`
-                        <div class="context-breakdown-more">
-                          ${t("usage.sessions.more", { count: String(more) })}
-                        </div>
-                      `
-                    : nothing}
-                </div>
-              `;
-            })()
-          : nothing}
-        ${filesList.length > 0
-          ? (() => {
-              const more = filesList.length - filesTop.length;
-              return html`
-                <div class="context-breakdown-card">
-                  <div class="context-breakdown-title">
-                    ${t("usage.details.files")} (${filesList.length})
-                  </div>
-                  <div class="context-breakdown-list">
-                    ${filesTop.map(
-                      (f) => html`
-                        <div class="context-breakdown-item">
-                          <span class="mono" title=${f.name}>${f.name}</span>
-                          <span class="muted"
-                            >~${formatTokens(charsToTokens(f.injectedChars))}</span
-                          >
-                        </div>
-                      `,
-                    )}
-                  </div>
-                  ${more > 0
-                    ? html`
-                        <div class="context-breakdown-more">
-                          ${t("usage.sessions.more", { count: String(more) })}
-                        </div>
-                      `
-                    : nothing}
-                </div>
-              `;
-            })()
-          : nothing}
+                ${more > 0
+                  ? html`
+                      <div class="context-breakdown-more">
+                        ${t("usage.sessions.more", { count: String(more) })}
+                      </div>
+                    `
+                  : nothing}
+              </div>
+            `;
+          })}
       </div>
     </div>
   `;
@@ -1114,17 +961,12 @@ function renderSessionLogsCompact(
       </div>
     `;
   }
-  const refreshStatus = renderPanelRefreshStatus({
+  const refreshStatus = renderUsageRefreshStatus(
     status,
-    errorMessage: status.error
-      ? t("usage.details.loadFailed", {
-          detail: normalizeLowercaseStringOrEmpty(t("usage.details.conversation")),
-          error: status.error,
-        })
-      : undefined,
     onRetry,
-    className: "usage-callout usage-detail-error--conversation",
-  });
+    "usage.details.conversation",
+    "conversation",
+  );
   if (status.error && !status.hasLoaded) {
     return html`
       <div class="session-logs-compact">
@@ -1152,42 +994,28 @@ function renderSessionLogsCompact(
   const toolOptions = Array.from(
     new Set(entries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
   ).toSorted((a, b) => a.localeCompare(b));
+  const hasCursorFilter = cursorStart != null && cursorEnd != null;
+  const cursorMin = hasCursorFilter ? Math.min(cursorStart, cursorEnd) : 0;
+  const cursorMax = hasCursorFilter ? Math.max(cursorStart, cursorEnd) : Infinity;
   const filteredEntries = entries.filter((entry) => {
     // Filter by cursor timeline range (only if logs cover the range)
-    if (cursorStart != null && cursorEnd != null) {
-      const ts = entry.log.timestamp;
-      if (ts > 0) {
-        const lo = Math.min(cursorStart, cursorEnd);
-        const hi = Math.max(cursorStart, cursorEnd);
-        const normalizedTs = normalizeLogTimestamp(ts);
-        if (normalizedTs < lo || normalizedTs > hi) {
-          return false;
-        }
-      }
-    }
-    if (filters.roles.length > 0 && !filters.roles.includes(entry.log.role)) {
-      return false;
-    }
-    if (filters.hasTools && entry.toolInfo.tools.length === 0) {
-      return false;
-    }
-    if (filters.tools.length > 0) {
-      const matchesTool = entry.toolInfo.tools.some(([name]) => filters.tools.includes(name));
-      if (!matchesTool) {
+    if (hasCursorFilter && entry.log.timestamp > 0) {
+      const timestamp = normalizeLogTimestamp(entry.log.timestamp);
+      if (timestamp < cursorMin || timestamp > cursorMax) {
         return false;
       }
     }
-    if (normalizedQuery) {
-      const haystack = normalizeLowercaseStringOrEmpty(entry.cleanContent);
-      if (!haystack.includes(normalizedQuery)) {
-        return false;
-      }
-    }
-    return true;
+    return (
+      (filters.roles.length === 0 || filters.roles.includes(entry.log.role)) &&
+      (!filters.hasTools || entry.toolInfo.tools.length > 0) &&
+      (filters.tools.length === 0 ||
+        entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
+      (!normalizedQuery ||
+        normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery))
+    );
   });
   const hasActiveFilters =
     filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery;
-  const hasCursorFilter = cursorStart != null && cursorEnd != null;
   const displayedCount =
     hasActiveFilters || hasCursorFilter
       ? `${filteredEntries.length} ${t("usage.details.of")} ${logs.length}${hasCursorFilter ? ` (${t("usage.details.timelineFiltered")})` : ""}`
@@ -1222,18 +1050,19 @@ function renderSessionLogsCompact(
               ),
             )}
         >
-          <option value="user" ?selected=${roleSelected.has("user")}>
-            ${t("usage.overview.user")}
-          </option>
-          <option value="assistant" ?selected=${roleSelected.has("assistant")}>
-            ${t("usage.overview.assistant")}
-          </option>
-          <option value="tool" ?selected=${roleSelected.has("tool")}>
-            ${t("usage.details.tool")}
-          </option>
-          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>
-            ${t("usage.details.toolResult")}
-          </option>
+          ${(
+            [
+              ["user", "usage.overview.user"],
+              ["assistant", "usage.overview.assistant"],
+              ["tool", "usage.details.tool"],
+              ["toolResult", "usage.details.toolResult"],
+            ] as const
+          ).map(
+            ([role, labelKey]) =>
+              html`<option value=${role} ?selected=${roleSelected.has(role)}>
+                ${t(labelKey)}
+              </option>`,
+          )}
         </select>
         <select
           multiple
@@ -1284,7 +1113,7 @@ function renderSessionLogsCompact(
               <div class="session-log-meta">
                 <span class="session-log-role">${roleLabel}</span>
                 <span>${formatMs(log.timestamp)}</span>
-                ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
+                ${log.tokens ? html`<span>${formatUsageTokens(log.tokens)}</span>` : nothing}
               </div>
               <div class="session-log-content">${cleanContent}</div>
               ${toolInfo.tools.length > 0

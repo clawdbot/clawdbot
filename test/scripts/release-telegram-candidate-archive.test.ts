@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const SCRIPT = path.resolve("scripts/release-telegram-candidate-archive.py");
 const tempDirs: string[] = [];
 const tarVersion = spawnSync("tar", ["--version"], { encoding: "utf8" });
-const hasGnuTar = tarVersion.status === 0 && tarVersion.stdout?.includes("GNU tar") === true;
+const hasGnuTar = tarVersion.status === 0 && tarVersion.stdout?.includes("GNU tar");
 
 afterEach(() => {
   for (const directory of tempDirs.splice(0)) {
@@ -472,7 +472,9 @@ describe("release Telegram candidate archive guard", () => {
     try {
       expectFailure(["validate-tree", root], "unsupported special entry");
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 

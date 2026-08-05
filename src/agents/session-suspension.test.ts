@@ -88,6 +88,77 @@ describe("session suspension", () => {
     );
   });
 
+  it("auto-resumes hook dispatch to the shared cron concurrency width", async () => {
+    vi.useFakeTimers();
+
+    await suspendLane(100, {} as OpenClawConfig, CommandLane.HookDispatch);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(
+      CommandLane.HookDispatch,
+      0,
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.HookDispatch,
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+  });
+
+  it("retargets a suspended hook lane when hooks are disabled before its TTL", async () => {
+    vi.useFakeTimers();
+    const { getSuspendedLaneIdsForGatewayPublication, setGatewayLaneResumeConcurrencies } =
+      await import("./session-suspension.js");
+
+    await suspendLane(100, {} as OpenClawConfig, CommandLane.HookDispatch);
+
+    setGatewayLaneResumeConcurrencies({ [CommandLane.HookDispatch]: 0 });
+    expect(getSuspendedLaneIdsForGatewayPublication()).toEqual(new Set([CommandLane.HookDispatch]));
+
+    commandQueueMocks.setCommandLaneConcurrency.mockClear();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledExactlyOnceWith(
+      CommandLane.HookDispatch,
+      0,
+    );
+  });
+
+  it("uses hooks-off concurrency when a pending suspension write finishes late", async () => {
+    vi.useFakeTimers();
+    const { setGatewayLaneResumeConcurrencies } = await import("./session-suspension.js");
+    let resolvePatch: (() => void) | undefined;
+    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(async (_scope, update) => {
+      await new Promise<void>((resolve) => {
+        resolvePatch = resolve;
+      });
+      return update({});
+    });
+
+    const suspension = suspendLane(100, {} as OpenClawConfig, CommandLane.HookDispatch);
+    await vi.waitFor(() => {
+      expect(resolvePatch).toBeTypeOf("function");
+    });
+
+    setGatewayLaneResumeConcurrencies({ [CommandLane.HookDispatch]: 0 });
+    resolvePatch?.();
+    await suspension;
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.HookDispatch,
+      0,
+    );
+    commandQueueMocks.setCommandLaneConcurrency.mockClear();
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledExactlyOnceWith(
+      CommandLane.HookDispatch,
+      0,
+    );
+  });
+
   it("clamps oversized suspension TTLs for timers and persisted resume time", async () => {
     // Persisted expectedResumeBy must match the clamped timer, not MAX_SAFE_INTEGER.
     vi.useFakeTimers();
@@ -279,6 +350,33 @@ describe("session suspension", () => {
 
     await vi.advanceTimersByTimeAsync(100);
 
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+  });
+
+  it("does not let a pending suspension regain ownership after test state resets", async () => {
+    let resolvePatch: (() => void) | undefined;
+    let writtenQuotaSuspension: unknown;
+    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(async (_scope, update) => {
+      await new Promise<void>((resolve) => {
+        resolvePatch = resolve;
+      });
+      const patch = update({});
+      writtenQuotaSuspension = patch?.quotaSuspension;
+      return patch;
+    });
+
+    const suspension = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+    await vi.waitFor(() => {
+      expect(resolvePatch).toBeTypeOf("function");
+    });
+
+    const { resetSessionSuspensionStateForTest } =
+      await import("./session-suspension.test-support.js");
+    resetSessionSuspensionStateForTest();
+    resolvePatch?.();
+    await suspension;
+
+    expect(writtenQuotaSuspension).toBeUndefined();
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
   });
 

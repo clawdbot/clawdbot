@@ -52,7 +52,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 2" });
+    ).toEqual({ text: "Automations listed.\nCount: 2" });
     expect(
       terminalPresentation(
         { action: "list" },
@@ -64,7 +64,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 250" });
+    ).toEqual({ text: "Automations listed.\nCount: 250" });
     expect(
       terminalPresentation(
         { action: "add" },
@@ -177,7 +177,7 @@ describe("cron tool flat-params", () => {
         cwd: "/repo",
         message: "rebuilt",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -191,7 +191,7 @@ describe("cron tool flat-params", () => {
         command: "make",
         message: "done",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -206,7 +206,7 @@ describe("cron tool flat-params", () => {
         command: "pnpm build",
         cwd: "/repo",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -219,7 +219,7 @@ describe("cron tool flat-params", () => {
         jobId: "job-infer",
         command: "make",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 

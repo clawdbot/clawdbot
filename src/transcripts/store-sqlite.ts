@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -121,10 +122,7 @@ function parseOptionalJsonRecord(value: string | null): Record<string, unknown> 
   if (!value) {
     return undefined;
   }
-  const parsed = JSON.parse(value) as unknown;
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(JSON.parse(value));
 }
 
 export function sessionFromRow(row: MeetingTranscriptSessionRow): TranscriptSessionDescriptor {

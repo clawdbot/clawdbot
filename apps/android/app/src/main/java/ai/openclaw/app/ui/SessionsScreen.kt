@@ -18,11 +18,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -35,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StarBorder
@@ -71,6 +70,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,6 +81,8 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   onOpenChat: () -> Unit,
 ) {
   val sessions by viewModel.chatSessions.collectAsState()
@@ -170,7 +172,7 @@ internal fun SessionsScreen(
 
   ClawScaffold(
     contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
-    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+    contentWindowInsets = WindowInsets.safeDrawing,
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
@@ -183,6 +185,14 @@ internal fun SessionsScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+          if (showSidebarButton) {
+            ClawPlainIconButton(
+              icon = Icons.Default.Menu,
+              contentDescription = nativeString("Show Sidebar"),
+              onClick = onOpenSidebar,
+              modifier = Modifier.testTag("sidebar-open-sessions"),
+            )
+          }
           Text(text = nativeString("Threads"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
             icon = Icons.Default.Search,

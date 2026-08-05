@@ -25,6 +25,7 @@ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
 import {
   buildProjectMemoryWriteInstruction,
   prepareProjectMemoryBootstrap,
@@ -65,6 +66,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   getProviderRuntimeHandle: () => ProviderRuntimePluginHandle;
   isRawModelRun: boolean;
   markStage: (name: string) => void;
+  modelToolsEnabled: boolean;
   proactiveSubagentOrchestration: boolean;
   sandbox?: SandboxContext;
   sandboxSessionKey: string;
@@ -273,6 +275,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(
     attempt.preparedModelRuntime?.projectKey,
   );
+  const extraSystemPrompt =
+    [
+      attempt.extraSystemPrompt,
+      projectMemoryWriteInstruction,
+      buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n") || undefined;
 
   const attemptSystemPrompt = buildAttemptSystemPrompt({
     isRawModelRun: params.isRawModelRun,
@@ -287,9 +297,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       workspaceDir: params.effectiveWorkspace,
       defaultThinkLevel: attempt.thinkLevel,
       reasoningLevel: attempt.reasoningLevel ?? "off",
-      extraSystemPrompt: projectMemoryWriteInstruction
-        ? [attempt.extraSystemPrompt, projectMemoryWriteInstruction].filter(Boolean).join("\n\n")
-        : attempt.extraSystemPrompt,
+      extraSystemPrompt,
       ownerNumbers: attempt.ownerNumbers,
       reasoningTagHint,
       heartbeatPrompt,

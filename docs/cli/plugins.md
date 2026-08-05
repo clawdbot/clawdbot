@@ -42,10 +42,10 @@ openclaw plugins disable <id>
 openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]
-openclaw plugins doctor
+openclaw plugins doctor [--json]
 openclaw plugins init <id> [--name <name>] [--type tool|provider] [--directory <path>]
 openclaw plugins build [--entry <path>] [--check]
-openclaw plugins validate [--entry <path>]
+openclaw plugins validate [--entry <path>] [--json]
 openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json]
 openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
@@ -85,8 +85,9 @@ id for the default output directory and package naming. Tool scaffolds use
 `plugins build` imports the built entry, reads its static tool metadata, writes
 `openclaw.plugin.json`, and keeps `package.json`'s `openclaw.extensions` aligned.
 `plugins validate` checks that the generated manifest, package metadata, and
-current entry export still agree. See [Tool Plugins](/plugins/tool-plugins) for
-the full authoring workflow.
+current entry export still agree. Pass `--json` for a machine-readable
+validation result. See [Tool Plugins](/plugins/tool-plugins) for the full
+authoring workflow.
 
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry, so the workflow also works with the published CLI. Use
@@ -419,7 +420,7 @@ openclaw plugins uninstall <id> --keep-files
 openclaw plugins uninstall <id> --force
 ```
 
-`uninstall` removes plugin records from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and linked `plugins.load.paths` entries when applicable. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
+`uninstall` removes plugin records from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
 `uninstall` prints a preview of what will be removed, then prompts `Uninstall plugin "<id>"?` before making changes. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
@@ -506,9 +507,13 @@ The `--json` flag outputs a machine-readable report suitable for scripting and a
 
 ```bash
 openclaw plugins doctor
+openclaw plugins doctor --json
 ```
 
-`doctor` reports plugin load errors, manifest/discovery diagnostics, compatibility notices, and stale plugin config references such as missing plugin slots. When the install tree and plugin config are clean it prints `No plugin issues detected.` If stale config remains but the install tree is otherwise healthy, the summary says so instead of implying full plugin health.
+`doctor` reports plugin load errors, manifest/discovery diagnostics, compatibility notices, and stale plugin config references such as missing plugin slots. It loads plugin modules without activating plugins and does not query the running Gateway. When these local checks pass, it prints `Plugin discovery, module loading, compatibility, and configuration checks passed. Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.` The [health command](/cli/health) reads current runtime quarantine and fallback state from the Gateway. If stale config remains but the install tree is otherwise healthy, the summary says so instead of implying full plugin health.
+
+With `--json`, the same discovery, compatibility, and configuration diagnostics
+are returned as one machine-readable object.
 
 If a configured plugin is present on disk but blocked by the loader's path-safety checks, config validation keeps the plugin entry and reports it as `present but blocked`. Fix the preceding blocked-plugin diagnostic, such as path ownership or world-writable permissions, instead of removing the `plugins.entries.<id>` or `plugins.allow` config.
 

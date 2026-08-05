@@ -5,6 +5,10 @@ import {
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
+import {
+  isGatewayServerBackedHttpTestFile,
+  isGatewayServerTestFile,
+} from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
@@ -39,15 +43,17 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const AGENTS_EMBEDDED_AGENT_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
 };
+const COMPACT_EMBEDDED_GROUP_NAMES = [
+  "agentic-agents-embedded-base",
+  "agentic-agents-embedded-incomplete-turn",
+  "agentic-agents-embedded-overflow-compaction",
+  "agentic-agents-embedded-run",
+];
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// The group hints below are loaded-fleet CI walls, so the cap is the real per-bin
-// test budget: 235s packs both runner classes into the same job count as before
-// (6 large + 15 small) while the measured ~60s median job setup keeps the slowest
-// bin near the 5-minute PR wall-clock budget. 220 with honest hints adds a job to
-// each pool for no ceiling win.
-// 190s cap: forbids pairings like core-runtime-media-ui (124) +
+// The group hints below are loaded-fleet CI walls. The 190s cap forbids
+// pairings like core-runtime-media-ui (124) +
 // core-unit-src-security (95) that produced a 195s real-wall straggler bin
 // while the pack sat at ~160s; ~3 extra bins buy ~30-40s of run wall.
 const COMPACT_NODE_TEST_JOB_SECONDS = 190;
@@ -82,9 +88,15 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-runtime", 79],
   ["agentic-agents-core-subagents", 32],
   ["agentic-agents-core-tools", 52],
-  // A cold fork run is about 430s and emits no file result for most of its
-  // first five minutes. Keep this whole-config whale in its own compact job.
+  // The composite hint sets the existing job count before its independent
+  // configs are striped across those jobs. Split hints are medians from four
+  // recent 2-core runs
+  // (30532132189, 30532967046, 30534273298, 30536274496).
   ["agentic-agents-embedded", 430],
+  ["agentic-agents-embedded-base", 363],
+  ["agentic-agents-embedded-incomplete-turn", 146],
+  ["agentic-agents-embedded-overflow-compaction", 150],
+  ["agentic-agents-embedded-run", 30],
   ["agentic-agents-support", 105],
   ["agentic-agents-tools", 42],
   ["agentic-cli", 72],
@@ -233,6 +245,25 @@ function estimateCompactGroupSeconds(group) {
     return Math.max(3, Math.round(group.includePatterns.length * DEFAULT_SECONDS_PER_TEST_FILE));
   }
   return DEFAULT_WHOLE_GROUP_SECONDS;
+}
+
+function expandCompactGroup(group) {
+  if (group.shard_name !== "agentic-agents-embedded") {
+    return [group];
+  }
+  if (group.configs.length !== COMPACT_EMBEDDED_GROUP_NAMES.length) {
+    throw new Error("embedded compact group names must cover every config");
+  }
+
+  const expandedGroups = [];
+  for (const [index, config] of group.configs.entries()) {
+    expandedGroups.push({
+      ...group,
+      configs: [config],
+      shard_name: COMPACT_EMBEDDED_GROUP_NAMES[index],
+    });
+  }
+  return expandedGroups;
 }
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
@@ -585,29 +616,6 @@ function createAgentCoreSplitShards() {
   ];
 }
 
-const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
-  "src/gateway/embeddings-http.test.ts",
-  "src/gateway/models-http.test.ts",
-  "src/gateway/openai-http.test.ts",
-  "src/gateway/openresponses-http.test.ts",
-  "src/gateway/probe.auth.integration.test.ts",
-]);
-
-const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
-  "src/gateway/gateway.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  "src/gateway/sessions-history-http.test.ts",
-]);
-
-function isGatewayServerTestFile(file) {
-  return (
-    file.startsWith("src/gateway/") &&
-    !file.startsWith("src/gateway/server-methods/") &&
-    !GATEWAY_SERVER_EXCLUDED_TESTS.has(file) &&
-    (file.includes("server") || GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file))
-  );
-}
-
 function resolveGatewayStartupShardName(file) {
   const name = relative("src/gateway", file).replaceAll("\\", "/");
   if (name.startsWith("server-startup-config") || name.startsWith("server-startup-early")) {
@@ -616,9 +624,7 @@ function resolveGatewayStartupShardName(file) {
   if (
     name.startsWith("server-runtime") ||
     name.startsWith("server.health") ||
-    name.startsWith("server.lazy") ||
-    name.startsWith("server/health-state") ||
-    name.startsWith("server/readiness")
+    name.startsWith("server.lazy")
   ) {
     return "agentic-control-plane-startup-health-runtime";
   }
@@ -631,7 +637,7 @@ function resolveGatewayStartupShardName(file) {
 function resolveGatewayServerShardName(file) {
   const name = relative("src/gateway", file).replaceAll("\\", "/");
   if (
-    GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file) ||
+    isGatewayServerBackedHttpTestFile(file) ||
     name.startsWith("server.models") ||
     name.startsWith("server.talk")
   ) {
@@ -661,8 +667,6 @@ function resolveGatewayServerShardName(file) {
     name.startsWith("server-runtime") ||
     name.startsWith("server.lazy") ||
     name.startsWith("server.health") ||
-    name.startsWith("server/health-state") ||
-    name.startsWith("server/readiness") ||
     name === "server-close.test.ts"
   ) {
     return resolveGatewayStartupShardName(file);
@@ -698,10 +702,7 @@ function resolveGatewayServerShardName(file) {
   ) {
     return "agentic-control-plane-runtime-ui-tools";
   }
-  if (name.startsWith("server/")) {
-    return "agentic-control-plane-runtime-events";
-  }
-  if (name.startsWith("server.") || name.startsWith("server/")) {
+  if (name.startsWith("server.")) {
     return "agentic-control-plane-runtime-state";
   }
   return "agentic-control-plane-runtime";
@@ -721,7 +722,6 @@ function createGatewayServerSplitShards() {
     "agentic-control-plane-runtime",
     "agentic-control-plane-runtime-config",
     "agentic-control-plane-runtime-cron",
-    "agentic-control-plane-runtime-events",
     "agentic-control-plane-runtime-network",
     "agentic-control-plane-runtime-server",
     "agentic-control-plane-runtime-shared-token",
@@ -1131,8 +1131,9 @@ const SPLIT_NODE_SHARDS = new Map([
         configs: ["test/vitest/vitest.tui-pty.config.ts"],
         env: {
           OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+          OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1",
         },
-        requiresDist: false,
+        requiresDist: true,
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
@@ -1334,14 +1335,14 @@ function stripeFileWeight(file) {
   return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_STRIPE_FILE_SECONDS;
 }
 
-// Deterministic cost-aware striping (greedy LPT): heaviest files first, each
-// into the currently lightest batch. Round-robin by discovery order packed one
-// whale next to another and left sibling stripes ~10x lighter.
-function createStripedBatches(values, batchCount) {
+// Deterministic cost-aware batching (greedy LPT): heaviest values first, each
+// into the currently lightest batch. Round-robin by discovery order can pack
+// one whale next to another and leave sibling batches much lighter.
+function createStripedBatches(values, batchCount, weightForValue = stripeFileWeight) {
   const entries = values.map((value, index) => ({
     index,
     value,
-    weight: stripeFileWeight(value),
+    weight: weightForValue(value),
   }));
   entries.sort((a, b) => b.weight - a.weight || a.index - b.index);
   const batches = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
@@ -1355,7 +1356,7 @@ function createStripedBatches(values, batchCount) {
     target.totalWeight += entry.weight;
     target.entries.push(entry);
   }
-  // Keep discovery order inside each stripe so include lists stay stable.
+  // Keep discovery order inside each batch so include lists stay stable.
   return batches.map((batch) =>
     batch.entries.toSorted((a, b) => a.index - b.index).map((entry) => entry.value),
   );
@@ -1500,9 +1501,8 @@ function createCompactNodeTestShardBundles(options = {}) {
 
   const compactJobs = [];
   for (const groups of groupsByRunner.values()) {
-    // First-fit decreasing on estimated serial seconds keeps every job near
-    // the same runtime; the old per-file weights let one 3-minute group land
-    // next to nine trivial ones and own the PR wall clock.
+    // First-fit decreasing sets the existing registration count from the
+    // composite groups and their runtime cap.
     const bins = [];
     const sortedGroups = groups.toSorted(
       (a, b) =>
@@ -1531,6 +1531,29 @@ function createCompactNodeTestShardBundles(options = {}) {
           weight,
         });
       }
+    }
+
+    const expandedGroups = groups.flatMap(expandCompactGroup);
+    if (expandedGroups.length !== groups.length) {
+      const regularGroups = expandedGroups
+        .filter((group) => !isExclusiveCompactGroup(group))
+        .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
+      const regularBinCount = bins.filter((bin) => !bin.exclusive).length;
+      const regularBatches = createStripedBatches(
+        regularGroups,
+        regularBinCount,
+        estimateCompactGroupSeconds,
+      );
+      if (regularBatches.some((batch) => batch.length > COMPACT_NODE_TEST_JOB_GROUPS)) {
+        throw new Error("striped compact job exceeds its group capacity");
+      }
+      const regularBins = regularBatches.map((batch) => ({
+        exclusive: false,
+        groups: batch,
+        hasWholeConfigGroup: batch.some((group) => !group.includePatterns),
+      }));
+      const exclusiveBins = bins.filter((bin) => bin.exclusive);
+      bins.splice(0, bins.length, ...regularBins, ...exclusiveBins);
     }
 
     for (const [index, bin] of bins.entries()) {

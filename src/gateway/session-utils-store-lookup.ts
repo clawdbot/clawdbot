@@ -15,6 +15,7 @@ import {
   loadExactSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
+import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
@@ -33,9 +34,10 @@ import type {
   GatewaySessionStoreTargetWithStore,
 } from "./session-utils-contracts.js";
 
-function findFreshestStoreMatch(
+function findCanonicalStoreMatch(
   store: Record<string, SessionEntry>,
-  ...candidates: string[]
+  candidates: readonly string[],
+  onCanonicalError?: (error: Error) => void,
 ): { entry: SessionEntry; key: string } | undefined {
   const matches = new Map<string, { entry: SessionEntry; key: string }>();
   for (const candidate of candidates) {
@@ -51,13 +53,27 @@ function findFreshestStoreMatch(
   if (matches.size === 0) {
     return undefined;
   }
-  let freshest: { entry: SessionEntry; key: string } | undefined;
-  for (const match of matches.values()) {
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
+  const canonicalKey = candidates[0] ?? "";
+  const selected = matches.get(canonicalKey) ?? matches.values().next().value;
+  if (matches.size > 1) {
+    const error = canonicalSessionKeyMigrationRequiredError(
+      `duplicate rows resolve to canonical session key ${canonicalKey || selected?.key || ""}`,
+    );
+    if (!onCanonicalError) {
+      throw error;
     }
+    onCanonicalError(error);
   }
-  return freshest;
+  if (selected && selected.key !== canonicalKey) {
+    const error = canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${canonicalKey || selected.key}`,
+    );
+    if (!onCanonicalError) {
+      throw error;
+    }
+    onCanonicalError(error);
+  }
+  return selected;
 }
 
 function buildGatewaySessionStoreScanTargets(params: {
@@ -204,12 +220,14 @@ function resolveGatewaySessionStoreLookup(params: {
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   exactRead?: boolean;
+  deferCanonicalValidation?: boolean;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): {
   storePath: string;
   store: Record<string, SessionEntry>;
   match: { entry: SessionEntry; key: string } | undefined;
+  canonicalValidationError?: Error;
 } {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
   const { existing, fallback } = resolveGatewaySessionStoreCandidates(
@@ -243,8 +261,13 @@ function resolveGatewaySessionStoreLookup(params: {
     params.initialStore && firstCandidate.storePath === fallback.storePath
       ? params.initialStore
       : loadStore(firstCandidate);
-  let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
-  let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
+  let canonicalValidationError: Error | undefined;
+  const recordCanonicalError = params.deferCanonicalValidation
+    ? (error: Error) => {
+        canonicalValidationError ??= error;
+      }
+    : undefined;
+  let selectedMatch = findCanonicalStoreMatch(selectedStore, scanTargets, recordCanonicalError);
 
   for (let index = 1; index < candidates.length; index += 1) {
     const candidate = candidates[index];
@@ -252,25 +275,32 @@ function resolveGatewaySessionStoreLookup(params: {
       continue;
     }
     const store = loadStore(candidate);
-    const match = findFreshestStoreMatch(store, ...scanTargets);
+    const match = findCanonicalStoreMatch(store, scanTargets, recordCanonicalError);
     if (!match) {
       continue;
     }
-    const updatedAt = match.entry.updatedAt ?? 0;
-    // Mirror combined-store merge behavior so follow-up mutations target the
-    // same backing store that won the listing merge when ids collide.
-    if (!selectedMatch || updatedAt >= selectedUpdatedAt) {
-      selectedStorePath = candidate.storePath;
-      selectedStore = store;
-      selectedMatch = match;
-      selectedUpdatedAt = updatedAt;
+    if (selectedMatch) {
+      const error = canonicalSessionKeyMigrationRequiredError(
+        `duplicate rows resolve to canonical session key ${params.canonicalKey}`,
+      );
+      if (!recordCanonicalError) {
+        throw error;
+      }
+      recordCanonicalError(error);
+      if (match.key !== params.canonicalKey || selectedMatch.key === params.canonicalKey) {
+        continue;
+      }
     }
+    selectedStorePath = candidate.storePath;
+    selectedStore = store;
+    selectedMatch = match;
   }
 
   return {
     storePath: selectedStorePath,
     store: selectedStore,
     match: selectedMatch,
+    ...(canonicalValidationError ? { canonicalValidationError } : {}),
   };
 }
 
@@ -282,6 +312,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   clone?: boolean;
+  deferCanonicalValidation?: boolean;
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   exactRead?: boolean;
@@ -322,6 +353,12 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     legacyAgentId,
     params.targetDiscoveryCache,
   );
+  let canonicalValidationError: Error | undefined;
+  const recordCanonicalError = params.deferCanonicalValidation
+    ? (error: Error) => {
+        canonicalValidationError ??= error;
+      }
+    : undefined;
   for (const target of existing) {
     if (target.agentId !== legacyAgentId) {
       continue;
@@ -332,9 +369,18 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
       ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
-    const match = findFreshestStoreMatch(store, ...lookupSeeds);
+    const match = findCanonicalStoreMatch(store, lookupSeeds, recordCanonicalError);
     if (!match) {
       continue;
+    }
+    if (best) {
+      const error = canonicalSessionKeyMigrationRequiredError(
+        `duplicate rows resolve to canonical session key ${canonicalKey}`,
+      );
+      if (!recordCanonicalError) {
+        throw error;
+      }
+      recordCanonicalError(error);
     }
     if (!best || (match.entry.updatedAt ?? 0) >= (best.match.entry.updatedAt ?? 0)) {
       best = { storePath: target.storePath, store, match };
@@ -358,6 +404,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     canonicalKey,
     storeKeys: Array.from(storeKeys),
     store: best.store,
+    ...(canonicalValidationError ? { canonicalValidationError } : {}),
   };
 }
 
@@ -369,6 +416,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   exactRead?: boolean;
+  deferCanonicalValidation?: boolean;
   includeStoreChildEntries?: boolean;
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
@@ -379,6 +427,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     cfg: params.cfg,
     key,
     clone: params.clone,
+    ...(params.deferCanonicalValidation ? { deferCanonicalValidation: true } : {}),
     readOnly: params.readOnly,
     exactRead: params.exactRead,
     ...(params.projection ? { projection: params.projection } : {}),
@@ -421,7 +470,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       params.includeStoreChildEntries,
     );
   }
-  const { storePath, store } = resolveGatewaySessionStoreLookup({
+  const { canonicalValidationError, storePath, store } = resolveGatewaySessionStoreLookup({
     cfg: params.cfg,
     key,
     canonicalKey,
@@ -429,6 +478,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     clone: params.clone,
     readOnly: params.readOnly,
     exactRead: params.exactRead,
+    deferCanonicalValidation: params.deferCanonicalValidation,
     initialStore: params.store,
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
@@ -437,7 +487,14 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
     return includeDirectChildEntries(
-      { agentId, storePath, canonicalKey, storeKeys, store },
+      {
+        agentId,
+        storePath,
+        canonicalKey,
+        storeKeys,
+        store,
+        ...(canonicalValidationError ? { canonicalValidationError } : {}),
+      },
       params.includeStoreChildEntries,
     );
   }
@@ -452,6 +509,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       canonicalKey,
       storeKeys: Array.from(storeKeys),
       store,
+      ...(canonicalValidationError ? { canonicalValidationError } : {}),
     },
     params.includeStoreChildEntries,
   );

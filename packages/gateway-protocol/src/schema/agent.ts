@@ -321,6 +321,9 @@ export const AgentParamsSchema = closedObject({
   ),
   acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
   internalRuntimeHandoffId: Type.Optional(NonEmptyString),
+  // Enabled backend recovery supplies only capture/retry mode. Disabled collection omits it;
+  // the private token, when present, remains in durable session state.
+  internalExecutionIdentityRetry: Type.Optional(Type.Boolean()),
   execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
   internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
   inputProvenance: Type.Optional(InputProvenanceSchema),
@@ -335,6 +338,7 @@ export const AgentParamsSchema = closedObject({
   // Host-owned recovery turns can force every Code Mode exec onto the
   // restart-safe path even if the model omits or clears the tool argument.
   forceRestartSafeTools: Type.Optional(Type.Boolean()),
+  forceCodeModeTools: Type.Optional(Type.Boolean()),
   voiceWakeTrigger: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),

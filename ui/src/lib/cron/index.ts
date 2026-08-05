@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronJob,
@@ -30,6 +31,7 @@ import { loadCronFailingCount } from "./scope.ts";
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
+type CronDelivery = NonNullable<CronJob["delivery"]>;
 
 export type CronFormState = {
   name: string;
@@ -65,6 +67,9 @@ export type CronFormState = {
   deliveryTo: string;
   deliveryAccountId: string;
   deliveryBestEffort: boolean;
+  deliveryThreadId: CronDelivery["threadId"] | undefined;
+  deliveryCompletionDestination: CronDelivery["completionDestination"] | undefined;
+  deliveryFailureDestination: CronDelivery["failureDestination"] | undefined;
   failureAlertMode: "inherit" | "disabled" | "custom";
   failureAlertAfter: string;
   failureAlertCooldownSeconds: string;
@@ -74,10 +79,6 @@ export type CronFormState = {
   failureAlertAccountId: string;
   timeoutSeconds: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object");
-}
 
 function isCronPayload(value: unknown): value is CronPayload {
   if (!isRecord(value)) {
@@ -140,6 +141,9 @@ const DEFAULT_CRON_FORM: CronFormState = {
   deliveryTo: "",
   deliveryAccountId: "",
   deliveryBestEffort: false,
+  deliveryThreadId: undefined,
+  deliveryCompletionDestination: undefined,
+  deliveryFailureDestination: undefined,
   failureAlertMode: "inherit",
   failureAlertAfter: "2",
   failureAlertCooldownSeconds: "3600",
@@ -466,9 +470,9 @@ export function resolveConfiguredCronModelSuggestions(
       }
     }
   }
-  const list = (agents as { list?: unknown }).list;
-  if (list && typeof list === "object") {
-    for (const entry of Object.values(list as Record<string, unknown>)) {
+  const entries = (agents as { entries?: unknown }).entries;
+  if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+    for (const entry of Object.values(entries as Record<string, unknown>)) {
       if (entry && typeof entry === "object") {
         addModelConfigIds(out, (entry as Record<string, unknown>).model);
       }
@@ -802,6 +806,10 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryTo: job.delivery?.to ?? "",
     deliveryAccountId: job.delivery?.accountId ?? "",
     deliveryBestEffort: job.delivery?.bestEffort ?? false,
+    deliveryThreadId: job.delivery?.threadId,
+    deliveryCompletionDestination:
+      job.delivery?.mode === "announce" ? job.delivery.completionDestination : undefined,
+    deliveryFailureDestination: job.delivery?.failureDestination,
     failureAlertMode:
       failureAlert === false
         ? "disabled"
@@ -1069,9 +1077,23 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
             to: form.deliveryTo.trim() || undefined,
             accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
+            ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+            ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
+              ? { completionDestination: form.deliveryCompletionDestination }
+              : {}),
+            ...(form.deliveryFailureDestination
+              ? { failureDestination: form.deliveryFailureDestination }
+              : {}),
           }
         : selectedDeliveryMode === "none"
-          ? ({ mode: "none" } as const)
+          ? ({
+              mode: "none",
+              ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
+              ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+              ...(form.deliveryFailureDestination
+                ? { failureDestination: form.deliveryFailureDestination }
+                : {}),
+            } as const)
           : undefined;
     const failureAlert = buildFailureAlert(form, editingJob?.failureAlert);
     const agentId = form.clearAgent ? null : form.agentId.trim();

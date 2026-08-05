@@ -165,12 +165,60 @@ describe("qa-channel gateway", () => {
         configured: true,
         enabled: true,
         running: true,
+        lifecycle: "starting",
+      },
+      {
+        accountId: "default",
+        connected: false,
+        lifecycle: "recovering",
+        lastError: "qa bus unavailable",
       },
       {
         accountId: "default",
         running: false,
+        connected: false,
+        lifecycle: "stopped",
       },
     ]);
+  });
+
+  it("publishes ready after the first successful poll", async () => {
+    const controller = new AbortController();
+    const server = await startJsonServer(() => ({
+      body: JSON.stringify({ cursor: 0, events: [] }),
+    }));
+    stops.push(() => server.stop());
+    const setStatus = vi.fn();
+
+    const run = startQaGatewayAccount("qa-channel", "QA Channel", {
+      abortSignal: controller.signal,
+      account: {
+        accountId: "default",
+        baseUrl: server.baseUrl,
+        botDisplayName: "QA Bot",
+        botUserId: "qa-bot",
+        config: {},
+        configured: true,
+        enabled: true,
+        pollTimeoutMs: 1,
+      },
+      cfg: {},
+      setStatus,
+    } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>);
+
+    await vi.waitFor(() =>
+      expect(setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: true,
+        connected: true,
+        lifecycle: "ready",
+        lastConnectedAt: expect.any(Number),
+        lastError: null,
+        terminalDisconnect: undefined,
+      }),
+    );
+    controller.abort();
+    await run;
   });
 
   it("stops the ordered inbound queue after the first dispatch failure", async () => {

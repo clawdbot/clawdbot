@@ -47,9 +47,11 @@ import {
   createVoiceReceiveRecoveryState,
   DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
   DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
+  DECRYPT_FAILURE_WINDOW_MS,
   enableDaveReceivePassthrough as tryEnableDaveReceivePassthrough,
   finishVoiceDecryptRecovery,
   noteVoiceDecryptFailure,
+  recoverDaveZeroTransition as tryRecoverDaveZeroTransition,
   resetVoiceReceiveRecoveryState,
 } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
@@ -258,6 +260,7 @@ function resolveDiscordVoiceAgentRoute(params: {
 export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
   private readonly joinTasks = new Map<string, Promise<VoiceOperationResult>>();
+  private readonly daveRecoveryAttempts = new Map<string, number>();
   private botUserId?: string;
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
@@ -267,7 +270,6 @@ export class DiscordVoiceManager {
   >();
   private readonly admissionAllowFrom?: string[];
   private readonly ownerAllowFrom?: string[];
-  private readonly ownerAllowAll: boolean;
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
   private readonly membership: DiscordVoiceMembershipTracker;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
@@ -296,7 +298,6 @@ export class DiscordVoiceManager {
     const voiceAccess = resolveDiscordVoiceAccess(params);
     this.admissionAllowFrom = voiceAccess.admissionAllowFrom;
     this.ownerAllowFrom = voiceAccess.ownerAllowFrom;
-    this.ownerAllowAll = voiceAccess.ownerAllowAll;
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null
@@ -307,7 +308,6 @@ export class DiscordVoiceManager {
     this.speakerContext = new DiscordVoiceSpeakerContextResolver({
       client: params.client,
       ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
     });
     this.membership = new DiscordVoiceMembershipTracker(
       params.client,
@@ -746,6 +746,7 @@ export class DiscordVoiceManager {
       receiveRecovery: createVoiceReceiveRecoveryState(),
       isStopped: () => stopped,
       stop: () => {
+        clearSessionIfCurrent();
         stopEntry(entry, {
           destroyConnection: true,
           reason: `stop guild ${guildId} channel ${channelId}`,
@@ -884,6 +885,12 @@ export class DiscordVoiceManager {
       entry,
       getHumanParticipantCount: () => this.membership.countHumanParticipants(entry, this.botUserId),
       mode: voiceMode,
+      onTerminalError: (error) => {
+        logger.error(
+          `discord voice: realtime session failed terminally guild=${entry.guildId} channel=${entry.channelId}: ${formatErrorMessage(error)}`,
+        );
+        entry.stop();
+      },
       runAgentTurn: ({ context, message, toolsAllow, userId }) =>
         this.runDiscordRealtimeAgentTurn({ context, entry, message, toolsAllow, userId }),
     });
@@ -950,6 +957,9 @@ export class DiscordVoiceManager {
     }
     entry.stop();
     this.sessions.delete(guildId);
+    if (!entry.receiveRecovery.decryptRecoveryInFlight) {
+      this.daveRecoveryAttempts.delete(guildId);
+    }
     if (!options?.preserveFollowState) {
       this.followedVoiceGuilds.delete(guildId);
       this.deleteFollowedUserChannelsForGuild(guildId);
@@ -1047,6 +1057,7 @@ export class DiscordVoiceManager {
     }
     const { guildId, channelId, userId } = params;
     const followKey = this.formatFollowedUserKey({ guildId, userId });
+    const previousFollowedChannelId = this.followedUserChannels.get(followKey)?.channelId;
     const existing = this.sessions.get(guildId);
     const wasFollowedVoiceSession =
       this.followedUserChannels.has(followKey) || this.followedVoiceGuilds.has(guildId);
@@ -1082,6 +1093,16 @@ export class DiscordVoiceManager {
       this.followedVoiceGuilds.add(guildId);
       return;
     }
+    const recoveryAttemptAt = this.daveRecoveryAttempts.get(guildId);
+    if (!existing && previousFollowedChannelId === channelId && recoveryAttemptAt !== undefined) {
+      if (Date.now() - recoveryAttemptAt < DECRYPT_FAILURE_WINDOW_MS) {
+        logger.warn(
+          `discord voice: automatic follow suppressed during DAVE recovery cooldown guild=${guildId} channel=${channelId}; retry /vc join after the voice gateway recovers`,
+        );
+        return;
+      }
+      this.daveRecoveryAttempts.delete(guildId);
+    }
     logger.info(
       `discord voice: following user guild=${guildId} user=${userId} channel=${channelId}`,
     );
@@ -1111,6 +1132,7 @@ export class DiscordVoiceManager {
       entry.stop();
     }
     this.sessions.clear();
+    this.daveRecoveryAttempts.clear();
     this.followedUserChannels.clear();
     this.followedVoiceGuilds.clear();
   }
@@ -1801,6 +1823,17 @@ export class DiscordVoiceManager {
     }
     logger.warn(`discord voice: receive error: ${analysis.message}`);
     if (analysis.shouldAttemptPassthrough) {
+      if (this.sessions.get(entry.guildId) === entry && !entry.isStopped()) {
+        const recovery = tryRecoverDaveZeroTransition({
+          target: entry,
+          sdk: loadDiscordVoiceSdk(),
+          onWarn: (message) => logger.warn(message),
+        });
+        if (recovery === "failed") {
+          this.startDecryptRecovery(entry, true);
+          return;
+        }
+      }
       this.enableDaveReceivePassthrough(
         entry,
         "receive decrypt error",
@@ -1819,7 +1852,45 @@ export class DiscordVoiceManager {
     if (!decryptFailure.shouldRecover) {
       return;
     }
-    void this.recoverFromDecryptFailures(entry)
+    this.startDecryptRecovery(entry);
+  }
+
+  private startDecryptRecovery(entry: VoiceSessionEntry, force = false): void {
+    let recovery: Promise<unknown>;
+    if (force) {
+      if (
+        this.sessions.get(entry.guildId) !== entry ||
+        entry.isStopped() ||
+        entry.receiveRecovery.decryptRecoveryInFlight
+      ) {
+        return;
+      }
+      const now = Date.now();
+      for (const [guildId, attemptedAt] of this.daveRecoveryAttempts) {
+        if (now - attemptedAt >= DECRYPT_FAILURE_WINDOW_MS) {
+          this.daveRecoveryAttempts.delete(guildId);
+        }
+      }
+      resetVoiceReceiveRecoveryState(entry.receiveRecovery);
+      entry.receiveRecovery.decryptRecoveryInFlight = true;
+      if (this.daveRecoveryAttempts.has(entry.guildId)) {
+        const windowSeconds = DECRYPT_FAILURE_WINDOW_MS / 1_000;
+        logger.warn(
+          `discord voice: DAVE recovery failed again within ${windowSeconds} seconds; disconnecting guild=${entry.guildId} channel=${entry.channelId} to avoid a reconnect loop; retry /vc join after the voice gateway recovers`,
+        );
+        recovery = this.leave(
+          { guildId: entry.guildId },
+          { preserveFollowState: this.isFollowOwnedGuild(entry.guildId) },
+        );
+      } else {
+        // A partially invalidated DAVE session suppresses all later decrypt failures.
+        this.daveRecoveryAttempts.set(entry.guildId, now);
+        recovery = this.recoverFromDecryptFailures(entry);
+      }
+    } else {
+      recovery = this.recoverFromDecryptFailures(entry);
+    }
+    void recovery
       .catch((recoverErr: unknown) =>
         logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
       )
@@ -1872,6 +1943,9 @@ export class DiscordVoiceManager {
 
   private resetDecryptFailureState(entry: VoiceSessionEntry) {
     resetVoiceReceiveRecoveryState(entry.receiveRecovery);
+    if (this.sessions.get(entry.guildId) === entry && !entry.isStopped()) {
+      this.daveRecoveryAttempts.delete(entry.guildId);
+    }
   }
 
   private async recoverFromDecryptFailures(entry: VoiceSessionEntry) {

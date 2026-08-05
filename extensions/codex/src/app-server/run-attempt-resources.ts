@@ -75,6 +75,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       | CodexNativePreToolUseFailure["disposition"]
       | undefined,
     releaseSharedClientLease: undefined as (() => void) | undefined,
+    startupClientUnsafe: false,
     sharedCodexClientRetiredForOneShotCleanup: false,
     sandboxExecEnvironmentAcquired: false,
     codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,

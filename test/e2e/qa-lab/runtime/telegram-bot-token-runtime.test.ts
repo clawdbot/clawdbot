@@ -6,6 +6,29 @@ import { runTelegramBotTokenRuntime, testing } from "./telegram-bot-token-runtim
 
 const tempDirs: string[] = [];
 
+function createCredentialDependencies(token: string, source: "convex" | "env" = "env") {
+  const release = vi.fn(async () => undefined);
+  const stop = vi.fn(async () => undefined);
+  return {
+    dependencies: {
+      acquireCredential: async () => ({
+        heartbeat: async () => undefined,
+        heartbeatIntervalMs: source === "convex" ? 30_000 : 0,
+        kind: "telegram",
+        payload: { sutToken: token },
+        release,
+        source,
+      }),
+      startCredentialHeartbeat: () => ({
+        stop,
+        throwIfFailed: () => undefined,
+      }),
+    },
+    release,
+    stop,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
@@ -26,7 +49,7 @@ describe("telegram bot token runtime evidence", () => {
     tempDirs.push(artifactBase);
     const evidence = await runTelegramBotTokenRuntime(
       { artifactBase, repoRoot: process.cwd(), startupTimeoutMs: 100 },
-      { TELEGRAM_BOT_TOKEN: "generic-token" },
+      { OPENCLAW_QA_CREDENTIAL_SOURCE: "env", TELEGRAM_BOT_TOKEN: "generic-token" },
     );
 
     expect(evidence.entries[0]?.result.status).toBe("blocked");
@@ -44,12 +67,14 @@ describe("telegram bot token runtime evidence", () => {
     const leasedToken = "123456:leased-secret";
     const cleanup = vi.fn(async () => undefined);
     const startGateway = vi.fn(async () => undefined);
+    const credential = createCredentialDependencies(leasedToken);
     let instanceOptions: Record<string, unknown> | undefined;
 
     const evidence = await runTelegramBotTokenRuntime(
       { artifactBase, repoRoot: process.cwd(), startupTimeoutMs: 100 },
       { OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: leasedToken },
       {
+        ...credential.dependencies,
         createInstance: async (options) => {
           instanceOptions = options as unknown as Record<string, unknown>;
           return {
@@ -66,6 +91,8 @@ describe("telegram bot token runtime evidence", () => {
     expect(evidence.entries[0]?.result.status).toBe("pass");
     expect(startGateway).toHaveBeenCalledOnce();
     expect(cleanup).toHaveBeenCalledOnce();
+    expect(credential.stop).toHaveBeenCalledOnce();
+    expect(credential.release).toHaveBeenCalledOnce();
     expect(instanceOptions).toMatchObject({
       config: {
         channels: {
@@ -78,6 +105,7 @@ describe("telegram bot token runtime evidence", () => {
       env: {
         OPENCLAW_SKIP_CHANNELS: undefined,
         OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       },
     });
     const log = await fs.readFile(
@@ -108,11 +136,13 @@ describe("telegram bot token runtime evidence", () => {
     const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-startup-failure-"));
     tempDirs.push(artifactBase);
     const leasedToken = "123456:leased-secret";
+    const credential = createCredentialDependencies(leasedToken);
 
     const evidence = await runTelegramBotTokenRuntime(
       { artifactBase, repoRoot: process.cwd(), startupTimeoutMs: 100 },
       { OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: leasedToken },
       {
+        ...credential.dependencies,
         createInstance: async () => ({
           cleanup: async () => undefined,
           logs: () => "",
@@ -132,5 +162,31 @@ describe("telegram bot token runtime evidence", () => {
       "utf8",
     );
     expect(log).not.toContain(leasedToken);
+    expect(credential.release).toHaveBeenCalledOnce();
+  });
+
+  it("uses the configured shared lease when no dedicated token env is present", async () => {
+    const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-bot-lease-"));
+    tempDirs.push(artifactBase);
+    const leasedToken = "123456:convex-secret";
+    const credential = createCredentialDependencies(leasedToken, "convex");
+    const createInstance = vi.fn(async () => ({
+      cleanup: async () => undefined,
+      startGateway: async () => undefined,
+      logs: () =>
+        `[qa-live] starting provider (@qa_test_bot) token=${leasedToken}\n` +
+        "[telegram][diag] polling cycle started\n",
+    }));
+
+    const evidence = await runTelegramBotTokenRuntime(
+      { artifactBase, repoRoot: process.cwd(), startupTimeoutMs: 100 },
+      { OPENCLAW_QA_CREDENTIAL_SOURCE: "convex" },
+      { ...credential.dependencies, createInstance },
+    );
+
+    expect(evidence.entries[0]?.result.status).toBe("pass");
+    expect(createInstance).toHaveBeenCalledOnce();
+    expect(credential.stop).toHaveBeenCalledOnce();
+    expect(credential.release).toHaveBeenCalledOnce();
   });
 });

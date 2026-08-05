@@ -1,5 +1,5 @@
 // Telegram Bot Api script supports OpenClaw repository automation.
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 
 type JsonObject = Record<string, unknown>;

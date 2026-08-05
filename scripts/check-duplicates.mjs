@@ -2,9 +2,8 @@
 // Runs duplicate-code detection with repo-specific excludes.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const jscpdBin = path.join(repoRoot, "node_modules", "jscpd", "bin", "jscpd");
 
 const targets = [

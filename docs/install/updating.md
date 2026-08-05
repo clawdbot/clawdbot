@@ -108,6 +108,12 @@ for an efficient source-server update: it restores tracked build outputs that
 `main` (or rebases a local server branch onto `origin/main`), installs
 dependencies, builds clean, and restarts the gateway.
 
+Generated output roots such as `dist`, `dist-runtime`, and package-local
+`dist` directories must be real directories. Builds refuse symbolic-link roots
+before reading or mutating their contents so cleanup cannot affect the link
+target. Replace an output-root symlink with a real directory before updating or
+building a source checkout.
+
 ```bash
 ssh you@server 'cd /path/to/openclaw && scripts/update-gateway.sh'
 ```

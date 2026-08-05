@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
@@ -8,10 +9,16 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
-import { ConfigPage, configSelectionFromSearch } from "./config-page.ts";
+import {
+  ConfigPage,
+  configSelectionFromSearch,
+  extractQuickSettingsSecurity,
+} from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
@@ -35,11 +42,13 @@ beforeEach(() => {
   );
   localStorageMock = createStorageMock();
   vi.stubGlobal("localStorage", localStorageMock);
+  resetServerUiPrefsSync();
   switchActiveRealtimeTalkCameras.mockReset();
   switchActiveRealtimeTalkCameras.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
+  resetServerUiPrefsSync();
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -89,6 +98,125 @@ describe("configSelectionFromSearch", () => {
 
   it("keeps provider models off Agent Defaults", () => {
     expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
+  });
+});
+
+describe("extractQuickSettingsSecurity", () => {
+  it("preserves provenance for inherited security defaults", () => {
+    expect(extractQuickSettingsSecurity({})).toMatchObject({
+      browserEnabled: true,
+      browserEnabledOverridden: false,
+      toolProfile: "full",
+      toolProfileOverridden: false,
+    });
+  });
+
+  it("distinguishes explicit values that equal the defaults", () => {
+    expect(
+      extractQuickSettingsSecurity({
+        browser: { enabled: true },
+        tools: { profile: "full" },
+      }),
+    ).toMatchObject({
+      browserEnabled: true,
+      browserEnabledOverridden: true,
+      toolProfile: "full",
+      toolProfileOverridden: true,
+    });
+  });
+});
+
+describe("ConfigPage synced preference provenance", () => {
+  it("uses the committed snapshot for both display and reset while the form draft differs", () => {
+    const page = new ConfigPage();
+    const committedConfig = { ui: { prefs: { theme: "claw" } } };
+    const draftConfig = { ui: { prefs: { theme: "knot" } } };
+    const runtimeConfig = {
+      state: {
+        client: null,
+        connected: true,
+        configLoading: false,
+        configRaw: JSON.stringify(draftConfig),
+        configRawOriginal: JSON.stringify(committedConfig),
+        configValid: true,
+        configIssues: [],
+        configSaving: false,
+        configApplying: false,
+        configNeedsApply: false,
+        configSnapshot: {
+          config: committedConfig,
+          hash: "committed-hash",
+          issues: [],
+          raw: JSON.stringify(committedConfig),
+          runtimeConfig: {},
+          valid: true,
+        },
+        configSchema: { type: "object", properties: {} },
+        configSchemaLoading: false,
+        configUiHints: {},
+        configForm: draftConfig,
+        configFormOriginal: committedConfig,
+        configFormDirty: true,
+        configFormMode: "form",
+      },
+      patchForm: vi.fn(),
+      removeFormValue: vi.fn(),
+      setRaw: vi.fn(),
+      save: vi.fn(),
+      discardDraft: vi.fn(),
+      openFile: vi.fn(),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const context = {
+      basePath: "",
+      config: {
+        current: {
+          assistantIdentity: { name: "OpenClaw" },
+          serverVersion: "2026.7.1",
+        },
+      },
+      gateway: {
+        connection: { gatewayUrl: "ws://committed.test" },
+        snapshot: {
+          hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+          phase: "connected",
+        },
+      },
+      navigate: vi.fn(),
+      overlays: {
+        snapshot: {
+          updateReconciliationPending: false,
+          updateRunning: false,
+        },
+      },
+      runtimeConfig,
+      theme: { refresh: vi.fn() },
+      webPush: { snapshot: {} },
+    } as unknown as ApplicationContext;
+    const state = page as unknown as {
+      context: ApplicationContext;
+      pageId: "appearance";
+      settings: ReturnType<typeof loadSettings>;
+    };
+    state.context = context;
+    state.pageId = "appearance";
+    const beforeReset = loadSettings();
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    const themeSection = container.querySelector<HTMLElement>("#settings-appearance-theme");
+    expect(themeSection?.textContent).toContain("Default: Claw");
+    expect(themeSection?.textContent).toContain("Synced across your devices");
+    expect(themeSection?.textContent).not.toContain("Default: Knot");
+    expect(themeSection?.textContent).not.toContain("Stored in this browser only");
+
+    themeSection
+      ?.querySelector<HTMLButtonElement>(
+        ":scope > .settings-section__header button[aria-label='Reset to default']",
+      )
+      ?.click();
+
+    expect(changedServerUiPrefs(beforeReset, state.settings)).toEqual({ theme: null });
   });
 });
 
@@ -362,12 +490,13 @@ describe("ConfigPage session observer models", () => {
 
 describe("ConfigPage curated mutation eligibility", () => {
   it.each([
-    ["offline", { connected: false }, ["operator.admin"], false],
-    ["read-only operator", { connected: true }, ["operator.read"], false],
-    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false],
-    ["app update", { connected: true }, ["operator.admin"], true],
-    ["idle administrator", { connected: true }, ["operator.admin"], false],
-  ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning) => {
+    ["offline", { connected: false }, ["operator.admin"], false, true],
+    ["read-only operator", { connected: true }, ["operator.read"], false, true],
+    ["config.set absent", { connected: true }, ["operator.admin"], false, false],
+    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false, true],
+    ["app update", { connected: true }, ["operator.admin"], true, true],
+    ["idle administrator", { connected: true }, ["operator.admin"], false, true],
+  ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning, canSet) => {
     const page = new ConfigPage();
     const state = page as unknown as {
       context: ApplicationContext;
@@ -375,6 +504,7 @@ describe("ConfigPage curated mutation eligibility", () => {
     };
     state.context = {
       runtimeConfig: {
+        canSet,
         state: {
           configLoading: false,
           configSaving: false,

@@ -70,7 +70,7 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(request.mock.calls[0]?.[0]).toBe("openclaw.chat");
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
-    // The engine receives the parseable reply text; the transcript shows the label.
+    // LLM-authored option cards remain chat messages; wizard controls use wizardAnswer below.
     expect(request.mock.calls[1]?.[1]).toMatchObject({
       welcomeVariant: "onboarding",
       message: "connect whatsapp",
@@ -78,6 +78,128 @@ describe("custodian page", () => {
     const userGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
     expect(userGroup.textContent).toContain("Connect WhatsApp");
     expect(connectOption.disabled).toBe(true);
+  });
+
+  it("renders and answers rich select, multiselect, and sensitive text wizard steps", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "rich-wizard-session",
+        reply: "Choose a channel.",
+        action: "none",
+        wizardInputPending: true,
+        step: {
+          id: "channel",
+          type: "select",
+          message: "Which channel?",
+          options: ["Discord", "Slack", "Telegram", "WhatsApp", "Twitch"].map((label) => ({
+            label,
+            value: label.toLowerCase(),
+          })),
+        },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "rich-wizard-session",
+        reply: "Choose features.",
+        action: "none",
+        wizardInputPending: true,
+        step: {
+          id: "features",
+          type: "multiselect",
+          message: "Which features?",
+          options: [
+            { label: "Chat", value: "chat" },
+            { label: "Moderation", value: "moderation" },
+            { label: "Announcements", value: "announcements" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "rich-wizard-session",
+        reply: "Enter the secret.",
+        action: "none",
+        sensitive: true,
+        wizardInputPending: true,
+        step: {
+          id: "secret",
+          type: "text",
+          message: "Twitch client secret",
+          sensitive: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "rich-wizard-session",
+        reply: "Setup complete.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+
+    await waitForFast(() =>
+      expect(page.querySelectorAll('.custodian__wizard-step input[type="radio"]')).toHaveLength(5),
+    );
+    expect(page.querySelector("openclaw-option-card")).toBeNull();
+    expect(page.querySelector(".agent-chat__composer-shell")).toBeNull();
+    page
+      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="radio"]')[4]!
+      .click();
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__wizard-step .btn.primary")!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() =>
+      expect(page.querySelectorAll('.custodian__wizard-step input[type="checkbox"]')).toHaveLength(
+        3,
+      ),
+    );
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      wizardAnswer: { stepId: "channel", value: "twitch" },
+    });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+    page
+      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="checkbox"]')[0]!
+      .click();
+    await page.updateComplete;
+    page
+      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="checkbox"]')[2]!
+      .click();
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__wizard-step .btn.primary")!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    const secretInput = await waitForFast(() => {
+      const input = page.querySelector<HTMLInputElement>("#custodian-wizard-input-5");
+      expect(input).not.toBeNull();
+      return input!;
+    });
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
+      wizardAnswer: { stepId: "features", value: ["chat", "announcements"] },
+    });
+    expect(secretInput.type).toBe("password");
+    const revealSecret = page.querySelector<HTMLButtonElement>(
+      '.custodian__wizard-step button[aria-label="Reveal value"]',
+    );
+    expect(revealSecret).not.toBeNull();
+    revealSecret!.click();
+    await page.updateComplete;
+    const revealedInput = page.querySelector<HTMLInputElement>("#custodian-wizard-input-5")!;
+    expect(revealedInput.type).toBe("text");
+    revealedInput.value = "fake-client-secret";
+    revealedInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__wizard-step .btn.primary")!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(page.textContent).toContain("Setup complete."));
+    expect(request.mock.calls[3]?.[1]).toMatchObject({
+      wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
+    });
+    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("message");
+    expect(page.textContent).toContain("Twitch");
+    expect(page.textContent).toContain("Chat, Announcements");
+    expect(page.textContent).toContain("Sensitive reply sent");
+    expect(page.textContent).not.toContain("fake-client-secret");
+    expect(page.querySelector(".agent-chat__composer-shell")).not.toBeNull();
   });
 
   it("collapses an empty transcript around a blocking startup error", async () => {

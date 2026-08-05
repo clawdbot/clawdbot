@@ -84,6 +84,22 @@ describe("browser action input fill command", () => {
     );
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
+
+  it("rejects conflicting inline and file fields before dispatch", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(
+        ["browser", "fill", "--fields", "[]", "--fields-file", "/tmp/browser-fields.json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      "Specify only one of --fields or --fields-file",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser action input wait command", () => {

@@ -388,6 +388,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企业微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },
@@ -1664,6 +1668,26 @@
     "target": "Baseten（Inkling + Model APIs）"
   },
   {
+    "source": "ChromeOS",
+    "target": "ChromeOS"
+  },
+  {
+    "source": "ChromeOS (Crostini)",
+    "target": "ChromeOS (Crostini)"
+  },
+  {
+    "source": "Linux guide",
+    "target": "Linux 指南"
+  },
+  {
+    "source": "Node install guidance",
+    "target": "Node 安装指南"
+  },
+  {
+    "source": "Gateway runbook",
+    "target": "Gateway 运行手册"
+  },
+  {
     "source": "Multi-user mode",
     "target": "多用户模式"
   },
@@ -1694,5 +1718,25 @@
   {
     "source": "TOOLS.md retired",
     "target": "TOOLS.md 已弃用"
+  },
+  {
+    "source": "Automations",
+    "target": "自动化"
+  },
+  {
+    "source": "Automations (cron)",
+    "target": "自动化 (cron)"
+  },
+  {
+    "source": "Daytona",
+    "target": "Daytona"
+  },
+  {
+    "source": "Gateway remote access",
+    "target": "Gateway 远程访问"
+  },
+  {
+    "source": "Updating OpenClaw",
+    "target": "更新 OpenClaw"
   }
 ]

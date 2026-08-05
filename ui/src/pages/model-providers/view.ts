@@ -1,11 +1,13 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing } from "lit";
+import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsDefaultState,
   renderSettingsGroup,
   renderSettingsPage,
   renderSettingsRow,
@@ -15,7 +17,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
+import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/model-providers.css";
@@ -30,7 +32,11 @@ import type {
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
 
-export type ModelProviderRowMessage = { kind: "success" | "error"; text: string };
+export type ModelProviderRowMessage = {
+  kind: "success" | "error";
+  text: string;
+  warning?: string;
+};
 
 type ModelProvidersViewProps = {
   connected: boolean;
@@ -44,8 +50,10 @@ type ModelProvidersViewProps = {
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
   defaultModelsDirty: boolean;
-  thinkingLevel: string;
+  thinkingLevel: string | undefined;
+  thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
+  fastModeOverridden: boolean;
   configBusy: boolean;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
@@ -80,52 +88,106 @@ type ModelProvidersViewProps = {
   onUtilityChange: (model: string | null) => void;
   onDefaultModelsSave: () => void;
   onDefaultModelsReset: () => void;
-  onThinkingChange: (level: string) => void;
+  onThinkingChange: (level: string, element: HTMLElement) => void;
+  onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
+  onFastModeReset: () => void;
   onOpenModelSetup: () => void;
 };
 
 // The global default intentionally omits "minimal"; the full list stays
 // available on session-level pickers.
 const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
+const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
 }
 
+function configMutationDisabled(props: ModelProvidersViewProps): boolean {
+  return !props.canMutate || props.configBusy;
+}
+
+function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
+  if (!message) {
+    return nothing;
+  }
+  return html`
+    <div class="callout ${message.kind}" role=${message.kind === "error" ? "alert" : "status"}>
+      ${message.text}
+    </div>
+    ${message.warning
+      ? html`<div class="callout warning" role="status">${message.warning}</div>`
+      : nothing}
+  `;
+}
+
 function renderModelBehavior(props: ModelProvidersViewProps) {
-  const fastMode = formatFastModeValue(props.fastMode);
+  const thinkingLevels =
+    props.thinkingLevel && !THINKING_LEVEL_SET.has(props.thinkingLevel)
+      ? [...THINKING_LEVELS, props.thinkingLevel]
+      : THINKING_LEVELS;
+  const thinkingDefault = renderSettingsDefaultState({
+    value: t("quickSettings.model.modelPolicy"),
+    overridden: props.thinkingOverridden,
+    disabled: props.configBusy,
+    onReset: props.onThinkingReset,
+  });
+  const fastDefault = renderSettingsDefaultState({
+    value: t("quickSettings.model.modelPolicy"),
+    overridden: props.fastModeOverridden,
+    disabled: props.configBusy,
+    onReset: props.onFastModeReset,
+  });
+  const fastMode = props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode);
   return html`
     <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
       ${renderSettingsSection({ title: t("quickSettings.model.title") }, [
         renderSettingsRow({
           title: t("quickSettings.model.thinking"),
-          control: renderSettingsSegmented({
-            value: props.thinkingLevel,
-            options: THINKING_LEVELS.map((level) => ({
-              value: level,
-              label: t(`quickSettings.model.thinkingLevels.${level}`),
-            })),
-            disabled: props.configBusy,
-            onChange: props.onThinkingChange,
-          }),
+          description: thinkingDefault.description,
+          control: html`
+            ${renderSettingsSegmented({
+              value: props.thinkingLevel ?? "",
+              options: [
+                { value: "", label: t("quickSettings.model.default") },
+                ...thinkingLevels.map((level) => ({
+                  value: level,
+                  label: THINKING_LEVEL_SET.has(level)
+                    ? t(`quickSettings.model.thinkingLevels.${level}`)
+                    : formatThinkingOverrideLabel(level),
+                })),
+              ],
+              disabled: props.configBusy,
+              onChange: (value, element) =>
+                value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
+            })}
+            ${thinkingDefault.action}
+          `,
         }),
         renderSettingsRow({
           title: t("quickSettings.model.fastMode"),
-          control: renderSettingsSegmented<"auto" | "on" | "off">({
-            value: fastMode,
-            options: [
-              { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-              { value: "on", label: t("quickSettings.model.fastModes.fast") },
-              { value: "off", label: t("quickSettings.model.fastModes.standard") },
-            ],
-            disabled: props.configBusy,
-            onChange: (value) => {
-              if (value !== fastMode) {
-                props.onFastModeChange(fastModeOptionValue(value));
-              }
-            },
-          }),
+          description: fastDefault.description,
+          control: html`
+            ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
+              value: fastMode,
+              options: [
+                { value: "", label: t("quickSettings.model.default") },
+                { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+                { value: "on", label: t("quickSettings.model.fastModes.fast") },
+                { value: "off", label: t("quickSettings.model.fastModes.standard") },
+              ],
+              disabled: props.configBusy,
+              onChange: (value) => {
+                if (value === "") {
+                  props.onFastModeReset();
+                } else if (value !== fastMode) {
+                  props.onFastModeChange(fastModeOptionValue(value));
+                }
+              },
+            })}
+            ${fastDefault.action}
+          `,
         }),
       ])}
     </div>
@@ -317,6 +379,7 @@ function renderKeyEditor(card: ModelProviderCard, props: ModelProvidersViewProps
   const authModeBlocked =
     card.apiKeySupported === false ||
     Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
+  const mutationDisabled = configMutationDisabled(props);
   return html`
     <div class="model-providers__inline-form">
       <label class="field">
@@ -328,7 +391,7 @@ function renderKeyEditor(card: ModelProviderCard, props: ModelProvidersViewProps
             ? t("modelProviders.apiKey.replacePlaceholder")
             : t("modelProviders.apiKey.placeholder")}
           .value=${props.keyDraft}
-          ?disabled=${busy || !props.canMutate || authModeBlocked}
+          ?disabled=${busy || mutationDisabled || authModeBlocked}
           @input=${(event: Event) =>
             props.onKeyDraftChange((event.target as HTMLInputElement).value)}
         />
@@ -336,7 +399,7 @@ function renderKeyEditor(card: ModelProviderCard, props: ModelProvidersViewProps
       <div class="model-providers__form-actions">
         <button
           class="btn primary btn--sm"
-          ?disabled=${busy || !props.canMutate || authModeBlocked || !props.keyDraft.trim()}
+          ?disabled=${busy || mutationDisabled || authModeBlocked || !props.keyDraft.trim()}
           @click=${() => props.onSaveKey(card.id, card.configKey ?? card.id)}
         >
           ${busy ? t("modelProviders.saving") : t("common.save")}
@@ -361,6 +424,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
+  const mutationDisabled = configMutationDisabled(props);
   const keyBlocked = authModeBlocked
     ? t("modelProviders.apiKey.authModeBlocked", { mode: card.configAuthMode ?? "" })
     : blocked;
@@ -383,7 +447,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
         : html`
             <button
               class="btn btn--sm"
-              ?disabled=${keyBusy || !props.canMutate || authModeBlocked}
+              ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
               title=${keyBlocked}
               @click=${() => props.onOpenKeyEditor(card.id)}
             >
@@ -396,7 +460,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
         ? html`
             <button
               class="btn btn--sm danger"
-              ?disabled=${keyBusy || !props.canMutate || authModeBlocked}
+              ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
               title=${keyBlocked}
               @click=${() => props.onRemoveKey(card.id, card.configKey ?? card.id)}
             >
@@ -408,7 +472,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
         ? html`
             <button
               class="btn btn--sm"
-              ?disabled=${logoutBusy || !props.canMutate}
+              ?disabled=${logoutBusy || mutationDisabled}
               title=${blocked}
               @click=${() => props.onRequestLogout(card.id)}
             >
@@ -424,7 +488,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             <div class="model-providers__form-actions">
               <button
                 class="btn danger btn--sm"
-                ?disabled=${logoutBusy}
+                ?disabled=${logoutBusy || mutationDisabled}
                 @click=${() => props.onLogout(card.id, card.logoutTargets)}
               >
                 ${logoutBusy
@@ -473,15 +537,14 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         ${renderLocalCost(card, props.costDays)}
       </div>
       ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
-      ${renderProbeResult(props.probeResults[card.id])}
-      ${message
-        ? html`<div class="callout ${message.kind}" role="status">${message.text}</div>`
-        : nothing}
+      ${renderProbeResult(props.probeResults[card.id])} ${renderMutationMessage(message)}
     </div>
   `;
 }
 
 function renderAddProvider(props: ModelProvidersViewProps) {
+  const busy = Boolean(props.busy.add);
+  const disabled = configMutationDisabled(props) || busy;
   const rows = html`
     ${props.unconfiguredProviders.length === 0
       ? renderSettingsEmpty(t("modelProviders.add.none"))
@@ -495,6 +558,7 @@ function renderAddProvider(props: ModelProvidersViewProps) {
                 <select
                   class="settings-select"
                   .value=${props.addProviderId}
+                  ?disabled=${disabled}
                   @change=${(event: Event) =>
                     props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}
                 >
@@ -512,25 +576,20 @@ function renderAddProvider(props: ModelProvidersViewProps) {
                   autocomplete="off"
                   placeholder=${t("modelProviders.apiKey.placeholder")}
                   .value=${props.addProviderKey}
+                  ?disabled=${disabled}
                   @input=${(event: Event) =>
                     props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
                 />
               </label>
               <button
                 class="btn primary"
-                ?disabled=${Boolean(props.busy.add) ||
-                !props.addProviderId ||
-                !props.addProviderKey.trim()}
+                ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
                 @click=${props.onAddProvider}
               >
                 ${props.busy.add ? t("modelProviders.saving") : t("modelProviders.add.save")}
               </button>
             </div>
-            ${props.messages.add
-              ? html`<div class="callout ${props.messages.add.kind}" role="status">
-                  ${props.messages.add.text}
-                </div>`
-              : nothing}
+            ${renderMutationMessage(props.messages.add)}
           </div>
         `
       : nothing}
@@ -542,7 +601,9 @@ function renderAddProvider(props: ModelProvidersViewProps) {
       actions: html`
         <button
           class="btn btn--sm"
-          ?disabled=${!props.canMutate || props.unconfiguredProviders.length === 0}
+          ?disabled=${busy ||
+          (!props.addProviderOpen &&
+            (configMutationDisabled(props) || props.unconfiguredProviders.length === 0))}
           title=${props.mutationBlockedReason ?? ""}
           @click=${props.onAddProviderToggle}
         >
@@ -620,7 +681,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           models: props.configuredModels,
           selection: props.defaultModels,
           dirty: props.defaultModelsDirty,
-          canMutate: props.canMutate,
+          canMutate: !configMutationDisabled(props),
           mutationBlockedReason: props.mutationBlockedReason,
           busy: props.busy,
           message: props.messages.defaults,

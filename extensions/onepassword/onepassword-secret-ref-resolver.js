@@ -18,7 +18,7 @@ function readStdin() {
     let input = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
-      input += chunk;
+      input += String(chunk);
     });
     process.stdin.on("error", reject);
     process.stdin.on("end", () => resolve(input));

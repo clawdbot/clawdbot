@@ -1,6 +1,5 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createAgent } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -291,7 +290,7 @@ export async function executeSystemAgentOperation(
       runtime.log(
         [
           "Changing model providers must happen outside the inference session that powers OpenClaw.",
-          "Exit OpenClaw and run `openclaw onboard`; it stages credentials, live-tests the candidate route, and saves only a passing setup.",
+          "Stop the OpenClaw host through whatever started it. Run `openclaw onboard` on the machine running OpenClaw: it stages credentials, live-tests the candidate route, and saves only a passing setup. Then restart the host.",
         ].join("\n"),
       );
       return { applied: false };
@@ -307,7 +306,7 @@ export async function executeSystemAgentOperation(
                 ? "openclaw configure --section web"
                 : "openclaw configure --section gateway";
       runtime.log(
-        `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
+        `This session cannot host an interactive wizard. Run \`${command}\` on the machine running OpenClaw.`,
       );
       return { applied: false };
     }
@@ -350,7 +349,7 @@ export async function executeSystemAgentOperation(
       if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
         const message = [
           `Uninstalling ${operation.pluginId} could remove the provider behind OpenClaw's own active inference route.`,
-          `Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+          `Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
         ].join("\n");
         runtime.log(message);
         return { applied: false, message };
@@ -374,7 +373,7 @@ export async function executeSystemAgentOperation(
             // moment so the destructive removal never hits the active route.
             if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
               throw new Error(
-                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
               );
             }
             await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
@@ -407,8 +406,10 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
+          const createAgentForOperation =
+            ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
           const result = await ctx.commit(async () => {
-            return await (ctx.deps?.createAgent ?? createAgent)({
+            return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
             });
@@ -436,7 +437,7 @@ export async function executeSystemAgentOperation(
     }
     case "doctor-fix":
       runtime.log(
-        "Doctor repairs can change the inference route that powers this session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal.",
+        "Doctor repairs can change the inference route that powers this session, so they run with OpenClaw stopped: `openclaw doctor --fix` on the machine running it.",
       );
       return { applied: false };
     case "status": {
@@ -485,13 +486,19 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
+          const gatewayHosted = ctx.deps?.setupSurface === "gateway";
           const runGatewayRestart =
-            ctx.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
+            ctx.deps?.runGatewayRestart ??
+            (() => runGatewayLifecycle("restart", gatewayHosted ? "gateway" : undefined));
           const restarted = await ctx.commit(runGatewayRestart);
           if (restarted === false) {
             throw new Error("Gateway restart did not complete");
           }
-          return { summary: "Restarted Gateway" };
+          const summary = gatewayHosted ? "Scheduled Gateway restart" : "Restarted Gateway";
+          if (gatewayHosted) {
+            ctx.runtime.log(summary);
+          }
+          return { summary };
         },
       });
     case "open-tui": {

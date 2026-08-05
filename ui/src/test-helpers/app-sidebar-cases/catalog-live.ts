@@ -270,6 +270,7 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     );
+    sidebar.connected = true;
     sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",

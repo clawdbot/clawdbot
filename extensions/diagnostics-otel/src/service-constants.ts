@@ -21,7 +21,6 @@ export const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
   "openclaw.traceId",
   "openclaw.trace_id",
 ]);
-export const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 export const SECURITY_TARGET_NAME_VALUE_RE = /^[A-Za-z0-9@/_.:-]{1,256}$/u;
 export const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
 export const MAX_OTEL_LOG_ATTRIBUTE_COUNT = 64;
@@ -83,4 +82,3 @@ export const CONTEXT_TOKENS_BUCKETS = [
   2_000_000,
 ];
 export const MAX_RETAINED_TRUSTED_SPAN_CONTEXTS = 1024;
-export const RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS = 5_000;

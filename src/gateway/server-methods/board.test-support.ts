@@ -1,5 +1,6 @@
 import { vi } from "vitest";
-import { InMemoryBoardStore, type BoardStore } from "../../boards/board-store.js";
+import type { BoardStore } from "../../boards/board-store.js";
+import { createTestBoardStore } from "../../boards/board-store.test-support.js";
 import { createBoardHandlers } from "./board.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -43,7 +44,7 @@ export function createMcpAppDependencies(): BoardMcpAppDependencies {
 export function createBoardHarness(
   readCanvasHtml?: Parameters<typeof createBoardHandlers>[2],
   dependencies: BoardHandlerDependencies = {},
-  store: BoardStore = new InMemoryBoardStore(),
+  store: BoardStore = createTestBoardStore(),
   contextOverrides: Partial<GatewayRequestContext> = {},
 ) {
   const defaults = createMcpAppDependencies();

@@ -234,49 +234,18 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Thinking: `/think adaptive` uses Google dynamic thinking. Gemini 3/3.1 omit a fixed `thinkingLevel`; Gemini 2.5 sends `thinkingBudget: -1`.
 - Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent` (or legacy `cached_content`) to forward a provider-native `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
-### Google Vertex and Gemini CLI
+### Google Vertex and Gemini CLI runtime
 
-- Providers: `google-vertex`, `google-gemini-cli`
-- Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
+- `google-vertex`: managed Google Cloud access through gcloud Application
+  Default Credentials.
+- `google-gemini-cli`: optional local runtime for an explicitly configured
+  canonical `google/*` model.
 
-<Warning>
-Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
-</Warning>
-
-Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
-
-<Steps>
-  <Step title="Install Gemini CLI">
-    <Tabs>
-      <Tab title="brew">
-        ```bash
-        brew install gemini-cli
-        ```
-      </Tab>
-      <Tab title="npm">
-        ```bash
-        npm install -g @google/gemini-cli
-        ```
-      </Tab>
-    </Tabs>
-  </Step>
-  <Step title="Enable plugin">
-    ```bash
-    openclaw plugins enable google
-    ```
-  </Step>
-  <Step title="Login">
-    ```bash
-    openclaw models auth login --provider google-gemini-cli --set-default
-    ```
-
-    Default model: `google-gemini-cli/gemini-3-flash-preview`. You do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores tokens in auth profiles on the gateway host.
-
-  </Step>
-  <Step title="Set project (if needed)">
-    If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
-  </Step>
-</Steps>
+OpenClaw does not create Gemini CLI OAuth or Antigravity OAuth profiles. Connect
+Google through an AI Studio API key or Vertex AI. If you explicitly choose the
+Gemini CLI runtime, it can use the selected Google API-key profile. Existing
+valid Gemini CLI OAuth profiles remain runtime-compatible, but they are not a
+setup or recovery route.
 
 Gemini CLI uses `stream-json` by default. OpenClaw reads assistant stream
 messages and normalizes `stats.cached` into `cacheRead`; legacy
@@ -473,10 +442,18 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
 
 BytePlus ARK provides access to the same models as Volcano Engine for international users.
 
+- Plugin: `@openclaw/byteplus-provider`
 - Provider: `byteplus` (coding: `byteplus-plan`)
 - Auth: `BYTEPLUS_API_KEY`
 - Example model: `byteplus-plan/ark-code-latest`
 - CLI: `openclaw onboard --auth-choice byteplus-api-key`
+
+Install the official plugin and restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/byteplus-provider
+openclaw gateway restart
+```
 
 ```json5
 {

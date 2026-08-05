@@ -1,5 +1,6 @@
 // Nodes page renders the mobile device pairing setup dialog.
 import { html, nothing } from "lit";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,7 +19,6 @@ type DevicePairSetupProps = {
   onRefresh: () => void;
   onAccessChange: (access: DevicePairSetupAccess) => void;
   onClose: () => void;
-  onCopy: (setupCode: string) => void;
   onManageDevices: () => void;
   onGetApps: () => void;
 };
@@ -29,6 +29,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   }
   const title = t("nodes.pairing.title");
   const description = t("nodes.pairing.subtitle");
+  const copyLabel = t("nodes.pairing.copySetupCode");
   const setup = props.setup;
   const pendingCount = props.pendingCount;
   const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
@@ -159,9 +160,10 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                   <button
                     class="btn primary"
                     type="button"
-                    @click=${() => props.onCopy(setup.setupCode)}
+                    @click=${(event: Event) =>
+                      void handleCopyButton(event, setup.setupCode, copyLabel)}
                   >
-                    ${icons.copy} ${t("nodes.pairing.copySetupCode")}
+                    ${icons.copy} <span data-copy-label>${copyLabel}</span>
                   </button>
                   <button
                     class="btn"

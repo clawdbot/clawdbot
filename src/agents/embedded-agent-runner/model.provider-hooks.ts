@@ -12,6 +12,7 @@ import {
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import { canonicalizeOpenAIModelId } from "../openai-routing.js";
+import { inheritModelProviderMetadataOwners } from "../provider-request-config.js";
 import {
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
@@ -231,10 +232,13 @@ export function normalizeResolvedModel(params: {
     normalizedInputModel.requestTimeoutMs !== undefined
       ? { ...normalizedModel, requestTimeoutMs: normalizedInputModel.requestTimeoutMs }
       : normalizedModel;
-  return canonicalizeLegacyResolvedModel({
-    provider: params.provider,
-    model: modelWithProviderTimeout,
-  });
+  return inheritModelProviderMetadataOwners(
+    params.model,
+    canonicalizeLegacyResolvedModel({
+      provider: params.provider,
+      model: modelWithProviderTimeout,
+    }),
+  );
 }
 
 export function resolveProviderTransport(params: {

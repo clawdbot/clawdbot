@@ -192,6 +192,12 @@ turn with a synthetic reply or silence, use `before_agent_reply`.
 | `before_compaction` / `after_compaction` | Observe or annotate compaction cycles                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `before_reset`                           | Observe session-reset events (`/reset`, programmatic resets)                                                                                                                                                                                                                                                                                                                                                                                                     |
 
+Shutdown and restart share one **2-second total `session_end` drain budget**
+across all active sessions and plugin handlers; the budget is not per handler.
+Return quickly or keep finalization bounded and persistence crash-consistent.
+If the budget expires, OpenClaw logs `session-end-drain timed out` and continues
+shutdown, so unfinished plugin work can be interrupted.
+
 For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases.
 
 **Subagents**

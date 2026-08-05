@@ -14,8 +14,7 @@ vi.mock("./discovery.js", async (importOriginal) => {
 });
 
 const { loadPluginManifestRegistry } = await import("./manifest-registry.js");
-const { resolveInstalledPluginIndexRegistry } =
-  await import("./installed-plugin-index-registry.js");
+const { loadInstalledPluginIndexWithDiscovery } = await import("./installed-plugin-index.js");
 
 const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
 
@@ -30,7 +29,7 @@ describe("discovery threading", () => {
     expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
 
     discoverOpenClawPluginsMock.mockClear();
-    resolveInstalledPluginIndexRegistry({ discovery: emptyDiscovery, installRecords: {} });
+    loadInstalledPluginIndexWithDiscovery({ discovery: emptyDiscovery, installRecords: {} });
     expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -39,7 +38,7 @@ describe("discovery threading", () => {
     expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
 
     discoverOpenClawPluginsMock.mockClear();
-    resolveInstalledPluginIndexRegistry({ installRecords: {} });
+    loadInstalledPluginIndexWithDiscovery({ installRecords: {} });
     expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   });
 
@@ -48,7 +47,7 @@ describe("discovery threading", () => {
     expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
 
     discoverOpenClawPluginsMock.mockClear();
-    resolveInstalledPluginIndexRegistry({
+    loadInstalledPluginIndexWithDiscovery({
       candidates: [],
       discovery: emptyDiscovery,
       installRecords: {},
@@ -63,9 +62,13 @@ describe("discovery threading", () => {
     );
     const diagnostics = [{ level: "warn" as const, message: "explicit candidate diagnostic" }];
 
-    const result = resolveInstalledPluginIndexRegistry({ candidates: [], diagnostics });
+    const result = loadInstalledPluginIndexWithDiscovery({
+      candidates: [],
+      diagnostics,
+      installRecords: {},
+    });
 
-    expect(result.registry.diagnostics).toEqual(diagnostics);
+    expect(result.manifestRegistry.diagnostics).toEqual(diagnostics);
     expect(result.discovery).toBeUndefined();
     expect(readInstallRecords).not.toHaveBeenCalled();
     expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();

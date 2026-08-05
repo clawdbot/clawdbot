@@ -15,10 +15,13 @@ Related: [Hooks](/automation/hooks) - [Plugin hooks](/plugins/hooks)
 ## List hooks
 
 ```bash
+openclaw hooks --json
 openclaw hooks list [--eligible] [--json] [-v|--verbose]
 ```
 
-Lists hooks discovered from workspace, managed, extra, and bundled directories.
+Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
+`openclaw hooks list`. The command discovers hooks from workspace, managed,
+extra, and bundled directories.
 
 - `--eligible`: only hooks whose requirements are met.
 - `--json`: structured output.

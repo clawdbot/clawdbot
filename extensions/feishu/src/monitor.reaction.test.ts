@@ -380,6 +380,54 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(result?.message.typing_target_message_id).toBe("om_msg1");
   });
 
+  it("preserves reaction actors when Feishu supplies user_id without open_id", async () => {
+    const result = await resolveReactionSyntheticEvent({
+      cfg,
+      accountId: "default",
+      event: makeReactionEvent({ user_id: { user_id: "u_actor_only" } }),
+      botOpenId: "ou_bot",
+      fetchMessage: async () => createFetchedReactionMessage("oc_group_from_lookup", "group"),
+      uuid: () => "fixed-uuid",
+    });
+
+    expect(result?.sender.sender_id).toEqual({ user_id: "u_actor_only" });
+    expect(parseFeishuMessageEvent(result!, "ou_bot").senderOpenId).toBe("u_actor_only");
+  });
+
+  it.each(["created", "deleted"] as const)(
+    "preserves the real reply anchor and topic ownership for %s reactions",
+    async (action) => {
+      const result = await resolveReactionSyntheticEvent({
+        cfg,
+        accountId: "default",
+        event: makeReactionEvent(),
+        botOpenId: "ou_bot",
+        action,
+        fetchMessage: async () => ({
+          ...createFetchedReactionMessage("oc_topic_group", "group"),
+          rootId: "om_topic_root",
+          threadId: "omt_topic",
+        }),
+        uuid: () => "fixed-uuid",
+      });
+
+      expect(result?.message).toEqual(
+        expect.objectContaining({
+          reply_target_message_id: "om_msg1",
+          root_id: "om_topic_root",
+          thread_id: "omt_topic",
+        }),
+      );
+      expect(parseFeishuMessageEvent(result!, "ou_bot")).toEqual(
+        expect.objectContaining({
+          replyTargetMessageId: "om_msg1",
+          rootId: "om_topic_root",
+          threadId: "omt_topic",
+        }),
+      );
+    },
+  );
+
   it("drops unverified reactions when sender verification times out", async () => {
     const event = makeReactionEvent();
     const result = await resolveReactionSyntheticEvent({
@@ -412,6 +460,7 @@ describe("resolveReactionSyntheticEvent", () => {
       },
       message: {
         message_id: "om_msg1:reaction:THUMBSUP:fixed-uuid",
+        reply_target_message_id: "om_msg1",
         typing_target_message_id: "om_msg1",
         chat_id: "oc_group_from_event",
         chat_type: "group",

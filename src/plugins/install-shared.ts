@@ -34,7 +34,7 @@ export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRu
 export const defaultLogger: PluginInstallLogger = {};
 
 export function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
-  return `Installed plugin ${packageName} declares openclaw as a peer dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
+  return `Installed plugin ${packageName} declares an openclaw dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
 }
 
 const MISSING_EXTENSIONS_ERROR =

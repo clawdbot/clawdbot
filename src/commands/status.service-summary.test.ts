@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as gatewayServiceLayout from "../daemon/service-layout.js";
 import type { GatewayServiceEnvArgs } from "../daemon/service-types.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
@@ -64,6 +65,37 @@ describe("readServiceStatusSummary", () => {
     expect(summary.managedByOpenClaw).toBe(false);
     expect(summary.externallyManaged).toBe(false);
     expect(summary.loadedText).toBe("disabled");
+  });
+
+  it("preserves running service state when optional layout diagnostics fail", async () => {
+    const layoutSpy = vi
+      .spyOn(gatewayServiceLayout, "summarizeGatewayServiceLayout")
+      .mockRejectedValueOnce(new Error("package metadata is unreadable"));
+
+    try {
+      const summary = await readServiceStatusSummary(
+        createService({
+          isLoaded: vi.fn(async () => true),
+          readCommand: vi.fn(async () => ({ programArguments: ["openclaw", "gateway", "run"] })),
+          readRuntime: vi.fn(async () => ({ status: "running", pid: 1234 })),
+        }),
+        "Daemon",
+      );
+
+      expect(layoutSpy).toHaveBeenCalledOnce();
+      expect(summary).toMatchObject({
+        label: "systemd",
+        installed: true,
+        loaded: true,
+        managedByOpenClaw: true,
+        externallyManaged: false,
+        loadedText: "enabled",
+        runtime: { status: "running", pid: 1234 },
+      });
+      expect(summary.layout).toBeUndefined();
+    } finally {
+      layoutSpy.mockRestore();
+    }
   });
 
   it("keeps unsupported service adapters readable", async () => {

@@ -59,19 +59,21 @@ describe("plugin SDK surface report", () => {
   });
 
   it("rejects unknown CLI options before collecting SDK stats", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/plugin-sdk-surface-report.mjs", "--chekc"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    for (const args of [["--chekc"], ["chekc", "--help"]]) {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/plugin-sdk-surface-report.mjs", ...args],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown plugin SDK surface report option: --chekc");
-    expect(result.stderr).not.toContain("at ");
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(`Unknown plugin SDK surface report option: ${args[0]}`);
+      expect(result.stderr).not.toContain("at ");
+    }
   });
 
   it("prints help before collecting SDK stats", () => {

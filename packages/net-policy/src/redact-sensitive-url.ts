@@ -36,9 +36,16 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "private_key",
   "credential",
   "authorization",
+  // Common signed/API gateway aliases that do not contain an existing secret-name marker.
+  "sig",
+  "x_api_key",
+  "x_access_token",
+  "x_auth_token",
 ]);
 // Align with FORM_BODY_KEY_SEPARATOR_RE: category-Lo Hangul fillers can splice sensitive names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
+// Proxy and per-resource bearer URLs may prefix a token key or suffix it with a random hex id.
+const SUFFIXED_OR_SCOPED_TOKEN_QUERY_PARAM_RE = /(?:^|_)token(?:_[a-f0-9]{16,})?$/u;
 
 // Telegram bot credentials use `/bot<token>/...`; align this shape with logging/redact.ts.
 const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3[aA])[A-Za-z0-9_-]{20,}(?=\/|$)/giu;
@@ -113,7 +120,11 @@ function looksLikeNestedUrlValue(value: string): boolean {
 /** True for auth-like URL query parameter names that should be redacted. */
 export function isSensitiveUrlQueryParamName(name: string): boolean {
   const normalized = normalizeUrlQueryParamName(name);
-  return normalized.unresolvedEncoding || SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized.value);
+  return (
+    normalized.unresolvedEncoding ||
+    SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized.value) ||
+    SUFFIXED_OR_SCOPED_TOKEN_QUERY_PARAM_RE.test(normalized.value)
+  );
 }
 
 /** True for config paths whose URL values may contain credentials or secret query params. */

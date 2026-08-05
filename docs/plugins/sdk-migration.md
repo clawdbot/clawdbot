@@ -3,8 +3,6 @@ summary: "Migrate from the legacy backwards-compatibility layer to the modern pl
 title: "Plugin SDK migration"
 sidebarTitle: "Migrate to SDK"
 read_when:
-  - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
-  - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
   - You used api.registerEmbeddedExtensionFactory before OpenClaw 2026.4.25
   - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
@@ -1046,15 +1044,6 @@ bundled-only modules were demoted to private-local build mappings.
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which
 compat records are due soonest for the surfaces your plugin uses.
-
-## Suppressing the warnings temporarily
-
-```bash
-OPENCLAW_SUPPRESS_PLUGIN_SDK_COMPAT_WARNING=1 openclaw gateway run
-OPENCLAW_SUPPRESS_EXTENSION_API_WARNING=1 openclaw gateway run
-```
-
-This is a temporary escape hatch, not a permanent solution.
 
 ## Related
 

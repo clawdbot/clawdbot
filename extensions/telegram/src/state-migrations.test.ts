@@ -9,7 +9,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
-import { resolveTelegramMessageCachePath } from "./message-cache.js";
+import { resolveTelegramMessageCachePath } from "./message-cache-persistence.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import {
   resolveTopicNameCacheNamespace,

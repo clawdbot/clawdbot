@@ -1,9 +1,10 @@
 // Chat message content tests cover visible text extraction from message parts.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   extractAssistantTextForPhase,
   extractAssistantVisibleText,
   extractFirstTextBlock,
+  parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "./chat-message-content.js";
 
@@ -179,6 +180,26 @@ describe("resolveAssistantMessagePhase", () => {
     expect(resolveAssistantMessagePhase({ role: "assistant", phase: "commentary" })).toBe(
       "commentary",
     );
+  });
+
+  it("reuses a block signature parse until the live block signature changes", () => {
+    const block = {
+      type: "text",
+      text: "streaming text",
+      textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "commentary" }),
+    };
+    const parseSpy = vi.spyOn(JSON, "parse");
+
+    expect(parseAssistantTextSignature(block)).toEqual({ id: "msg_1", phase: "commentary" });
+    block.text += " delta";
+    expect(parseAssistantTextSignature(block)).toEqual({ id: "msg_1", phase: "commentary" });
+    expect(parseSpy).toHaveBeenCalledTimes(1);
+
+    block.textSignature = JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" });
+    expect(parseAssistantTextSignature(block)).toEqual({ id: "msg_2", phase: "final_answer" });
+    expect(parseSpy).toHaveBeenCalledTimes(2);
+
+    parseSpy.mockRestore();
   });
 
   it("resolves a single explicit phase from textSignature metadata", () => {

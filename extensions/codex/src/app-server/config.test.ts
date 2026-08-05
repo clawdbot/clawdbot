@@ -2220,7 +2220,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           execMode,
         }),
       ).toThrow(
-        `Codex app-server local execution is not available when tools.exec.mode=${execMode}`,
+        `Codex app-server local execution is unavailable because effective tools.exec.mode=${execMode}`,
       );
     },
   );
@@ -2634,7 +2634,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     expect(execPolicy.mode).toBe("deny");
-    expect(() =>
+    let error: unknown;
+    try {
       resolveRuntimeForTest({
         pluginConfig: {
           appServer: {
@@ -2644,8 +2645,18 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           },
         },
         execPolicy,
-      }),
-    ).toThrow("Codex app-server local execution is not available when tools.exec.mode=deny");
+      });
+    } catch (cause) {
+      error = cause;
+    }
+    expect(error).toMatchObject({
+      name: "AgentHarnessPreflightError",
+      scope: "harness",
+      message: expect.stringContaining(
+        "inspect them with `openclaw approvals get --gateway` and update that same target with `openclaw approvals set --gateway --stdin`",
+      ),
+    });
+    expect((error as Error).message).not.toContain("--node");
   });
 
   it("applies host exec approval ask floors before starting Codex app-server", () => {
@@ -2761,7 +2772,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         },
         execPolicy,
       }),
-    ).toThrow("Codex app-server local execution is not available when tools.exec.mode=deny");
+    ).toThrow(
+      "Codex app-server local execution is unavailable because effective tools.exec.mode=deny",
+    );
   });
 
   it("applies agent-scoped exec approval ask floors before starting Codex app-server", () => {

@@ -44,6 +44,8 @@ export type ChannelOutboundContext = {
   deliveryQueueId?: string;
   /** @internal Stable platform-send index within one durable payload. */
   deliveryPartIndex?: number;
+  /** @internal Exact platform-send count within one durable payload. */
+  deliveryPartCount?: number;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
   preparedMessageId?: string;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */

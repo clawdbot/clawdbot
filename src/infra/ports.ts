@@ -6,7 +6,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
-import { tryListenOnPort } from "./ports-probe.js";
+import { LOOPBACK_PORT_PROBE_HOSTS, tryListenOnPort } from "./ports-probe.js";
 import type { PortConnection, PortListener, PortUsage, PortUsageStatus } from "./ports-types.js";
 
 class PortInUseError extends Error {
@@ -95,4 +95,5 @@ export {
   isDualStackLoopbackGatewayListeners,
   isExpectedGatewayListeners,
 } from "./ports-format.js";
+export { LOOPBACK_PORT_PROBE_HOSTS };
 export { inspectPortConnections, inspectPortUsage, inspectPortUsages } from "./ports-inspect.js";

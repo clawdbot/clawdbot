@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
@@ -119,6 +123,24 @@ type SessionEntrySummary = ReturnType<
 >[number];
 
 const config = {} as OpenClawConfig;
+
+async function normalizeCodexManifestConfig(value: unknown): Promise<Record<string, unknown>> {
+  const manifest = JSON.parse(
+    await fs.readFile(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: JsonSchemaObject };
+  const result = validateJsonSchemaValue({
+    cacheKey: "codex.session-catalog.manifest-config",
+    schema: manifest.configSchema,
+    value,
+    applyDefaults: true,
+  });
+  if (!result.ok) {
+    throw new Error(
+      `Expected valid Codex manifest config: ${result.errors.map((error) => error.text).join(", ")}`,
+    );
+  }
+  return result.value as Record<string, unknown>;
+}
 
 function idleThread(overrides: Partial<CodexThread> = {}): CodexThread {
   return {
@@ -429,7 +451,11 @@ describe("Codex session catalog errors", () => {
 
 describe("Codex supervision catalog", () => {
   it("lists non-archived interactive threads without probing transcript previews", async () => {
-    const pluginConfig = { supervision: { enabled: true } };
+    const pluginConfig = await normalizeCodexManifestConfig({
+      supervision: { enabled: true },
+      appServer: { command: "codex-catalog" },
+    });
+    expect((pluginConfig.appServer as Record<string, unknown>).homeScope).toBeUndefined();
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [
         {
@@ -1160,6 +1186,51 @@ describe("Codex supervision catalog", () => {
         }),
       ],
     });
+  });
+
+  it("omits the Gateway's same-install node host from native discovery", async () => {
+    const control = createControl({
+      listPage: vi.fn(async () => ({
+        sessions: [{ threadId: "local", status: "idle", archived: false }],
+      })),
+    });
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => ({
+      payloadJSON: JSON.stringify({
+        sessions: [{ threadId: `remote-${nodeId}`, status: "idle", archived: false }],
+      }),
+    }));
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "gateway-node",
+          displayName: "Gateway node",
+          gatewayLocal: true,
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        {
+          nodeId: "remote-node",
+          displayName: "Remote node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+      ],
+      invoke,
+    });
+
+    const result = await listCodexSessionCatalog({
+      bindingStore: createCodexTestBindingStore(),
+      config,
+      runtime,
+      control,
+    });
+
+    expect(result.hosts.map((host) => host.hostId)).toEqual([
+      CODEX_LOCAL_SESSION_HOST_ID,
+      "node:remote-node",
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });
 
   it("isolates federated host failures while preserving selected healthy hosts", async () => {

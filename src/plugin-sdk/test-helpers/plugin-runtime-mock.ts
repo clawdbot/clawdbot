@@ -1009,7 +1009,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     llm: {
       acquireLocalService: vi.fn(),
-      complete: vi.fn(),
+      complete: vi.fn().mockResolvedValue({
+        text: "{}",
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        agentId: "main",
+        usage: {},
+        execution: {
+          mode: "direct-provider",
+          owner: { kind: "provider", id: DEFAULT_PROVIDER },
+        },
+        audit: { caller: { kind: "plugin", id: "test" } },
+      }),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

@@ -58,7 +58,7 @@ const runtimeMocks = vi.hoisted(() => ({
   resolveReplyToMode: vi.fn(() => "first"),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
-  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn(() => ({
+  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn((_params?: unknown) => ({
     modelApi: "openai-responses",
     runtimeModel: {
       id: "gpt-4.1",
@@ -68,6 +68,9 @@ const runtimeMocks = vi.hoisted(() => ({
       baseUrl: "https://api.openai.com/v1",
     },
   })),
+  resolveEffectiveToolInventoryRuntimeModelContextAsync: vi.fn(async (params: unknown) =>
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext(params),
+  ),
 }));
 
 vi.mock("./tools-effective.runtime.js", () => ({
@@ -529,6 +532,50 @@ describe("tools.effective handler", () => {
     });
   });
 
+  it("uses async model context while projecting a warm MCP catalog", async () => {
+    mockWarmMcpTool();
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
+      throw new Error("synchronous model context should not be used");
+    });
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync.mockResolvedValue({
+      modelApi: "openai-responses",
+      runtimeModel: {
+        id: "gpt-4.1",
+        name: "GPT 4.1",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(
+      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+    ).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).not.toHaveBeenCalled();
+  });
+
+  it("does not retry synchronous model context when async resolution has no model", async () => {
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
+      throw new Error("synchronous model context should not be used");
+    });
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync.mockResolvedValue(
+      {} as never,
+    );
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(
+      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+    ).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).not.toHaveBeenCalled();
+  });
+
   it("projects MCP tools from the session-owning native harness catalog", async () => {
     const loaded = runtimeMocks.loadSessionEntry();
     runtimeMocks.loadSessionEntry.mockReturnValueOnce({
@@ -678,6 +725,18 @@ describe("tools.effective handler", () => {
       workspaceDir: "/tmp/sandbox-copy",
       cfg: {},
     });
+    expect(
+      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+    ).toHaveBeenCalledTimes(2);
+    expect(
+      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+    ).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/sandbox-copy",
+        modelProvider: "openai",
+        modelId: "gpt-4.1",
+      }),
+    );
   });
 
   it("does not project warm MCP tools filtered out by final policy", async () => {

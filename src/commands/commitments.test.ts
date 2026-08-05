@@ -9,17 +9,12 @@ const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
   resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw.sqlite"),
-  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../commitments/store.js", () => ({
   listCommitments: mocks.listCommitments,
   markCommitmentsStatus: mocks.markCommitmentsStatus,
   resolveCommitmentDatabasePath: mocks.resolveCommitmentDatabasePath,
-}));
-
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 function createRuntime(): { runtime: OutputRuntimeEnv; logs: string[]; stdout: string[] } {
@@ -70,6 +65,38 @@ describe("commitments command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listCommitments.mockResolvedValue([commitment()]);
+    mocks.markCommitmentsStatus.mockResolvedValue(["cm_escape"]);
+  });
+
+  it("sanitizes invalid status values before rendering errors", async () => {
+    const { runtime } = createRuntime();
+
+    await commitmentsListCommand(
+      { status: "bad\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes\u001b[31m" },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Unknown commitment status: bad\\nforged: yes. Use one of: pending, sent, dismissed, snoozed, expired.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.listCommitments).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes agent filters and database paths in human-readable output", async () => {
+    const unsafeText = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes\u001b[31m";
+    mocks.resolveCommitmentDatabasePath.mockReturnValueOnce(`/tmp/${unsafeText}.sqlite`);
+    mocks.listCommitments.mockResolvedValueOnce([]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({ agent: `main${unsafeText}` }, runtime);
+
+    expect(logs.map(stripAnsi)).toContain("Store: /tmp/\\nforged: yes.sqlite");
+    expect(logs.map(stripAnsi)).toContain("Agent filter: main\\nforged: yes");
+    for (const line of logs) {
+      expect(line).not.toContain("\u0007");
+      expect(line).not.toContain("\n");
+    }
   });
 
   it("sanitizes untrusted commitment fields in table output", async () => {
@@ -235,10 +262,84 @@ describe("commitments command", () => {
     expect(logs).toEqual([]);
     expect(stdout).toEqual([JSON.stringify({ dismissed: ["cm_escape"] }, null, 2)]);
     expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
-      cfg: {},
       ids: ["cm_escape"],
       status: "dismissed",
       nowMs: expect.any(Number),
     });
+  });
+
+  it("reports only actually dismissed ids and explains skipped ids", async () => {
+    mocks.markCommitmentsStatus.mockResolvedValueOnce(["cm_valid"]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsDismissCommand(
+      { ids: [" cm_valid ", "cm_missing", "cm_valid", "cm_terminal"] },
+      runtime,
+    );
+
+    expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
+      ids: ["cm_valid", "cm_missing", "cm_terminal"],
+      status: "dismissed",
+      nowMs: expect.any(Number),
+    });
+    expect(logs.map(stripAnsi)).toEqual(["Dismissed commitments: cm_valid"]);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Commitments not found or no longer active: cm_missing, cm_terminal. Run openclaw commitments --all to inspect current state.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects dismissals when no requested commitment is active", async () => {
+    mocks.markCommitmentsStatus.mockResolvedValueOnce([]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsDismissCommand({ ids: ["cm_missing", "cm_terminal"] }, runtime);
+
+    expect(logs).toEqual([]);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Commitments not found or no longer active: cm_missing, cm_terminal. Run openclaw commitments --all to inspect current state.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps unsuccessful dismissals truthful and machine-readable", async () => {
+    mocks.markCommitmentsStatus.mockResolvedValueOnce([]);
+    const { runtime, logs, stdout } = createRuntime();
+
+    await commitmentsDismissCommand({ ids: ["cm_missing"], json: true }, runtime);
+
+    expect(logs).toEqual([]);
+    expect(stdout).toEqual([
+      JSON.stringify({ dismissed: [], notDismissed: ["cm_missing"] }, null, 2),
+    ]);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("sanitizes dismissed ids in human output while preserving raw JSON", async () => {
+    const unsafeId = "cm_\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes\u001b[31m";
+    mocks.markCommitmentsStatus.mockResolvedValue([unsafeId]);
+    const human = createRuntime();
+    const json = createRuntime();
+
+    await commitmentsDismissCommand({ ids: [unsafeId] }, human.runtime);
+    await commitmentsDismissCommand({ ids: [unsafeId], json: true }, json.runtime);
+
+    expect(human.logs.map(stripAnsi)).toEqual(["Dismissed commitments: cm_\\nforged: yes"]);
+    expect(human.logs[0]).not.toContain("\u0007");
+    expect(human.logs[0]).not.toContain("\n");
+    expect(JSON.parse(json.stdout[0] ?? "{}")).toStrictEqual({ dismissed: [unsafeId] });
+  });
+
+  it("sanitizes skipped dismiss ids in human-readable failure output", async () => {
+    const unsafeId = "cm_\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes\u001b[31m";
+    mocks.markCommitmentsStatus.mockResolvedValueOnce([]);
+    const { runtime } = createRuntime();
+
+    await commitmentsDismissCommand({ ids: [unsafeId] }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Commitments not found or no longer active: cm_\\nforged: yes. Run openclaw commitments --all to inspect current state.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

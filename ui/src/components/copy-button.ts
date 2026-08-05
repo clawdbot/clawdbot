@@ -21,6 +21,54 @@ type CopyButtonOptions = {
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {
   button.setAttribute("aria-label", label);
+  // Preserve Lit's marker nodes so a later locale change can rerender this label.
+  const visibleLabel = button.querySelector("[data-copy-label]")?.lastChild;
+  if (visibleLabel?.nodeType === Node.TEXT_NODE) {
+    visibleLabel.nodeValue = label;
+  }
+}
+
+export async function handleCopyButton(event: Event, text: string, idleLabel: string) {
+  const button = event.currentTarget as HTMLButtonElement | null;
+  if (!button || button.dataset.copying === "1") {
+    return;
+  }
+
+  // Older reset timers must not replace feedback from a newer copy attempt.
+  const attempt = String(Number(button.dataset.copyAttempt ?? "0") + 1);
+  button.dataset.copyAttempt = attempt;
+  button.dataset.copying = "1";
+  button.setAttribute("aria-busy", "true");
+  button.disabled = true;
+
+  const copied = await copyToClipboard(text);
+  delete button.dataset.copying;
+  button.removeAttribute("aria-busy");
+  button.disabled = false;
+  if (!button.isConnected || button.dataset.copyAttempt !== attempt) {
+    return;
+  }
+
+  const feedback = copied ? "copied" : "error";
+  delete button.dataset[copied ? "error" : "copied"];
+  button.dataset[feedback] = "1";
+  const feedbackLabel = t(copied ? "common.copied" : "common.copyFailed");
+  setButtonLabel(button, feedbackLabel);
+
+  const duration = copied ? COPIED_FOR_MS : ERROR_FOR_MS;
+  window.setTimeout(() => {
+    if (!button.isConnected || button.dataset.copyAttempt !== attempt) {
+      return;
+    }
+    delete button.dataset[feedback];
+    // A locale rerender can replace the idle label while feedback is still active.
+    const renderedLabel =
+      button.querySelector("[data-copy-label]")?.textContent ?? button.getAttribute("aria-label");
+    setButtonLabel(
+      button,
+      renderedLabel && renderedLabel !== feedbackLabel ? renderedLabel : idleLabel,
+    );
+  }, duration);
 }
 
 function createCopyButton(options: CopyButtonOptions): TemplateResult {
@@ -31,51 +79,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
         class=${options.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
         type="button"
         aria-label=${idleLabel}
-        @click=${async (e: Event) => {
-          const btn = e.currentTarget as HTMLButtonElement | null;
-
-          if (!btn || btn.dataset.copying === "1") {
-            return;
-          }
-
-          btn.dataset.copying = "1";
-          btn.setAttribute("aria-busy", "true");
-          btn.disabled = true;
-
-          const copied = await copyToClipboard(options.text());
-          if (!btn.isConnected) {
-            return;
-          }
-
-          delete btn.dataset.copying;
-          btn.removeAttribute("aria-busy");
-          btn.disabled = false;
-
-          if (!copied) {
-            btn.dataset.error = "1";
-            setButtonLabel(btn, t("common.copyFailed"));
-
-            window.setTimeout(() => {
-              if (!btn.isConnected) {
-                return;
-              }
-              delete btn.dataset.error;
-              setButtonLabel(btn, idleLabel);
-            }, ERROR_FOR_MS);
-            return;
-          }
-
-          btn.dataset.copied = "1";
-          setButtonLabel(btn, t("common.copied"));
-
-          window.setTimeout(() => {
-            if (!btn.isConnected) {
-              return;
-            }
-            delete btn.dataset.copied;
-            setButtonLabel(btn, idleLabel);
-          }, COPIED_FOR_MS);
-        }}
+        @click=${(event: Event) => void handleCopyButton(event, options.text(), idleLabel)}
       >
         <span class="chat-copy-btn__icon" aria-hidden="true">
           <span class="chat-copy-btn__icon-copy">${icons.copy}</span>

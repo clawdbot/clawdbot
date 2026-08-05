@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSlackSetupWizardBase, slackSetupAdapter } from "./setup-core.js";
+import { createSlackSetupWizardBase, slackSetupContract } from "./setup-core.js";
 import { buildSlackSetupLines } from "./setup-shared.js";
 
 const slackSetupWizard = createSlackSetupWizardBase({
@@ -184,7 +184,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -229,7 +229,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -266,7 +266,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["work"],
           defaultAccountId: () => "work",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -319,7 +319,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -355,7 +355,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["work"],
           defaultAccountId: () => "work",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;

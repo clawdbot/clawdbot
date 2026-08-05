@@ -10,6 +10,7 @@ import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-rec
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -55,8 +56,9 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { bindReplyOperationTyping, refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import {
@@ -110,7 +112,19 @@ export async function runReplyAgent(
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
-  const replyOperationRunState = resolveReplyOperationRunState(opts);
+  let didDeliverVisiblePartialReply = false;
+  const runOpts = opts?.onPartialReply
+    ? {
+        ...opts,
+        onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
+          await opts.onPartialReply?.(payload);
+          if (hasOutboundReplyContent(payload, { trimText: true })) {
+            didDeliverVisiblePartialReply = true;
+          }
+        },
+      }
+    : opts;
+  const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -331,6 +345,13 @@ export async function runReplyAgent(
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }
+      if (activeReplyOperation) {
+        // Steering joins the existing task; its dispatch-local controller is
+        // disposable, while the task-owned controller must keep its lifetime.
+        await refreshReplyOperationTyping(activeReplyOperation, {
+          startIfIdle: typingSignals.shouldStartImmediately,
+        });
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -384,6 +405,7 @@ export async function runReplyAgent(
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
+    replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -557,6 +579,7 @@ export async function runReplyAgent(
       }
     }
   }
+  bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
   const returnWithQueuedFollowupDrain = <T>(value: T): T => {
@@ -568,6 +591,7 @@ export async function runReplyAgent(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
     isArmed: isRestartRecoveryArmed,
   } = createReplyAgentRestartRecoveryController({
     activeSessionStore,
@@ -636,6 +660,7 @@ export async function runReplyAgent(
       blockStreamingEnabled,
       cfg,
       checkpointBeforeAgentReply,
+      confirmRestartRecoveryArmedAfterLeaseLoss,
       commandBody,
       defaultModel,
       followupRun,
@@ -643,7 +668,7 @@ export async function runReplyAgent(
       getActiveSessionEntry: () => activeSessionEntry,
       isHeartbeat,
       isRestartRecoveryArmed,
-      opts,
+      opts: runOpts,
       pendingToolTasks,
       performSessionReset: resetSession,
       queueKey,
@@ -683,7 +708,10 @@ export async function runReplyAgent(
     });
   } catch (error) {
     return await handleReplyAgentRunError(error, {
+      blockReplyPipeline,
       cfg,
+      didDeliverVisiblePartialReply: () => didDeliverVisiblePartialReply,
+      isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,
       resolvedVerboseLevel,

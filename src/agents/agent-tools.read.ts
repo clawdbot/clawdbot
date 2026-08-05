@@ -1077,6 +1077,8 @@ function createSandboxEditOperations(params: SandboxToolParams) {
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
         params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+      statFile: (absolutePath: string) =>
+        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
       access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
     } as const,
     params.memoryWriteProvenance,
@@ -1087,6 +1089,9 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
   const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
   if (!stat) {
     throw createFsAccessError("ENOENT", absolutePath);
+  }
+  if (stat.type === "directory") {
+    throw createFsAccessError("EISDIR", absolutePath);
   }
 }
 
@@ -1137,6 +1142,13 @@ async function writeWorkspaceFile(
   // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
   // rejection when validation fails first — the readFile/access paths already defer the same way.
   const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+  // fs-safe 0.5.2 atomically replaces a final symlink on write. The workspace
+  // contract rejects symlink write targets so the link and its target survive.
+  const rootReal = await fs.realpath(root);
+  const targetStat = await fs.lstat(path.resolve(rootReal, relative)).catch(() => undefined);
+  if (targetStat?.isSymbolicLink()) {
+    throw new FsSafeError("symlink", `refusing to write to symlink: ${absolutePath}`);
+  }
   await (await getRoot()).write(relative, content, { mkdir: true });
 }
 
@@ -1184,7 +1196,10 @@ function createHostWriteOperations(
       writeFile: (absolutePath: string, content: string) =>
         writeWorkspaceFile(root, getRoot, absolutePath, content),
       readFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
+        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+        // rejects intermediate symlinks by default, but in-workspace symlink
+        // parents are part of the workspace contract.
+        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
         return (await (await getRoot()).read(relative)).buffer;
       },
       statFile: async (absolutePath: string) => {
@@ -1213,6 +1228,7 @@ function createHostEditOperations(
           return await fs.readFile(resolveHostPath(absolutePath));
         },
         writeFile: writeHostFile,
+        statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
         access: async (absolutePath: string) => {
           await fs.access(resolveHostPath(absolutePath));
         },
@@ -1230,16 +1246,24 @@ function createHostEditOperations(
   return withMemoryWriteProvenance(
     {
       readFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
+        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+        // rejects intermediate symlinks by default, but in-workspace symlink
+        // parents are part of the workspace contract.
+        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
         const safeRead = await (await getRoot()).read(relative);
         return safeRead.buffer;
       },
       writeFile: (absolutePath: string, content: string) =>
         writeWorkspaceFile(root, getRoot, absolutePath, content),
+      statFile: async (absolutePath: string) => {
+        const relative = toRelativeWorkspacePath(root, absolutePath);
+        return statHostFile(path.resolve(root, relative));
+      },
       access: async (absolutePath: string) => {
         let relative: string;
         try {
-          relative = toRelativeWorkspacePath(root, absolutePath);
+          // Canonicalized like readFile so in-workspace symlink parents pass.
+          relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
         } catch {
           // Path escapes workspace root.  Don't throw here – the upstream
           // library replaces any `access` error with a misleading "File not

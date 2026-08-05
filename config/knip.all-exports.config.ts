@@ -44,16 +44,22 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/non-isolated-runner.ts!",
   "test/vitest/*-runtime.ts!",
   "test/vitest/vitest*.config.ts!",
+  "test/vitest/vitest*.setup.ts!",
+  "test/vitest/vitest*.global-setup.ts!",
   // Test drivers and Docker fixtures are executed by path from package scripts
   // and the test-project registry.
   "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts!",
   "test/e2e/qa-lab/runtime/docker-e2e-lane.ts!",
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
+  // The identity scenario spawns this process-isolated repeated-turn driver by path.
+  "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
   // Invoked directly by the Docker image-auth scenario.
   "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts!",
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
   // QA scenario YAML dispatches these scripts/tests by path rather than import.
   ...QA_SCENARIO_EXECUTION_ENTRIES,
+  // Invoked directly by the sandbox bind-conflict E2E verification script.
+  "scripts/e2e-sandbox-bind-conflict.mjs!",
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
   // Loaded with cache-busting query strings so configuration fallback tests
@@ -121,6 +127,8 @@ const config = {
   // This fixture deliberately mixes used, aliased, and unused exports so the
   // topology analyzer can prove each classification.
   ignoreIssues: {
+    // The memory-state compatibility facade must retain its pre-registry-bundle type export.
+    "src/plugins/memory-state.ts": ["types"],
     // Cache-busting dynamic imports are real consumers, but Knip cannot map
     // their query-suffixed module ids back to these named test-support exports.
     "test/helpers/config/bundled-channel-config-runtime.ts": ["exports"],

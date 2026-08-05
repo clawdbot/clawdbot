@@ -73,7 +73,12 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", () => ({
   clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
 }));
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionAbortHandlers } from "./sessions-abort.js";
+import { sessionCompactHandlers } from "./sessions-compact.js";
+import { sessionDeleteHandlers } from "./sessions-delete.js";
+import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { sessionReadHandlers } from "./sessions-read.js";
+import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
 function createActiveRun(sessionKey: string, params: { agentId?: string } = {}) {
   const now = Date.now();
@@ -132,8 +137,17 @@ function createGlobalWorkRunContext(activeRun: ActiveRun): GatewayRequestContext
   });
 }
 
+const sessionHandlers = {
+  ...sessionAbortHandlers,
+  ...sessionCompactHandlers,
+  ...sessionDeleteHandlers,
+  ...sessionMutationHandlers,
+  ...sessionReadHandlers,
+  ...sessionSubscriptionHandlers,
+};
+
 async function callSessions(
-  method: keyof typeof sessionsHandlers,
+  method: keyof typeof sessionHandlers,
   params: Record<string, unknown>,
   options: {
     context: GatewayRequestContext;
@@ -144,8 +158,8 @@ async function callSessions(
 ): Promise<RespondFn> {
   const respond = options.respond ?? createRespond();
   await expectDefined(
-    sessionsHandlers[method],
-    "sessionsHandlers[method] test invariant",
+    sessionHandlers[method],
+    "sessionHandlers[method] test invariant",
   )({
     req: { id: options.reqId ?? `req-${method}` } as never,
     params,

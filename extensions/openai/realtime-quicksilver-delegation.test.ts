@@ -1,15 +1,45 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
+  boundOpenAIQuicksilverDelegationResult,
   chunkOpenAIQuicksilverAppendText,
   parseOpenAIQuicksilverEvent,
 } from "./realtime-quicksilver-wire.js";
-import {
-  createRequest,
-  createResponseHarness,
-  parseSent,
-  emitSideband,
-  createBroker,
-} from "./realtime-quicksilver.test-helpers.js";
+import { FakeSocket, parseSent } from "./realtime-quicksilver.test-helpers.js";
+
+type ConsultRunner = (params: {
+  prompt: string;
+  signal?: AbortSignal;
+}) => Promise<{ text: string }>;
+
+function createDelegationHarness(params?: {
+  isCanceledError?: (error: unknown) => boolean;
+  runAgentConsult?: ConsultRunner;
+}) {
+  const socket = new FakeSocket("manual");
+  socket.readyState = 1;
+  const logger = { debug: vi.fn(), warn: vi.fn() };
+  const onFatalError = vi.fn();
+  const sessionController = new AbortController();
+  const runAgentConsult = params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" }));
+  const controller = new OpenAIQuicksilverDelegationController({
+    getSocket: () => socket,
+    isCanceledError: params?.isCanceledError,
+    logger,
+    onFatalError,
+    runAgentConsult,
+    signal: sessionController.signal,
+  });
+  return { controller, logger, onFatalError, runAgentConsult, sessionController, socket };
+}
+
+function delegate(
+  controller: OpenAIQuicksilverDelegationController,
+  id: string,
+  prompt: string,
+): void {
+  controller.handleEvent({ kind: "delegation", id, prompt });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -125,322 +155,187 @@ describe("GPT-Live sideband protocol", () => {
     }
   });
 
+  it("bounds total speakable text before chunking", () => {
+    expect(boundOpenAIQuicksilverDelegationResult("  short result  ")).toBe("  short result  ");
+    const limited = boundOpenAIQuicksilverDelegationResult(
+      `${"a".repeat(1_783)}😀${"b".repeat(1_000)}`,
+    );
+    const chunks = chunkOpenAIQuicksilverAppendText(limited);
+
+    expect(limited).toMatch(/ \[truncated\]$/);
+    expect(limited.length).toBeLessThanOrEqual(1_800);
+    expect(limited).not.toContain("\uFFFD");
+    expect(chunks.length).toBeLessThanOrEqual(11);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(500);
+    }
+  });
+
   it("wraps delegated input and appends the raw speakable result", async () => {
-    const runAgentConsult = vi.fn(async ({ prompt }: { prompt: string }) => ({
+    const runAgentConsult = vi.fn<ConsultRunner>(async ({ prompt }) => ({
       text: `Result for ${prompt}`,
     }));
-    const { realtime, sockets } = createBroker({ runAgentConsult });
-    try {
-      const reservation = await realtime.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: "gpt-live-1",
-          runAgentConsult,
-        },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
-      const response = createResponseHarness();
-      await realtime.handler(createRequest({ token: reservation.clientSecret }), response.res);
-      const socket = sockets[0];
-      if (!socket) {
-        throw new Error("Expected sideband socket");
-      }
-      expect(socket.sent).toEqual([]);
-      socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "delegation.created",
-            item: {
-              type: "delegation",
-              target: "client",
-              id: "delegation-1",
-              content: [
-                { type: "input_text", text: "first " },
-                { type: "input_text", text: "task" },
-              ],
-            },
-          }),
+    const { controller, socket } = createDelegationHarness({ runAgentConsult });
+
+    delegate(controller, "delegation-1", "first task");
+
+    await vi.waitFor(() =>
+      expect(runAgentConsult).toHaveBeenCalledWith({
+        prompt: "<realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(parseSent(socket)).toContainEqual({
+        type: "delegation.context.append",
+        delegation_item_id: "delegation-1",
+        channel: "speakable",
+        content: [
+          {
+            type: "input_text",
+            text: "Result for <realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("bounds and chunks delegation output before sideband sends", async () => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "x".repeat(10_000) }));
+    const { controller, socket } = createDelegationHarness({ runAgentConsult });
+
+    delegate(controller, "delegation-large", "summarize everything");
+
+    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+    const appends = parseSent(socket).filter((event) => event.type === "delegation.context.append");
+    expect(appends.length).toBeLessThanOrEqual(11);
+    expect(
+      appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
+    ).toMatch(/^x+ \[truncated\]$/);
+    expect(
+      appends.every((event) =>
+        (event.content as Array<{ text: string }>).every(
+          ({ text }) => Buffer.byteLength(text, "utf8") <= 500,
         ),
-        false,
-      );
-      await vi.waitFor(() =>
-        expect(runAgentConsult).toHaveBeenCalledWith({
-          prompt: "<realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
-          signal: expect.any(AbortSignal),
-        }),
-      );
-      await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "delegation.context.append",
-          delegation_item_id: "delegation-1",
-          channel: "speakable",
-          content: [
-            {
-              type: "input_text",
-              text: "Result for <realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
-            },
-          ],
-        }),
-      );
-      await realtime.cleanup();
-      expect(parseSent(socket).at(-1)).toEqual({ type: "session.close" });
-      expect(socket.closed).toBe(true);
-    } finally {
-      await realtime.cleanup();
-    }
+      ),
+    ).toBe(true);
   });
 
-  it("adds the in-call transcript delta to each delegation and resets it", async () => {
-    const runAgentConsult = vi.fn(async (_params: { prompt: string; signal?: AbortSignal }) => ({
-      text: "Done",
-    }));
-    const { realtime, sockets } = createBroker({ runAgentConsult });
-    try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1-codex", runAgentConsult },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret }),
-        createResponseHarness().res,
-      );
-      const socket = sockets[0];
-      if (!socket) {
-        throw new Error("Expected sideband socket");
-      }
+  it("consumes bounded transcript context once and in event order", async () => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
+    const { controller } = createDelegationHarness({ runAgentConsult });
+    controller.handleEvent({ kind: "transcript-delta", role: "user", text: "hel" });
+    controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
+    controller.handleEvent({ kind: "transcript-delta", role: "assistant", text: "ack" });
 
-      emitSideband(socket, { type: "input_transcript.added", item: { text: "hel" } });
-      emitSideband(socket, {
-        type: "turn.done",
-        turn: { role: "user", transcript: "hello" },
-      });
-      emitSideband(socket, { type: "output_transcript.added", item: { text: "ack" } });
-      emitSideband(socket, {
-        type: "delegation.created",
-        item: {
-          type: "delegation",
-          target: "client",
-          id: "delegation-1",
-          content: [{ type: "input_text", text: "check weather" }],
-        },
-      });
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
-      expect(runAgentConsult.mock.calls[0]?.[0]?.prompt).toBe(
-        "<realtime_delegation>\n  <input>check weather</input>\n  <transcript_delta>user: hello\nassistant: ack</transcript_delta>\n</realtime_delegation>",
-      );
+    delegate(controller, "delegation-1", "check weather");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toBe(
+      "<realtime_delegation>\n  <input>check weather</input>\n  <transcript_delta>user: hello\nassistant: ack</transcript_delta>\n</realtime_delegation>",
+    );
 
-      emitSideband(socket, {
-        type: "turn.done",
-        turn: { role: "user", transcript: "second context" },
-      });
-      emitSideband(socket, {
-        type: "delegation.created",
-        item: {
-          type: "delegation",
-          target: "client",
-          id: "delegation-2",
-          content: [{ type: "input_text", text: "next task" }],
-        },
-      });
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
-      expect(runAgentConsult.mock.calls[1]?.[0]?.prompt).toBe(
-        "<realtime_delegation>\n  <input>next task</input>\n  <transcript_delta>user: second context</transcript_delta>\n</realtime_delegation>",
-      );
-    } finally {
-      await realtime.cleanup();
-    }
+    controller.handleEvent({ kind: "transcript-done", role: "user", text: "second context" });
+    delegate(controller, "delegation-2", "next task");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+    expect(runAgentConsult.mock.calls[1]?.[0].prompt).toBe(
+      "<realtime_delegation>\n  <input>next task</input>\n  <transcript_delta>user: second context</transcript_delta>\n</realtime_delegation>",
+    );
   });
 
-  it("aborts the in-flight consult when a newer delegation arrives", async () => {
+  it("aborts stale work and retains only the latest pending delegation", async () => {
     const signals: AbortSignal[] = [];
-    const resolutions: Array<(value: { text: string }) => void> = [];
-    const runAgentConsult = vi.fn(
-      ({ signal }: { prompt: string; signal?: AbortSignal }) =>
-        new Promise<{ text: string }>((resolve) => {
-          if (signal) {
-            signals.push(signal);
-          }
-          resolutions.push(resolve);
+    const runAgentConsult = vi.fn<ConsultRunner>(
+      async ({ signal }) =>
+        await new Promise<{ text: string }>((_resolve, reject) => {
+          signals.push(signal as AbortSignal);
+          signal?.addEventListener(
+            "abort",
+            () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
+            { once: true },
+          );
         }),
     );
-    const { realtime, sockets } = createBroker({ runAgentConsult });
-    try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1-codex", runAgentConsult },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret }),
-        createResponseHarness().res,
-      );
-      const socket = sockets[0];
-      if (!socket) {
-        throw new Error("Expected sideband socket");
-      }
+    const { controller } = createDelegationHarness({ runAgentConsult });
 
-      for (const [id, text] of [
-        ["delegation-1", "first"],
-        ["delegation-2", "second"],
-      ] as const) {
-        emitSideband(socket, {
-          type: "delegation.created",
-          item: {
-            type: "delegation",
-            target: "client",
-            id,
-            content: [{ type: "input_text", text }],
-          },
-        });
-        if (id.endsWith("1")) {
-          await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
-        }
-      }
+    delegate(controller, "delegation-1", "first task");
+    delegate(controller, "delegation-2", "second task");
+    delegate(controller, "delegation-3", "latest task");
 
-      expect(signals[0]?.aborted).toBe(true);
-      expect(runAgentConsult).toHaveBeenCalledTimes(1);
-      resolutions[0]?.({ text: "stale" });
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
-      expect(signals[1]?.aborted).toBe(false);
-      resolutions[1]?.({ text: "fresh" });
-      await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual(
-          expect.objectContaining({
-            delegation_item_id: "delegation-2",
-            channel: "speakable",
-          }),
-        ),
-      );
-      expect(parseSent(socket)).not.toContainEqual(
-        expect.objectContaining({ delegation_item_id: "delegation-1" }),
-      );
-    } finally {
-      await realtime.cleanup();
-    }
+    expect(signals[0]?.aborted).toBe(true);
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+    expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
+    expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
+    controller.stop(new Error("test complete"));
   });
 
-  it("skips empty delegations and keeps their transcript for the next one", async () => {
-    const runAgentConsult = vi.fn(async (_params: { prompt: string; signal?: AbortSignal }) => ({
-      text: "Done",
-    }));
-    const { realtime, sockets } = createBroker({ runAgentConsult });
-    try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1-codex", runAgentConsult },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret }),
-        createResponseHarness().res,
-      );
-      const socket = sockets[0];
-      if (!socket) {
-        throw new Error("Expected sideband socket");
-      }
-      emitSideband(socket, {
-        type: "turn.done",
-        turn: { role: "user", transcript: "hello" },
-      });
-      emitSideband(socket, {
-        type: "delegation.created",
-        item: {
-          type: "delegation",
-          target: "client",
-          id: "empty",
-          content: [{ type: "input_text", text: "  " }],
-        },
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      expect(runAgentConsult).not.toHaveBeenCalled();
+  it("keeps transcript context when it skips an empty delegation", async () => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
+    const { controller } = createDelegationHarness({ runAgentConsult });
+    controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
 
-      emitSideband(socket, {
-        type: "delegation.created",
-        item: {
-          type: "delegation",
-          target: "client",
-          id: "delegation-1",
-          content: [{ type: "input_text", text: "check weather" }],
-        },
-      });
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
-      expect(runAgentConsult.mock.calls[0]?.[0]?.prompt).toBe(
-        "<realtime_delegation>\n  <input>check weather</input>\n  <transcript_delta>user: hello</transcript_delta>\n</realtime_delegation>",
-      );
-    } finally {
-      await realtime.cleanup();
-    }
+    delegate(controller, "empty", "  ");
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    delegate(controller, "delegation-1", "check weather");
+
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
+      "<transcript_delta>user: hello</transcript_delta>",
+    );
   });
 
-  it("returns a speakable failure when the delegated agent fails", async () => {
-    const runAgentConsult = vi.fn(async () => {
+  it("returns only a fixed speakable failure when the delegated agent fails", async () => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => {
       throw new Error("workspace unavailable");
     });
-    const { realtime, sockets, logger } = createBroker({ runAgentConsult });
-    try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1", runAgentConsult },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret }),
-        createResponseHarness().res,
-      );
-      const socket = sockets[0];
-      if (!socket) {
-        throw new Error("Expected sideband socket");
-      }
-      socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "delegation.created",
-            item: {
-              type: "delegation",
-              target: "client",
-              id: "delegation-failed",
-              content: [{ type: "input_text", text: "do work" }],
-            },
-          }),
-        ),
-        false,
-      );
-      await vi.waitFor(() => {
-        expect(parseSent(socket)).toContainEqual(
-          expect.objectContaining({
-            type: "delegation.context.append",
-            delegation_item_id: "delegation-failed",
-            channel: "speakable",
-            content: [
-              {
-                type: "input_text",
-                text: "The agent task failed. Tell the user it did not complete and offer to try again.",
-              },
-            ],
-          }),
-        );
-      });
-      // The raw failure detail must stay in Gateway logs, never on the provider sideband.
-      expect(JSON.stringify(parseSent(socket))).not.toContain("workspace unavailable");
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("workspace unavailable"));
-    } finally {
-      await realtime.cleanup();
-    }
+    const { controller, logger, socket } = createDelegationHarness({ runAgentConsult });
+
+    delegate(controller, "delegation-failed", "do work");
+
+    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+    expect(parseSent(socket)).toContainEqual(
+      expect.objectContaining({
+        delegation_item_id: "delegation-failed",
+        channel: "speakable",
+        content: [
+          {
+            type: "input_text",
+            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
+          },
+        ],
+      }),
+    );
+    expect(socket.sent.join("\n")).not.toContain("workspace unavailable");
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("workspace unavailable"));
+  });
+
+  it("surfaces fatal sideband errors to the lifecycle owner", () => {
+    const { controller, logger, onFatalError } = createDelegationHarness();
+    controller.handleEvent({ kind: "error", message: "token expired", fatalAuth: true });
+
+    expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live sideband error: token expired");
+    expect(onFatalError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "OpenAI GPT-Live sideband error: token expired" }),
+    );
+  });
+
+  it("suppresses host cancellation and stops accepting work after teardown", async () => {
+    const abortError = new Error("The operation was aborted");
+    abortError.name = "AbortError";
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => {
+      throw abortError;
+    });
+    const { controller, logger, socket } = createDelegationHarness({
+      isCanceledError: (error) => error === abortError,
+      runAgentConsult,
+    });
+
+    delegate(controller, "delegation-cancelled", "stop this");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+    expect(socket.sent).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalled();
+
+    controller.stop(new Error("session closed"));
+    delegate(controller, "delegation-late", "late task");
+    expect(runAgentConsult).toHaveBeenCalledOnce();
   });
 });

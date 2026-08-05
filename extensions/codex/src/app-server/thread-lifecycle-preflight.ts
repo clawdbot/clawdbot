@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
-import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import {
+  isMessageOnlyCodexSourceReply,
+  isSystemAgentOnlyCodexDynamicToolAllowlist,
+} from "./dynamic-tool-profile.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -99,15 +102,17 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     params.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw");
   const ringZeroActive =
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
-  if (ringZeroActive && params.nativeCodeModeEnabled !== false) {
-    throw new Error("Codex ring-zero requires native code mode to be disabled");
+  const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params.params);
+  const restrictedToolSurface = ringZeroActive || messageOnlySourceReply;
+  if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
+    throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
-  const ringZeroInheritedMcpServerNames = ringZeroActive
+  const ringZeroInheritedMcpServerNames = restrictedToolSurface
     ? await lifecycleTiming.measure("ring-zero-mcp-config-read", () =>
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal),
       )
     : [];
-  if (ringZeroActive) {
+  if (restrictedToolSurface) {
     await lifecycleTiming.measure("ring-zero-config-requirements-read", () =>
       assertCodexRingZeroHasNoManagedHooks(params.client, params.signal),
     );
