@@ -1683,10 +1683,10 @@ export const registerTelegramNativeCommands = ({
           resolveTelegramNativeCommandDisableBlockStreaming(runtimeTelegramCfg);
         const deliveryState = {
           delivered: false,
-          intentionallySuppressed: false,
           skippedNonSilent: 0,
           failedNonSilent: 0,
         };
+        let finalReplyOutcome: "failed" | "suppressed" | undefined;
 
         const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
         let recordSessionMetaTask: Promise<unknown> | undefined;
@@ -1762,24 +1762,21 @@ export const registerTelegramNativeCommands = ({
                   };
             },
             onDelivered: (_payload, info, result) => {
-              // Only a final suppression may suppress the fallback; tool/block
-              // suppressions must not erase a later final failure's visible
-              // outcome. A failed final outweighs later suppression.
               const reason = result?.suppression?.reason;
               if (
                 info.kind === "final" &&
-                deliveryState.failedNonSilent === 0 &&
+                finalReplyOutcome !== "failed" &&
                 (reason === "cancelled_by_reply_payload_sending_hook" ||
                   reason === "empty_after_reply_payload_sending_hook")
               ) {
-                deliveryState.intentionallySuppressed = true;
+                finalReplyOutcome = "suppressed";
               }
             },
             onError: (err, info) => {
               deliveryState.failedNonSilent += 1;
               if (info.kind === "final") {
                 // A failed final outweighs any earlier suppression until a final delivers.
-                deliveryState.intentionallySuppressed = false;
+                finalReplyOutcome = "failed";
               }
               runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
             },
@@ -1795,7 +1792,7 @@ export const registerTelegramNativeCommands = ({
         )(turnPlan);
         if (
           !deliveryState.delivered &&
-          !deliveryState.intentionallySuppressed &&
+          finalReplyOutcome !== "suppressed" &&
           (deliveryState.skippedNonSilent > 0 || deliveryState.failedNonSilent > 0) &&
           (!turnResult.dispatched ||
             turnResult.dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" ||
