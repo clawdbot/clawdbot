@@ -28,6 +28,7 @@ export type SessionTranscriptTurnExpectedState = {
 export type SessionTranscriptTurnLifecyclePatch = {
   abortedLastRun?: boolean;
   endedAt?: number;
+  lifecycleRunId?: SessionEntry["lifecycleRunId"];
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
   restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
