@@ -78,6 +78,35 @@ function parsePairingFilename(filename: string): PairingChannel | null {
     : null;
 }
 
+function findCaseFoldedAllowFromCollisions(
+  filenames: readonly string[],
+  knownChannelIds: readonly string[],
+): Set<string> {
+  const firstFilenameByKey = new Map<string, string>();
+  const collisions = new Set<string>();
+  for (const filename of filenames) {
+    if (!filename.endsWith(ALLOW_FROM_SUFFIX)) {
+      continue;
+    }
+    const stem = filename.slice(0, -ALLOW_FROM_SUFFIX.length);
+    for (const channel of knownChannelIds) {
+      if (!stem.startsWith(`${channel}-`)) {
+        continue;
+      }
+      const accountKey = stem.slice(channel.length + 1).toLowerCase();
+      const collisionKey = `${channel}\0${accountKey}`;
+      const firstFilename = firstFilenameByKey.get(collisionKey);
+      if (firstFilename) {
+        collisions.add(firstFilename);
+        collisions.add(filename);
+      } else {
+        firstFilenameByKey.set(collisionKey, filename);
+      }
+    }
+  }
+  return collisions;
+}
+
 function parseAllowFromFilename(
   filename: string,
   knownChannelIds: readonly string[],
@@ -242,6 +271,10 @@ export function migrateLegacyChannelPairingState(params: {
 }): { changes: string[]; warnings: string[] } {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const caseFoldedCollisions = findCaseFoldedAllowFromCollisions(
+    params.detected.files,
+    params.detected.knownChannelIds,
+  );
   for (const filename of params.detected.files) {
     const filePath = path.join(params.detected.sourceDir, filename);
     const pairingChannel = parsePairingFilename(filename);
@@ -270,8 +303,10 @@ export function migrateLegacyChannelPairingState(params: {
     if (!allowTarget) {
       continue;
     }
-    if (!allowTarget.target) {
-      const reason = allowTarget.reason === "ambiguous" ? "ambiguous" : "unresolved";
+    const hasCaseFoldedCollision = caseFoldedCollisions.has(filename);
+    if (hasCaseFoldedCollision || !allowTarget.target) {
+      const reason =
+        hasCaseFoldedCollision || allowTarget.reason === "ambiguous" ? "ambiguous" : "unresolved";
       warnings.push(
         `Legacy channel allowFrom channel/account is ${reason}; left in place at ${filePath}`,
       );
