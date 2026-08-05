@@ -1,9 +1,3 @@
-/**
- * Runtime facade for subagent registry reads and steer updates.
- *
- * Announcement and control paths import this narrow surface so tests can mock
- * registry behavior without loading the full mutable registry module.
- */
 export {
   countActiveDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
@@ -18,4 +12,27 @@ export {
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "./subagent-registry-announce-read.js";
-export { replaceSubagentRunAfterSteer } from "./subagent-registry-steer-runtime.js";
+
+export async function replaceSubagentRunAfterSteer(
+  params: Parameters<typeof import("./subagent-registry.js").replaceSubagentRunAfterSteer>[0],
+) {
+  return (await import("./subagent-registry.js")).replaceSubagentRunAfterSteer(params);
+}
+
+export async function getSubagentRunByRunId(runId: string) {
+  return (await import("./subagent-registry.js")).getSubagentRunByRunId(runId);
+}
+
+export async function recordAcceptedSubagentSteerDispatch(
+  params: Parameters<
+    typeof import("./subagent-registry.js").recordAcceptedSubagentSteerDispatch
+  >[0],
+) {
+  return (await import("./subagent-registry.js")).recordAcceptedSubagentSteerDispatch(params);
+}
+
+export async function clearSubagentRunSteerRestart(
+  ...args: Parameters<typeof import("./subagent-registry.js").clearSubagentRunSteerRestart>
+) {
+  return (await import("./subagent-registry.js")).clearSubagentRunSteerRestart(...args);
+}

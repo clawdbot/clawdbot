@@ -12,11 +12,7 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -43,6 +39,7 @@ import {
 } from "../../lib/cron/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
@@ -70,16 +67,15 @@ type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
 >;
 
-class AgentsPage extends OpenClawLightDomElement implements AgentsState {
+class AgentsPage
+  extends OpenClawLightDomElement
+  implements Omit<AgentsState, "agentsLoading" | "agentsError">
+{
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: AgentsRouteData;
 
-  @state() client: GatewayBrowserClient | null = null;
-  @state() connected = false;
-  @state() agentsLoading = false;
-  @state() agentsError: string | null = null;
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsSelectedId: string | null = null;
   @state() toolsCatalogLoading = false;
@@ -112,10 +108,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   @state() skillsFilter = "";
   @state() private cron = createInitialCronState();
 
-  requestGeneration = 0;
   private routeDataInitialized = false;
-  private hasBoundGateway = false;
-  private gatewaySource: ApplicationContext["gateway"] | null = null;
   private hasBoundAgents = false;
   private agentsSource: ApplicationContext["agents"] | null = null;
   private hasBoundAgentIdentity = false;
@@ -131,6 +124,23 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     agentId: string;
   } | null = null;
   private normalizedLocation = "";
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => this.resetForClientChange(),
+    invalidateRequests: (change) => {
+      if (change.identityChanged) {
+        return;
+      }
+      this.invalidateTransientRequests();
+      this.chatModelCatalog = [];
+      this.chatModelCatalogClient = null;
+      this.chatModelCatalogAgentId = null;
+      this.chatModelCatalogByAgentId.clear();
+      this.chatModelCatalogError = null;
+    },
+    onSnapshot: () => this.syncGatewayState(),
+    ensureInitialData: () => this.ensureInitialData(),
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.agents,
@@ -225,30 +235,22 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           }
         };
       },
-    )
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const initialBind = !this.hasBoundGateway;
-        this.hasBoundGateway = true;
-        this.gatewaySource = gateway;
-        this.applyGatewaySnapshot(gateway.snapshot, !initialBind, initialBind);
-        const stop = gateway.subscribe((snapshot) => {
-          if (this.gatewaySource === gateway && this.context.gateway === gateway) {
-            this.applyGatewaySnapshot(snapshot, false);
-          }
-        });
-        return () => {
-          stop();
-          if (this.gatewaySource === gateway) {
-            this.gatewaySource = null;
-          }
-        };
-      },
     );
 
   get sessions() {
     return this.context.sessions;
+  }
+
+  get client() {
+    return this.gateway.client;
+  }
+
+  get connected() {
+    return this.gateway.connected;
+  }
+
+  get requestGeneration() {
+    return this.gateway.epoch;
   }
 
   get sessionsResult() {
@@ -270,9 +272,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.requestGeneration += 1;
-    this.client = null;
-    this.connected = false;
     super.disconnectedCallback();
   }
 
@@ -284,30 +283,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
   }
 
-  private applyGatewaySnapshot(
-    snapshot: ApplicationGatewaySnapshot,
-    forceReset: boolean,
-    initialBind = false,
-  ) {
-    const connectionChanged = this.connected !== (snapshot.phase === "connected");
-    const clientChanged = this.client !== snapshot.client;
-    this.syncGatewayState(snapshot);
-    if (forceReset || (!initialBind && clientChanged)) {
-      this.resetForClientChange();
-    } else if (!initialBind && connectionChanged) {
-      this.invalidateTransientRequests();
-      this.chatModelCatalog = [];
-      this.chatModelCatalogClient = null;
-      this.chatModelCatalogAgentId = null;
-      this.chatModelCatalogByAgentId.clear();
-      this.chatModelCatalogError = null;
-    }
-    this.ensureInitialData();
-  }
-
-  private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
-    this.client = snapshot.client;
-    this.connected = snapshot.phase === "connected";
+  private syncGatewayState() {
     if (this.cron.client !== this.client || this.cron.connected !== this.connected) {
       // In-flight cron loaders mutate their captured state; same-client
       // snapshots must retain it or loading never clears in the visible state.
@@ -317,8 +293,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 
   private syncAgentState(agents = this.context.agents) {
     const agentState = agents.state;
-    this.agentsLoading = agentState.agentsLoading;
-    this.agentsError = agentState.agentsError;
     this.agentsList = agentState.agentsList ? selectableAgentsList(agentState.agentsList) : null;
     if (this.agentsList) {
       this.ensureSelectedAgentInList(this.agentsList);
@@ -359,8 +333,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   private resetForClientChange() {
-    this.agentsLoading = false;
-    this.agentsError = null;
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.chatModelCatalog = [];
@@ -372,16 +344,13 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   private resetForAgentsSourceChange() {
-    this.agentsLoading = false;
-    this.agentsError = null;
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.resetSelectionState();
   }
 
   private invalidateTransientRequests() {
-    this.requestGeneration += 1;
-    this.agentsLoading = false;
+    this.gateway.invalidate();
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentIdentityLoading = false;
@@ -407,12 +376,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       return;
     }
     this.routeDataInitialized = true;
-    const gateway = this.context.gateway;
-    if (data.gateway !== gateway || data.gatewaySnapshot !== gateway.snapshot) {
+    if (!this.gateway.isRouteDataCurrent(data)) {
       return;
     }
-    this.agentsLoading = false;
-    this.agentsError = data.error;
     if (data.agentsList) {
       this.agentsList = data.agentsList;
       const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
@@ -478,7 +444,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     ) {
       void this.context.runtimeConfig.ensureLoaded();
     }
-    if (!this.agentsList && !this.agentsLoading) {
+    if (!this.agentsList && !this.context.agents.state.agentsLoading) {
       void this.loadAgentsAndCommit();
       return;
     }
@@ -724,7 +690,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   private resetSelectionState() {
-    this.requestGeneration += 1;
+    this.gateway.invalidate();
     this.chatModelCatalog = [];
     this.chatModelCatalogAgentId = null;
     this.chatModelCatalogError = null;
@@ -842,6 +808,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 
   override render() {
     const configState = this.context.runtimeConfig.state;
+    const agentsState = this.context.agents.state;
     const selectedAgentId = this.resolveSelectedAgentId();
     const config = currentConfigObject(configState);
     return html`
@@ -857,8 +824,8 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
         renderAgents({
           basePath: this.context.basePath,
           authToken: this.controlUiAuthToken(),
-          loading: this.agentsLoading,
-          error: this.agentsError,
+          loading: agentsState.agentsLoading,
+          error: agentsState.agentsError,
           agentsList: this.agentsList,
           selectedAgentId,
           activePanel: this.agentsPanel,

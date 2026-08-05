@@ -196,9 +196,9 @@ describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
       messageToolDeliveryState: { toolCallIds: new Set(), completed: false },
       preserveProgressCallbackStartOrder: false,
       presentation: {
+        classifyStreamingPartial: () => ({ skip: true }),
+        sanitizeStreamingText: () => ({ skip: true }),
         normalizeStreamingText: () => ({ skip: true }),
-        preparePartialForTyping: () => undefined,
-        handlePartialForTyping: async () => undefined,
         startPresentationWhileTyping: async () => undefined,
         blockReplyHandler: undefined,
       },

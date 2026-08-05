@@ -10,6 +10,7 @@ import {
 import * as configSessions from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -181,11 +182,35 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     getLatestSubagentRunByChildSessionKey: vi.fn(
       (_childSessionKey: string): MockSubagentRun | undefined => undefined,
     ),
+    getSubagentRunByRunId: vi.fn((_runId: string): MockSubagentRun | undefined => undefined),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
+    recordAcceptedSubagentSteerDispatch: vi.fn(
+      async (params: {
+        runId: string;
+        expected: MockSubagentRun;
+        gatewayRunId: string;
+        phase: "dispatching" | "accepted";
+        lifecycleGeneration?: string;
+        expectedSessionId?: string;
+        expectedLifecycleRevision?: string;
+      }) => ({
+        status: "persisted" as const,
+        ownerRunId: params.runId,
+        owner: params.expected,
+        dispatch: {
+          gatewayRunId: params.gatewayRunId,
+          phase: params.phase,
+          lifecycleGeneration: params.lifecycleGeneration,
+          expectedSessionId: params.expectedSessionId,
+          expectedLifecycleRevision: params.expectedLifecycleRevision,
+        },
+      }),
+    ),
+    clearSubagentRunSteerRestart: vi.fn(async () => true),
     replaceSubagentRunAfterSteer: vi.fn(
-      (_params: { previousRunId: string; nextRunId: string }) => true,
+      (_params: { previousRunId: string; nextRunId: string; lifecycleGeneration?: string }) => true,
     ),
     resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
   },
@@ -330,7 +355,6 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
   }) as unknown as Record<string, SessionEntry>;
 }
 
-vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryMock);
 vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 
 describe("subagent announce formatting", () => {
@@ -482,7 +506,35 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.getLatestSubagentRunByChildSessionKey
       .mockClear()
       .mockReturnValue(undefined);
+    subagentRegistryMock.getSubagentRunByRunId.mockClear().mockImplementation((runId: string) => ({
+      runId,
+      childSessionKey: "agent:main:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "parent task",
+      cleanup: "delete",
+      createdAt: 1,
+      execution: {
+        endedAt: 2,
+        outcome: { status: "ok" },
+      },
+    }));
     subagentRegistryMock.listSubagentRunsForRequester.mockClear().mockReturnValue([]);
+    subagentRegistryMock.recordAcceptedSubagentSteerDispatch
+      .mockClear()
+      .mockImplementation(async (params) => ({
+        status: "persisted" as const,
+        ownerRunId: params.runId,
+        owner: params.expected,
+        dispatch: {
+          gatewayRunId: params.gatewayRunId,
+          phase: params.phase,
+          lifecycleGeneration: params.lifecycleGeneration,
+          expectedSessionId: params.expectedSessionId,
+          expectedLifecycleRevision: params.expectedLifecycleRevision,
+        },
+      }));
+    subagentRegistryMock.clearSubagentRunSteerRestart.mockClear().mockResolvedValue(true);
     subagentRegistryMock.replaceSubagentRunAfterSteer.mockClear().mockReturnValue(true);
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
     hasSubagentDeliveryTargetHook = false;
@@ -895,6 +947,13 @@ describe("subagent announce formatting", () => {
   });
 
   it("suppresses announce flow for whitespace-padded ANNOUNCE_SKIP and still runs cleanup", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-skip-whitespace",
+        lifecycleRevision: "child-lifecycle-skip-whitespace",
+      },
+    };
+
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-skip-whitespace",
@@ -927,6 +986,49 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "restored visible reply" } as const,
+      expectedAgentCalls: 1,
+      expectedMessage: "restored visible reply",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      expectedAgentCalls: 0,
+      expectedMessage: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      expectedAgentCalls: 1,
+      expectedMessage: "(no output)",
+    },
+  ])(
+    "replays restored durable $name output without transcript inference",
+    async ({ name, terminalReply, expectedAgentCalls, expectedMessage }) => {
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: `run-restored-completion-${name}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+        terminalReply,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(chatHistoryMock).not.toHaveBeenCalled();
+      expect(readLatestAssistantReplyMock).not.toHaveBeenCalled();
+      expect(agentSpy).toHaveBeenCalledTimes(expectedAgentCalls);
+      if (expectedMessage) {
+        expect(getAgentCall()?.params?.message).toContain(expectedMessage);
+      }
+    },
+  );
 
   it("uses fallback reply when wake continuation returns NO_REPLY", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
@@ -2792,7 +2894,14 @@ describe("subagent announce formatting", () => {
       },
     );
 
-    agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2"));
+    const wakeDispatchId = buildAnnounceIdempotencyKey(
+      `${buildAnnounceIdFromChildRun({
+        childSessionKey: "agent:main:subagent:parent",
+        childRunId: "run-parent-phase-1",
+      })}:wake`,
+    );
+    agentSpy.mockResolvedValueOnce(visibleAgentResponse(wakeDispatchId));
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:parent",
@@ -2808,19 +2917,93 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as {
-      params?: { sessionKey?: string; message?: string };
+      params?: { sessionKey?: string; message?: string; idempotencyKey?: string };
     };
     expect(call?.params?.sessionKey).toBe("agent:main:subagent:parent");
+    expect(call?.params?.idempotencyKey).toBe(wakeDispatchId);
     const message = call?.params?.message ?? "";
     expect(message).toContain("All pending descendants for that run have now settled");
     expect(message).toContain("result from child a");
     expect(message).toContain("result from child b");
-    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
-      previousRunId: "run-parent-phase-1",
-      nextRunId: "run-parent-phase-2",
-      preserveFrozenResultFallback: true,
-      task: expect.stringContaining("All pending descendants for that run have now settled"),
+    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousRunId: "run-parent-phase-1",
+        nextRunId: wakeDispatchId,
+        lifecycleGeneration,
+        preserveFrozenResultFallback: true,
+        task: expect.stringContaining("All pending descendants for that run have now settled"),
+      }),
+    );
+  });
+
+  it("keeps the child session when a failed wake leaves termination unconfirmed", async () => {
+    // Only a sessionId: without a frozen lifecycle revision the accepted wake run
+    // cannot be proven stopped.
+    sessionStore = {
+      "agent:main:subagent:parent": {
+        sessionId: "session-parent",
+      },
+    };
+
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.replaceSubagentRunAfterSteer.mockReturnValue(false);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (
+          sessionKey !== "agent:main:subagent:parent" ||
+          scope?.requesterRunId !== "run-parent-unconfirmed-1"
+        ) {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-a",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 10,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
+            cleanupCompletedAt: 21,
+            frozenResultText: "result from child a",
+          },
+        ];
+      },
+    );
+
+    const wakeDispatchId = buildAnnounceIdempotencyKey(
+      `${buildAnnounceIdFromChildRun({
+        childSessionKey: "agent:main:subagent:parent",
+        childRunId: "run-parent-unconfirmed-1",
+      })}:wake`,
+    );
+    agentSpy.mockResolvedValueOnce(visibleAgentResponse(wakeDispatchId));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-unconfirmed-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+      wakeOnDescendantSettle: true,
+      roundOneReply: "waiting for children",
     });
+
+    expect(didAnnounce).toBe(false);
+    expect(callGatewaySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.abort",
+        params: {
+          sessionKey: "agent:main:subagent:parent",
+          runId: wakeDispatchId,
+        },
+      }),
+    );
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
   it("does not re-wake an already woken run id", async () => {

@@ -4,9 +4,11 @@ import {
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptTitleProbeBatch,
   readSessionTranscriptWatermark,
+  readSessionTranscriptWatermarkBatch,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
 } from "../config/sessions/session-accessor.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import {
   extractMessageRole,
@@ -44,13 +46,7 @@ function sqliteTitleFieldCacheKey(target: ResolvedTranscriptReadTarget): string 
 function setSqliteTitleFieldCache(key: string, entry: SqliteTitleFieldCacheEntry): void {
   sqliteTitleFieldCache.delete(key);
   sqliteTitleFieldCache.set(key, entry);
-  if (sqliteTitleFieldCache.size <= SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldestKey = sqliteTitleFieldCache.keys().next().value;
-  if (oldestKey !== undefined) {
-    sqliteTitleFieldCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(sqliteTitleFieldCache, SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES);
 }
 
 function readSqliteTitleProbeRange(
@@ -173,6 +169,14 @@ export function readSessionTitleFieldsFromTranscriptBatch(
     scope: SessionTranscriptReadScope;
     target: ResolvedTranscriptReadTarget;
   }> = [];
+  const cachedCandidates: Array<{
+    cacheKey: string;
+    cached: SqliteTitleFieldCacheEntry;
+    cachedFields: SessionTitleFields;
+    index: number;
+    scope: SessionTranscriptReadScope;
+    target: ResolvedTranscriptReadTarget;
+  }> = [];
 
   for (const [index, scope] of scopes.entries()) {
     const target = resolveTranscriptReadTarget(scope);
@@ -181,16 +185,32 @@ export function readSessionTitleFieldsFromTranscriptBatch(
     const cached = sqliteTitleFieldCache.get(cacheKey);
     const cachedFields = cached?.fields[variant];
     if (cached && cachedFields) {
-      // Keep the single-row generation/maxSeq validity contract, but validate only warm rows;
-      // cold or changed rows still collapse into the one store-batched probe below.
-      const watermark = readSessionTranscriptWatermark(scope);
-      if (cached.generation === watermark.generation && cached.maxSeq === watermark.maxSeq) {
-        setSqliteTitleFieldCache(cacheKey, cached);
-        results.set(index, { ...cachedFields });
-        continue;
-      }
+      cachedCandidates.push({ cacheKey, cached, cachedFields, index, scope, target });
+      continue;
     }
     misses.push({ cacheKey, index, scope, target });
+  }
+
+  const watermarks = readSessionTranscriptWatermarkBatch(
+    cachedCandidates.map((candidate) => candidate.scope),
+  );
+  for (const [candidateIndex, candidate] of cachedCandidates.entries()) {
+    const watermark = watermarks[candidateIndex];
+    if (
+      watermark &&
+      candidate.cached.generation === watermark.generation &&
+      candidate.cached.maxSeq === watermark.maxSeq
+    ) {
+      setSqliteTitleFieldCache(candidate.cacheKey, candidate.cached);
+      results.set(candidate.index, { ...candidate.cachedFields });
+      continue;
+    }
+    misses.push({
+      cacheKey: candidate.cacheKey,
+      index: candidate.index,
+      scope: candidate.scope,
+      target: candidate.target,
+    });
   }
 
   const probes =

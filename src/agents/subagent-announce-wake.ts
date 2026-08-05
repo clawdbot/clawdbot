@@ -1,4 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
 import {
@@ -10,20 +16,31 @@ import type {
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
 } from "./subagent-announce.runtime.js";
+import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 
-type SubagentRegistryRuntime = typeof import("./subagent-announce.registry.runtime.js");
+type SubagentRegistryRuntime = typeof import("./subagent-registry-runtime.js");
+
+const log = createSubsystemLogger("agents/subagent-announce-wake");
+
+/**
+ * Wake dispatch outcome. `termination-unconfirmed` means an accepted wake run was
+ * never proven stopped, so the caller must keep child-session ownership instead of
+ * treating the failed wake as a clean no-op.
+ */
+export type SubagentDescendantWakeOutcome = "woke" | "not-woken" | "termination-unconfirmed";
 
 export type SubagentDescendantWakeDeps = {
+  callGateway: typeof import("../gateway/call.js").callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
   loadSubagentRegistryRuntime: () => Promise<SubagentRegistryRuntime>;
 };
 
-export function hasUsableSessionEntry(entry: unknown): boolean {
-  if (!entry || typeof entry !== "object") {
+export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
+  if (!isRecord(entry)) {
     return false;
   }
-  const sessionId = (entry as { sessionId?: unknown }).sessionId;
+  const sessionId = entry.sessionId;
   return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
@@ -64,33 +81,134 @@ export async function wakeSubagentRunAfterDescendants(
     taskLabel: string;
     findings: string;
     announceId: string;
+    isChildSessionEffectsAllowed: () => boolean;
     signal?: AbortSignal;
   },
   deps: SubagentDescendantWakeDeps,
-): Promise<boolean> {
-  if (params.signal?.aborted) {
-    return false;
+): Promise<SubagentDescendantWakeOutcome> {
+  if (params.signal?.aborted || !params.isChildSessionEffectsAllowed()) {
+    return "not-woken";
   }
 
   const childEntry = loadSessionEntryByKey(params.childSessionKey);
   if (!hasUsableSessionEntry(childEntry)) {
-    return false;
+    return "not-woken";
   }
 
   const cfg = deps.getRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
+  const wakeLifecycleGeneration = getAgentEventLifecycleGeneration();
   const wakeMessage = buildDescendantWakeMessage({
     findings: params.findings,
     taskLabel: params.taskLabel,
   });
+  const wakeDispatchId = buildAnnounceIdempotencyKey(`${params.announceId}:wake`);
+  const registryRuntime = await deps.loadSubagentRegistryRuntime();
+  const sourceEntry = await registryRuntime.getSubagentRunByRunId(params.runId);
+  if (!sourceEntry) {
+    return "not-woken";
+  }
+  const reservedDispatch = await registryRuntime.recordAcceptedSubagentSteerDispatch({
+    runId: params.runId,
+    expected: sourceEntry,
+    gatewayRunId: wakeDispatchId,
+    phase: "dispatching",
+    lifecycleGeneration: wakeLifecycleGeneration,
+    expectedSessionId:
+      typeof childEntry.sessionId === "string"
+        ? childEntry.sessionId.trim() || undefined
+        : undefined,
+    expectedLifecycleRevision:
+      typeof childEntry.lifecycleRevision === "string"
+        ? childEntry.lifecycleRevision.trim() || undefined
+        : undefined,
+  });
+  if (reservedDispatch.status !== "persisted") {
+    if (reservedDispatch.status === "rejected") {
+      return "not-woken";
+    }
+    const cleared = await registryRuntime.clearSubagentRunSteerRestart(
+      reservedDispatch.ownerRunId,
+      reservedDispatch.owner,
+      reservedDispatch.dispatch,
+      true,
+    );
+    return cleared ? "not-woken" : "termination-unconfirmed";
+  }
+  let wakeDispatchOwnership = {
+    ownerRunId: reservedDispatch.ownerRunId,
+    owner: reservedDispatch.owner,
+    dispatch: reservedDispatch.dispatch,
+  };
+  const terminateUnownedWake = async (
+    gatewayRunId: string,
+  ): Promise<SubagentDescendantWakeOutcome> => {
+    const acceptedDispatch = await registryRuntime.recordAcceptedSubagentSteerDispatch({
+      runId: wakeDispatchOwnership.ownerRunId,
+      expected: wakeDispatchOwnership.owner,
+      gatewayRunId,
+      phase: "accepted",
+      lifecycleGeneration: wakeLifecycleGeneration,
+      expectedSessionId:
+        typeof childEntry.sessionId === "string"
+          ? childEntry.sessionId.trim() || undefined
+          : undefined,
+      expectedLifecycleRevision:
+        typeof childEntry.lifecycleRevision === "string"
+          ? childEntry.lifecycleRevision.trim() || undefined
+          : undefined,
+    });
+    if (acceptedDispatch.status !== "rejected") {
+      wakeDispatchOwnership = {
+        ownerRunId: acceptedDispatch.ownerRunId,
+        owner: acceptedDispatch.owner,
+        dispatch: acceptedDispatch.dispatch,
+      };
+    }
+    const terminated = await terminateAcceptedCollectorRun({
+      childSessionKey: params.childSessionKey,
+      gatewayRunId,
+      expectedSessionId:
+        typeof childEntry.sessionId === "string"
+          ? childEntry.sessionId.trim() || undefined
+          : undefined,
+      expectedLifecycleRevision:
+        typeof childEntry.lifecycleRevision === "string"
+          ? childEntry.lifecycleRevision.trim() || undefined
+          : undefined,
+      timeoutMs: announceTimeoutMs,
+      callGateway: deps.callGateway,
+    });
+    if (terminated) {
+      await registryRuntime.clearSubagentRunSteerRestart(
+        wakeDispatchOwnership.ownerRunId,
+        wakeDispatchOwnership.owner,
+        wakeDispatchOwnership.dispatch,
+      );
+      return "not-woken";
+    }
+    // The accepted wake run was never proven stopped. Report the unconfirmed fact
+    // so the caller keeps the child session for cleanup retry rather than deleting
+    // a session a live Gateway run may still own.
+    log.warn("descendant wake termination unconfirmed; retained child session ownership", {
+      runId: params.runId,
+      gatewayRunId,
+      childSessionKey: params.childSessionKey,
+    });
+    return "termination-unconfirmed";
+  };
 
-  let wakeRunId;
+  let wakeRunId: string;
   try {
     const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
       operation: "descendant wake agent call",
       signal: params.signal,
-      run: async () =>
-        await deps.dispatchGatewayMethodInProcess(
+      isAttemptAllowed: params.isChildSessionEffectsAllowed,
+      run: async () => {
+        if (!params.isChildSessionEffectsAllowed()) {
+          return {};
+        }
+        return await deps.dispatchGatewayMethodInProcess(
           "agent",
           {
             sessionKey: params.childSessionKey,
@@ -102,29 +220,40 @@ export async function wakeSubagentRunAfterDescendants(
               sourceChannel: INTERNAL_MESSAGE_CHANNEL,
               sourceTool: "subagent_announce",
             },
-            idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
+            idempotencyKey: wakeDispatchId,
           },
           {
             timeoutMs: announceTimeoutMs,
           },
-        ),
+        );
+      },
     });
     wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
-    return false;
+    return await terminateUnownedWake(wakeDispatchId);
   }
 
-  if (!wakeRunId) {
-    return false;
+  if (wakeRunId !== wakeDispatchId) {
+    return await terminateUnownedWake(wakeDispatchId);
   }
 
-  const { replaceSubagentRunAfterSteer } = await deps.loadSubagentRegistryRuntime();
-  return replaceSubagentRunAfterSteer({
-    previousRunId: params.runId,
-    nextRunId: wakeRunId,
+  if (
+    !params.isChildSessionEffectsAllowed() ||
+    !isAgentEventLifecycleGenerationCurrent(wakeLifecycleGeneration)
+  ) {
+    return await terminateUnownedWake(wakeDispatchId);
+  }
+  const replaced = await registryRuntime.replaceSubagentRunAfterSteer({
+    previousRunId: wakeDispatchOwnership.ownerRunId,
+    nextRunId: wakeDispatchId,
+    fallback: wakeDispatchOwnership.owner,
+    expected: wakeDispatchOwnership.owner,
+    allowEndedSource: true,
+    lifecycleGeneration: wakeLifecycleGeneration,
     preserveFrozenResultFallback: true,
     // Persist the wake message as the replacement run's task so that any
     // post-restart redispatch reconstructs the correct prompt.
     task: wakeMessage,
   });
+  return replaced ? "woke" : await terminateUnownedWake(wakeDispatchId);
 }

@@ -2,7 +2,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
@@ -20,8 +20,11 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureEnv } from "../test-utils/env.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -56,8 +59,6 @@ import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
-
-const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -132,9 +133,22 @@ function createUnsafeTaskOwnerIndex(database: DatabaseSync): void {
 }
 
 describe("task-registry store runtime", () => {
+  let testState: OpenClawTestState;
+
+  beforeAll(async () => {
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-task-store-suite-",
+    });
+  });
+
+  afterAll(async () => {
+    await testState.cleanup();
+  });
+
   afterEach(() => {
-    ORIGINAL_ENV.restore();
-    resetTaskRegistryForTests();
+    testState.applyEnv();
+    resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
@@ -341,6 +355,7 @@ describe("task-registry store runtime", () => {
     expect(parseTaskScopeKind("system")).toBe("system");
     expect(parseTaskStatus("running")).toBe("running");
     expect(parseTaskDeliveryStatus("pending")).toBe("pending");
+    expect(parseTaskDeliveryStatus("dismissed")).toBe("dismissed");
     expect(parseTaskNotifyPolicy("done_only")).toBe("done_only");
     expect(parseOptionalTaskTerminalOutcome("blocked")).toBe("blocked");
     expect(parseOptionalTaskTerminalOutcome(null)).toBeUndefined();

@@ -174,9 +174,9 @@ private func waitUntil(
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
         let problem = pairingScopeUpgradeProblem
-        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        appModel.applyOperatorGatewayConnectionProblem(problem)
 
-        appModel._test_prepareForGatewayConnect(
+        appModel.prepareForGatewayConnect(
             stableID: "manual|gateway.example.com|443",
             preservingGatewayProblem: true)
 
@@ -189,7 +189,7 @@ private func waitUntil(
             domain: URLError.errorDomain,
             code: URLError.cancelled.rawValue,
             userInfo: [NSLocalizedDescriptionKey: "gateway receive: cancelled"])
-        let mapped = appModel._test_mapNodeGatewayConnectionError(cancelled)
+        let mapped = appModel.mapNodeGatewayConnectionError(cancelled)
         #expect(mapped?.kind == .websocketCancelled)
         #expect(mapped?.requestId == nil)
         #expect(mapped?.pauseReconnect == false)
@@ -199,7 +199,7 @@ private func waitUntil(
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
         let problem = pairingScopeUpgradeProblem
-        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        appModel.applyOperatorGatewayConnectionProblem(problem)
 
         let cancelled = NSError(
             domain: URLError.errorDomain,
@@ -212,7 +212,7 @@ private func waitUntil(
         #expect(appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == "req-admin")
 
-        appModel._test_clearOperatorGatewayConnectionProblemIfCurrent()
+        appModel.clearOperatorGatewayConnectionProblemIfCurrent()
         #expect(appModel.lastGatewayProblem == nil)
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
@@ -238,11 +238,11 @@ private func waitUntil(
         let disconnectedOwner = appModel.chatViewModelOwnerID
         let disconnectedRefreshIdentity = appModel.chatViewModelIdentityID
 
-        appModel._test_setOperatorConnected(true)
+        appModel.setOperatorConnected(true)
         #expect(appModel.chatViewModelOwnerID == disconnectedOwner)
         #expect(appModel.chatViewModelIdentityID != disconnectedRefreshIdentity)
 
-        appModel._test_setOperatorConnected(false)
+        appModel.setOperatorConnected(false)
         #expect(appModel.chatViewModelOwnerID == disconnectedOwner)
         #expect(appModel.chatViewModelIdentityID == disconnectedRefreshIdentity)
     }
@@ -450,27 +450,27 @@ private func waitUntil(
 
     @Test func `operator admin scope requests only when shared auth or already granted`() {
         #expect(
-            !NodeAppModel._test_shouldRequestOperatorAdminScope(
+            !NodeAppModel.shouldRequestOperatorAdminScope(
                 token: nil,
                 password: nil,
                 storedOperatorScopes: ["operator.read", "operator.write", "operator.talk.secrets"]))
         #expect(
-            NodeAppModel._test_shouldRequestOperatorAdminScope(
+            NodeAppModel.shouldRequestOperatorAdminScope(
                 token: nil,
                 password: nil,
                 storedOperatorScopes: ["operator.admin"]))
         #expect(
-            NodeAppModel._test_shouldRequestOperatorAdminScope(
+            NodeAppModel.shouldRequestOperatorAdminScope(
                 token: "shared-token",
                 password: nil,
                 storedOperatorScopes: []))
         #expect(
-            NodeAppModel._test_shouldRequestOperatorAdminScope(
+            NodeAppModel.shouldRequestOperatorAdminScope(
                 token: nil,
                 password: "shared-password",
                 storedOperatorScopes: []))
         #expect(
-            !NodeAppModel._test_shouldRequestOperatorAdminScope(
+            !NodeAppModel.shouldRequestOperatorAdminScope(
                 token: "shared-token",
                 password: nil,
                 storedOperatorScopes: [],
@@ -497,12 +497,12 @@ private func waitUntil(
 
     @Test func `operator approval scope requests stay backward compatible`() {
         #expect(
-            !NodeAppModel._test_shouldRequestOperatorApprovalScope(
+            !NodeAppModel.shouldRequestOperatorApprovalScope(
                 token: nil,
                 password: nil,
                 storedOperatorScopes: ["operator.read", "operator.write", "operator.talk.secrets"]))
         #expect(
-            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+            NodeAppModel.shouldRequestOperatorApprovalScope(
                 token: nil,
                 password: nil,
                 storedOperatorScopes: [
@@ -512,18 +512,18 @@ private func waitUntil(
                     "operator.talk.secrets",
                 ]))
         #expect(
-            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+            NodeAppModel.shouldRequestOperatorApprovalScope(
                 token: "shared-token",
                 password: nil,
                 storedOperatorScopes: []))
         #expect(
-            !NodeAppModel._test_shouldRequestOperatorApprovalScope(
+            !NodeAppModel.shouldRequestOperatorApprovalScope(
                 token: "shared-token",
                 password: nil,
                 storedOperatorScopes: [],
                 forceTalkPermissionUpgradeRequest: true))
         #expect(
-            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+            NodeAppModel.shouldRequestOperatorApprovalScope(
                 token: nil,
                 password: nil,
                 storedOperatorScopes: ["operator.approvals"],
@@ -532,29 +532,29 @@ private func waitUntil(
 
     @Test @MainActor func `operator pairing problem preserves primary gateway connection state`() {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
         appModel.gatewayServerName = "gateway.example.com"
         appModel.gatewayRemoteAddress = "127.0.0.1:53380"
         let problem = pairingScopeUpgradeProblem
 
-        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        appModel.applyOperatorGatewayConnectionProblem(problem)
 
-        #expect(appModel._test_isGatewayConnected())
+        #expect(appModel.gatewayConnected)
         #expect(appModel.gatewayServerName == "gateway.example.com")
         #expect(appModel.gatewayRemoteAddress == "127.0.0.1:53380")
         #expect(appModel.lastGatewayProblem == problem)
         #expect(appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == "req-admin")
 
-        appModel._test_clearGatewayConnectionProblem()
+        appModel.clearGatewayConnectionProblem()
 
         #expect(appModel.lastGatewayProblem == problem)
         #expect(appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == "req-admin")
 
-        appModel._test_clearOperatorGatewayConnectionProblemIfCurrent()
+        appModel.clearOperatorGatewayConnectionProblemIfCurrent()
 
-        #expect(appModel._test_isGatewayConnected())
+        #expect(appModel.gatewayConnected)
         #expect(appModel.gatewayServerName == "gateway.example.com")
         #expect(appModel.lastGatewayProblem == nil)
         #expect(!appModel.gatewayPairingPaused)
@@ -574,7 +574,7 @@ private func waitUntil(
             message: "The gateway refused the connection.",
             retryable: true,
             pauseReconnect: false)
-        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        appModel.applyOperatorGatewayConnectionProblem(problem)
 
         #expect(appModel.lastGatewayProblem == problem)
 
@@ -684,7 +684,7 @@ private func waitUntil(
         let config = Self.makeGatewayConnectConfig()
         appModel.applyGatewayConnectConfig(config)
         let problem = pairingScopeUpgradeProblem
-        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        appModel.applyOperatorGatewayConnectionProblem(problem)
         #expect(appModel.gatewayPairingPaused)
 
         appModel.applyGatewayConnectConfig(config, forceReconnect: true)
@@ -694,7 +694,7 @@ private func waitUntil(
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
 
-        appModel._test_clearGatewayConnectionProblem()
+        appModel.clearGatewayConnectionProblem()
 
         #expect(appModel.lastGatewayProblem == nil)
         #expect(!appModel.gatewayPairingPaused)
@@ -707,7 +707,7 @@ private func waitUntil(
         let config = Self.makeGatewayConnectConfig()
         appModel.applyGatewayConnectConfig(config)
         let problem = pairingScopeUpgradeProblem
-        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        appModel.applyOperatorGatewayConnectionProblem(problem)
 
         appModel.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
 
@@ -717,7 +717,7 @@ private func waitUntil(
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
 
-        appModel._test_clearGatewayConnectionProblem()
+        appModel.clearGatewayConnectionProblem()
         #expect(appModel.lastGatewayProblem == nil)
     }
 
@@ -767,7 +767,7 @@ private func waitUntil(
         var fallback = config.nodeOptions
         fallback.clientId = "fallback-client"
 
-        let selected = appModel._test_currentGatewayReconnectOptions(
+        let selected = appModel.currentGatewayReconnectOptions(
             stableID: decomposedID,
             fallback: fallback)
 
@@ -1135,7 +1135,7 @@ private func waitUntil(
             role: "node",
             gatewayID: previousStableID)?.token == "previous-node-token")
         #expect(appModel._test_hasGatewayLoopTasks().operator)
-        #expect(appModel._test_currentGatewayReconnectOptions(
+        #expect(appModel.currentGatewayReconnectOptions(
             stableID: stableID,
             fallback: bootstrapOptions).allowStoredDeviceAuth)
     }
@@ -1352,7 +1352,7 @@ private func waitUntil(
             #expect(appModel.gatewayServerName == nil)
             #expect(!appModel._test_hasGatewayLoopTasks().node)
             #expect(!appModel._test_hasGatewayLoopTasks().operator)
-            #expect(!appModel._test_hasChatSessionRoutingRestoreTask())
+            #expect(!(appModel.chatSessionRoutingRestoreTask != nil))
             #expect(ShareGatewayRelaySettings.loadConfig() == nil)
 
             let relaunchedModel = NodeAppModel()
@@ -1662,7 +1662,7 @@ private func waitUntil(
             message: "Upgrade the gateway before reconnecting.",
             retryable: false,
             pauseReconnect: true)
-        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        appModel.applyOperatorGatewayConnectionProblem(problem)
         let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
         controller.cancelPendingConnectionAttempts()
@@ -2351,7 +2351,7 @@ private func waitUntil(
         let focusedSessionKey = "agent:main:ios-foreground-focused"
         appModel.applyGatewayConnectConfig(config)
         appModel.focusChatSession(focusedSessionKey)
-        await appModel._test_restartGatewaySessionsAfterForegroundStaleConnection()
+        await appModel.restartGatewaySessionsAfterForegroundStaleConnection()
 
         #expect(appModel.gatewayStatusText == "Reconnecting…")
         #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: config) == true)

@@ -1,0 +1,246 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "./subagent-registry.mocks.shared.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as detachedTaskRuntime from "../tasks/detached-task-runtime.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import {
+  createSubagentRegistryTestDeps,
+  canonicalSubagentRunFixtures,
+} from "./subagent-registry.persistence.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry.store.sqlite.js";
+import {
+  addSubagentRunForTests,
+  getSubagentRunByChildSessionKey,
+  listSubagentRunsForRequester,
+  registerSubagentRun,
+  resetSubagentRegistryForTests,
+  testing,
+} from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+describe("subagent registration rollback", () => {
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  let tempStateDir: string | undefined;
+
+  beforeEach(async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-rollback-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    testing.setDepsForTest(createSubagentRegistryTestDeps());
+  });
+
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    testing.setDepsForTest();
+    resetSubagentRegistryForTests({ persist: false });
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true });
+      tempStateDir = undefined;
+    }
+    envSnapshot.restore();
+  });
+
+  const createOlderKilledRun = (childSessionKey: string): SubagentRunRecord => ({
+    runId: "run-task-registration-older",
+    childSessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "older killed generation",
+    cleanup: "keep",
+    generation: 1,
+    createdAt: 1,
+    execution: {
+      status: "terminal",
+      startedAt: 1,
+      endedAt: 2,
+      outcome: { status: "error", error: "killed" },
+    },
+    completion: { required: false, resultText: null, capturedAt: 2 },
+    delivery: { status: "not_required" },
+    endedReason: "subagent-killed",
+    suppressAnnounceReason: "killed",
+    killReconciliation: { killedAt: 2 },
+    cleanupHandled: true,
+    cleanupCompletedAt: 2,
+  });
+
+  const createPriorSameIdRun = (runId: string, childSessionKey: string): SubagentRunRecord => ({
+    runId,
+    taskRunId: runId,
+    childSessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "prior same-id run",
+    cleanup: "keep",
+    generation: 2,
+    createdAt: 3,
+    execution: {
+      status: "terminal",
+      startedAt: 3,
+      endedAt: 4,
+      outcome: { status: "ok" },
+    },
+    completion: { required: false, resultText: "prior result", capturedAt: 4 },
+    delivery: { status: "not_required" },
+    endedReason: "subagent-complete",
+    cleanupHandled: true,
+    cleanupCompletedAt: 4,
+  });
+
+  it("restores same-id and older kill state after task registration throws", () => {
+    const childSessionKey = "agent:main:subagent:task-registration-fails";
+    const runId = "run-task-registration-fails";
+    const priorSameIdRun = createPriorSameIdRun(runId, childSessionKey);
+    const olderRun = createOlderKilledRun(childSessionKey);
+    addSubagentRunForTests(priorSameIdRun);
+    addSubagentRunForTests(olderRun);
+    saveSubagentRegistryToSqlite(
+      canonicalSubagentRunFixtures(
+        new Map([
+          [priorSameIdRun.runId, priorSameIdRun],
+          [olderRun.runId, olderRun],
+        ]),
+      ),
+    );
+    const expectedKillReconciliation = structuredClone(olderRun.killReconciliation);
+    const persistenceScopes: string[][] = [];
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
+        persistenceScopes.push([...(changedRunIds ?? [])]);
+        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
+      },
+    });
+    const taskError = new Error("task runtime unavailable");
+    const createTaskSpy = vi
+      .spyOn(detachedTaskRuntime, "createRunningTaskRun")
+      .mockImplementationOnce(() => {
+        throw taskError;
+      });
+
+    try {
+      expect(() =>
+        registerSubagentRun({
+          runId,
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "task registration failure",
+          cleanup: "keep",
+        }),
+      ).toThrow(taskError);
+      expect(
+        listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId),
+      ).toMatchObject({
+        task: priorSameIdRun.task,
+        generation: priorSameIdRun.generation,
+      });
+      expect(
+        listSubagentRunsForRequester("agent:main:main").find(
+          (entry) => entry.runId === olderRun.runId,
+        )?.killReconciliation,
+      ).toEqual(expectedKillReconciliation);
+      const persisted = loadSubagentRegistryFromSqlite();
+      expect(persisted.get(runId)).toMatchObject({
+        task: priorSameIdRun.task,
+        generation: priorSameIdRun.generation,
+      });
+      expect(persisted.get(olderRun.runId)?.killReconciliation).toEqual(expectedKillReconciliation);
+      expect(persistenceScopes).toEqual([
+        [runId, olderRun.runId],
+        [runId, olderRun.runId],
+      ]);
+    } finally {
+      createTaskSpy.mockRestore();
+    }
+  });
+
+  it("restores a same-id run when initial registration persistence fails", () => {
+    const runId = "run-initial-persist-same-id";
+    const childSessionKey = "agent:main:subagent:initial-persist-same-id";
+    const priorSameIdRun = createPriorSameIdRun(runId, childSessionKey);
+    addSubagentRunForTests(priorSameIdRun);
+    saveSubagentRegistryToSqlite(
+      canonicalSubagentRunFixtures(new Map([[priorSameIdRun.runId, priorSameIdRun]])),
+    );
+    const persistError = new Error("initial sqlite busy");
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      persistSubagentRunsToDisk: saveSubagentRegistryToSqlite,
+      persistSubagentRunsToDiskOrThrow: () => {
+        throw persistError;
+      },
+    });
+
+    expect(() =>
+      registerSubagentRun({
+        runId,
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "replacement that must roll back",
+        cleanup: "keep",
+      }),
+    ).toThrow(persistError);
+    expect(
+      listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId),
+    ).toMatchObject({
+      task: priorSameIdRun.task,
+      generation: priorSameIdRun.generation,
+    });
+    expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+      task: priorSameIdRun.task,
+      generation: priorSameIdRun.generation,
+    });
+  });
+
+  it("surfaces task registration and rollback persistence failures together", () => {
+    const taskError = new Error("task runtime unavailable");
+    const rollbackError = new Error("rollback sqlite busy");
+    let persistAttempt = 0;
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
+        persistAttempt += 1;
+        if (persistAttempt === 2) {
+          throw rollbackError;
+        }
+        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
+      },
+    });
+    const createTaskSpy = vi
+      .spyOn(detachedTaskRuntime, "createRunningTaskRun")
+      .mockImplementationOnce(() => {
+        throw taskError;
+      });
+
+    try {
+      let thrown: unknown;
+      try {
+        registerSubagentRun({
+          runId: "run-rollback-persist-fails",
+          childSessionKey: "agent:main:subagent:rollback-persist-fails",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "rollback persistence failure",
+          cleanup: "keep",
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(AggregateError);
+      expect((thrown as AggregateError).errors).toEqual([taskError, rollbackError]);
+      expect(
+        getSubagentRunByChildSessionKey("agent:main:subagent:rollback-persist-fails"),
+      ).toBeNull();
+    } finally {
+      createTaskSpy.mockRestore();
+    }
+  });
+});

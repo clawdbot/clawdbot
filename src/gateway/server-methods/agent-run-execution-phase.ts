@@ -453,6 +453,7 @@ export function startAgentRunExecution(params: {
           traceparent: inheritedTraceparent,
           abortSignal: prepared.activeRunAbort.controller.signal,
           lifecycleGeneration: params.lifecycleGeneration,
+          onExecutionStarted: () => prepared.activeRunAbort.markExecutionStarted(),
           onActiveModelSelected: createAgentRunModelSelectionHandler({
             context: params.context,
             runId: params.runId,

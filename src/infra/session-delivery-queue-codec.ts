@@ -68,6 +68,14 @@ export type SessionDeliveryRoute = {
 
 export type SessionDeliverySettledOutcome = "recovered" | "moved-to-failed";
 
+export type SessionDeliveryOwnerReference = {
+  kind: "subagent_completion";
+  runId: string;
+  taskId: string;
+  generation: number;
+  deadlineAt: number;
+};
+
 /**
  * Durable payloads whose metadata can contain only descriptor references.
  * Inline attachment bytes are deliberately excluded from generic delivery
@@ -117,6 +125,7 @@ type QueuedSessionDeliveryGenericPayload =
       expectedMediaUrls?: string[];
       suppressTextDelivery?: true;
       idempotencyKey?: string;
+      owner?: SessionDeliveryOwnerReference;
     } & QueuedSessionDeliveryPayloadMetadata);
 
 /**
@@ -365,6 +374,16 @@ const QueuedAgentTurnSchema = z
     expectedMediaUrls: z.array(z.string()).optional(),
     suppressTextDelivery: z.literal(true).optional(),
     idempotencyKey: z.string().optional(),
+    owner: z
+      .object({
+        kind: z.literal("subagent_completion"),
+        runId: z.string().min(1),
+        taskId: z.string().min(1),
+        generation: z.number().int().positive(),
+        deadlineAt: z.number(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

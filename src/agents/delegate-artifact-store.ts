@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { ArtifactSummary } from "@openclaw/gateway-protocol";
 import { z } from "zod";
 import {
@@ -11,6 +10,7 @@ import { DELEGATE_ARTIFACTS_SCHEMA_SQL } from "../state/delegate-artifacts-schem
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 
@@ -205,6 +205,7 @@ export type DelegateArtifactDatabase = {
 
 export type PolicyRow = DelegateArtifactDatabase["delegate_artifact_policies"];
 export type ClaimRow = DelegateArtifactDatabase["delegate_artifact_claims"];
+type DelegateArtifactDatabaseHandle = OpenClawStateDatabase["db"];
 
 function hasControlCharacter(value: string): boolean {
   for (const char of value) {
@@ -293,9 +294,9 @@ export const DelegateArtifactRecipientProjectionSchema = z
   })
   .strict();
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
+const ensuredDatabases = new WeakSet<DelegateArtifactDatabaseHandle>();
 
-export function artifactDb(db: DatabaseSync) {
+export function artifactDb(db: DelegateArtifactDatabaseHandle) {
   return getNodeSqliteKysely<DelegateArtifactDatabase>(db);
 }
 
@@ -306,6 +307,7 @@ export function ensureDelegateArtifactsSchema(options: OpenClawStateDatabaseOpti
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      // sqlite-allow-raw -- feature-local additive schema DDL; artifact rows use Kysely.
       db.exec(DELEGATE_ARTIFACTS_SCHEMA_SQL);
     },
     options,
@@ -434,7 +436,7 @@ export function toDelegateArtifactSummaryV1(
   }) as DelegateArtifactSummaryV1;
 }
 
-export function claimRowsForFlow(db: DatabaseSync, flowId: string): ClaimRow[] {
+export function claimRowsForFlow(db: DelegateArtifactDatabaseHandle, flowId: string): ClaimRow[] {
   const kdb = artifactDb(db);
   return executeSqliteQuerySync(
     db,
@@ -447,7 +449,7 @@ export function claimRowsForFlow(db: DatabaseSync, flowId: string): ClaimRow[] {
 }
 
 export function projectionsForCompletedPolicy(params: {
-  db: DatabaseSync;
+  db: DelegateArtifactDatabaseHandle;
   policy: PolicyRow;
   deliveredAt: number;
   replayedAt?: number;
@@ -553,7 +555,7 @@ export function projectionMatchesDurableFacts(
 }
 
 export function auditOperation(params: {
-  db: DatabaseSync;
+  db: DelegateArtifactDatabaseHandle;
   action: string;
   outcome: string;
   claimId?: string;
@@ -580,7 +582,7 @@ export function auditOperation(params: {
 }
 
 export function resolveClaimForRecipient(params: {
-  db: DatabaseSync;
+  db: DelegateArtifactDatabaseHandle;
   claimId: string;
   recipientSessionKey: string;
   recipientSessionId: string;

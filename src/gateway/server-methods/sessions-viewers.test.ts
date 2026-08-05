@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 async function declare(params: {
@@ -11,8 +11,8 @@ async function declare(params: {
 }) {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers["sessions.viewers.set"],
-    'sessionsHandlers["sessions.viewers.set"] test invariant',
+    sessionSubscriptionHandlers["sessions.viewers.set"],
+    'sessionSubscriptionHandlers["sessions.viewers.set"] test invariant',
   )({
     req: { id: "req-viewers", method: "sessions.viewers.set" } as never,
     params: params.body,

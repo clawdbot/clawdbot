@@ -10,6 +10,7 @@ import {
   type DetachedTaskTerminalState,
 } from "../tasks/detached-task-runtime-contract.js";
 import { resolveRequiredCompletionTerminalResult } from "../tasks/task-completion-contract.js";
+import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -38,7 +39,7 @@ export function resolveFinalizedSubagentTaskState(
   ) {
     return undefined;
   }
-  const progressSummary = completion.resultText ?? undefined;
+  const progressSummary = resolveSubagentCompletionResultText(entry);
   if (
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
     entry.suppressAnnounceReason !== "steer-restart"
@@ -55,7 +56,7 @@ export function resolveFinalizedSubagentTaskState(
   if (outcome.status === "ok") {
     const terminal =
       entry.expectsCompletionMessage === true
-        ? resolveRequiredCompletionTerminalResult(completion.resultText)
+        ? resolveRequiredCompletionTerminalResult(progressSummary)
         : {};
     return {
       status: "succeeded",

@@ -25,7 +25,7 @@ describe("Telegram QA profiles", () => {
 
     expect(live).not.toContain("telegram-long-final-reuses-preview");
     expect(mock).toContain("telegram-long-final-reuses-preview");
-    expect(mock).toContain("telegram-assistant-transcript-role-boundary");
+    expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");
     expect(mock).not.toContain("telegram-startup-getme-live");
   });
 
@@ -36,7 +36,7 @@ describe("Telegram QA profiles", () => {
     });
 
     expect(scenarioIds).toContain("channel-message-flows");
-    expect(scenarioIds).toContain("native-command-session-target");
+    expect(scenarioIds).not.toContain("native-command-session-target");
   });
 
   it("lets explicit scenarios override profile selection", () => {

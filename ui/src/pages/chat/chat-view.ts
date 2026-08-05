@@ -108,8 +108,10 @@ export type ChatProps = {
   onObserverVisibilityChange?: (visible: boolean) => void;
   sessionRailCompanion?: ChatSessionCompanionThread;
   sessionRailOpenRequest?: number;
+  sessionRailConsumedOpenRequest?: number;
   sessionRailMode?: SessionRailMode;
   sessionRailDocked?: boolean;
+  onSessionRailOpenRequestConsumed?: (openRequest: number) => void;
   onSessionRailSubmit?: (question: string) => void;
   onSessionRailDraftChange?: (draft: string) => void;
   onSessionRailClear?: () => void;
@@ -643,6 +645,8 @@ export function renderChat(props: ChatProps) {
                       .companion=${props.sessionRailCompanion}
                       .connected=${props.connected}
                       .openRequest=${props.sessionRailOpenRequest ?? 0}
+                      .consumedOpenRequest=${props.sessionRailConsumedOpenRequest ?? 0}
+                      .onOpenRequestConsumed=${props.onSessionRailOpenRequestConsumed}
                       .onSubmit=${props.onSessionRailSubmit}
                       .onDraftChange=${props.onSessionRailDraftChange}
                       .onClear=${props.onSessionRailClear}

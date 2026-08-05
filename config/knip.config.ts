@@ -127,8 +127,8 @@ const rootEntries = [
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagent-registry.runtime.ts!",
-  // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
-  "src/agents/subagent-orphan-recovery.ts!",
+  // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
+  "src/agents/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
@@ -619,11 +619,6 @@ const config = {
     "packages/memory-host-sdk": {
       entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
-    },
-    "packages/speech-core": {
-      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
-      project: ["**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
     },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],

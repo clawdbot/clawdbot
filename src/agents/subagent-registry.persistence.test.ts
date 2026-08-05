@@ -11,7 +11,6 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
@@ -40,10 +39,6 @@ const { announceSpy } = vi.hoisted(() => ({
 }));
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
-}));
-
-vi.mock("./subagent-orphan-recovery.js", () => ({
-  scheduleOrphanRecovery: vi.fn(),
 }));
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -190,7 +185,6 @@ describe("subagent registry persistence", () => {
       startedAt: 111,
       endedAt: 222,
     });
-    vi.mocked(scheduleOrphanRecovery).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
   });
@@ -249,6 +243,7 @@ describe("subagent registry persistence", () => {
       },
       runSubagentAnnounceFlow: announceSpy,
     });
+
     expect(() =>
       registerSubagentRun({
         runId: "run-persist-fails",
@@ -803,13 +798,13 @@ describe("subagent registry persistence", () => {
     );
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
+    await flushQueuedRegistryWork();
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
     expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
       expect.objectContaining({ runId, terminalOwner: "interrupted-recovery" }),
     ]);
+    await testing.sweepOnceForTests();
   });
 
   it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
@@ -843,7 +838,7 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("keeps stale unended restored runs with abortedLastRun for lifecycle recovery", async () => {
+  it("finalizes stale unended restored runs with abortedLastRun in the sweeper", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
       expectFields(request, {
         method: "agent.wait",
@@ -884,15 +879,15 @@ describe("subagent registry persistence", () => {
     });
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
+    await flushQueuedRegistryWork();
+    await testing.sweepOnceForTests();
 
-    // The dead pre-restart run must not be queried before orphan recovery can
-    // replace it with a fresh turn through the Gateway-owned runtime.
+    // The dead pre-restart run is terminalized without querying its stale run id.
     expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
-    expect(
-      listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
-    ).toBe(true);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("stale aborted subagent run"),
+    });
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {

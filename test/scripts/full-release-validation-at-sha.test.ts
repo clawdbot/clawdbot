@@ -9,7 +9,6 @@ import {
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
-  runGhRead,
   shouldDeleteTemporaryWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
@@ -163,30 +162,9 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
-    const calls: unknown[][] = [];
-    expect(
-      runGhRead(["api", "repos/openclaw/openclaw/actions/runs/123"], {
-        execFileSyncImpl: (...args: unknown[]) => {
-          calls.push(args);
-          return " result ";
-        },
-      }),
-    ).toBe("result");
-    expect(calls).toEqual([
-      [
-        "gh",
-        ["api", "repos/openclaw/openclaw/actions/runs/123"],
-        expect.objectContaining({
-          killSignal: "SIGKILL",
-          timeout: 60_000,
-        }),
-      ],
-    ]);
-
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
-    expect(source).toContain(
-      'runGhRead(["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`])',
-    );
+    expect(source).toContain("timeout: GH_READ_TIMEOUT_MS");
+    expect(source.match(/GH_READ_OPTIONS/gu)).toHaveLength(3);
     expect(source).toContain('const dispatchOutput = run("gh", dispatchArgs');
   });
 

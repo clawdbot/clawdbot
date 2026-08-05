@@ -124,6 +124,10 @@ const bootLifecycle = vi.hoisted(() => ({
   record: vi.fn(
     (_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string): string | undefined => "boot-id",
   ),
+  recover: vi.fn(
+    (_bootId?: string, _env?: NodeJS.ProcessEnv, _nowMs?: number): string | undefined =>
+      "recovered-boot-id",
+  ),
   complete: vi.fn(),
 }));
 const netState = vi.hoisted(() => ({
@@ -318,6 +322,8 @@ vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
     bootLifecycle.inspect(env, nowMs),
   recordGatewayBootStart: (env?: NodeJS.ProcessEnv, nowMs?: number, reason?: string) =>
     bootLifecycle.record(env, nowMs, reason),
+  recordGatewayCrashLoopRecovery: (bootId?: string, env?: NodeJS.ProcessEnv, nowMs?: number) =>
+    bootLifecycle.recover(bootId, env, nowMs),
   completeGatewayBootLifecycle: (bootId: string | undefined, completion: unknown) =>
     bootLifecycle.complete(bootId, completion),
 }));
@@ -421,6 +427,7 @@ describe("gateway run option collisions", () => {
     bootLifecycle.decisions.length = 0;
     bootLifecycle.inspect.mockClear();
     bootLifecycle.record.mockClear();
+    bootLifecycle.recover.mockClear();
     bootLifecycle.complete.mockClear();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
@@ -479,6 +486,7 @@ describe("gateway run option collisions", () => {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
       channelAutostartSuppression?: { reason?: string; message?: string };
+      tryRecoverChannelAutostartSuppression?: () => boolean;
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
@@ -489,7 +497,7 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
 
-  it("runs the fast-path bootstrap hook before gateway startup", async () => {
+  it("composes gateway run registration through startup after the fast-path bootstrap", async () => {
     normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
       callOrder.push("normalize");
     });
@@ -502,6 +510,15 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("rejects invalid gateway ports before startup", async () => {
+    await expect(
+      runGatewayCli(["gateway", "--port", "0", "--token", "test-token"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Invalid --port. Use a port number from 1 to 65535");
   });
 
   it("suppresses ambient channel triggers for dev gateways by default", async () => {
@@ -1033,6 +1050,18 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("openclaw gateway run --dev");
     expect(runtimeErrors.join("\n")).toContain("--profile <name> with a free port");
+  });
+
+  it("reports forced port cleanup failures before startup", async () => {
+    forceFreePortAndWait.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Could not free port 18789: boom");
+    expect(runtimeErrors.join("\n")).toContain("openclaw gateway status --deep");
   });
 
   it("marks service-mode gateway descendants with the live gateway pid", async () => {
@@ -1606,6 +1635,55 @@ describe("gateway run option collisions", () => {
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
+  it("recovers channel autostart only after the full breaker window drains", async () => {
+    runGatewayLoop.mockImplementationOnce(
+      async ({
+        beginBoot,
+        start,
+      }: {
+        beginBoot?: (startedAtMs: number) => Promise<void> | void;
+        start: GatewayLoopStart;
+      }) => {
+        await beginBoot?.(1000);
+        await start({ startupStartedAt: 1000 });
+      },
+    );
+    bootLifecycle.decisions.push({
+      tripped: true,
+      uncleanBoots: 3,
+      windowMs: 300_000,
+      shouldWriteStabilityBundle: false,
+      recovered: false,
+    });
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    const recover = gatewayStartOptions().tryRecoverChannelAutostartSuppression;
+    expect(recover).toBeTypeOf("function");
+    bootLifecycle.decisions.push(
+      {
+        tripped: false,
+        uncleanBoots: 1,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+      {
+        tripped: false,
+        uncleanBoots: 0,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+    );
+
+    expect(recover?.()).toBe(false);
+    expect(bootLifecycle.recover).not.toHaveBeenCalled();
+    expect(recover?.()).toBe(true);
+    expect(bootLifecycle.recover).toHaveBeenCalledWith("boot-id", process.env, undefined);
+    expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
+  });
+
   it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
     const port = await getFreePort();
     configState.snapshot = {
@@ -1626,6 +1704,9 @@ describe("gateway run option collisions", () => {
     });
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
+    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
+    expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
+    expect(runtimeErrors.join("\n")).toContain("gateway stop");
   });
 
   it("exits 78 and parks launchd for a repairable shared-state schema", async () => {

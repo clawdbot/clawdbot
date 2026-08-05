@@ -12,9 +12,6 @@ scenario:
   gatewayConfigPatch:
     channels:
       telegram:
-        groups:
-          "*":
-            requireMention: false
         streaming:
           mode: partial
   successCriteria:

@@ -993,6 +993,17 @@ export function hasAssistantVisibleReply(params: {
   return resolveSendableOutboundReplyParts(params).hasContent || Boolean(params.audioAsVoice);
 }
 
+function hasReplyTargetOnlyTerminalEvidence(parsed: ReplyDirectiveParseResult): boolean {
+  const hasReplyTarget = Boolean(parsed.replyToId || parsed.replyToTag || parsed.replyToCurrent);
+  return (
+    hasReplyTarget &&
+    parsed.text.trim().length === 0 &&
+    !resolveSendableOutboundReplyParts(parsed).hasMedia &&
+    !parsed.audioAsVoice &&
+    !parsed.reaction
+  );
+}
+
 /** Builds normalized stream payload data for assistant visible output. */
 function buildAssistantStreamData(params: {
   text?: string;
@@ -1712,11 +1723,13 @@ export function handleMessageEnd(
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
+  let replyTargetOnlyTerminalEvidence = false;
   const parsedText = (() => {
     if (!trimmedText) {
       return null;
     }
     const parsed = parseReplyDirectives(trimmedText);
+    replyTargetOnlyTerminalEvidence = hasReplyTargetOnlyTerminalEvidence(parsed);
     const displayText = resolveCommentaryDisplayText(parsed.text, { final: true });
     return displayText === parsed.text ? parsed : { ...parsed, text: displayText };
   })();
@@ -1763,6 +1776,9 @@ export function handleMessageEnd(
   const silentExpectedWithoutSentinel =
     ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
   const finalAssistantText = silentExpectedWithoutSentinel ? "" : cleanedText;
+  const terminalAssistantTextEvidence = replyTargetOnlyTerminalEvidence
+    ? trimmedText
+    : finalAssistantText;
   const deliveredBlockReplyTexts = ctx.state.deliveredBlockReplyTexts.filter(Boolean);
   const attemptedBlockReplyTexts = (ctx.state.attemptedBlockReplyTexts ?? []).filter(Boolean);
   const effectiveDeliveredBlockReplyTexts =
@@ -1866,12 +1882,13 @@ export function handleMessageEnd(
     .join("\n");
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({
-    text: finalAssistantText,
+    text: terminalAssistantTextEvidence,
     addedDuringMessage,
     chunkerHasBuffered,
     reconcileCurrentMessage:
       ctx.state.blockReplyBreak === "text_end" &&
       addedDuringMessage &&
+      !replyTargetOnlyTerminalEvidence &&
       finalAssistantText !== currentMessageAssistantText,
   });
 

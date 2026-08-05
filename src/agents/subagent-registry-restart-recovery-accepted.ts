@@ -1,0 +1,188 @@
+import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.js";
+import { isRestartRecoveryLifecycleCurrent } from "./subagent-registry-restart-recovery-helpers.js";
+import { settleAcceptedRecoverySession } from "./subagent-registry-restart-recovery-session.js";
+import type {
+  RestartRecoveryParams,
+  RestartRecoveryResult,
+} from "./subagent-registry-restart-recovery-types.js";
+import type {
+  SubagentRestartRecoveryReceipt,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
+
+export async function reconcileAcceptedRecovery(params: {
+  agentId: string;
+  attempts: number;
+  childSessionKey: string;
+  currentSessionId?: string;
+  currentSessionLifecycleRevision?: string;
+  clearAcceptedRecovery: RestartRecoveryParams["clearAcceptedRecovery"];
+  entry: SubagentRunRecord;
+  getRun: RestartRecoveryParams["getRun"];
+  isCurrent: () => boolean;
+  now: number;
+  receipt: SubagentRestartRecoveryReceipt;
+  replaceRun: RestartRecoveryParams["replaceRun"];
+  resumeAcceptedRecovery: RestartRecoveryParams["resumeAcceptedRecovery"];
+  runId: string;
+  storePath: string;
+  warn: RestartRecoveryParams["warn"];
+}): Promise<RestartRecoveryResult> {
+  let owner = params.entry;
+  if (!isRestartRecoveryLifecycleCurrent(params.receipt)) {
+    return {
+      status: "terminal",
+      error: "retired Gateway lifecycle",
+      suppressSessionEffects: true,
+      target: { runId: owner.runId, entry: owner },
+    };
+  }
+  if (params.runId !== params.receipt.idempotencyKey) {
+    let remapped = false;
+    let remapError: unknown;
+    try {
+      remapped =
+        params.isCurrent() &&
+        params.replaceRun({
+          previousRunId: params.runId,
+          nextRunId: params.receipt.idempotencyKey,
+          fallback: params.entry,
+          expected: params.entry,
+          transcriptTarget: resolveInternalSessionEffectsTarget({
+            agentId: params.agentId,
+            runId: params.receipt.idempotencyKey,
+            storePath: params.storePath,
+          }),
+          task: params.entry.task,
+          restartRecovery: params.receipt,
+          requirePersistence: true,
+        });
+    } catch (error) {
+      remapError = error;
+    }
+    if (!remapped) {
+      params.warn("accepted subagent restart recovery could not remap its exact row", {
+        runId: params.runId,
+        childSessionKey: params.childSessionKey,
+        ...(remapError === undefined ? {} : { error: remapError }),
+      });
+      return { status: "deferred" };
+    }
+    const successor = params.getRun(params.receipt.idempotencyKey);
+    if (!successor || successor.execution.restartRecovery !== params.receipt) {
+      params.warn("accepted subagent restart recovery lost its remapped owner", {
+        runId: params.runId,
+        childSessionKey: params.childSessionKey,
+      });
+      return { status: "deferred" };
+    }
+    owner = successor;
+  }
+
+  if (
+    !params.currentSessionId ||
+    params.currentSessionId !== params.receipt.sessionId ||
+    (params.receipt.sessionLifecycleRevision !== undefined &&
+      params.currentSessionLifecycleRevision !== params.receipt.sessionLifecycleRevision)
+  ) {
+    return {
+      status: "terminal",
+      error:
+        "accepted subagent restart recovery lost its exact session before ownership settlement",
+      suppressSessionEffects: true,
+      target: { runId: owner.runId, entry: owner },
+    };
+  }
+
+  try {
+    if (
+      !(await settleAcceptedRecoverySession({
+        attempts: params.attempts,
+        childSessionKey: params.childSessionKey,
+        isOwnerCurrent: () =>
+          params.getRun(owner.runId) === owner &&
+          owner.execution.restartRecovery === params.receipt &&
+          isRestartRecoveryLifecycleCurrent(params.receipt),
+        sessionId: params.receipt.sessionId,
+        sessionLifecycleRevision: params.receipt.sessionLifecycleRevision,
+        now: params.now,
+        runId: owner.runId,
+        storePath: params.storePath,
+      }))
+    ) {
+      if (!isRestartRecoveryLifecycleCurrent(params.receipt)) {
+        return {
+          status: "terminal",
+          error: "retired Gateway lifecycle",
+          suppressSessionEffects: true,
+          target: { runId: owner.runId, entry: owner },
+        };
+      }
+      params.warn("accepted subagent restart recovery session changed during settlement", {
+        runId: owner.runId,
+        childSessionKey: params.childSessionKey,
+      });
+      return { status: "deferred" };
+    }
+  } catch (error) {
+    if (!isRestartRecoveryLifecycleCurrent(params.receipt)) {
+      return {
+        status: "terminal",
+        error: "retired Gateway lifecycle",
+        suppressSessionEffects: true,
+        target: { runId: owner.runId, entry: owner },
+      };
+    }
+    params.warn("accepted subagent restart recovery could not clear its abort marker", {
+      runId: owner.runId,
+      childSessionKey: params.childSessionKey,
+      error,
+    });
+    return { status: "deferred" };
+  }
+  if (!isRestartRecoveryLifecycleCurrent(params.receipt)) {
+    return {
+      status: "terminal",
+      error: "retired Gateway lifecycle",
+      suppressSessionEffects: true,
+      target: { runId: owner.runId, entry: owner },
+    };
+  }
+
+  try {
+    if (
+      !params.clearAcceptedRecovery({
+        runId: owner.runId,
+        expected: owner,
+        sessionId: params.receipt.sessionId,
+        idempotencyKey: params.receipt.idempotencyKey,
+      })
+    ) {
+      params.warn("accepted subagent restart recovery could not retire its receipt", {
+        runId: owner.runId,
+        childSessionKey: params.childSessionKey,
+      });
+      return { status: "deferred" };
+    }
+  } catch (error) {
+    params.warn("accepted subagent restart recovery could not persist receipt retirement", {
+      error,
+      runId: owner.runId,
+      childSessionKey: params.childSessionKey,
+    });
+    return { status: "deferred" };
+  }
+  if (
+    !params.resumeAcceptedRecovery({
+      runId: owner.runId,
+      expected: owner,
+    })
+  ) {
+    params.warn("accepted subagent restart recovery lost its settled owner", {
+      runId: owner.runId,
+      childSessionKey: params.childSessionKey,
+    });
+    return { status: "deferred" };
+  }
+  return { status: "accepted" };
+}

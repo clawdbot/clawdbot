@@ -270,6 +270,45 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("previews plugin updates in Nix mode without acquiring a lease or writing state", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+    const config = createTrackedPluginConfig({
+      pluginId: "alpha",
+      spec: "@acme/alpha@1.0.0",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [
+        {
+          pluginId: "alpha",
+          status: "updated",
+          message: "Would update alpha: 1.0.0 -> 1.1.0.",
+        },
+      ],
+    });
+    const lifecycleLease = await import("../plugins/plugin-lifecycle-lease.js");
+    const acquireLease = vi.spyOn(lifecycleLease, "withPluginLifecycleLease");
+
+    try {
+      await runPluginsCommand(["plugins", "update", "alpha", "--dry-run"]);
+
+      expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+        expect.objectContaining({ dryRun: true, pluginIds: ["alpha"] }),
+      );
+      expect(acquireLease).not.toHaveBeenCalled();
+      expect(writeConfigFile).not.toHaveBeenCalled();
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+      expect(refreshPluginRegistry).not.toHaveBeenCalled();
+      expect(runtimeLogs).toContain("Would update alpha: 1.0.0 -> 1.1.0.");
+    } finally {
+      acquireLease.mockRestore();
+    }
+  });
+
   it.each([
     { id: "missing-plugin", args: [] },
     { id: "missing-plugin", args: ["--dry-run"] },

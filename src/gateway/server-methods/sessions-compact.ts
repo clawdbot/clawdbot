@@ -33,7 +33,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveSessionModelRef,

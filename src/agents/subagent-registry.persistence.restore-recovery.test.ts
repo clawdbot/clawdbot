@@ -12,7 +12,6 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resetDetachedTaskLifecycleRuntimeForTests } from "../tasks/detached-task-runtime.test-support.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import {
   canonicalSubagentRunFixtures,
   createSubagentRegistryTestDeps,
@@ -41,10 +40,6 @@ const { announceSpy } = vi.hoisted(() => ({
 }));
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
-}));
-
-vi.mock("./subagent-orphan-recovery.js", () => ({
-  scheduleOrphanRecovery: vi.fn(),
 }));
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -201,7 +196,6 @@ describe("subagent registry persistence", () => {
       startedAt: 111,
       endedAt: 222,
     });
-    vi.mocked(scheduleOrphanRecovery).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
   });
@@ -280,43 +274,6 @@ describe("subagent registry persistence", () => {
     ]);
   });
 
-  it("preserves restored interrupted-recovery owners for orphan replay", async () => {
-    const now = Date.now();
-    const runId = "run-interrupted-recovery-restore";
-    await writePersistedRegistry(
-      {
-        version: 2,
-        runs: {
-          [runId]: {
-            runId,
-            childSessionKey: "agent:main:subagent:interrupted-recovery-restore",
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "replay interrupted terminal",
-            cleanup: "keep",
-            createdAt: now - 100,
-            startedAt: now - 50,
-            endedAt: now,
-            endedReason: "subagent-error",
-            outcome: { status: "error", error: "restart interrupted run" },
-            terminalOwner: "interrupted-recovery",
-            completion: { required: false, resultText: null, capturedAt: now },
-          },
-        },
-      },
-      { seedChildSessions: false },
-    );
-
-    restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
-    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
-      expect.objectContaining({ runId, terminalOwner: "interrupted-recovery" }),
-    ]);
-  });
-
   it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
     const now = Date.now();
     const runId = "run-stale-unended-restore";
@@ -343,58 +300,6 @@ describe("subagent registry persistence", () => {
     expect(callGateway).not.toHaveBeenCalled();
     expect(announceSpy).not.toHaveBeenCalled();
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
-  });
-
-  it("keeps stale unended restored runs with abortedLastRun for lifecycle recovery", async () => {
-    vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-      expectFields(request, {
-        method: "agent.wait",
-      });
-      expectFields((request as { params?: unknown }).params, {
-        runId: "run-stale-aborted-restore",
-      });
-      return {
-        status: "pending",
-      };
-    });
-    const now = Date.now();
-    const runId = "run-stale-aborted-restore";
-    const childSessionKey = "agent:main:subagent:stale-aborted-restore";
-    await writePersistedRegistry(
-      {
-        version: 2,
-        runs: {
-          [runId]: {
-            runId,
-            childSessionKey,
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "stale restart-recoverable work",
-            cleanup: "keep",
-            createdAt: now - 3 * 60 * 60 * 1_000,
-            startedAt: now - 3 * 60 * 60 * 1_000,
-          },
-        },
-      },
-      { seedChildSessions: false },
-    );
-    await writeChildSessionEntry({
-      sessionKey: childSessionKey,
-      sessionId: "sess-stale-aborted-restore",
-      updatedAt: now,
-      abortedLastRun: true,
-    });
-
-    restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
-
-    // The dead pre-restart run must not be queried before orphan recovery can
-    // replace it with a fresh turn through the Gateway-owned runtime.
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
-    expect(
-      listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
-    ).toBe(true);
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {

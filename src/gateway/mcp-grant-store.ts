@@ -8,6 +8,7 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -86,8 +87,14 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1h
 const MAX_TTL_MS = 12 * 60 * 60 * 1000;
 
-const grantsByToken = new Map<string, McpAttachGrant>();
-const clientGrantsByToken = new Map<string, StoredMcpLoopbackClientGrant>();
+const grantsByToken = resolveGlobalMap<string, McpAttachGrant>(
+  Symbol.for("openclaw.mcpAttachGrants"),
+  "close-and-restart",
+);
+const clientGrantsByToken = resolveGlobalMap<string, StoredMcpLoopbackClientGrant>(
+  Symbol.for("openclaw.mcpLoopbackClientGrants"),
+  "close-and-restart",
+);
 
 function clampTtlMs(ttlMs: number | undefined): number {
   if (!Number.isFinite(ttlMs) || (ttlMs as number) <= 0) {

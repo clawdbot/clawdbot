@@ -170,6 +170,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "continuationChainId",
   "pendingPostCompactionDelegates",
   "quotaSuspension",
+  "pendingTranscriptRepair",
   "visibility",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"

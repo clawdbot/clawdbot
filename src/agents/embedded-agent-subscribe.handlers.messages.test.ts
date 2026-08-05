@@ -3109,6 +3109,9 @@ describe("handleMessageEnd", () => {
       stripBlockTags,
       consumeReplyDirectives: vi.fn((text: string) => ({ text })),
       state: {
+        assistantTexts: ["Hello world"],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
         blockBuffer: "",
         deltaBuffer: "",
       },
@@ -3128,7 +3131,75 @@ describe("handleMessageEnd", () => {
       { final: true },
     );
     expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
-    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "", reconcileCurrentMessage: true }),
+    );
+  });
+
+  it("preserves reply-target-only streamed text as terminal evidence without delivering it", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn(() => null),
+      state: {
+        assistantTexts: ["[[reply_to_current]]"],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[[reply_to_current]]" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    });
+
+    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "[[reply_to_current]]",
+        addedDuringMessage: true,
+        reconcileCurrentMessage: false,
+      }),
+    );
+  });
+
+  it("does not retain reaction-only text as reply-target terminal evidence", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn(() => null),
+      state: {
+        assistantTexts: ["[[react_to_current:✅]]"],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[[react_to_current:✅]]" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    });
+
+    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "",
+        addedDuringMessage: true,
+        reconcileCurrentMessage: true,
+      }),
+    );
   });
 
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {

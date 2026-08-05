@@ -76,6 +76,55 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.options).toMatchObject({ mediaLocalRoots: undefined });
   });
 
+  it.each([
+    { action: "send" as const, expectedAction: "sendMessage", message: "    @room" },
+    {
+      action: "send" as const,
+      expectedAction: "sendMessage",
+      message: "    @alice:example.org",
+    },
+    { action: "edit" as const, expectedAction: "editMessage", message: "    @room" },
+    {
+      action: "edit" as const,
+      expectedAction: "editMessage",
+      message: "    @alice:example.org",
+    },
+  ])(
+    "preserves leading Markdown indentation for $action with $message",
+    async ({ action, expectedAction, message }) => {
+      await matrixMessageActions.handleAction?.(
+        createContext({
+          action,
+          accountId: "ops",
+          params:
+            action === "send"
+              ? { to: "room:!room:example", message }
+              : { roomId: "!room:example", messageId: "$original", message },
+        }),
+      );
+
+      expect(matrixActionCall().input).toMatchObject({
+        action: expectedAction,
+        accountId: "ops",
+        content: message,
+      });
+    },
+  );
+
+  it.each(["send", "edit"] as const)("rejects a missing %s message", async (action) => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action,
+          params:
+            action === "send"
+              ? { to: "room:!room:example" }
+              : { roomId: "!room:example", messageId: "$original" },
+        }),
+      ),
+    ).rejects.toThrow("message required");
+  });
+
   it("forwards accountId for permissions actions", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({

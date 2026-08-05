@@ -831,6 +831,8 @@ describe("durable continuation_work dispatch", () => {
       callGateway: callGateway as never,
       childSessionKey,
       spawnMode: "run",
+      expectedSessionId: "continuation-child-session",
+      expectedLifecycleRevision: "continuation-child-revision",
     });
     expect(callGateway).not.toHaveBeenCalled();
 
@@ -860,6 +862,8 @@ describe("durable continuation_work dispatch", () => {
         key: childSessionKey,
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "continuation-child-session",
+        expectedLifecycleRevision: "continuation-child-revision",
       },
       timeoutMs: 10_000,
     });
@@ -878,6 +882,8 @@ describe("durable continuation_work dispatch", () => {
       callGateway: callGateway as never,
       childSessionKey,
       spawnMode: "run",
+      expectedSessionId: "continuation-delegate-child-session",
+      expectedLifecycleRevision: "continuation-delegate-child-revision",
     });
     // Deletion is deferred while the delegate is queued so the child session (and
     // its chain state) survives until the delegate's hedge fires.
@@ -911,6 +917,8 @@ describe("durable continuation_work dispatch", () => {
       callGateway: callGateway as never,
       childSessionKey,
       spawnMode: "run",
+      expectedSessionId: "continuation-running-child-session",
+      expectedLifecycleRevision: "continuation-running-child-revision",
     });
     // Must still defer: a queued-only gate would delete the child out from under
     // the running delegate.

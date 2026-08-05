@@ -1,6 +1,7 @@
 import type { SubagentEndReason } from "../context-engine/types.js";
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
@@ -16,6 +17,8 @@ export type SubagentRunOutcome = {
 
 export type SubagentCompletionRequest = {
   runId: string;
+  /** Exact in-process owner required after acquiring the terminal completion lock. */
+  expectedEntry?: SubagentRunRecord;
   endedAt?: number;
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
@@ -26,6 +29,7 @@ export type SubagentCompletionRequest = {
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type ContextEngineSubagentEndedParams = {
@@ -57,13 +61,35 @@ export type PendingFinalDeliveryPayload = {
   outcome?: SubagentRunOutcome;
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
-  frozenResultText?: string | null;
-  fallbackFrozenResultText?: string | null;
   wakeOnDescendantSettle?: boolean;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
+
+export type SubagentRestartRecoveryReceipt = {
+  sessionId: string;
+  sessionMarker: string;
+  sessionLifecycleRevision?: string;
+  idempotencyKey: string;
+  phase: "reserved" | "attempted" | "consumed" | "accepted" | "abandoned";
+  lifecycleGeneration?: string;
+};
+
+type SubagentDeliveryDisposition =
+  | "delivered"
+  | "session_queued"
+  | "intentional_non_delivery"
+  | "retryable"
+  | "ambiguous"
+  | "permanent_failure";
 
 type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
+  /** Gateway lifecycle that owns child-session effects for this run. */
+  lifecycleGeneration?: string;
+  /** Durable dispatch receipt for one interrupted-session snapshot. */
+  restartRecovery?: SubagentRestartRecoveryReceipt;
+  /** Sticky terminal policy: this run must never mutate its child session again. */
+  suppressSessionEffects?: true;
   acceptedAt?: number;
   startedAt?: number;
   endedAt?: number;
@@ -79,6 +105,7 @@ export type SubagentCompletionState = {
   capturedAt?: number;
   fallbackResultText?: string | null;
   fallbackCapturedAt?: number;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
@@ -122,13 +149,22 @@ export type SubagentCompletionDeliveryState = {
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;
+  /** Closed result of the latest transport attempt; never doubles as delivery success. */
+  disposition?: SubagentDeliveryDisposition;
+  /** Logical obligation generation. Redrive increments it and never revives an old row. */
+  generation?: number;
+  queueId?: string;
+  windowStartedAt?: number;
+  deadlineAt?: number;
+  nextAttemptAt?: number;
   steeringLeaseId?: string;
   steeringLeasedAt?: number;
   steeringInjectedAt?: number;
   suspendedAt?: number;
-  suspendedReason?: "retry-limit" | "expiry";
+  suspendedReason?: "retry-limit" | "expiry" | "permanent_failure";
+  dismissedAt?: number;
   discardedAt?: number;
-  discardReason?: "expired" | "pressure-pruned";
+  discardReason?: "expired";
   discardedPayloadSummary?: {
     requesterSessionKey?: string;
     childSessionKey?: string;
@@ -176,6 +212,23 @@ type SubagentKillReconciliationState = {
   supersededAt?: number;
 };
 
+type SubagentKillIntent = {
+  requestedAt: number;
+  reason: string;
+  lifecycleGeneration?: string;
+  sessionId?: string;
+  sessionLifecycleRevision?: string;
+  suppressTaskDelivery?: boolean;
+};
+
+export type SubagentAcceptedSteerDispatch = {
+  gatewayRunId: string;
+  phase?: "dispatching" | "accepted";
+  lifecycleGeneration?: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+};
+
 export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
@@ -213,10 +266,14 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  /** Accepted steer run awaiting remap or exact termination confirmation. */
+  acceptedSteerDispatch?: SubagentAcceptedSteerDispatch;
   /** Sticky owner while restart recovery replays this exact terminal run. */
   terminalOwner?: "interrupted-recovery";
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
+  /** Durable operator cancellation ownership before runtime side effects complete. */
+  killIntent?: SubagentKillIntent;
   /** Durable requester-stop policy until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;

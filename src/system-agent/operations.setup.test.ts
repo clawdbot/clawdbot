@@ -1,7 +1,7 @@
 // OpenClaw operation tests cover rescue operation planning and execution.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +13,7 @@ import {
   createSystemAgentTestRuntime,
   expectSystemAgentAuditRecord as expectAuditRecord,
   expectTestRecordFields as expectRecordFields,
+  installSystemAgentClaudeCliBackendTestFixture,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
   requireTestRecord as requireRecord,
 } from "./system-agent.test-helpers.js";
@@ -138,7 +139,23 @@ vi.mock("../config/config.js", () => ({
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
+
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingState: () => undefined,
+  readLocalOnboardingStateForConfig: () => undefined,
+  completeLocalOnboarding: () => false,
+}));
+
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let restoreCliBackendFixture: (() => void) | undefined;
+
+beforeAll(() => {
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+});
+
+afterAll(() => {
+  restoreCliBackendFixture?.();
+});
 
 describe("parseSystemAgentOperation", () => {
   let stateDirSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -170,6 +187,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: true,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -339,6 +358,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: [],
     }));
 
@@ -410,6 +431,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
 

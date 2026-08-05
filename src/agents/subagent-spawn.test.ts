@@ -23,6 +23,7 @@ const hoisted = vi.hoisted(() => ({
   loadPreparedModelCatalogMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
+  getSubagentRunByRunIdMock: vi.fn(),
   startQueuedSubagentRunMock: vi.fn(),
   settleFailedQueuedSubagentLaunchMock: vi.fn(),
   completeCollectorLaunchCleanupMock: vi.fn(),
@@ -178,6 +179,7 @@ describe("spawnSubagentDirect seam flow", () => {
       loadPreparedModelCatalogMock: hoisted.loadPreparedModelCatalogMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      getSubagentRunByRunIdMock: hoisted.getSubagentRunByRunIdMock,
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
       settleFailedQueuedSubagentLaunchMock: hoisted.settleFailedQueuedSubagentLaunchMock,
       completeCollectorLaunchCleanupMock: hoisted.completeCollectorLaunchCleanupMock,
@@ -200,6 +202,9 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.loadPreparedModelCatalogMock.mockReset().mockResolvedValue([]);
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.getSubagentRunByRunIdMock
+      .mockReset()
+      .mockReturnValue({ execution: { status: "queued" } });
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
     hoisted.settleFailedQueuedSubagentLaunchMock.mockReset().mockReturnValue(true);
     hoisted.completeCollectorLaunchCleanupMock.mockReset();
@@ -578,23 +583,28 @@ describe("spawnSubagentDirect seam flow", () => {
     let stopAllowed = false;
     let agentCalls = 0;
     let abortCalls = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        return { runId: `gateway-${agentCalls}` };
-      }
-      if (request.method === "chat.abort") {
-        abortCalls += 1;
-        if (!stopAllowed) {
-          throw new Error("abort unavailable");
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          agentCalls += 1;
+          return { runId: `gateway-${agentCalls}` };
+        }
+        if (request.method === "chat.abort") {
+          abortCalls += 1;
+          if (!stopAllowed) {
+            throw new Error("abort unavailable");
+          }
+          return {
+            aborted: true,
+            runIds: [requireRecord(request.params).runId],
+          };
+        }
+        if (request.method === "sessions.delete") {
+          throw new Error("delete unavailable");
         }
         return {};
-      }
-      if (request.method === "sessions.delete") {
-        throw new Error("delete unavailable");
-      }
-      return {};
-    });
+      },
+    );
 
     const first = await spawnSubagentDirect(
       { task: "stop-confirmation-first", collect: true, groupId: "stop-confirmation" },
@@ -664,6 +674,105 @@ describe("spawnSubagentDirect seam flow", () => {
     releaseDelete?.();
     await vi.waitFor(() => expect(agentCalls).toBe(2));
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledOnce();
+  });
+
+  it("releases the collector slot only once an unconfirmed accepted launch loses its queued row", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+    });
+    // No frozen child-session identity, so guarded deletion cannot confirm the
+    // accepted run stopped and termination stays unconfirmed.
+    hoisted.updateSessionStoreMock.mockImplementation(async () => ({}));
+    hoisted.startQueuedSubagentRunMock.mockReturnValue(false);
+    const launchedTasks: string[] = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          launchedTasks.push(String(requireRecord(request.params).message));
+          return { runId: "gateway-unowned" };
+        }
+        if (request.method === "chat.abort") {
+          return { aborted: true, runIds: ["a-different-run"] };
+        }
+        return {};
+      },
+    );
+
+    await spawnSubagentDirect(
+      { task: "unowned-first", collect: true, groupId: "unowned-release" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    await spawnSubagentDirect(
+      { task: "unowned-second", collect: true, groupId: "unowned-release" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    // A still-owned queued row keeps its slot across repeated durable failures.
+    await vi.waitFor(() =>
+      expect(launchedTasks.filter((task) => task.includes("unowned-first")).length).toBeGreaterThan(
+        1,
+      ),
+    );
+    expect(launchedTasks.some((task) => task.includes("unowned-second"))).toBe(false);
+    expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
+
+    hoisted.getSubagentRunByRunIdMock.mockReturnValue(undefined);
+    await vi.waitFor(() =>
+      expect(launchedTasks.some((task) => task.includes("unowned-second"))).toBe(true),
+    );
+  });
+
+  it("keeps accepted ownership when a retry fails before returning", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+    });
+    hoisted.updateSessionStoreMock.mockImplementation(async () => ({}));
+    hoisted.startQueuedSubagentRunMock.mockImplementation(
+      (_runId: string, gatewayRunId: string) => gatewayRunId === "gateway-next",
+    );
+    let firstAttempts = 0;
+    const launchedTasks: string[] = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          const task = String(requireRecord(request.params).message);
+          launchedTasks.push(task);
+          if (task.includes("attempt-local-first")) {
+            firstAttempts += 1;
+            if (firstAttempts === 1) {
+              return { runId: "gateway-first" };
+            }
+            throw new Error("retry failed before acceptance");
+          }
+          return { runId: "gateway-next" };
+        }
+        if (request.method === "chat.abort") {
+          return { aborted: true, runIds: ["another-run"] };
+        }
+        return {};
+      },
+    );
+
+    const first = await spawnSubagentDirect(
+      { task: "attempt-local-first", collect: true, groupId: "attempt-local" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    await spawnSubagentDirect(
+      { task: "attempt-local-next", collect: true, groupId: "attempt-local" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    await vi.waitFor(() => expect(firstAttempts).toBeGreaterThanOrEqual(2));
+    expect(launchedTasks.some((task) => task.includes("attempt-local-next"))).toBe(false);
+    expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
+
+    hoisted.getSubagentRunByRunIdMock.mockReturnValue(undefined);
+    await vi.waitFor(() =>
+      expect(launchedTasks.some((task) => task.includes("attempt-local-next"))).toBe(true),
+    );
+    expect(first).toMatchObject({ status: "accepted" });
   });
 
   it("emits collector deletion after an asynchronous launch failure", async () => {
@@ -1179,6 +1288,8 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
     expect(persistedStore?.[childSessionKey]).toMatchObject({
+      sessionId: expect.any(String),
+      lifecycleRevision: expect.any(String),
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",

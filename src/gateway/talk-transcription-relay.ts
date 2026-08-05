@@ -160,7 +160,9 @@ function broadcastToOwner(
   connId: string,
   event: TalkTranscriptionRelayEvent,
 ): void {
-  context.broadcastToConnIds(TRANSCRIPTION_EVENT, event, new Set([connId]), { dropIfSlow: true });
+  context.broadcastToConnIds(TRANSCRIPTION_EVENT, event, new Set([connId]), {
+    dropIfSlow: event.type === "inputAudio" || event.type === "partial",
+  });
 }
 
 function ensureTranscriptionTurn(session: TranscriptionRelaySession): string {

@@ -10,6 +10,10 @@ const hasRecoverablePendingDelegateMock = vi.hoisted(() => vi.fn(() => false));
 const failStagedPostCompactionDelegatesForCleanupMock = vi.hoisted(() => vi.fn(() => 0));
 const countActiveDescendantRunsMock = vi.hoisted(() => vi.fn(() => 0));
 const logWarnMock = vi.hoisted(() => vi.fn());
+const cleanupSessionIdentity = {
+  expectedSessionId: "child-session-id",
+  expectedLifecycleRevision: "child-lifecycle-revision",
+} as const;
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
@@ -49,6 +53,28 @@ describe("deleteSubagentSessionForCleanup", () => {
     vi.useRealTimers();
   });
 
+  it("refuses key-only deletion without scheduling a retry", async () => {
+    const callGateway = vi.fn(async function mockCallGateway<T = Record<string, unknown>>(
+      _opts: CallGatewayOptions,
+    ): Promise<T> {
+      return { ok: true } as T;
+    }) as typeof defaultCallGateway;
+
+    const result = await deleteSubagentSessionForCleanup({
+      callGateway,
+      childSessionKey: "agent:main:subagent:identity-missing",
+    });
+
+    expect(result).toBe("failed");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(hasLiveOrRecentlyDispatchedContinuationWorkMock).not.toHaveBeenCalled();
+    expect(hasRecoverablePendingDelegateMock).not.toHaveBeenCalled();
+    expect(countActiveDescendantRunsMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("defers deletion while accepted descendant delegate runs still depend on the child session", async () => {
     const callGateway = vi.fn(async function mockCallGateway<T = Record<string, unknown>>(
       _opts: CallGatewayOptions,
@@ -60,6 +86,7 @@ describe("deleteSubagentSessionForCleanup", () => {
     await deleteSubagentSessionForCleanup({
       callGateway,
       childSessionKey: "agent:main:subagent:child",
+      ...cleanupSessionIdentity,
     });
     expect(callGateway).not.toHaveBeenCalled();
     expect(failStagedPostCompactionDelegatesForCleanupMock).not.toHaveBeenCalled();
@@ -72,6 +99,8 @@ describe("deleteSubagentSessionForCleanup", () => {
         key: "agent:main:subagent:child",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: cleanupSessionIdentity.expectedSessionId,
+        expectedLifecycleRevision: cleanupSessionIdentity.expectedLifecycleRevision,
       },
       timeoutMs: 10_000,
     });
@@ -88,6 +117,7 @@ describe("deleteSubagentSessionForCleanup", () => {
     await deleteSubagentSessionForCleanup({
       callGateway,
       childSessionKey: "agent:main:subagent:post-compaction-owner",
+      ...cleanupSessionIdentity,
     });
     expect(callGateway).not.toHaveBeenCalled();
     expect(failStagedPostCompactionDelegatesForCleanupMock).not.toHaveBeenCalled();
@@ -99,6 +129,8 @@ describe("deleteSubagentSessionForCleanup", () => {
         key: "agent:main:subagent:post-compaction-owner",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: cleanupSessionIdentity.expectedSessionId,
+        expectedLifecycleRevision: cleanupSessionIdentity.expectedLifecycleRevision,
       },
       timeoutMs: 10_000,
     });
@@ -117,6 +149,7 @@ describe("deleteSubagentSessionForCleanup", () => {
     await deleteSubagentSessionForCleanup({
       callGateway,
       childSessionKey: "agent:main:subagent:post-compaction-owner",
+      ...cleanupSessionIdentity,
     });
 
     expect(failStagedPostCompactionDelegatesForCleanupMock).toHaveBeenCalledWith(
@@ -135,6 +168,8 @@ describe("deleteSubagentSessionForCleanup", () => {
         key: "agent:main:subagent:post-compaction-owner",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: cleanupSessionIdentity.expectedSessionId,
+        expectedLifecycleRevision: cleanupSessionIdentity.expectedLifecycleRevision,
       },
       timeoutMs: 10_000,
     });
@@ -150,6 +185,7 @@ describe("deleteSubagentSessionForCleanup", () => {
     await deleteSubagentSessionForCleanup({
       callGateway,
       childSessionKey: "agent:main:subagent:delete-fails",
+      ...cleanupSessionIdentity,
     });
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("[subagent-session-cleanup-delete-failed]"),

@@ -638,6 +638,7 @@ jobs:
       - name: Capture baseline metadata
         if: ${{ inputs.mode != 'fresh' }}
         id: baseline_metadata
+        working-directory: workflow
         env:
           BASELINE_PACK_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/pack.json
         run: |

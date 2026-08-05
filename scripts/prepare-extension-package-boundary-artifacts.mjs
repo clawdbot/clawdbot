@@ -12,12 +12,10 @@ import {
 } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
-
-const require = createRequire(import.meta.url);
-const repoRoot = resolve(import.meta.dirname, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
-const tscBin = require.resolve("typescript/bin/tsc");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
@@ -276,6 +274,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const MEMORY_CORE_DTS_INPUTS = [
+  "extensions/memory-core/api.ts",
+  "extensions/memory-core/src",
+  "extensions/memory-core/tsconfig.json",
+];
+const MEMORY_CORE_DTS_STAMP = "dist/plugin-sdk/extensions/memory-core/.boundary-dts.stamp";
+const MEMORY_CORE_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/memory-core/api.d.ts"];
 const MATRIX_DTS_INPUTS = [
   "extensions/matrix/test-api.ts",
   "extensions/matrix/src",
@@ -358,32 +363,6 @@ export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
   return parsePositiveInt(raw, "OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS");
 }
 
-/**
- * Builds a declaration command with the selected compiler and no incremental state.
- */
-export function createBoundaryDeclarationArgs({ project, outDir, rootDir, compiler = "native" }) {
-  if ((outDir && !rootDir) || (!outDir && rootDir)) {
-    throw new Error("Boundary declaration outDir and rootDir must be provided together");
-  }
-
-  const compilerPath = compiler === "js" ? tscBin : runTsgoScript;
-  const args = [compilerPath, "-p", project, "--declaration", "true"];
-  if (outDir && rootDir) {
-    args.push(
-      "--emitDeclarationOnly",
-      "true",
-      "--noEmit",
-      "false",
-      "--outDir",
-      outDir,
-      "--rootDir",
-      rootDir,
-    );
-  }
-  args.push("--incremental", "false");
-  return args;
-}
-
 function collectNewestMtime(paths, params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const includeFile = params.includeFile ?? (() => true);
@@ -442,6 +421,14 @@ export function isArtifactSetFresh(params) {
 
 function hasMissingOutput(paths) {
   return paths.some((relativePath) => !fs.existsSync(resolve(repoRoot, relativePath)));
+}
+
+// Stale inputs invalidate the whole incremental emit graph, not just missing
+// outputs: reused .tsbuildinfo can skip re-emitting declarations whose own
+// sources did not change even when the cached d.ts predates their current
+// exports (observed on sticky-disk CI runners).
+function removeStaleIncrementalState(params) {
+  fs.rmSync(resolve(repoRoot, params.tsBuildInfoPath), { force: true });
 }
 
 function writeStampFile(relativePath) {
@@ -769,7 +756,11 @@ async function main(argv = process.argv.slice(2)) {
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(PACKAGE_DTS_REQUIRED_OUTPUTS);
     const entryShimsFresh = isArtifactSetFresh({
-      inputPaths: ENTRY_SHIMS_INPUTS,
+      inputPaths: [
+        ...ENTRY_SHIMS_INPUTS,
+        "dist/plugin-sdk/.tsbuildinfo",
+        "packages/plugin-sdk/dist/.tsbuildinfo",
+      ],
       outputPaths: [
         "dist/plugin-sdk/.boundary-entry-shims.stamp",
         ...resolveBoundaryEntryShimRequiredOutputs({
@@ -784,6 +775,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const memoryCoreDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: MEMORY_CORE_DTS_INPUTS,
+        outputPaths: [MEMORY_CORE_DTS_STAMP, ...MEMORY_CORE_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(MEMORY_CORE_DTS_REQUIRED_OUTPUTS);
     const matrixDtsFresh =
       isArtifactSetFresh({
         inputPaths: MATRIX_DTS_INPUTS,
@@ -819,12 +816,12 @@ async function main(argv = process.argv.slice(2)) {
     const dependentSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
+        });
         prerequisiteSteps.push({
           label: "plugin-sdk boundary dts",
-          args: createBoundaryDeclarationArgs({
-            project: "tsconfig.plugin-sdk.dts.json",
-            compiler: "js",
-          }),
+          args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: ROOT_DTS_STAMP,
@@ -834,12 +831,12 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
     if (!packageDtsFresh) {
+      removeStaleIncrementalState({
+        tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
+      });
       prerequisiteSteps.push({
         label: "plugin-sdk package boundary dts",
-        args: createBoundaryDeclarationArgs({
-          project: "packages/plugin-sdk/tsconfig.json",
-          compiler: "js",
-        }),
+        args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
         env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
         timeoutMs: 300_000,
         stampPath: PACKAGE_DTS_STAMP,
@@ -849,13 +846,28 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (mode === "all") {
       if (!qaChannelDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
+        });
         dependentSteps.push({
           label: "qa-channel boundary dts",
-          args: createBoundaryDeclarationArgs({
-            project: "extensions/qa-channel/tsconfig.json",
-            outDir: "dist/plugin-sdk/extensions/qa-channel",
-            rootDir: "extensions/qa-channel",
-          }),
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/qa-channel/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/qa-channel",
+            "--rootDir",
+            "extensions/qa-channel",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
+          ],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: QA_CHANNEL_DTS_STAMP,
@@ -863,14 +875,59 @@ async function main(argv = process.argv.slice(2)) {
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
       }
+      if (!memoryCoreDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "memory-core boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/memory-core/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/memory-core",
+            "--rootDir",
+            "extensions/memory-core",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: MEMORY_CORE_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[memory-core boundary dts] fresh; skipping\n");
+      }
       if (!matrixDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+        });
         dependentSteps.push({
           label: "matrix boundary dts",
-          args: createBoundaryDeclarationArgs({
-            project: "extensions/matrix/tsconfig.json",
-            outDir: "dist/plugin-sdk/extensions/matrix",
-            rootDir: "extensions/matrix",
-          }),
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/matrix/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/matrix",
+            "--rootDir",
+            "extensions/matrix",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+          ],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: MATRIX_DTS_STAMP,
@@ -879,13 +936,28 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[matrix boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
+        });
         dependentSteps.push({
           label: "discord boundary dts",
-          args: createBoundaryDeclarationArgs({
-            project: "extensions/discord/tsconfig.json",
-            outDir: "dist/plugin-sdk/extensions/discord",
-            rootDir: "extensions/discord",
-          }),
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/discord/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/discord",
+            "--rootDir",
+            "extensions/discord",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
+          ],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: DISCORD_DTS_STAMP,
@@ -894,13 +966,28 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[discord boundary dts] fresh; skipping\n");
       }
       if (!slackDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
+        });
         dependentSteps.push({
           label: "slack boundary dts",
-          args: createBoundaryDeclarationArgs({
-            project: "extensions/slack/tsconfig.json",
-            outDir: "dist/plugin-sdk/extensions/slack",
-            rootDir: "extensions/slack",
-          }),
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/slack/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/slack",
+            "--rootDir",
+            "extensions/slack",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
+          ],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: SLACK_DTS_STAMP,
@@ -909,13 +996,28 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[slack boundary dts] fresh; skipping\n");
       }
       if (!whatsappDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
+        });
         dependentSteps.push({
           label: "whatsapp boundary dts",
-          args: createBoundaryDeclarationArgs({
-            project: "extensions/whatsapp/tsconfig.json",
-            outDir: "dist/plugin-sdk/extensions/whatsapp",
-            rootDir: "extensions/whatsapp",
-          }),
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/whatsapp/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/whatsapp",
+            "--rootDir",
+            "extensions/whatsapp",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
+          ],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: WHATSAPP_DTS_STAMP,
@@ -924,13 +1026,28 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
       }
       if (!telegramDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+        });
         dependentSteps.push({
           label: "telegram boundary dts",
-          args: createBoundaryDeclarationArgs({
-            project: "extensions/telegram/tsconfig.json",
-            outDir: "dist/plugin-sdk/extensions/telegram",
-            rootDir: "extensions/telegram",
-          }),
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/telegram/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/telegram",
+            "--rootDir",
+            "extensions/telegram",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+          ],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: TELEGRAM_DTS_STAMP,

@@ -1066,11 +1066,11 @@ describe("createMediaGenerationTaskLifecycle", () => {
     );
   });
 
-  it("treats terminal generated-media fallback failure as handled", async () => {
+  it("treats an ambiguous generated-media acknowledgement as handled", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: false,
       path: "direct",
-      terminal: true,
+      disposition: "ambiguous",
       error: "generated media direct delivery failed after partial upload",
     });
     const lifecycle = createImageMediaLifecycle();

@@ -5,6 +5,7 @@ import {
   recordDelegateArtifactDeliveryBinding,
 } from "../agents/delegate-artifacts.js";
 import { replaceManagedDelegateReturnInPrompt } from "../agents/internal-events.js";
+import { resolveCorrelatedSubagentDelivery } from "../agents/subagent-completion-delivery.js";
 import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -111,6 +112,17 @@ function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
 }
 
 export async function deliverQueuedSessionDelivery(params: {
+  deps: CliDeps;
+  entry: QueuedSessionDelivery;
+  stateDir?: string;
+}) {
+  return await deliverResolvedQueuedSessionDelivery({
+    ...params,
+    entry: resolveCorrelatedSubagentDelivery(params.entry),
+  });
+}
+
+async function deliverResolvedQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
   stateDir?: string;

@@ -74,8 +74,12 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
 /** Clears cached directory entries for all channels or one channel/account scope. */
-export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
-  if (!params?.channel) {
+export function resetDirectoryCache(params?: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}) {
+  if (!params) {
     directoryCache.clear();
     return;
   }
@@ -89,7 +93,7 @@ export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: 
       return true;
     }
     return key.startsWith(`${channelKey}:${accountKey}:`);
-  });
+  }, params.cfg);
 }
 
 function normalizeQuery(value: string): string {

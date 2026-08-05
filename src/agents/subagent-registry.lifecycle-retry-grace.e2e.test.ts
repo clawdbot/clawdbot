@@ -80,7 +80,7 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     if (next === "throw") {
       throw new Error("announce delivery failed");
     }
-    return {};
+    return { result: { payloads: [{ text: "completion delivered" }] } };
   }
   return {};
 });
@@ -104,6 +104,8 @@ vi.mock("../config/sessions.js", () => ({
 // entries (requester lookups included) from the same in-memory fixture.
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  listSessionEntriesReadOnly: () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
 }));
 
@@ -179,10 +181,19 @@ describe("subagent registry lifecycle error grace", () => {
       countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
       hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
       getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+      getSubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
       isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
       listAncestorSessionKeys,
       listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-      replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
+      recordAcceptedSubagentSteerDispatch: async (
+        params: Parameters<typeof mod.recordAcceptedSubagentSteerDispatch>[0],
+      ) => mod.recordAcceptedSubagentSteerDispatch(params),
+      replaceSubagentRunAfterSteer: async (
+        params: Parameters<typeof mod.replaceSubagentRunAfterSteer>[0],
+      ) => mod.replaceSubagentRunAfterSteer(params),
+      clearSubagentRunSteerRestart: async (
+        ...args: Parameters<typeof mod.clearSubagentRunSteerRestart>
+      ) => mod.clearSubagentRunSteerRestart(...args),
       resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
       shouldIgnorePostCompletionAnnounceForSession:
         mod.shouldIgnorePostCompletionAnnounceForSession,
@@ -198,6 +209,7 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadSessionEntry: ({ sessionKey }) => sessionStore[sessionKey],
       getRequesterSessionActivity: (requesterSessionKey: string) => {
         const entry = sessionStore[requesterSessionKey];
         return {
@@ -350,8 +362,9 @@ describe("subagent registry lifecycle error grace", () => {
           typeof internalEvents[0] === "object"
             ? (internalEvents[0] as { result?: string })
             : undefined;
-        return event?.result ?? "";
-      });
+        return event?.result;
+      })
+      .filter((result): result is string => typeof result === "string");
   }
 
   it("ignores transient lifecycle errors when run retries and then ends successfully", async () => {

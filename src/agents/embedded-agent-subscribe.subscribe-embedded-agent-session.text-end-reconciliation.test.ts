@@ -2,6 +2,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   createTextEndBlockReplyHarness,
   emitAssistantTextDelta,
@@ -474,6 +475,30 @@ function requireBlockReplyPayload(onBlockReply: OnBlockReplyMock): BlockReplyPay
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it("retains reply-target-only text as terminal evidence when block delivery is unavailable", async () => {
+    const directive = "[[reply_to_current]]";
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      blockReplyBreak: "text_end",
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: directive });
+    emitAssistantTextEnd({ emit, content: directive });
+    await Promise.resolve();
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: directive }],
+      } as AssistantMessage,
+    });
+    await Promise.resolve();
+
+    expect(subscription.assistantTexts).toEqual([directive]);
+  });
+
   it("emits block replies on text_end and does not duplicate on message_end", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

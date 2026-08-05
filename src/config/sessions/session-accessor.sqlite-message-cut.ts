@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   openOpenClawAgentDatabase,
@@ -122,12 +123,7 @@ function loadSessionBranchSummaries(
   );
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, { ...watermark, branches });
-  if (sessionBranchCache.size > SESSION_BRANCH_CACHE_MAX_ENTRIES) {
-    const oldestKey = sessionBranchCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      sessionBranchCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
   return cloneSessionBranchSummaries(branches);
 }
 

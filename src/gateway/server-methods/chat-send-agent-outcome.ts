@@ -2,7 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { readToolValidationErrorSummary } from "../../agents/tool-error-summary.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { broadcastChatAborted, broadcastChatError } from "./chat-broadcast.js";
+import { broadcastChatAborted, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ChatSendAgentOutcomeContext = Pick<
@@ -17,6 +17,7 @@ export function finalizeChatSendAgentOutcome(params: {
   agentId?: string;
   hasReturnedAgentErrorPayloads: boolean;
   broadcastedSourceReplyFinal: boolean;
+  successfulFinalOwnedElsewhere?: boolean;
   markTerminalBroadcasted: () => void;
   terminalAlreadyBroadcasted?: boolean;
   returnedAgentErrorMessage?: string;
@@ -33,8 +34,18 @@ export function finalizeChatSendAgentOutcome(params: {
   const shouldBroadcastValidationAbort =
     hasUnbroadcastAgentError && validationAbortErrorMessage !== undefined;
   const shouldBroadcastAgentError = hasUnbroadcastAgentError && !shouldBroadcastValidationAbort;
+  const shouldBroadcastSuccessfulFinal =
+    params.context.agentRunSeq.has(params.runId) &&
+    !hasReturnedAgentError &&
+    !alreadyAborted &&
+    !params.terminalAlreadyBroadcasted &&
+    !params.successfulFinalOwnedElsewhere;
 
-  if (shouldBroadcastValidationAbort || shouldBroadcastAgentError) {
+  if (
+    shouldBroadcastValidationAbort ||
+    shouldBroadcastAgentError ||
+    shouldBroadcastSuccessfulFinal
+  ) {
     params.markTerminalBroadcasted();
   }
 
@@ -56,6 +67,13 @@ export function finalizeChatSendAgentOutcome(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       errorMessage: params.returnedAgentErrorMessage,
+    });
+  } else if (shouldBroadcastSuccessfulFinal) {
+    broadcastChatFinal({
+      context: params.context,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
   }
 

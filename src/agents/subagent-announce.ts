@@ -6,6 +6,7 @@ import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -16,13 +17,16 @@ import {
   prepareDelegateArtifactDelivery,
   type DelegateArtifactRecipientProjectionV1,
 } from "./delegate-artifacts.js";
-import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  buildSubagentAnnounceMessages,
+  type SubagentAnnounceType,
+} from "./subagent-announce-message.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -35,6 +39,7 @@ import {
   filterCurrentDirectChildCompletionRows,
   readLatestSubagentOutputWithRetry,
   readSubagentOutput,
+  readSubagentTimeoutProgress,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
 import {
@@ -80,7 +85,7 @@ const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-announce.registry.runtime.js"),
+  () => import("./subagent-registry-runtime.js"),
 );
 const subagentContinuationRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-announce.continuation.runtime.js"),
@@ -93,29 +98,7 @@ function loadSubagentRegistryRuntime() {
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export { hasUsableSessionEntry } from "./subagent-announce-wake.js";
-
-export type SubagentAnnounceType = "subagent task" | "cron job";
-
-function buildAnnounceReplyInstruction(params: {
-  requesterIsSubagent: boolean;
-  announceType: SubagentAnnounceType;
-  expectsCompletionMessage?: boolean;
-}): string {
-  if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
-  }
-  if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
-  }
-  return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
-}
-
-function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
-  return (
-    formatAgentInternalEventsForPrompt(events) ||
-    "A background task finished. Process the completion update now."
-  );
-}
+export type { SubagentAnnounceType } from "./subagent-announce-message.js";
 
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
@@ -127,6 +110,7 @@ export async function runSubagentAnnounceFlow(params: {
   timeoutMs: number;
   cleanup: "delete" | "keep";
   roundOneReply?: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
   /**
    * Fallback text preserved from the pre-wake run when a wake continuation
    * completes with NO_REPLY despite an earlier final summary already existing.
@@ -141,6 +125,12 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
+  suppressChildSessionEffects?: boolean;
+  /** Live owner check for child-session effects after awaited phases. */
+  isChildSessionEffectsAllowed?: () => boolean;
+  /** Live owner check for requester delivery after awaited phases. */
+  isCompletionDeliveryAllowed?: () => boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -156,6 +146,12 @@ export async function runSubagentAnnounceFlow(params: {
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
+  const childSessionEffectsAllowed = () =>
+    params.suppressChildSessionEffects !== true &&
+    params.isChildSessionEffectsAllowed?.() !== false;
+  const completionDeliveryAllowed = () => params.isCompletionDeliveryAllowed?.() !== false;
+  let childSessionId: string | undefined;
+  let childSessionLifecycleRevision: string | undefined;
   try {
     const sessionEntryCache = new Map<string, ReturnType<typeof loadSessionEntryByKey>>();
     const requesterEntryCache = new Map<string, ReturnType<typeof loadRequesterSessionEntry>>();
@@ -177,14 +173,25 @@ export async function runSubagentAnnounceFlow(params: {
     };
     let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-    const childSessionId = (() => {
-      const entry = readSessionEntryByKey(params.childSessionKey);
-      return typeof entry?.sessionId === "string" && entry.sessionId.trim()
-        ? entry.sessionId.trim()
+    const childSessionEntry = !childSessionEffectsAllowed()
+      ? undefined
+      : readSessionEntryByKey(params.childSessionKey);
+    childSessionId =
+      typeof childSessionEntry?.sessionId === "string" && childSessionEntry.sessionId.trim()
+        ? childSessionEntry.sessionId.trim()
         : undefined;
-    })();
+    childSessionLifecycleRevision =
+      typeof childSessionEntry?.lifecycleRevision === "string" &&
+      childSessionEntry.lifecycleRevision.trim()
+        ? childSessionEntry.lifecycleRevision.trim()
+        : undefined;
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
-    let reply = params.roundOneReply;
+    let reply =
+      params.terminalReply?.disposition === "visible"
+        ? params.terminalReply.text
+        : params.terminalReply?.disposition === "silent"
+          ? SILENT_REPLY_TOKEN
+          : params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (childSessionId && isEmbeddedAgentRunActive(childSessionId)) {
       const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
@@ -216,10 +223,11 @@ export async function runSubagentAnnounceFlow(params: {
     const failedTerminalOutcome = outcome.status === "error";
     const allowFailedOutputCapture =
       !failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply);
-    if (failedTerminalOutcome) {
+    if (failedTerminalOutcome && !params.terminalReply) {
       reply = undefined;
     }
     const managedArtifactReturn =
+      childSessionEffectsAllowed() &&
       params.childRunId.startsWith("continuation-delegate-") &&
       isDelegateArtifactReturnConfigured(params.childRunId);
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
@@ -271,16 +279,18 @@ export async function runSubagentAnnounceFlow(params: {
         }
       }
 
-      const pendingChildDescendantRuns = Math.max(
-        0,
-        subagentRegistryRuntime.countPendingDescendantRuns(params.childSessionKey),
-      );
+      const pendingChildDescendantRuns = !childSessionEffectsAllowed()
+        ? 0
+        : Math.max(0, subagentRegistryRuntime.countPendingDescendantRuns(params.childSessionKey));
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
         shouldDeleteChildSession = false;
         return false;
       }
 
-      if (typeof subagentRegistryRuntime.listSubagentRunsForRequester === "function") {
+      if (
+        childSessionEffectsAllowed() &&
+        typeof subagentRegistryRuntime.listSubagentRunsForRequester === "function"
+      ) {
         const directChildren = subagentRegistryRuntime.listSubagentRunsForRequester(
           params.childSessionKey,
           {
@@ -311,6 +321,7 @@ export async function runSubagentAnnounceFlow(params: {
     const childRunAlreadyWoken = isWakeContinuationRun(params.childRunId);
     if (
       params.wakeOnDescendantSettle === true &&
+      childSessionEffectsAllowed() &&
       childCompletionFindings?.trim() &&
       !childRunAlreadyWoken
     ) {
@@ -318,119 +329,143 @@ export async function runSubagentAnnounceFlow(params: {
         childSessionKey: params.childSessionKey,
         childRunId: stripWakeRunSuffixes(params.childRunId),
       });
-      const woke = await wakeSubagentRunAfterDescendants(
+      const wake = await wakeSubagentRunAfterDescendants(
         {
           runId: params.childRunId,
           childSessionKey: params.childSessionKey,
           taskLabel: params.label || params.task || "task",
           findings: childCompletionFindings,
           announceId: wakeAnnounceId,
+          isChildSessionEffectsAllowed: childSessionEffectsAllowed,
           signal: params.signal,
         },
         subagentAnnounceDeps,
       );
-      if (woke) {
+      if (wake === "woke") {
         shouldDeleteChildSession = false;
         return true;
+      }
+      if (wake === "termination-unconfirmed") {
+        // An accepted wake run may still own this child session. Keep the session
+        // and leave cleanup unfinished so the registry retries instead of deleting
+        // a session out from under a live run.
+        shouldDeleteChildSession = false;
+        return false;
       }
     }
 
     let skipAnnounceDelivery = false;
     if (!childCompletionFindings) {
-      const fallbackReply = failedTerminalOutcome
-        ? undefined
-        : normalizeOptionalString(params.fallbackReply);
-      const fallbackIsSilent =
-        Boolean(fallbackReply) &&
-        (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
-
-      if (!reply && allowFailedOutputCapture) {
-        reply = await readSubagentOutput(params.childSessionKey, outcome);
+      if (params.terminalReply?.disposition === "silent" && !managedArtifactReturn) {
+        return true;
       }
-
-      if (!reply?.trim() && allowFailedOutputCapture) {
-        reply = await readLatestSubagentOutputWithRetry({
-          sessionKey: params.childSessionKey,
-          maxWaitMs: params.timeoutMs,
+      if (
+        childSessionEffectsAllowed() &&
+        params.terminalReply?.disposition === "empty" &&
+        outcome.status === "timeout"
+      ) {
+        const timeoutProgress = await readSubagentTimeoutProgress(
+          params.childSessionKey,
+          params.timeoutMs,
           outcome,
-        });
+        );
+        // Empty remains the authoritative terminal fact. Transcript text is a
+        // timeout-only progress hint and must never reclassify silence as output.
+        if (timeoutProgress) {
+          reply = normalizeSubagentAnnounceReply(timeoutProgress) ?? undefined;
+        }
       }
+      if (!params.terminalReply) {
+        const fallbackReply = failedTerminalOutcome
+          ? undefined
+          : normalizeOptionalString(params.fallbackReply);
+        const fallbackIsSilent =
+          Boolean(fallbackReply) &&
+          (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
 
-      if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
-        reply = fallbackReply;
-      }
+        if (childSessionEffectsAllowed() && !reply && allowFailedOutputCapture) {
+          reply = await readSubagentOutput(params.childSessionKey, outcome);
+        }
 
-      // A worker can finish just after the first wait request timed out.
-      // If we already have real completion content, do one cached recheck so
-      // the final completion event prefers the authoritative terminal state.
-      // This is best-effort; if the recheck fails, keep the known timeout
-      // outcome instead of dropping the announcement entirely.
-      if (outcome?.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
-        try {
-          const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
-          const applied = applySubagentWaitOutcome({
-            wait: rechecked,
+        if (childSessionEffectsAllowed() && !reply?.trim() && allowFailedOutputCapture) {
+          reply = await readLatestSubagentOutputWithRetry({
+            sessionKey: params.childSessionKey,
+            maxWaitMs: params.timeoutMs,
             outcome,
-            startedAt: params.startedAt,
-            endedAt: params.endedAt,
           });
-          outcome = applied.outcome;
-          params.startedAt = applied.startedAt;
-          params.endedAt = applied.endedAt;
-        } catch {
-          // Best-effort recheck; keep the existing timeout outcome on failure.
         }
-      }
 
-      if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
-        if (fallbackReply && !fallbackIsSilent) {
-          const cleaned = normalizeSubagentAnnounceReply(fallbackReply);
-          if (cleaned === null) {
-            warnIfCronAnnounceSkipped({
-              reply,
-              requesterSessionKey: targetRequesterSessionKey,
-              childRunId: params.childRunId,
+        if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
+          reply = fallbackReply;
+        }
+
+        if (outcome.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
+          try {
+            const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
+            const applied = applySubagentWaitOutcome({
+              wait: rechecked,
+              outcome,
+              startedAt: params.startedAt,
+              endedAt: params.endedAt,
             });
-            if (!managedArtifactReturn) {
-              return true;
-            }
-            reply = "(no output)";
-          } else {
-            reply = cleaned;
-          }
-        } else {
-          warnIfCronAnnounceSkipped({
-            reply,
-            requesterSessionKey: targetRequesterSessionKey,
-            childRunId: params.childRunId,
-          });
-          if (managedArtifactReturn) {
-            reply = "(no output)";
-          } else {
-            skipAnnounceDelivery = true;
+            outcome = applied.outcome;
+            params.startedAt = applied.startedAt;
+            params.endedAt = applied.endedAt;
+          } catch {
+            // Best-effort recheck; keep the existing timeout outcome on failure.
           }
         }
-      } else if (reply) {
-        const cleaned = normalizeSubagentAnnounceReply(reply);
-        if (cleaned === null) {
+
+        if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
           if (fallbackReply && !fallbackIsSilent) {
-            const cleanedFallback = normalizeSubagentAnnounceReply(fallbackReply);
-            if (cleanedFallback === null) {
+            const cleaned = normalizeSubagentAnnounceReply(fallbackReply);
+            if (cleaned === null) {
+              warnIfCronAnnounceSkipped({
+                reply,
+                requesterSessionKey: targetRequesterSessionKey,
+                childRunId: params.childRunId,
+              });
               if (!managedArtifactReturn) {
                 return true;
               }
               reply = "(no output)";
             } else {
-              reply = cleanedFallback;
+              reply = cleaned;
             }
           } else {
-            if (!managedArtifactReturn) {
-              return true;
+            warnIfCronAnnounceSkipped({
+              reply,
+              requesterSessionKey: targetRequesterSessionKey,
+              childRunId: params.childRunId,
+            });
+            if (managedArtifactReturn) {
+              reply = "(no output)";
+            } else {
+              skipAnnounceDelivery = true;
             }
-            reply = "(no output)";
           }
-        } else {
-          reply = cleaned;
+        } else if (reply) {
+          const cleaned = normalizeSubagentAnnounceReply(reply);
+          if (cleaned === null) {
+            if (fallbackReply && !fallbackIsSilent) {
+              const cleanedFallback = normalizeSubagentAnnounceReply(fallbackReply);
+              if (cleanedFallback === null) {
+                if (!managedArtifactReturn) {
+                  return true;
+                }
+                reply = "(no output)";
+              } else {
+                reply = cleanedFallback;
+              }
+            } else {
+              if (!managedArtifactReturn) {
+                return true;
+              }
+              reply = "(no output)";
+            }
+          } else {
+            reply = cleaned;
+          }
         }
       }
     }
@@ -439,22 +474,32 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = { status: "unknown" };
     }
 
+    if (!childSessionEffectsAllowed()) {
+      childCompletionFindings = undefined;
+      reply = params.roundOneReply ?? params.fallbackReply;
+      outcome = params.outcome ?? { status: "unknown" };
+    }
+
     const cfg = subagentAnnounceDeps.getRuntimeConfig();
     const artifactConfig = subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
-    const announceSessionId = childSessionId || "unknown";
-    const artifactFinalization = finalizeDelegateArtifacts({
-      producerSessionKey: params.childSessionKey,
-      producerSessionId: announceSessionId,
-      producerRunId: params.childRunId,
-      completionId: announceId,
-      finalizationKey: `delegate-artifact-finalization:${announceId}`,
-      completionStatus: outcome.status,
-      completedAt: params.endedAt ?? Date.now(),
-      silent: params.silentAnnounce === true,
-      runtimeEnabled: artifactConfig.enabled,
-      crossSessionEnabled: artifactConfig.crossSessionTargeting === "enabled",
-      resolveSessionId: (sessionKey) => loadSessionEntryByKey(sessionKey)?.sessionId,
-    });
+    const announceSessionId = childSessionEffectsAllowed()
+      ? childSessionId || "unknown"
+      : "unknown";
+    const artifactFinalization = childSessionEffectsAllowed()
+      ? finalizeDelegateArtifacts({
+          producerSessionKey: params.childSessionKey,
+          producerSessionId: announceSessionId,
+          producerRunId: params.childRunId,
+          completionId: announceId,
+          finalizationKey: `delegate-artifact-finalization:${announceId}`,
+          completionStatus: outcome.status,
+          completedAt: params.endedAt ?? Date.now(),
+          silent: params.silentAnnounce === true,
+          runtimeEnabled: artifactConfig.enabled,
+          crossSessionEnabled: artifactConfig.crossSessionTargeting === "enabled",
+          resolveSessionId: (sessionKey) => loadSessionEntryByKey(sessionKey)?.sessionId,
+        })
+      : ({ status: "not-configured" } as const);
     if (artifactFinalization.status === "deferred") {
       return false;
     }
@@ -464,16 +509,6 @@ export async function runSubagentAnnounceFlow(params: {
         error: `managed artifact return failed (${artifactFinalization.disposition})`,
       };
     }
-
-    // Build status label
-    const statusLabel =
-      outcome.status === "ok"
-        ? "completed; ready for parent review"
-        : outcome.status === "timeout"
-          ? "timed out"
-          : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
 
     const taskLabel = params.label || params.task || "task";
     let findings = childCompletionFindings || reply || "(no output)";
@@ -506,29 +541,13 @@ export async function runSubagentAnnounceFlow(params: {
     }
     const requesterIsSubagent = requesterIsInternalSession();
 
-    const replyInstruction = buildAnnounceReplyInstruction({
-      requesterIsSubagent,
-      announceType,
-      expectsCompletionMessage,
-    });
-    const statsLine = await buildCompactAnnounceStatsLine({
-      sessionKey: params.childSessionKey,
-      startedAt: params.startedAt,
-      endedAt: params.endedAt,
-    });
-    const baseInternalEvent: AgentInternalEvent = {
-      type: "task_completion",
-      source: announceType === "cron job" ? "cron" : "subagent",
-      childSessionKey: params.childSessionKey,
-      childSessionId: announceSessionId,
-      announceType,
-      taskLabel,
-      status: outcome.status,
-      statusLabel,
-      result: findings,
-      statsLine,
-      replyInstruction,
-    };
+    const statsLine = childSessionEffectsAllowed()
+      ? await buildCompactAnnounceStatsLine({
+          sessionKey: params.childSessionKey,
+          startedAt: params.startedAt,
+          endedAt: params.endedAt,
+        })
+      : undefined;
     const finalizedArtifactProjections =
       "projections" in artifactFinalization ? artifactFinalization.projections : undefined;
     let artifactProjections: Map<string, DelegateArtifactRecipientProjectionV1> | undefined;
@@ -552,21 +571,20 @@ export async function runSubagentAnnounceFlow(params: {
         }
       }
     }
-    const requesterProjection = artifactProjections?.get(targetRequesterSessionKey);
-    const internalEvents: AgentInternalEvent[] = [
-      requesterProjection
-        ? { ...baseInternalEvent, delegateArtifacts: requesterProjection }
-        : baseInternalEvent,
-    ];
-    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
-    const artifactTriggerMessages = artifactProjections
-      ? new Map(
-          [...artifactProjections].map(([sessionKey, projection]) => [
-            sessionKey,
-            buildAnnounceSteerMessage([{ ...baseInternalEvent, delegateArtifacts: projection }]),
-          ]),
-        )
-      : undefined;
+    const { internalEvents, triggerMessage, artifactTriggerMessages } =
+      buildSubagentAnnounceMessages({
+        requesterIsSubagent,
+        announceType,
+        expectsCompletionMessage,
+        childSessionKey: params.childSessionKey,
+        childSessionId: announceSessionId,
+        requesterSessionKey: targetRequesterSessionKey,
+        taskLabel,
+        outcome,
+        findings,
+        statsLine,
+        artifactProjections,
+      });
     const returnRoute = await continuationRuntime.routeSubagentContinuationReturn({
       cfg,
       continuationEnabled: continuation.continuationEnabled,
@@ -605,17 +623,22 @@ export async function runSubagentAnnounceFlow(params: {
       const { entry } = readRequesterSessionEntry(targetRequesterSessionKey);
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
-    const completionDirectOrigin =
+    const candidateCompletionDirectOrigin =
       expectsCompletionMessage && !requesterIsSubagent
-        ? await resolveSubagentCompletionOrigin({
-            childSessionKey: params.childSessionKey,
-            requesterSessionKey: targetRequesterSessionKey,
-            requesterOrigin: directOrigin,
-            childRunId: params.childRunId,
-            spawnMode: params.spawnMode,
-            expectsCompletionMessage,
-          })
+        ? !childSessionEffectsAllowed()
+          ? targetRequesterOrigin
+          : await resolveSubagentCompletionOrigin({
+              childSessionKey: params.childSessionKey,
+              requesterSessionKey: targetRequesterSessionKey,
+              requesterOrigin: directOrigin,
+              childRunId: params.childRunId,
+              spawnMode: params.spawnMode,
+              expectsCompletionMessage,
+            })
         : targetRequesterOrigin;
+    const completionDirectOrigin = childSessionEffectsAllowed()
+      ? candidateCompletionDirectOrigin
+      : targetRequesterOrigin;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     let deliveryResultReported = false;
     const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {
@@ -640,8 +663,10 @@ export async function runSubagentAnnounceFlow(params: {
       completionDirectOrigin,
       directOrigin,
       sourceSessionKey: params.childSessionKey,
+      sourceRunId: params.childRunId,
       sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
+      isSourceSessionEffectsAllowed: completionDeliveryAllowed,
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage,
@@ -653,7 +678,7 @@ export async function runSubagentAnnounceFlow(params: {
       ...(returnRoute.traceparent ? { traceparent: returnRoute.traceparent } : {}),
     });
     reportDeliveryResult(delivery);
-    didAnnounce = delivery.delivered || delivery.terminal === true;
+    didAnnounce = delivery.delivered || delivery.disposition === "intentional_non_delivery";
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
@@ -665,11 +690,17 @@ export async function runSubagentAnnounceFlow(params: {
   } finally {
     // The spawn label is persisted at run start (agent request `label` →
     // buildAgentSessionPatch), so no post-run label patch is needed here.
-    if (shouldDeleteChildSession && (params.onBeforeDeleteChildSession?.() ?? true)) {
+    if (
+      shouldDeleteChildSession &&
+      childSessionEffectsAllowed() &&
+      (params.onBeforeDeleteChildSession?.() ?? true)
+    ) {
       await deleteSubagentSessionForCleanup({
         callGateway: subagentAnnounceDeps.callGateway,
         childSessionKey: params.childSessionKey,
         spawnMode: params.spawnMode,
+        expectedSessionId: childSessionId,
+        expectedLifecycleRevision: childSessionLifecycleRevision,
       });
     }
   }

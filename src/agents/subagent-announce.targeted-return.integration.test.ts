@@ -105,7 +105,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-vi.mock("./subagent-announce.registry.runtime.js", () => registryRuntimeMock);
+vi.mock("./subagent-registry-runtime.js", () => registryRuntimeMock);
 
 vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => requesterDepthMock(),

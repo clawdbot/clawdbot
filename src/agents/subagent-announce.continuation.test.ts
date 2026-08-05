@@ -57,7 +57,7 @@ vi.mock("./embedded-agent.js", () => ({
   waitForEmbeddedAgentRunEnd: async () => true,
 }));
 
-vi.mock("./subagent-announce.registry.runtime.js", () => ({
+vi.mock("./subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: (key: string) => mocked.countActiveDescendantRunsMock(key),
   countPendingDescendantRuns: (key: string) => mocked.countPendingDescendantRunsMock(key),
   countPendingDescendantRunsExcludingRun: () => 0,

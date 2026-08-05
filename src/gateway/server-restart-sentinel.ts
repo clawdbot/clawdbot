@@ -1,5 +1,6 @@
 // Gateway restart sentinel recovery.
 // Resumes pending restart continuations and outbound delivery after process restart.
+import { settleCorrelatedSubagentDelivery } from "../agents/subagent-completion-delivery.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -22,6 +23,7 @@ import {
   loadPendingSessionDelivery,
   recoverPendingSessionDeliveries,
   type QueuedSessionDeliveryPayload,
+  type SettleSessionDeliveryFn,
   type SessionDeliveryRecoveryLogger,
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
@@ -54,6 +56,12 @@ const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 20;
 const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
+
+/** Settles every queue entry through its durable producer before cron cleanup. */
+export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (entry, outcome) => {
+  await settleCorrelatedSubagentDelivery(entry, outcome);
+  await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+};
 
 function cloneRestartSentinelPayload(
   payload: RestartSentinelPayload | null,
@@ -171,7 +179,7 @@ async function drainRestartContinuationQueue(params: {
           entry,
           ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
         }),
-      onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
+      onSettled: settleQueuedSessionDelivery,
       selectEntry: (entry) => ({
         match: entry.id === params.entryId,
         bypassBackoff: true,
@@ -206,7 +214,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
       }),
     log: params.log ?? log,
     maxEnqueuedAt: params.maxEnqueuedAt,
-    onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
+    onSettled: settleQueuedSessionDelivery,
   });
 }
 

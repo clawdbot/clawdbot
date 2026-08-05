@@ -872,6 +872,11 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.waitForOutput("/help");
       await fixture.run.waitForOutput("/verbose <on|off|full>");
       await fixture.run.waitForOutput("/reasoning <on|off|stream>");
+      await fixture.run.waitForOutput("/goal");
+      await fixture.run.waitForOutput("/goal start <objective>");
+      await fixture.run.waitForOutput("/btw <side question>");
+      await fixture.run.waitForOutput("/queue");
+      await fixture.run.waitForOutput("/stop");
       await fixture.run.waitForOutput("/exit");
     },
     TEST_TIMEOUT_MS,

@@ -143,6 +143,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
   registerSubagentRunMock?: MockFn;
+  getSubagentRunByRunIdMock?: MockFn;
   startQueuedSubagentRunMock?: MockFn;
   settleFailedQueuedSubagentLaunchMock?: MockFn;
   completeCollectorLaunchCleanupMock?: MockFn;
@@ -396,6 +397,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("./subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: countActiveRunsForSessionImpl,
+    getSubagentRunByRunId:
+      params.getSubagentRunByRunIdMock ?? vi.fn(() => ({ execution: { status: "queued" } })),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun: registerSubagentRunImpl,
     resetSubagentRegistryForTests,

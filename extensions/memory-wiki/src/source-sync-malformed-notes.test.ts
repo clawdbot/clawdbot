@@ -55,8 +55,10 @@ describe("memory wiki source sync malformed human Notes", () => {
   it.each([
     { group: "bridge" as const, missingMarker: "opening" as const },
     { group: "bridge" as const, missingMarker: "closing" as const },
+    { group: "bridge" as const, missingMarker: "both" as const },
     { group: "unsafe-local" as const, missingMarker: "opening" as const },
     { group: "unsafe-local" as const, missingMarker: "closing" as const },
+    { group: "unsafe-local" as const, missingMarker: "both" as const },
   ])(
     "preserves $group pages and persisted state when the $missingMarker marker is missing",
     async ({ group, missingMarker }) => {
@@ -72,9 +74,13 @@ describe("memory wiki source sync malformed human Notes", () => {
         "generated content",
         "```",
         "## Notes",
-        ...(missingMarker === "opening" ? [] : ["<!-- openclaw:human:start -->"]),
+        ...(missingMarker === "opening" || missingMarker === "both"
+          ? []
+          : ["<!-- openclaw:human:start -->"]),
         "human annotations must survive malformed markers",
-        ...(missingMarker === "closing" ? [] : ["<!-- openclaw:human:end -->"]),
+        ...(missingMarker === "closing" || missingMarker === "both"
+          ? []
+          : ["<!-- openclaw:human:end -->"]),
         "",
       ].join("\n");
       await fs.writeFile(pageAbsPath, pageContent, "utf8");
@@ -90,7 +96,7 @@ describe("memory wiki source sync malformed human Notes", () => {
       const updatedEntry = { ...entry, sourceSize: entry.sourceSize + 1 };
       setImportedSourceEntry({ state, syncKey: "sync-key", entry: updatedEntry });
       const expectedMissingMarker =
-        missingMarker === "opening"
+        missingMarker === "opening" || missingMarker === "both"
           ? "<!-- openclaw:human:start -->"
           : "<!-- openclaw:human:end -->";
 

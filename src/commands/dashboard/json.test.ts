@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayAuth: vi.fn(),
   resolveGatewayAuthToken: vi.fn(),
   resolveGatewayPort: vi.fn(),
+  waitForControlUiDocument: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -54,6 +55,11 @@ vi.mock("../../infra/tls/gateway.js", () => ({
 
 vi.mock("../gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
+}));
+
+vi.mock("../control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../control-ui-handoff.js")>()),
+  waitForControlUiDocument: mocks.waitForControlUiDocument,
 }));
 
 // Assembled so secret scanners do not read the fixture as a real credential.
@@ -123,6 +129,7 @@ describe("dashboardCommand --json", () => {
       expiresAtMs: 123_456,
     });
     mocks.loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
+    mocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
   });
 
   it("prints one compact success object without interactive side effects", async () => {
@@ -182,10 +189,20 @@ describe("dashboardCommand --json", () => {
       required: true,
       fingerprintSha256: "ab".repeat(32),
     });
+    mocks.waitForControlUiDocument.mockResolvedValue({
+      ready: true,
+      tlsFingerprint: "ab".repeat(32),
+    });
 
     await dashboardCommand(runtime, { json: true });
 
-    expect(mocks.loadGatewayTlsRuntime).toHaveBeenCalledWith({ enabled: true });
+    expect(mocks.waitForControlUiDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://127.0.0.1:18789/",
+        tlsConfig: { enabled: true },
+        waitForPending: false,
+      }),
+    );
     expect(runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: true,
@@ -261,6 +278,42 @@ describe("dashboardCommand --json", () => {
       }),
       0,
     );
+  });
+
+  it("fails immediately without issuing a token while dashboard assets are preparing", async () => {
+    mocks.waitForControlUiDocument.mockResolvedValue({
+      ready: false,
+      reason: "Control UI assets are still preparing.",
+      status: 503,
+    });
+
+    await dashboardCommand(runtime, { json: true });
+
+    expect(mocks.waitForControlUiDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ waitForPending: false }),
+    );
+    expect(runtime.writeJson).toHaveBeenCalledOnce();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      { ok: false, reason: "Control UI assets are still preparing." },
+      0,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it("does not issue a token when the Gateway certificate fingerprint mismatches", async () => {
+    mocks.waitForControlUiDocument.mockResolvedValue({
+      ready: false,
+      reason: "Gateway TLS certificate fingerprint mismatch.",
+    });
+
+    await dashboardCommand(runtime, { json: true });
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      { ok: false, reason: "Gateway TLS certificate fingerprint mismatch." },
+      0,
+    );
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
   it("fails closed when the browser bootstrap cannot be issued", async () => {

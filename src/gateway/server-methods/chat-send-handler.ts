@@ -593,6 +593,7 @@ export async function handleChatSend(
               agentId,
               hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
               broadcastedSourceReplyFinal,
+              successfulFinalOwnedElsewhere: queuedFollowupEnqueued,
               markTerminalBroadcasted,
               terminalAlreadyBroadcasted: activeRunAbort.entry?.chatTerminalBroadcasted === true,
               returnedAgentErrorMessage,

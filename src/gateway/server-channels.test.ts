@@ -253,6 +253,7 @@ function createManager(options?: {
   deferStartupAccountStartsUntil?: Promise<void>;
   fillChannelDependencies?: boolean;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
+  tryRecoverAutostartSuppression?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -280,6 +281,9 @@ function createManager(options?: {
       : {}),
     ...(options?.ambientAutostartSuppressedChannelIds
       ? { ambientAutostartSuppressedChannelIds: options.ambientAutostartSuppressedChannelIds }
+      : {}),
+    ...(options?.tryRecoverAutostartSuppression
+      ? { tryRecoverAutostartSuppression: options.tryRecoverAutostartSuppression }
       : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
@@ -1729,6 +1733,83 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(manager.getAutostartSuppression()?.reason).toBe("crash-loop-breaker");
+  });
+
+  it("recovers suppressed autostart without undoing manual stops", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"],
+      }),
+    );
+    const tryRecover = vi.fn(() => true);
+    const manager = createManager({
+      tryRecoverAutostartSuppression: tryRecover,
+      getRuntimeConfig: () => ({
+        channels: { discord: { healthMonitor: { enabled: false } } },
+      }),
+    });
+    manager.setAutostartSuppression({
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    });
+
+    await manager.startChannels();
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.recoverAutostartSuppression();
+    await flushMicrotasks();
+
+    expect(tryRecover).toHaveBeenCalledOnce();
+    expect(manager.getAutostartSuppression()).toBeNull();
+    expect(startAccount.mock.calls.map(([ctx]) => ctx.accountId)).toEqual([
+      DEFAULT_ACCOUNT_ID,
+      "work",
+    ]);
+    expect(manager.isHealthMonitorEnabled("discord", "work")).toBe(false);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
+  it("keeps suppression when persisted recovery is not proven", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ tryRecoverAutostartSuppression: () => false });
+    manager.setAutostartSuppression({
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    });
+
+    await expect(manager.recoverAutostartSuppression()).resolves.toBe(false);
+
+    expect(manager.getAutostartSuppression()?.reason).toBe("crash-loop-breaker");
+    expect(startAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps ambient channel suppression after crash-loop recovery", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({
+      ambientAutostartSuppressedChannelIds: new Set(["discord"]),
+      tryRecoverAutostartSuppression: () => true,
+    });
+    manager.setAutostartSuppression({
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    });
+
+    await expect(manager.recoverAutostartSuppression()).resolves.toBe(true);
+
+    expect(manager.getAutostartSuppression()).toBeNull();
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.lastError).toBe(
+      "ambient channel credentials suppressed for dev gateway",
+    );
   });
 
   it("suppresses ambient dev channel autostart while allowing manual starts", async () => {

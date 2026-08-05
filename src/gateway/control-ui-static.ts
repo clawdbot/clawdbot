@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -303,13 +304,7 @@ function cachedCompressedControlUiHtml(
     () => compressControlUiBody(Buffer.from(body), encoding),
     { cacheRejections: false },
   );
-  while (controlUiHtmlCompressionCache.size > CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES) {
-    const oldestKey = controlUiHtmlCompressionCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    controlUiHtmlCompressionCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);
   return compression;
 }
 
