@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import {
   createRecoveryPointAcceptance,

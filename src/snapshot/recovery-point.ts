@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { stableStringify } from "@openclaw/normalization-core";
 import { z } from "zod";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { root } from "../infra/fs-safe.js";
