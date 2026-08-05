@@ -422,6 +422,45 @@ type FixedSessionStoreReadSnapshot =
   | Extract<SessionStoreTargetsReadResult, { available: false }>;
 export type SessionStoreTargetsReadCache = Map<string, FixedSessionStoreReadSnapshot>;
 
+function readSessionStoreTargetSnapshot(params: {
+  cache?: SessionStoreTargetsReadCache;
+  databaseAgentId: string;
+  env: NodeJS.ProcessEnv;
+  sqlitePath: string;
+}): FixedSessionStoreReadSnapshot {
+  const cacheKey = path.resolve(params.sqlitePath);
+  const cached = params.cache?.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  let snapshot: FixedSessionStoreReadSnapshot;
+  if (!fsSync.existsSync(params.sqlitePath)) {
+    snapshot = { available: false, reason: "database-missing" };
+  } else {
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) => {
+        const scopedAgentIds = new Set<string>();
+        let hasUnscopedRow = false;
+        for (const sessionKey of readSqliteSessionEntryKeys(database)) {
+          const parsed = parseAgentSessionKey(sessionKey);
+          if (parsed) {
+            scopedAgentIds.add(normalizeAgentId(parsed.agentId));
+          } else {
+            hasUnscopedRow = true;
+          }
+        }
+        return { databaseAgentId: params.databaseAgentId, hasUnscopedRow, scopedAgentIds };
+      },
+      { agentId: params.databaseAgentId, env: params.env, path: params.sqlitePath },
+    );
+    snapshot = result.found
+      ? { available: true, ...result.value }
+      : { available: false, reason: result.reason };
+  }
+  params.cache?.set(cacheKey, snapshot);
+  return snapshot;
+}
+
 function resolveFixedSessionStoreTargetsReadOnly(
   cfg: OpenClawConfig,
   requested: string,
@@ -451,35 +490,12 @@ function resolveFixedSessionStoreTargetsReadOnly(
     if (!sqlitePath) {
       return { available: false, reason: "read-failed" };
     }
-    const cacheKey = path.resolve(sqlitePath);
-    let snapshot = cache?.get(cacheKey);
-    if (!snapshot) {
-      if (!fsSync.existsSync(sqlitePath)) {
-        snapshot = { available: false, reason: "database-missing" };
-      } else {
-        const databaseAgentId = normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId);
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (database) => {
-            const scopedAgentIds = new Set<string>();
-            let hasUnscopedRow = false;
-            for (const sessionKey of readSqliteSessionEntryKeys(database)) {
-              const parsed = parseAgentSessionKey(sessionKey);
-              if (parsed) {
-                scopedAgentIds.add(normalizeAgentId(parsed.agentId));
-              } else {
-                hasUnscopedRow = true;
-              }
-            }
-            return { databaseAgentId, hasUnscopedRow, scopedAgentIds };
-          },
-          { agentId: databaseAgentId, env, path: sqlitePath },
-        );
-        snapshot = result.found
-          ? { available: true, ...result.value }
-          : { available: false, reason: result.reason };
-      }
-      cache?.set(cacheKey, snapshot);
-    }
+    const snapshot = readSessionStoreTargetSnapshot({
+      cache,
+      databaseAgentId: normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId),
+      env,
+      sqlitePath,
+    });
     if (!snapshot.available) {
       return snapshot;
     }
@@ -510,12 +526,27 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
 ): SessionStoreTargetsReadResult {
   const env = params.env ?? process.env;
   const requested = normalizeAgentId(agentId);
-  return isPerAgentSessionStoreConfig(cfg.session?.store)
-    ? {
-        available: true,
-        targets: resolveExistingAgentSessionStoreTargetsSync(cfg, requested, { env }),
-      }
-    : resolveFixedSessionStoreTargetsReadOnly(cfg, requested, env, params.cache);
+  if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
+    return resolveFixedSessionStoreTargetsReadOnly(cfg, requested, env, params.cache);
+  }
+  const targets = resolveExistingAgentSessionStoreTargetsSync(cfg, requested, { env });
+  for (const target of targets) {
+    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+      agentId: target.agentId,
+      defaultAgentId: resolveDefaultAgentId(cfg),
+      env,
+    });
+    const snapshot = readSessionStoreTargetSnapshot({
+      cache: params.cache,
+      databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
+      env,
+      sqlitePath: resolved.path,
+    });
+    if (!snapshot.available) {
+      return snapshot;
+    }
+  }
+  return { available: true, targets };
 }
 
 /** Resolves only already-existing stores for one configured, retired, or manual agent. */
