@@ -1,4 +1,5 @@
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
@@ -24,7 +25,7 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { handleApprovalRequest, toTranscriptToolResult } from "./run-attempt-tools.js";
+import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
   inferCodexDynamicToolMeta,
@@ -124,9 +125,9 @@ export function createCodexAttemptServerRequestController(
             armCompletionWatchOnResponse = true;
             markCurrentTurnRequestProgress();
           }
-          return handleApprovalRequest({
+          return handleCodexAppServerApprovalRequest({
             method: request.method,
-            params: request.params,
+            requestParams: request.params,
             paramsForRun: params,
             threadId: resourceState.thread.threadId,
             turnId,
