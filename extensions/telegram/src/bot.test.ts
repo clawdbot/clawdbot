@@ -2162,7 +2162,7 @@ describe("createTelegramBot", () => {
       {
         name: "preserves a compatible auth profile on a same-provider picker switch",
         callbackData: "mdl_sel_openai/gpt-4.1",
-        expectedProfile: "openai:work",
+        expectedProfile: "team:prod",
       },
       {
         name: "clears an incompatible auth profile on a cross-provider picker switch",
@@ -2175,6 +2175,9 @@ describe("createTelegramBot", () => {
 
       const storePath = createTelegramTestStorePath("model-auth-profile");
       const config = {
+        auth: {
+          profiles: { "team:prod": { provider: "openai", mode: "api_key" } },
+        },
         agents: {
           defaults: {
             model: "openai/gpt-5",
@@ -2210,13 +2213,12 @@ describe("createTelegramBot", () => {
           updatedAt: 1,
           providerOverride: "openai",
           modelOverride: "gpt-4o",
-          authProfileOverride: "openai:work",
+          authProfileOverride: "team:prod",
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: 2,
         },
       });
-      const buildModelsProviderDataMock =
-        telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+      const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
       buildModelsProviderDataMock.mockResolvedValueOnce({
         byProvider: new Map([
           ["openai", new Set(["gpt-4.1", "gpt-5"])],
@@ -2246,8 +2248,7 @@ describe("createTelegramBot", () => {
 
   it("renders model callback lists with configured display names", async () => {
     const storePath = createTelegramTestStorePath("model-display-names");
-    const buildModelsProviderDataMock =
-      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
     buildModelsProviderDataMock.mockResolvedValueOnce({
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],

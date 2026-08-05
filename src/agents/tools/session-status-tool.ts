@@ -30,7 +30,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import {
   getSessionStateVersion,
   listSessionStateEventsSince,
@@ -892,8 +892,15 @@ export function createSessionStatusTool(opts?: {
                     isDefault: selection.isDefault,
                   };
             const nextEntry: SessionEntry = { ...scopedResolved.entry };
-            const applied = applyModelOverrideToSessionEntry({
+            const currentProvider =
+              scopedResolved.entry.providerOverride?.trim() ||
+              scopedResolved.entry.modelProvider?.trim() ||
+              configured.provider;
+            const applied = applyModelOverrideWithAuthProfileCompatibility({
+              cfg,
+              agentDir: selectedAgentDir,
               entry: nextEntry,
+              currentProvider,
               selection: modelSelection,
               markLiveSwitchPending: true,
             });
@@ -906,8 +913,14 @@ export function createSessionStatusTool(opts?: {
                 },
                 (entry, context) => {
                   const persistedEntryPatch: SessionEntry = { ...entry };
-                  applyModelOverrideToSessionEntry({
+                  applyModelOverrideWithAuthProfileCompatibility({
+                    cfg,
+                    agentDir: selectedAgentDir,
                     entry: persistedEntryPatch,
+                    currentProvider:
+                      entry.providerOverride?.trim() ||
+                      entry.modelProvider?.trim() ||
+                      configured.provider,
                     selection: modelSelection,
                     markLiveSwitchPending: true,
                   });

@@ -1,11 +1,11 @@
 // Discord plugin module implements native command model picker apply behavior.
 import { randomUUID } from "node:crypto";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  applyModelOverrideToSessionEntry,
+  applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
-  shouldPreserveSessionAuthProfileOverride,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -59,19 +59,16 @@ async function persistDiscordModelPickerOverride(params: {
       const currentProvider =
         entry.providerOverride?.trim() || entry.modelProvider?.trim() || params.defaultProvider;
       persisted =
-        applyModelOverrideToSessionEntry({
+        applyModelOverrideWithAuthProfileCompatibility({
+          cfg: params.cfg,
+          agentDir: resolveAgentDir(params.cfg, params.route.agentId),
           entry,
+          currentProvider,
           selection: {
             provider: params.provider,
             model: params.model,
             isDefault: params.isDefault,
           },
-          preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-            cfg: params.cfg,
-            entry,
-            currentProvider,
-            provider: params.provider,
-          }),
           markLiveSwitchPending: true,
         }).updated || persisted;
       const runtime = params.runtime?.trim();

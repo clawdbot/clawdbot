@@ -1928,6 +1928,30 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("preserves a compatible auth profile for a mixed model directive", async () => {
+    const sessionEntry = createSessionEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-5",
+      authProfileOverride: "team:prod",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
+    });
+
+    await runHandleCommand("/model openai/gpt-4o", {
+      cfg: {
+        ...baseConfig(),
+        auth: { profiles: { "team:prod": { provider: "openai", mode: "api_key" } } },
+      },
+      provider: "openai",
+      model: "gpt-5",
+      sessionEntry,
+    });
+
+    expect(sessionEntry.authProfileOverride).toBe("team:prod");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(sessionEntry.authProfileOverrideCompactionCount).toBe(2);
+  });
+
   it("uses the target session agent when persisting a model selection", async () => {
     vi.mocked(resolveSessionAgentId).mockReturnValue("work");
     const sessionEntry = createSessionEntry();

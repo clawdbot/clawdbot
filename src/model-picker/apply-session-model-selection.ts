@@ -2,6 +2,7 @@ import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
 } from "../agents/agent-runtime-id.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, normalizeProviderId } from "../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
@@ -26,11 +27,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
-  applyModelOverrideToSessionEntry,
 } from "../sessions/model-overrides.js";
 
 export type SessionModelSelectionRequest = {
@@ -98,18 +98,22 @@ type ApplySessionModelSelectionToEntryResult = {
 
 /** Applies the model transaction field family to one caller-owned snapshot. */
 function applySessionModelSelectionToEntry(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
   entry: SessionEntry;
+  currentProvider: string;
   request: SessionModelSelectionRequest;
   runtime: AppliedRuntimeDirective;
   markLiveSwitchPending?: boolean;
-  preserveAuthProfileOverride?: boolean;
 }): ApplySessionModelSelectionToEntryResult {
-  const modelChange = applyModelOverrideToSessionEntry({
+  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
     entry: params.entry,
+    currentProvider: params.currentProvider,
     selection: params.request,
     profileOverride: params.request.profileOverride,
     markLiveSwitchPending: params.markLiveSwitchPending,
-    preserveAuthProfileOverride: params.preserveAuthProfileOverride,
   });
   const runtimeChange = applyModelRuntimeDirective(params.entry, params.runtime);
   return {
@@ -210,16 +214,13 @@ export async function applySessionModelSelection(
   const initialEntry = { ...startingEntry };
   const nextEntry = { ...startingEntry };
   const applied = applySessionModelSelectionToEntry({
+    cfg: params.cfg,
+    agentDir: resolveAgentDir(params.cfg, params.agentId),
     entry: nextEntry,
+    currentProvider: params.currentProvider,
     request,
     runtime,
     markLiveSwitchPending: params.markLiveSwitchPending,
-    preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-      cfg: params.cfg,
-      entry: startingEntry,
-      currentProvider: params.currentProvider,
-      provider: request.provider,
-    }),
   });
   const thinkingCatalog = params.thinkingCatalog ?? params.modelCatalog;
   const thinkingRuntime = resolveEffectiveAgentRuntime({

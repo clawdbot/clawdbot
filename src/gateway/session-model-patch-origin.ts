@@ -4,8 +4,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
-
 const agentSessionModelPatch = new AsyncLocalStorage<boolean>();
 
 export function withAgentSessionModelPatchOrigin<T>(run: () => T): T {
