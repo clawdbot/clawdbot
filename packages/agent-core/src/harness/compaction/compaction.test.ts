@@ -442,6 +442,65 @@ describe("session-entry compaction budgeting", () => {
 });
 
 describe("generateSummary thinking options", () => {
+  it("bounds the summarization output cap by the summary-size budget, not the input reserve", async () => {
+    const model: Model = {
+      id: "gpt-5.6-sol",
+      name: "GPT 5.6 Sol",
+      api: "openai-chat-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 128_000,
+    };
+    const summaryMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "summary" }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    const streamFn = vi.fn<StreamFn>((_model, _context, options) => {
+      // reserveTokensFloor: 80000 with model.maxTokens: 128000 used to
+      // authorize 64,000 output tokens per call even though the final merged
+      // summary is hard-capped at 16,000 chars (~4,000 tokens). The output
+      // cap must be bounded by the summary-size budget instead.
+      expect(options?.maxTokens).toBeLessThanOrEqual(4_000);
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: "stop", message: summaryMessage });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      80_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "off",
+      streamFn,
+    );
+
+    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(streamFn).toHaveBeenCalledOnce();
+  });
+
   it("maps explicit Fable off to low effort for compaction", async () => {
     const model: Model = {
       id: "production-fable",

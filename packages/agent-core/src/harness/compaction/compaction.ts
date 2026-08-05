@@ -159,6 +159,20 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   keepRecentTokens: 20000,
 };
 
+/**
+ * Output token budget for a single summarization LLM call.
+ *
+ * The final merged summary is hard-capped at MAX_COMPACTION_SUMMARY_CHARS
+ * (16,000 chars ≈ 4,000 tokens at the shared 4-char/token estimate) by the
+ * compaction safeguard, so authorizing more output per call than can survive
+ * only inflates cost and latency. The output cap must be derived from that
+ * summary-size budget, NOT from the input-side reserve floor (which is a
+ * context-window holdback and can be 16x larger on high-maxTokens models).
+ */
+const MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS = Math.ceil(
+  16_000 / CHARS_PER_TOKEN_ESTIMATE,
+);
+
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
   if (usage.contextUsage?.state === "available") {
@@ -661,7 +675,9 @@ async function runSummarizationCompletion(params: {
 export async function generateSummary(
   currentMessages: AgentMessage[],
   model: Model,
-  reserveTokens: number,
+  // Retained for positional API compatibility; the per-call output cap is
+  // derived from the summary-size budget, not the input-side reserve.
+  _reserveTokens: number,
   apiKey: string | undefined,
   headers?: Record<string, string>,
   signal?: AbortSignal,
@@ -672,7 +688,7 @@ export async function generateSummary(
   runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
-    Math.floor(0.8 * reserveTokens),
+    MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS,
     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
   );
   let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
@@ -974,7 +990,9 @@ export async function compact(
 async function generateTurnPrefixSummary(
   messages: AgentMessage[],
   model: Model,
-  reserveTokens: number,
+  // Retained for positional API compatibility; the per-call output cap is
+  // derived from the summary-size budget, not the input-side reserve.
+  _reserveTokens: number,
   apiKey: string | undefined,
   headers?: Record<string, string>,
   signal?: AbortSignal,
@@ -983,7 +1001,7 @@ async function generateTurnPrefixSummary(
   runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
-    Math.floor(0.5 * reserveTokens),
+    MAX_COMPACTION_SUMMARY_OUTPUT_TOKENS,
     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
   );
   const llmMessages = convertToLlm(messages);
