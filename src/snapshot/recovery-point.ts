@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { z } from "zod";
-import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { root } from "../infra/fs-safe.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
