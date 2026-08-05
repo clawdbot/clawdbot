@@ -6,6 +6,7 @@ import { stableStringify } from "../agents/stable-stringify.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import {
+  ensureDurableDirectory,
   pinDirectory,
   requireDirectorySync,
   type PinnedDirectory,
@@ -13,6 +14,7 @@ import {
 import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 import {
@@ -309,12 +311,19 @@ function resolveOwnerAgentDatabases(request: FinalRecoveryPointRequest): Array<{
 }> {
   const expectedAgentIds = request.ownerInventory.agentIds;
   const expected = new Set(expectedAgentIds);
-  const registered = listOpenClawRegisteredAgentDatabases();
+  const registered = listOpenClawRegisteredAgentDatabases({
+    includeIncompatibleSchemaVersions: true,
+  });
   const byAgentId = new Map<string, string>();
   for (const entry of registered) {
     if (!expected.has(entry.agentId)) {
       throw operationConflict(
         `Final recovery-point inventory omitted registered agent database: ${entry.agentId}.`,
+      );
+    }
+    if (entry.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+      throw operationConflict(
+        `Final recovery-point inventory cannot capture incompatible registered agent database: ${entry.agentId}.`,
       );
     }
     const existing = byAgentId.get(entry.agentId);
@@ -466,18 +475,26 @@ async function prepareOperationDirectory(directoryPath: string, label: string): 
 }
 
 async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
-  const result = await ensureAbsoluteDirectory(directoryPath, {
-    mode: PRIVATE_DIRECTORY_MODE,
-    scopeLabel: "final recovery-point repository",
+  const receipt = await ensureDurableDirectory({
+    directoryPath,
+    label: "final recovery-point repository",
+    create: async (targetPath) => {
+      const result = await ensureAbsoluteDirectory(targetPath, {
+        mode: PRIVATE_DIRECTORY_MODE,
+        scopeLabel: "final recovery-point repository",
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+      applyPrivateModeSync(result.path, PRIVATE_DIRECTORY_MODE);
+    },
   });
-  if (!result.ok) {
-    throw result.error;
-  }
-  const stat = await fs.lstat(result.path);
+  requireDirectorySync(receipt.parentSync, "final recovery-point repository");
+  const stat = await fs.lstat(receipt.path);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw operationConflict("Final recovery-point path is not a trusted directory.");
   }
-  applyPrivateModeSync(result.path, PRIVATE_DIRECTORY_MODE);
+  applyPrivateModeSync(receipt.path, PRIVATE_DIRECTORY_MODE);
 }
 
 async function pinRecoveryPointDirectory(directoryPath: string): Promise<PinnedDirectory> {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -24,6 +24,34 @@ import {
 } from "./final-recovery-point.js";
 import { resolveRecoveryJournalPath, writeRecoveryJournalRecord } from "./recovery-journal.js";
 
+const { durabilityTestState } = vi.hoisted(() => ({
+  durabilityTestState: {
+    durableDirectoryParentSyncOutcome: undefined as
+      | { status: "synced" }
+      | { status: "unsupported"; code?: string }
+      | undefined,
+    syncOutcome: undefined as
+      | { status: "synced" }
+      | { status: "unsupported"; code?: string }
+      | undefined,
+  },
+}));
+
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
+  return {
+    ...actual,
+    ensureDurableDirectory: async (...args: Parameters<typeof actual.ensureDurableDirectory>) => {
+      const receipt = await actual.ensureDurableDirectory(...args);
+      return durabilityTestState.durableDirectoryParentSyncOutcome === undefined
+        ? receipt
+        : { ...receipt, parentSync: durabilityTestState.durableDirectoryParentSyncOutcome };
+    },
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let previousStateDir: string | undefined;
 
@@ -32,6 +60,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  durabilityTestState.durableDirectoryParentSyncOutcome = undefined;
+  durabilityTestState.syncOutcome = undefined;
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -80,6 +110,35 @@ describe("final recovery-point capture", () => {
     ]);
     expect(agentManifest.database).toMatchObject({ role: "agent", agentId: "main" });
   });
+
+  it("quarantines incompatible registered agent databases instead of omitting them", async () => {
+    const fixture = await createFixture();
+    rewriteRegisteredAgentSchemaVersion(
+      fixture.request.ownerInventory.agentIds[0]!,
+      OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+    );
+
+    await expect(captureFinalRecoveryPoint(fixture.request)).rejects.toMatchObject({
+      code: "final-capture.operation-conflict",
+      disposition: "quarantine",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when recovery-root parent synchronization is unsupported",
+    async () => {
+      const fixture = await createFixture();
+      durabilityTestState.durableDirectoryParentSyncOutcome = {
+        status: "unsupported",
+        code: "ENOTSUP",
+      };
+
+      await expect(captureFinalRecoveryPoint(fixture.request)).rejects.toMatchObject({
+        code: "final-capture.snapshot-failed",
+        disposition: "hold",
+      });
+    },
+  );
 
   it("quarantines a changed request under the same handoff and generation", async () => {
     const fixture = await createFixture();
@@ -267,6 +326,18 @@ function createDatabase(databasePath: string, role: "global" | "agent", agentId?
         ) VALUES ('primary', ?, ?, ?, NULL, 1, 1)`,
       )
       .run(role, version, role === "agent" ? agentId! : null);
+  } finally {
+    database.close();
+  }
+}
+
+function rewriteRegisteredAgentSchemaVersion(agentId: string, schemaVersion: number): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath());
+  try {
+    database
+      .prepare("UPDATE agent_databases SET schema_version = ? WHERE agent_id = ?")
+      .run(schemaVersion, agentId);
   } finally {
     database.close();
   }
