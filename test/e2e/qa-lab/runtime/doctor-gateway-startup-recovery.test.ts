@@ -33,6 +33,7 @@ describe("doctor gateway startup recovery producer", () => {
         OPENCLAW_GATEWAY_URL: "wss://ambient.example.invalid",
         OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/tmp/host-state",
+        OPENCLAW_SUPERVISOR_MODE: "external",
         PATH: "/usr/bin",
       },
       accountHome,
@@ -50,6 +51,7 @@ describe("doctor gateway startup recovery producer", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_URL).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
+    expect(env.OPENCLAW_SUPERVISOR_MODE).toBeUndefined();
   });
 
   it("uses the stable built launcher for every child CLI command", () => {
