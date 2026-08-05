@@ -926,7 +926,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("blocks gateway readiness when plugin repair warnings remain", async () => {
+  it("blocks gateway readiness with install-neutral plugin repair guidance", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
@@ -946,7 +946,11 @@ describe("runDoctorConfigPreflight state migration", () => {
         invalidConfigNote: false,
         requireStartupMigrationCheckpoint: true,
       }),
-    ).rejects.toThrow("Configured plugin discord is not installed");
+    ).rejects.toThrow(
+      "OpenClaw plugin verification failed; refusing to report the gateway ready.\n" +
+        "- Configured plugin discord is not installed. Run `openclaw update repair` to retry plugin repair.\n" +
+        "Resolve the plugin verification errors above, then restart the Gateway.",
+    );
 
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
       env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
