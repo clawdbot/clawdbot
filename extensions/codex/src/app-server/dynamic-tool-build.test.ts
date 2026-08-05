@@ -63,6 +63,7 @@ function setOpenClawCodingToolsFactoryForTests(
 
 function resetOpenClawCodingToolsFactoryForTests(): void {
   dynamicToolBuildState.openClawCodingToolsFactory = undefined;
+  dynamicToolBuildState.agentHarnessCodingToolsFactory = undefined;
 }
 
 type RuntimeDynamicToolForTest = Parameters<
@@ -141,6 +142,7 @@ async function buildDynamicToolsForTest(
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
   return buildDynamicTools({
+    attributionAttempt: params,
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
@@ -156,6 +158,26 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
+  it("uses the exact host-admitted attempt for private tool attribution", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const admittedAttempt = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    admittedAttempt.disableTools = false;
+    admittedAttempt.runtimePlan = createCodexRuntimePlanFixture();
+    const runtimeParams = { ...admittedAttempt };
+    const factory = vi.fn<NonNullable<typeof dynamicToolBuildState.agentHarnessCodingToolsFactory>>(
+      () => [],
+    );
+    dynamicToolBuildState.agentHarnessCodingToolsFactory = factory;
+
+    await buildDynamicToolsForTest(runtimeParams, workspaceDir, {
+      attributionAttempt: admittedAttempt,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(factory.mock.calls[0]?.[0]).toBe(admittedAttempt);
+    expect(factory.mock.calls[0]?.[0]).not.toBe(runtimeParams);
+  });
+
   it("removes account-wide app access when native tools are restricted", () => {
     expect(
       disableCodexPluginThreadConfig({

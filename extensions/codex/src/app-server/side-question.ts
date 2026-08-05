@@ -413,6 +413,7 @@ export async function runCodexAppServerSideQuestion(
           })
         : "unsupported";
     const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
+      attributionParams: params,
       params: effectiveParams,
       cwd,
       pluginConfig,
@@ -920,6 +921,7 @@ function buildSideRunAttemptParams(
 }
 
 async function createCodexSideToolBridge(input: {
+  attributionParams: AgentHarnessSideQuestionParams;
   params: AgentHarnessSideQuestionParams;
   cwd: string;
   pluginConfig: ReturnType<typeof readCodexPluginConfig>;
@@ -935,8 +937,8 @@ async function createCodexSideToolBridge(input: {
   const messageToolProvider = resolveCodexMessageToolProvider(input.params);
   let tools: AnyAgentTool[] = [];
   if (supportsModelTools(runtimeModel)) {
-    const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
-      .createOpenClawCodingTools;
+    const { createOpenClawCodingToolsForAgentHarnessSideQuestion } =
+      await import("openclaw/plugin-sdk/agent-harness-tool-runtime");
     const sandboxSessionKey =
       input.params.sandboxSessionKey?.trim() ||
       input.params.sessionKey?.trim() ||
@@ -947,7 +949,7 @@ async function createCodexSideToolBridge(input: {
       sessionKey: sandboxSessionKey,
       workspaceDir: input.cwd,
     });
-    const allTools = createOpenClawCodingTools({
+    const allTools = createOpenClawCodingToolsForAgentHarnessSideQuestion(input.attributionParams, {
       agentId: input.sessionAgentId,
       sessionKey: sandboxSessionKey,
       runSessionKey:

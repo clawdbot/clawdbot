@@ -32,6 +32,11 @@ const isCodexAppServerNativeAuthProfileMock = vi.fn();
 const getSharedCodexAppServerClientMock = vi.fn();
 const refreshCodexAppServerAuthTokensMock = vi.fn();
 const createOpenClawCodingToolsMock = vi.fn();
+let sideQuestionToolParams: unknown;
+const createOpenClawCodingToolsForSideQuestionMock = vi.fn((params: unknown, options: unknown) => {
+  sideQuestionToolParams = params;
+  return createOpenClawCodingToolsMock(options);
+});
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
@@ -95,8 +100,9 @@ vi.mock("./provider-capabilities.js", () => ({
     resolveCodexProviderWebSearchSupportForClientMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
-  createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
+vi.mock("openclaw/plugin-sdk/agent-harness-tool-runtime", () => ({
+  createOpenClawCodingToolsForAgentHarnessSideQuestion: (params: unknown, options: unknown) =>
+    createOpenClawCodingToolsForSideQuestionMock(params, options),
 }));
 
 const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
@@ -474,6 +480,8 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockReset();
     refreshCodexAppServerAuthTokensMock.mockReset();
     createOpenClawCodingToolsMock.mockReset();
+    createOpenClawCodingToolsForSideQuestionMock.mockClear();
+    sideQuestionToolParams = undefined;
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
@@ -536,33 +544,34 @@ describe("runCodexAppServerSideQuestion", () => {
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const params = sideParams({
+      messageChannel: "discord",
+      messageProvider: "discord-voice",
+      chatId: "discord-native-room",
+      chatType: "channel",
+      sessionKey: "agent:main:conversation",
+      sandboxSessionKey: "agent:main:runtime-policy",
+      messageActionTurnCapability: "turn-capability-1",
+      currentChannelId: "voice-room",
+      agentAccountId: "account-1",
+      messageTo: "channel-1",
+      messageThreadId: "thread-1",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
+      senderIsOwner: true,
+    });
 
-    const result = await runCodexAppServerSideQuestion(
-      sideParams({
-        messageChannel: "discord",
-        messageProvider: "discord-voice",
-        chatId: "discord-native-room",
-        chatType: "channel",
-        sessionKey: "agent:main:conversation",
-        sandboxSessionKey: "agent:main:runtime-policy",
-        messageActionTurnCapability: "turn-capability-1",
-        currentChannelId: "voice-room",
-        agentAccountId: "account-1",
-        messageTo: "channel-1",
-        messageThreadId: "thread-1",
-        groupId: "group-1",
-        groupChannel: "#ops",
-        groupSpace: "workspace-1",
-        spawnedBy: "agent:main:parent",
-        senderId: "sender-1",
-        senderName: "Rosita",
-        senderUsername: "rosita",
-        senderE164: "+15550001",
-        senderIsOwner: true,
-      }),
-    );
+    const result = await runCodexAppServerSideQuestion(params);
 
     expect(result).toEqual({ text: "Side answer." });
+    expect(sideQuestionToolParams).toBe(params);
+    expect(params).not.toHaveProperty("attribution");
     expect(mockCall(getSharedCodexAppServerClientMock)[0]).toMatchObject({
       preparedAuth: {
         kind: "profile",
