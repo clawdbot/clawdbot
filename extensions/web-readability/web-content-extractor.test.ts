@@ -114,6 +114,19 @@ describe("web readability extractor", () => {
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
 
+  it("counts nesting after a raw text body containing length-changing unicode", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const script = `<script>${"İ".repeat(3_000)}</script>`;
+    const nested = `${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${script}${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
   it("still counts nesting inside noscript", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const nested = `<noscript>${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}</noscript>`;

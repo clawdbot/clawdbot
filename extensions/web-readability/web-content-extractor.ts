@@ -48,9 +48,42 @@ const loadReadabilityDeps = createLazyRuntimeModule(() =>
   ]),
 );
 
+// Locate the case-insensitive closing tag for a raw-text element in the
+// original string's index space. Tag names are ASCII, so folding stays
+// length-preserving; scanning a toLowerCase() copy would drift the offset
+// whenever an interior code point lowercases to a different UTF-16 length.
+function findRawTextClose(html: string, tagName: string, from: number): number {
+  const len = html.length;
+  for (let p = from; p < len; p++) {
+    if (html.charCodeAt(p) !== 60 || html.charCodeAt(p + 1) !== 47) {
+      continue;
+    }
+    let q = p + 2;
+    let matched = 0;
+    while (matched < tagName.length) {
+      let c = html.charCodeAt(q);
+      if (c >= 65 && c <= 90) {
+        c += 32;
+      }
+      if (c !== tagName.charCodeAt(matched)) {
+        break;
+      }
+      q += 1;
+      matched += 1;
+    }
+    if (matched < tagName.length) {
+      continue;
+    }
+    const boundary = html.charCodeAt(q);
+    if (q >= len || boundary === 62 || boundary === 47 || boundary <= 32) {
+      return p;
+    }
+  }
+  return -1;
+}
+
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
-  let lowerHtml: string | undefined;
   const len = html.length;
   for (let i = 0; i < len; i++) {
     if (html.charCodeAt(i) !== 60) {
@@ -129,17 +162,7 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
     }
 
     if (HTML_RAW_TEXT_TAGS.has(tagName)) {
-      lowerHtml ??= html.toLowerCase();
-      const needle = `</${tagName}`;
-      let closeStart = lowerHtml.indexOf(needle, k + 1);
-      while (closeStart >= 0) {
-        const after = closeStart + needle.length;
-        const boundary = html.charCodeAt(after);
-        if (after >= len || boundary === 62 || boundary === 47 || boundary <= 32) {
-          break;
-        }
-        closeStart = lowerHtml.indexOf(needle, after);
-      }
+      const closeStart = findRawTextClose(html, tagName, k + 1);
       if (closeStart < 0) {
         return false;
       }
