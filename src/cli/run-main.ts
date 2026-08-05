@@ -871,6 +871,10 @@ function isKnownBuiltInCommandRoot(primary: string): boolean {
   );
 }
 
+function shouldResolvePluginMachineOutput(primary: string): boolean {
+  return !isKnownBuiltInCommandRoot(primary) || isPluginYieldingBuiltinCommandRoot(primary);
+}
+
 function resolvesMachineOutput(
   descriptor: {
     machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
@@ -896,7 +900,7 @@ async function resolvePluginMachineOutput(params: {
   config: OpenClawConfig;
 }): Promise<boolean> {
   const { primary } = resolveCliArgvInvocation(params.argv);
-  if (!primary || isKnownBuiltInCommandRoot(primary)) {
+  if (!primary || !shouldResolvePluginMachineOutput(primary)) {
     return false;
   }
   const { loadPluginCliDescriptors } = await loadCliRegistryLoaderModule();
@@ -1247,7 +1251,7 @@ async function runCliWithPreparedOutputMode(
     !isHelpOrVersionInvocation &&
     !bareSessionInvocation &&
     normalizedInvocation.primary &&
-    !isKnownBuiltInCommandRoot(normalizedInvocation.primary)
+    shouldResolvePluginMachineOutput(normalizedInvocation.primary)
   ) {
     const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
     if (

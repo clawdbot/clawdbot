@@ -3235,32 +3235,38 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("routes plugin registration logs for descriptor-declared machine output", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(false);
-    resolvePluginCliRootOwnerIdsMock.mockImplementation(
-      ({ primaryCommand }: { primaryCommand?: string }) =>
-        primaryCommand === "path" ? ["oc-path"] : [],
-    );
-    loadPluginCliDescriptorsMock.mockResolvedValueOnce([
-      {
-        name: "path",
-        description: "OC path",
-        hasSubcommands: true,
-        machineOutput: ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY,
-      },
-    ]);
-    let stderrDuringPluginRegistration = false;
-    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
-      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
-      return {};
-    });
-    buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: vi.fn() });
+  it.each([
+    ["plugin-only root", "path", "oc-path"],
+    ["plugin-yielding built-in root", "auth", "proof-auth-owner"],
+  ])(
+    "routes plugin registration logs for descriptor-declared machine output on a %s",
+    async (_name, commandRoot, ownerId) => {
+      tryRouteCliMock.mockResolvedValueOnce(false);
+      resolvePluginCliRootOwnerIdsMock.mockImplementation(
+        ({ primaryCommand }: { primaryCommand?: string }) =>
+          primaryCommand === commandRoot ? [ownerId] : [],
+      );
+      loadPluginCliDescriptorsMock.mockResolvedValueOnce([
+        {
+          name: commandRoot,
+          description: `${commandRoot} commands`,
+          hasSubcommands: true,
+          machineOutput: ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY,
+        },
+      ]);
+      let stderrDuringPluginRegistration = false;
+      registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+        stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+        return {};
+      });
+      buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: vi.fn() });
 
-    await runCli(["node", "openclaw", "path", "validate", "oc://AGENTS.md"]);
+      await runCli(["node", "openclaw", commandRoot, "validate", "oc://AGENTS.md"]);
 
-    expect(stderrDuringPluginRegistration).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
+      expect(stderrDuringPluginRegistration).toBe(true);
+      expect(loggingState.forceConsoleToStderr).toBe(false);
+    },
+  );
 
   it("does not route lazy plugin registration logs for pass-through --json after terminator", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
