@@ -73,6 +73,8 @@ const hoisted = vi.hoisted(() => {
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
   const upsertSessionEntryMock = vi.fn();
+  const recordSessionCreatedMock = vi.fn();
+  const recordSubagentSpawnedMock = vi.fn();
   const createSessionAccessorMock = () => {
     const resolveMockStorePath = (scope: {
       agentId?: string;
@@ -167,6 +169,8 @@ const hoisted = vi.hoisted(() => {
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
     upsertSessionEntryMock,
+    recordSessionCreatedMock,
+    recordSubagentSpawnedMock,
     createSessionAccessorMock,
     state,
   };
@@ -201,6 +205,13 @@ vi.mock("../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
+
+// ACP spawn owns publication timing and attribution; the event owner suite keeps
+// the real SQLite persistence and watcher coverage for these two facts.
+vi.mock("../sessions/session-state-events.js", () => ({
+  recordSessionCreated: hoisted.recordSessionCreatedMock,
+  recordSubagentSpawned: hoisted.recordSubagentSpawnedMock,
+}));
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
@@ -712,6 +723,8 @@ describe("spawnAcpDirect", () => {
         sessionId: patch.sessionId ?? "sess-123",
         updatedAt: patch.updatedAt ?? Date.now(),
       }));
+    hoisted.recordSessionCreatedMock.mockReset();
+    hoisted.recordSubagentSpawnedMock.mockReset();
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -883,6 +896,23 @@ describe("spawnAcpDirect", () => {
       targetKind: "session",
       placement: "child",
     });
+    expect(hoisted.recordSessionCreatedMock).toHaveBeenCalledWith({
+      sessionKey: accepted.childSessionKey,
+      agentId: "codex",
+      entry: expect.objectContaining({
+        sessionId: "sess-123",
+        spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "agent:main:main" },
+      }),
+    });
+    expect(hoisted.recordSubagentSpawnedMock).toHaveBeenCalledWith({
+      childSessionKey: accepted.childSessionKey,
+      childRunId: expect.any(String),
+      requesterSessionKey: "agent:main:main",
+      agentId: "codex",
+    });
     const agentCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
       (call: unknown[]) => (call[0] as { method?: string }).method === "agent",
     );
@@ -894,18 +924,33 @@ describe("spawnAcpDirect", () => {
       hoisted.initializeSessionMock.mock.invocationCallOrder[0],
       "hoisted.initializeSessionMock.mock.invocationCallOrder[0] test invariant",
     );
+    const createdEventCallOrder = expectDefined(
+      hoisted.recordSessionCreatedMock.mock.invocationCallOrder[0],
+      "hoisted.recordSessionCreatedMock.mock.invocationCallOrder[0] test invariant",
+    );
+    const spawnedEventCallOrder = expectDefined(
+      hoisted.recordSubagentSpawnedMock.mock.invocationCallOrder[0],
+      "hoisted.recordSubagentSpawnedMock.mock.invocationCallOrder[0] test invariant",
+    );
     const agentCallOrder = expectDefined(
       hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex],
       "hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex] test invariant",
     );
     expect(typeof createCallOrder).toBe("number");
     expect(typeof initializeCallOrder).toBe("number");
+    expect(typeof createdEventCallOrder).toBe("number");
+    expect(typeof spawnedEventCallOrder).toBe("number");
     expect(typeof agentCallOrder).toBe("number");
     expect(createCallOrder < initializeCallOrder).toBe(true);
-    expect(initializeCallOrder < agentCallOrder).toBe(true);
+    expect(initializeCallOrder < createdEventCallOrder).toBe(true);
+    expect(createdEventCallOrder < spawnedEventCallOrder).toBe(true);
+    expect(spawnedEventCallOrder < agentCallOrder).toBe(true);
     expectResolvedIntroTextInBindMetadata();
 
     const agentCall = gatewayRequest("agent");
+    expect(hoisted.recordSubagentSpawnedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ childRunId: agentCall.params?.idempotencyKey }),
+    );
     expect(agentCall?.params?.sessionKey).toMatch(/^agent:codex:acp:/);
     expect(agentCall?.params?.to).toBe("channel:child-thread");
     expect(agentCall?.params?.threadId).toBe("child-thread");
@@ -2654,6 +2699,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("keeps ACP spawn running when session-file persistence fails", async () => {
+    hoisted.upsertSessionEntryMock.mockResolvedValueOnce(null);
     hoisted.resolveSessionTranscriptFileMock.mockRejectedValueOnce(new Error("disk full"));
 
     const result = await spawnAcpDirect(
@@ -2677,6 +2723,13 @@ describe("spawnAcpDirect", () => {
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.sessionKey).toBe(result.childSessionKey);
+    expect(hoisted.recordSessionCreatedMock).not.toHaveBeenCalled();
+    expect(hoisted.recordSubagentSpawnedMock).toHaveBeenCalledWith({
+      childSessionKey: result.childSessionKey,
+      childRunId: expect.any(String),
+      requesterSessionKey: "agent:main:main",
+      agentId: "codex",
+    });
   });
 
   it("includes cwd in ACP thread intro banner when provided at spawn time", async () => {
@@ -2726,6 +2779,8 @@ describe("spawnAcpDirect", () => {
     expectRecordFields(result, {
       status: "forbidden",
     });
+    expect(hoisted.recordSessionCreatedMock).not.toHaveBeenCalled();
+    expect(hoisted.recordSubagentSpawnedMock).not.toHaveBeenCalled();
   });
 
   it("requires an explicit ACP agent when no config default exists", async () => {
@@ -3108,7 +3163,24 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expectAcceptedSpawn(result);
+    const accepted = expectAcceptedSpawn(result);
+    expect(hoisted.recordSessionCreatedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: accepted.childSessionKey,
+        agentId: "codex",
+        entry: expect.objectContaining({
+          spawnedBy: "global",
+          parentSessionKey: "global",
+          createdActor: { type: "agent", id: "global" },
+        }),
+      }),
+    );
+    expect(hoisted.recordSubagentSpawnedMock).toHaveBeenCalledWith({
+      childSessionKey: accepted.childSessionKey,
+      childRunId: expect.any(String),
+      requesterSessionKey: "global",
+      agentId: "codex",
+    });
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
         requesterSessionKey: "global",

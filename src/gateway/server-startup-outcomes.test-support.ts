@@ -1,3 +1,4 @@
+/** Startup outcome coverage loaded by the post-attach startup suite. */
 import { describe, expect, it } from "vitest";
 import {
   createGatewayStartupOutcomeRecorder,

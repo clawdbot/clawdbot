@@ -10,6 +10,10 @@ import {
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
+import {
+  getToolTerminalPresentation,
+  setToolTerminalPresentation,
+} from "./tool-terminal-presentation.js";
 
 type ExecuteMock = ReturnType<typeof vi.fn>;
 
@@ -214,6 +218,18 @@ describe("wrapToolWithAbortSignal", () => {
       message: "Aborted",
     });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("preserves terminal presentation metadata on abort-wrapped tools", () => {
+    const formatter = () => ({ text: "done" });
+    const tool = setToolTerminalPresentation(
+      asAgentTool({ name: "presented", execute: vi.fn() }),
+      formatter,
+    );
+
+    const wrapped = wrapToolWithAbortSignal(tool, new AbortController().signal);
+
+    expect(getToolTerminalPresentation(wrapped)).toBe(formatter);
   });
 });
 

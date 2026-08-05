@@ -21,6 +21,12 @@ type MockRegistryToolEntry = {
 const loadOpenClawPluginsMock = vi.fn();
 const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
+const loadContextMocks = vi.hoisted(() => ({
+  actualResolve: undefined as
+    | typeof import("./runtime/load-context.js").resolvePluginRuntimeLoadContext
+    | undefined,
+  resolve: vi.fn(),
+}));
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
@@ -35,6 +41,15 @@ vi.mock("./loader.js", () => ({
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: unknown) => applyPluginAutoEnableMock(params),
 }));
+
+vi.mock("./runtime/load-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime/load-context.js")>();
+  loadContextMocks.actualResolve = actual.resolvePluginRuntimeLoadContext;
+  return {
+    ...actual,
+    resolvePluginRuntimeLoadContext: (...args: unknown[]) => loadContextMocks.resolve(...args),
+  };
+});
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
@@ -313,64 +328,63 @@ function installToolManifestSnapshots(params: {
   plugins: Record<string, unknown>[];
 }) {
   const plugins = params.plugins;
-  setCurrentPluginMetadataSnapshot(
-    {
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
-      workspaceDir: "/tmp",
-      index: {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash: "test",
-        generatedAtMs: 0,
-        installRecords: {},
-        plugins: plugins.map((plugin) => ({
-          pluginId: String(plugin.id),
-          origin: plugin.origin,
-          enabled: true,
-          enabledByDefault: plugin.enabledByDefault,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-        })),
-        diagnostics: [],
-      },
-      registryDiagnostics: [],
-      manifestRegistry: { plugins, diagnostics: [] },
-      plugins,
+  const snapshot = {
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    workspaceDir: "/tmp",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: plugins.map((plugin) => ({
+        pluginId: String(plugin.id),
+        origin: plugin.origin,
+        enabled: true,
+        enabledByDefault: plugin.enabledByDefault,
+        startup: {
+          sidecar: false,
+          memory: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      })),
       diagnostics: [],
-      byPluginId: new Map(plugins.map((plugin) => [String(plugin.id), plugin])),
-      normalizePluginId: (id: string) => id,
-      owners: {
-        channels: new Map(),
-        channelConfigs: new Map(),
-        providers: new Map(),
-        modelCatalogProviders: new Map(),
-        cliBackends: new Map(),
-        setupProviders: new Map(),
-        commandAliases: new Map(),
-        contracts: new Map(),
-      },
-      metrics: {
-        registrySnapshotMs: 0,
-        manifestRegistryMs: 0,
-        ownerMapsMs: 0,
-        totalMs: 0,
-        indexPluginCount: plugins.length,
-        manifestPluginCount: plugins.length,
-      },
-    } as never,
-    {
-      config: params.config,
-      compatibleConfigs: params.compatibleConfigs,
-      env: params.env ?? process.env,
-      workspaceDir: "/tmp",
     },
-  );
+    registryDiagnostics: [],
+    manifestRegistry: { plugins, diagnostics: [] },
+    plugins,
+    diagnostics: [],
+    byPluginId: new Map(plugins.map((plugin) => [String(plugin.id), plugin])),
+    normalizePluginId: (id: string) => id,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: plugins.length,
+      manifestPluginCount: plugins.length,
+    },
+  };
+  setCurrentPluginMetadataSnapshot(snapshot as never, {
+    config: params.config,
+    compatibleConfigs: params.compatibleConfigs,
+    env: params.env ?? process.env,
+    workspaceDir: "/tmp",
+  });
+  return snapshot;
 }
 
 function createXaiToolManifest() {
@@ -513,6 +527,13 @@ describe("resolvePluginTools optional tools", () => {
       config,
       changes: [],
     }));
+    loadContextMocks.resolve.mockReset();
+    loadContextMocks.resolve.mockImplementation((...args: unknown[]) => {
+      if (!loadContextMocks.actualResolve) {
+        throw new Error("load-context mock was not initialized");
+      }
+      return loadContextMocks.actualResolve(...(args as [never]));
+    });
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
     resetPluginToolDescriptorCacheForTest?.();
@@ -969,6 +990,44 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
+  });
+
+  it("uses owner-prepared load facts without invoking the cold resolver", () => {
+    const context = createContext();
+    const config = context.config;
+    const registry = createToolRegistry([createOptionalDemoEntry()]);
+    const metadataSnapshot = installToolManifestSnapshots({
+      config,
+      plugins: [
+        createToolManifest("optional-demo", ["optional_tool"], {
+          toolMetadata: { optional_tool: { optional: true } },
+        }),
+      ],
+    });
+
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({ context, toolAllowlist: ["optional_tool"] }),
+      preparedRuntime: {
+        loadContext: {
+          rawConfig: config,
+          config,
+          activationSourceConfig: config,
+          autoEnabledReasons: {},
+          workspaceDir: "/tmp",
+          env: process.env,
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          manifestRegistry: metadataSnapshot.manifestRegistry as never,
+          metadataSnapshot: metadataSnapshot as never,
+          installRecords: {},
+        },
+        metadataSnapshot: metadataSnapshot as never,
+        registry: registry as never,
+      },
+    });
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(loadContextMocks.resolve).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", () => {

@@ -58,6 +58,12 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
 
+// Session projection owns static normalization; dedicated runtime tests cover
+// provider plugin hooks without cold-loading that graph in this broad suite.
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 function closeSessionSqliteDatabasesForTest(): void {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();

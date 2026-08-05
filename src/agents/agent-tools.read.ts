@@ -48,7 +48,7 @@ import {
   createWriteTool,
   type ReadToolDetails,
   type ReadToolTruncationDetails,
-} from "./sessions/index.js";
+} from "./sessions/tools/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -890,8 +890,10 @@ type SandboxToolParams = {
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
-export function createSandboxedReadTool(params: SandboxToolParams) {
-  const base = createReadTool(params.root, {
+export function createSandboxedReadTool(
+  params: SandboxToolParams & { createTool?: typeof createReadTool },
+) {
+  const base = (params.createTool ?? createReadTool)(params.root, {
     operations: createSandboxReadOperations(params),
   }) as unknown as AnyAgentTool;
   return createOpenClawReadTool(base, {
@@ -901,16 +903,20 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
 }
 
 /** Create a sandbox-backed write tool with required-parameter validation. */
-export function createSandboxedWriteTool(params: SandboxToolParams) {
-  const base = createWriteTool(params.root, {
+export function createSandboxedWriteTool(
+  params: SandboxToolParams & { createTool?: typeof createWriteTool },
+) {
+  const base = (params.createTool ?? createWriteTool)(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
-export function createSandboxedEditTool(params: SandboxToolParams) {
-  const base = createEditTool(params.root, {
+export function createSandboxedEditTool(
+  params: SandboxToolParams & { createTool?: typeof createEditTool },
+) {
+  const base = (params.createTool ?? createEditTool)(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
@@ -922,9 +928,10 @@ export function createHostWorkspaceWriteTool(
   options?: {
     workspaceOnly?: boolean;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    createTool?: typeof createWriteTool;
   },
 ) {
-  const base = createWriteTool(root, {
+  const base = (options?.createTool ?? createWriteTool)(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
@@ -936,9 +943,10 @@ export function createHostWorkspaceEditTool(
   options?: {
     workspaceOnly?: boolean;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    createTool?: typeof createEditTool;
   },
 ) {
-  const base = createEditTool(root, {
+  const base = (options?.createTool ?? createEditTool)(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);

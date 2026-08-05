@@ -41,7 +41,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     markProgress,
     markVisibleToolErrorProgress,
     maybeApplyTtsWithFinalizationLease,
-    maybeSendWorkingStatus,
     normalizeReplyMediaPayload,
     notifySessionMetadataChanges,
     onToolResultFromReplyOptions,
@@ -339,24 +338,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ) {
                     await state.onApprovalEventFromReplyOptions?.(payload);
                   }
-                  if (isDispatchOperationAborted()) {
-                    return;
-                  }
-                  if (
-                    payload.phase !== "requested" ||
-                    shouldSuppressDefaultToolProgressMessages()
-                  ) {
-                    return;
-                  }
-                  const label = state.summarizeApprovalLabel({
-                    status: payload.status,
-                    command: payload.command,
-                    message: payload.message,
-                  });
-                  if (!label) {
-                    return;
-                  }
-                  await maybeSendWorkingStatus(label);
                 },
                 onPatchSummary: async (payload) => {
                   if (isDispatchOperationAborted()) {
@@ -378,20 +359,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ) {
                     await state.onPatchSummaryFromReplyOptions?.(payload);
                   }
-                  if (isDispatchOperationAborted()) {
-                    return;
-                  }
-                  if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
-                    return;
-                  }
-                  const label = state.summarizePatchLabel({
-                    summary: payload.summary,
-                    title: payload.title,
-                  });
-                  if (!label) {
-                    return;
-                  }
-                  await maybeSendWorkingStatus(label);
                 },
                 onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
                   markProgress();

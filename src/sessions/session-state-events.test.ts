@@ -843,9 +843,18 @@ describe("session state events", () => {
       "compacted",
     ]);
     expect(events[0]).toMatchObject({
+      sessionId: "session-child",
+      agentId: "main",
       actorType: "agent",
       actorId: watcher,
       summary: "session created",
+    });
+    expect(events[1]).toMatchObject({
+      runId: "run-child",
+      agentId: "main",
+      actorType: "agent",
+      actorId: watcher,
+      summary: "child session spawned",
     });
     expect(events[3]).toMatchObject({
       runId: "run-child-cancelled",

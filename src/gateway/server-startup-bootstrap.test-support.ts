@@ -1,3 +1,4 @@
+/** Runtime-config publication coverage loaded by the startup plugin suite. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getRuntimeConfigSnapshot,

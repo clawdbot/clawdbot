@@ -2,12 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  consumeSessionSkillSuggestion,
-  recordSessionSkillCaptureSignals,
-} from "../../config/sessions/skill-suggestions.js";
+import * as skillSuggestions from "../../config/sessions/skill-suggestions.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -25,33 +22,45 @@ import { runSkillResearchAutoCapture } from "./autocapture.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
-const SESSION_KEY = "agent:main:main";
+let sessionKeyIndex = 0;
+let SESSION_KEY = "";
 
-async function seedSession(sessionKey = SESSION_KEY): Promise<void> {
+async function seedSession(key = SESSION_KEY): Promise<void> {
   await upsertSessionEntry(
-    { agentId: "main", sessionKey },
-    { sessionId: `session-${sessionKey}`, updatedAt: 1 },
+    { agentId: "main", sessionKey: key },
+    { sessionId: `session-${key}`, updatedAt: 1 },
   );
 }
 
-function readSession(sessionKey = SESSION_KEY) {
-  return loadSessionEntry({ agentId: "main", sessionKey, readConsistency: "latest" });
+function readSession(key = SESSION_KEY) {
+  return loadSessionEntry({ agentId: "main", sessionKey: key, readConsistency: "latest" });
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-workshop-state-",
   });
-  await seedSession();
+});
+
+beforeEach(() => {
+  testState.applyEnv();
+  SESSION_KEY = `agent:main:autocapture-test-${String(++sessionKeyIndex)}`;
 });
 
 afterEach(async () => {
-  await testState.cleanup();
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
 
-async function makeWorkspace(): Promise<string> {
+afterAll(async () => {
+  await testState.cleanup();
+});
+
+async function makeWorkspace(options: { seedSession?: boolean } = {}): Promise<string> {
+  if (options.seedSession !== false) {
+    await seedSession();
+  }
   return await tempDirs.make("openclaw-skill-workshop-");
 }
 
@@ -142,7 +151,10 @@ describe("skill research auto-capture", () => {
     });
     expect(readSession()?.skillCaptureSignalHashes?.length).toBeGreaterThan(0);
 
-    await consumeSessionSkillSuggestion({ agentId: "main", sessionKey: SESSION_KEY });
+    await skillSuggestions.consumeSessionSkillSuggestion({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+    });
     await runSkillResearchAutoCapture({ event, ctx, config });
     expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
   });
@@ -181,8 +193,8 @@ describe("skill research auto-capture", () => {
       ctx: { trigger: "manual", sessionKey: "active-memory-recall-87504" },
     },
   ])("skips $name before queuing proposals", async ({ ctx }) => {
-    const workspaceDir = await makeWorkspace();
-    await seedSession(ctx.sessionKey);
+    const workspaceDir = await makeWorkspace({ seedSession: false });
+    const sessionRead = vi.spyOn(skillSuggestions, "readSessionSkillCaptureSignalHashes");
 
     await runSkillResearchAutoCapture({
       event: {
@@ -208,6 +220,7 @@ describe("skill research auto-capture", () => {
     });
 
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+    expect(sessionRead).not.toHaveBeenCalled();
   });
 
   it("preserves existing skill content when auto-capturing an update", async () => {
@@ -950,7 +963,8 @@ describe("skill research auto-capture", () => {
   });
 
   it("bounds captured signal fingerprints to the newest 32", async () => {
-    await recordSessionSkillCaptureSignals({
+    await seedSession();
+    await skillSuggestions.recordSessionSkillCaptureSignals({
       agentId: "main",
       sessionKey: SESSION_KEY,
       signalHashes: Array.from({ length: 40 }, (_, index) => `hash-${index}`),
@@ -978,7 +992,7 @@ describe("skill research auto-capture", () => {
     await runSkillResearchAutoCapture({ event, ctx, config });
     expect(
       (
-        await consumeSessionSkillSuggestion({
+        await skillSuggestions.consumeSessionSkillSuggestion({
           agentId: "main",
           sessionKey: SESSION_KEY,
         })

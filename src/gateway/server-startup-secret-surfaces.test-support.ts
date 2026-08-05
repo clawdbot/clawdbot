@@ -1,3 +1,4 @@
+/** Secret-surface projection coverage loaded by the startup SecretRef suite. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayStartupSecretProjection } from "./server-startup-secret-surfaces.js";

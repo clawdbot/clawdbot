@@ -43,7 +43,6 @@ describe("session transcript reader boundary guard", () => {
         "src/gateway/server-methods/sessions-read.ts",
         "src/gateway/server-methods/sessions-shared.ts",
         "src/gateway/server-methods/sessions-subscriptions.ts",
-        "src/gateway/server-methods/sessions.ts",
         "src/gateway/server-session-events.ts",
         "src/gateway/session-history-state.test.ts",
         "src/gateway/session-history-state.ts",

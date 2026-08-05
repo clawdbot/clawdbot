@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import {
   addSubagentRunForTests,
@@ -25,6 +25,12 @@ import {
   filterAndSortSessionEntries,
   listSessionsFromStore,
 } from "./session-utils.js";
+
+// Search and row projection own static normalization; plugin-hook composition is
+// covered by session-utils.plugin-runtime.test.ts without loading provider runtime here.
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
 
 const MAIN_SESSION_KEY = "agent:main:main";
 const MAIN_SESSION_ID = "sess-main";
@@ -377,36 +383,6 @@ function childTranscriptEntry(sessionId: string, now: number): SessionEntry {
 }
 
 describe("listSessionsFromStore search", () => {
-  beforeAll(() => {
-    listSessionsFromStore({
-      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4-6" }),
-      store: {
-        "agent:main:warm-runtime": {
-          sessionId: "sess-warm-runtime",
-          updatedAt: Date.now(),
-        } as SessionEntry,
-      },
-      storePath: "/tmp/openclaw-session-search-warm.json",
-      opts: { search: "anthropic" },
-    });
-  });
-
-  beforeAll(() => {
-    listSessionsFromStore({
-      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      storePath: "/tmp/sessions.json",
-      store: {
-        "agent:main:main": {
-          sessionId: "sess-main",
-          updatedAt: 1,
-          modelProvider: "openai",
-          model: "gpt-5.4",
-        },
-      },
-      opts: { search: "openai" },
-    });
-  });
-
   afterEach(() => {
     resetAgentEventsForTest({ preserveListeners: true });
     resetSubagentRegistryForTests();

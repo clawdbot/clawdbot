@@ -1,6 +1,4 @@
-/**
- * Gateway startup session migration tests.
- */
+/** Gateway session migration coverage loaded by the startup invariant suite. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
