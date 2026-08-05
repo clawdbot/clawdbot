@@ -299,6 +299,8 @@ jobs:
         id: run_profile
         env:
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
+          REQUESTED_REF: ${{ inputs.ref }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -311,15 +313,47 @@ jobs:
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$output_dir"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
           qa_exit_code=0
-          pnpm openclaw qa run \
+          timeout --signal=TERM --kill-after=30s 110m pnpm openclaw qa run \
             --repo-root . \
             --qa-profile "${QA_PROFILE}" \
             --concurrency 3 \
             --fast \
             --output-dir "${output_dir}" || qa_exit_code=$?
+
+          timed_out=false
+          if [[ "$qa_exit_code" -eq 124 ]]; then
+            timed_out=true
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes; partial evidence will still be uploaded."
+          fi
+
+          QA_EXIT_CODE="$qa_exit_code" TIMED_OUT="$timed_out" OUTPUT_DIR="$output_dir" \
+            node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const status = {
+            target: {
+              ref: process.env.REQUESTED_REF,
+              sha: process.env.TARGET_SHA,
+            },
+            profile: process.env.QA_PROFILE,
+            run: {
+              id: process.env.GITHUB_RUN_ID,
+              attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            },
+            exitCode: Number(process.env.QA_EXIT_CODE),
+            timedOut: process.env.TIMED_OUT === "true",
+            completedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync(
+            path.join(process.env.OUTPUT_DIR, "qa-profile-run-status.json"),
+            `${JSON.stringify(status, null, 2)}\n`,
+          );
+          NODE
 
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
 

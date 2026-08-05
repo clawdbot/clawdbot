@@ -5214,9 +5214,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
+    expect(runProfileStep.env?.REQUESTED_REF).toBe("${{ inputs.ref }}");
+    expect(runProfileStep.env?.TARGET_SHA).toBe(
+      "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+    );
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
+    expect(runProfileStep.run).toContain('mkdir -p "$output_dir"');
+    expect(runProfileStep.run.indexOf('mkdir -p "$output_dir"')).toBeLessThan(
+      runProfileStep.run.indexOf('echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"'),
+    );
+    expect(runProfileStep.run).toContain(
+      "timeout --signal=TERM --kill-after=30s 110m pnpm openclaw qa run",
+    );
     expect(runProfileStep.run).toContain("qa_exit_code=$?");
+    expect(runProfileStep.run).toContain('[[ "$qa_exit_code" -eq 124 ]]');
+    expect(runProfileStep.run).toContain("qa-profile-run-status.json");
+    expect(runProfileStep.run).toContain("exitCode: Number(process.env.QA_EXIT_CODE)");
+    expect(runProfileStep.run).toContain('timedOut: process.env.TIMED_OUT === "true"');
+    expect(runProfileStep.run).toContain("completedAt: new Date().toISOString()");
     expect(runProfileStep.run).not.toContain("--allow-failures");
     const failProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
@@ -5400,6 +5416,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const qaUploadStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload QA profile evidence",
     );
+    expect(qaUploadStep.if).toBe("always()");
     expect(qaUploadStep.with).toMatchObject({
       name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
       path: "${{ steps.run_profile.outputs.output_dir }}",
