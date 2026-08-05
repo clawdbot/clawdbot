@@ -9,7 +9,6 @@ import {
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
   rememberWhatsAppPollCreationMessage,
-  setWhatsAppPollStoreForTests,
 } from "./poll-votes.js";
 import {
   buildPollCreationMessageForTests,
@@ -310,11 +309,9 @@ describe("poll vote decoding survives a simulated gateway restart (durable-store
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-poll-restart-"));
     store = new WhatsAppPollStore(dir);
-    setWhatsAppPollStoreForTests(store);
   });
 
   afterEach(() => {
-    setWhatsAppPollStoreForTests(undefined);
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -349,6 +346,7 @@ describe("poll vote decoding survives a simulated gateway restart (durable-store
       getCachedMessage: () => undefined, // in-memory cache "lost" by the restart
       selfJid: POLL_CREATOR_JID,
       accountId: "acct",
+      store,
     });
 
     expect(decoded?.selectedOptions).toEqual(["Restart-A"]);
@@ -362,13 +360,14 @@ describe("poll vote decoding survives a simulated gateway restart (durable-store
     const creationKey = creationKeyFor("POLL-RESTART-HOOK");
     // Simulates what a live gateway would have written before restarting:
     // ownership + the creation message, both durable, nothing in memory.
-    rememberWhatsAppOwnPollCreation("acct", CHAT_JID, "POLL-RESTART-HOOK", CFG);
+    rememberWhatsAppOwnPollCreation("acct", CHAT_JID, "POLL-RESTART-HOOK", CFG, store);
     rememberWhatsAppPollCreationMessage(
       "acct",
       CHAT_JID,
       "POLL-RESTART-HOOK",
       pollCreationMessage,
       CFG,
+      store,
     );
     const vote = encryptPollVoteForTests({
       selectedOptionNames: ["Restart-B"],
@@ -388,6 +387,7 @@ describe("poll vote decoding survives a simulated gateway restart (durable-store
       // durable store (populated above) can supply the creation message now.
       getCachedMessage: () => undefined,
       selfJid: POLL_CREATOR_JID,
+      store,
     });
 
     await vi.waitFor(() => {

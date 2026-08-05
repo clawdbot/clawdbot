@@ -148,6 +148,8 @@ export function decodeWhatsAppPollVote(params: {
   selfLid?: string | null;
   /** Scopes the durable-store fallback lookup below; omit to skip it (e.g. in isolated unit tests). */
   accountId?: string;
+  /** Test-only: inject an isolated store instead of the process-wide singleton. */
+  store?: WhatsAppPollStore;
 }): WhatsAppDecodedPollVote | undefined {
   const pollUpdateMessage = params.message?.pollUpdateMessage;
   const creationKey = pollUpdateMessage?.pollCreationMessageKey;
@@ -161,7 +163,11 @@ export function decodeWhatsAppPollVote(params: {
   const pollCreationMessage =
     params.getCachedMessage(remoteJid, creationKey.id) ??
     (params.accountId
-      ? resolvePollStore().readPollCreationMessage(params.accountId, remoteJid, creationKey.id)
+      ? resolvePollStore(params.store).readPollCreationMessage(
+          params.accountId,
+          remoteJid,
+          creationKey.id,
+        )
       : undefined);
   const pollEncKey = toPollEncKeyBuffer(pollCreationMessage?.messageContextInfo?.messageSecret);
   if (!pollCreationMessage || !pollEncKey) {
@@ -222,10 +228,7 @@ const DEFAULT_POLL_VOTE_RETENTION_MS = 10 * 60 * 1000;
 const recentOwnPollCreationKeys: Map<string, { expiresAt: number; value: true }> = new Map();
 
 /** Resolves the configured poll-state retention window, account overriding channel, defaulting to 10 minutes. */
-export function resolveWhatsAppPollVoteRetentionMs(
-  cfg: OpenClawConfig,
-  accountId?: string,
-): number {
+function resolveWhatsAppPollVoteRetentionMs(cfg: OpenClawConfig, accountId?: string): number {
   const channelConfig = cfg.channels?.whatsapp;
   const accountConfig = accountId ? channelConfig?.accounts?.[accountId] : undefined;
   return (
@@ -235,18 +238,14 @@ export function resolveWhatsAppPollVoteRetentionMs(
   );
 }
 
-let pollStoreOverride: WhatsAppPollStore | undefined;
-
-/** Test-only hook to inject an isolated store instead of the process-wide singleton. */
-export function setWhatsAppPollStoreForTests(store: WhatsAppPollStore | undefined): void {
-  pollStoreOverride = store;
-}
-
-function resolvePollStore(): WhatsAppPollStore {
-  if (pollStoreOverride) {
-    return pollStoreOverride;
-  }
-  return getWhatsAppPollStore(path.join(resolveStateDir(), "whatsapp", "poll-state"));
+/**
+ * Resolves the durable poll store. `override` lets callers (tests) inject an
+ * isolated instance instead of the process-wide singleton, via the same
+ * optional `store` parameter every public function below accepts — no
+ * separate test-only setter/export needed.
+ */
+function resolvePollStore(override?: WhatsAppPollStore): WhatsAppPollStore {
+  return override ?? getWhatsAppPollStore(path.join(resolveStateDir(), "whatsapp", "poll-state"));
 }
 
 /**
@@ -261,6 +260,8 @@ export function rememberWhatsAppOwnPollCreation(
   remoteJid: string | null | undefined,
   messageId: string | null | undefined,
   cfg: OpenClawConfig,
+  /** Test-only: inject an isolated store instead of the process-wide singleton. */
+  store?: WhatsAppPollStore,
 ): void {
   if (!remoteJid || !messageId) {
     return;
@@ -272,7 +273,7 @@ export function rememberWhatsAppOwnPollCreation(
     true,
     ttlMs,
   );
-  resolvePollStore().rememberOwnPollCreation(accountId, remoteJid, messageId, ttlMs);
+  resolvePollStore(store).rememberOwnPollCreation(accountId, remoteJid, messageId, ttlMs);
 }
 
 /**
@@ -287,15 +288,28 @@ export function rememberWhatsAppPollCreationMessage(
   messageId: string | null | undefined,
   message: proto.IMessage | null | undefined,
   cfg: OpenClawConfig,
+  /** Test-only: inject an isolated store instead of the process-wide singleton. */
+  store?: WhatsAppPollStore,
 ): void {
   if (!remoteJid || !messageId || !message) {
     return;
   }
   const ttlMs = resolveWhatsAppPollVoteRetentionMs(cfg, accountId);
-  resolvePollStore().rememberPollCreationMessage(accountId, remoteJid, messageId, message, ttlMs);
+  resolvePollStore(store).rememberPollCreationMessage(
+    accountId,
+    remoteJid,
+    messageId,
+    message,
+    ttlMs,
+  );
 }
 
-function isOwnPollCreation(accountId: string, remoteJid: string, messageId: string): boolean {
+function isOwnPollCreation(
+  accountId: string,
+  remoteJid: string,
+  messageId: string,
+  store?: WhatsAppPollStore,
+): boolean {
   if (
     readWhatsAppBaileysCacheEntry(
       recentOwnPollCreationKeys,
@@ -306,7 +320,7 @@ function isOwnPollCreation(accountId: string, remoteJid: string, messageId: stri
   }
   // Falls back to the durable store, covering the case where the in-memory
   // cache was wiped by a gateway restart since the poll was created.
-  return resolvePollStore().isOwnPollCreation(accountId, remoteJid, messageId);
+  return resolvePollStore(store).isOwnPollCreation(accountId, remoteJid, messageId);
 }
 
 const recentlyDispatchedPollVoteKeys: Map<string, { expiresAt: number; value: true }> = new Map();
@@ -392,6 +406,8 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   getCachedMessage: (remoteJid: string, messageId: string) => proto.IMessage | undefined;
   selfJid?: string | null;
   selfLid?: string | null;
+  /** Test-only: inject an isolated store instead of the process-wide singleton. */
+  store?: WhatsAppPollStore;
 }): void {
   if (!shouldEmitWhatsAppPollVoteHooks({ cfg: params.cfg, accountId: params.accountId })) {
     return;
@@ -401,7 +417,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   if (
     !creationKey?.id ||
     !remoteJid ||
-    !isOwnPollCreation(params.accountId, remoteJid, creationKey.id)
+    !isOwnPollCreation(params.accountId, remoteJid, creationKey.id, params.store)
   ) {
     // Not a poll this account created — stays within the documented
     // "polls OpenClaw created" boundary rather than exposing third-party
@@ -415,12 +431,17 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     const dedupKey = `${params.accountId}:${remoteJid}:${voteUpdateId}`;
     if (
       readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey) ||
-      resolvePollStore().isVoteDedup(params.accountId, remoteJid, voteUpdateId)
+      resolvePollStore(params.store).isVoteDedup(params.accountId, remoteJid, voteUpdateId)
     ) {
       return;
     }
     rememberWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey, true, ttlMs);
-    resolvePollStore().rememberVoteDedup(params.accountId, remoteJid, voteUpdateId, ttlMs);
+    resolvePollStore(params.store).rememberVoteDedup(
+      params.accountId,
+      remoteJid,
+      voteUpdateId,
+      ttlMs,
+    );
   }
   const decoded = decodeWhatsAppPollVote({
     message: params.message,
@@ -429,6 +450,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     selfJid: params.selfJid,
     selfLid: params.selfLid,
     accountId: params.accountId,
+    store: params.store,
   });
   if (decoded) {
     emitWhatsAppPollVoteReceivedHook({
