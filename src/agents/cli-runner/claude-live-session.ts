@@ -1330,6 +1330,44 @@ function handleClaudeLiveControlRequest(
   })();
 }
 
+/**
+ * Stubs base64 image payloads in a parsed Claude CLI stream-json line in
+ * place. Image bytes inside tool_result content blocks are dead weight for
+ * openclaw: the CLI backend already sent them to the model API and nothing
+ * downstream reads `source.data`. Metering them against maxTurnRawChars makes
+ * photo-heavy turns abort with a spurious output-limit error (#119445).
+ * Returns true when at least one payload was stubbed so callers only
+ * re-serialize lines that actually carried image data.
+ */
+function stripClaudeLiveImagePayloads(parsed: Record<string, unknown>): boolean {
+  let stubbed = false;
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item);
+      }
+      return;
+    }
+    if (!isRecord(node)) {
+      return;
+    }
+    if (
+      node.type === "image" &&
+      isRecord(node.source) &&
+      typeof node.source.data === "string" &&
+      node.source.data.length > 0
+    ) {
+      node.source.data = `[image: ${node.source.data.length} base64 chars omitted]`;
+      stubbed = true;
+    }
+    for (const value of Object.values(node)) {
+      visit(value);
+    }
+  };
+  visit(parsed);
+  return stubbed;
+}
+
 function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   const turn = session.currentTurn;
   const trimmed = line.trim();
@@ -1346,6 +1384,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     }
     return;
   }
+  // Meter base64 image payloads as stubs: image bytes inside tool_result
+  // content blocks are never consumed by openclaw (the CLI backend already
+  // sent them to the model API), but they dominate maxTurnRawChars accounting
+  // and abort photo-heavy turns with a spurious output-limit error (#119445).
+  const meteredLine = stripClaudeLiveImagePayloads(parsed) ? JSON.stringify(parsed) : trimmed;
   const parsedSessionId = parseSessionId(parsed);
   if (parsedSessionId) {
     session.sessionId = parsedSessionId;
@@ -1380,7 +1423,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   ) {
     turn.hasReplayUnsafeActivity = true;
   }
-  turn.rawChars += trimmed.length + 1;
+  turn.rawChars += meteredLine.length + 1;
   if (
     turn.rawChars > turn.outputLimits.maxTurnRawChars ||
     turn.rawLines.length >= turn.outputLimits.maxTurnLines
@@ -1392,10 +1435,10 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     );
     return;
   }
-  turn.rawLines.push(trimmed);
+  turn.rawLines.push(meteredLine);
   applyBackgroundTasksChanged(session, parsed);
   const toolEventCountBefore = turn.toolEventCount;
-  turn.streamingParser.push(`${trimmed}\n`);
+  turn.streamingParser.push(`${meteredLine}\n`);
   turn.sessionId = parsedSessionId ?? turn.sessionId;
   noteClaudeLiveProgress(turn, parsed, turn.toolEventCount !== toolEventCountBefore);
   handleClaudeLiveControlRequest(session, turn, parsed);
