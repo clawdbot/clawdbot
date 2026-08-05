@@ -5,9 +5,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import type { ReadinessCondition } from "./conditions.js";
 import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "./subjects.js";
 
-export const STATE_READY_CRITERION_ID = "openclaw.state-ready";
-export const DELIVERY_RUNTIME_READY_CRITERION_ID = "openclaw.delivery-runtime-ready";
-export const SCHEDULER_READY_CRITERION_ID = "openclaw.scheduler-ready";
+const STATE_READY_CRITERION_ID = "openclaw.state-ready";
+const DELIVERY_RUNTIME_READY_CRITERION_ID = "openclaw.delivery-runtime-ready";
+const SCHEDULER_READY_CRITERION_ID = "openclaw.scheduler-ready";
 
 export type StateServiceReadinessSnapshot = {
   scheduler?: CronSchedulerReadinessSnapshot;

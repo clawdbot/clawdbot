@@ -14,7 +14,7 @@ export function listSessionStorageReadinessSubjects(): ReadinessSubject[] {
   return [{ ref: CORE_READINESS_SUBJECT_REFS.sessionStorage, kind: "openclaw.session-storage" }];
 }
 
-export type SessionStorageReadinessEvidence = {
+type SessionStorageReadinessEvidence = {
   writable: boolean | null;
   reason: string;
   message: string;
@@ -163,13 +163,6 @@ function resolveSessionStorageTargets(
     );
   }
   return [...targets.values()].toSorted((a, b) => a.directory.localeCompare(b.directory, "en"));
-}
-
-export function resolveSessionStorageDirectories(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  return resolveSessionStorageTargets(config, env).map((target) => target.directory);
 }
 
 export function buildSessionStorageReadinessCondition(

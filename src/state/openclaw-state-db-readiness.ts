@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export type OpenClawStateDatabaseReadinessStatus = "active" | "failed" | "inactive";
+type OpenClawStateDatabaseReadinessStatus = "active" | "failed" | "inactive";
 
 const readinessByPath = new Map<string, OpenClawStateDatabaseReadinessStatus>();
 

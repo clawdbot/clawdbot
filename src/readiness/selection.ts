@@ -38,8 +38,8 @@ type SelectedCriterion = {
   requirement: ReadinessRequirement;
 };
 
-export const EVENT_LOOP_HEALTHY_CRITERION_ID = "openclaw.event-loop-healthy";
-export const PLUGINS_LOADED_CRITERION_ID = "openclaw.plugins-loaded";
+const EVENT_LOOP_HEALTHY_CRITERION_ID = "openclaw.event-loop-healthy";
+const PLUGINS_LOADED_CRITERION_ID = "openclaw.plugins-loaded";
 
 const CANONICAL_CONDITION_TYPES = new Map<string, ReadinessCondition["type"]>([
   [EVENT_LOOP_HEALTHY_CRITERION_ID, "EventLoopHealthy"],

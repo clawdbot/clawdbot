@@ -14,13 +14,13 @@ import { defaultSlotIdForKey } from "../plugins/slots.js";
 import type { ReadinessCondition } from "./conditions.js";
 import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "./subjects.js";
 
-export const CONTEXT_ENGINE_READY_CRITERION_ID = "openclaw.context-engine-ready";
-export const TOOL_CATALOG_READY_CRITERION_ID = "openclaw.tool-catalog-ready";
-export const MCP_RUNTIME_READY_CRITERION_ID = "openclaw.mcp-runtime-ready";
-export const SANDBOX_READY_CRITERION_ID = "openclaw.sandbox-ready";
-export const HARNESS_READY_CRITERION_ID = "openclaw.harness-ready";
+const CONTEXT_ENGINE_READY_CRITERION_ID = "openclaw.context-engine-ready";
+const TOOL_CATALOG_READY_CRITERION_ID = "openclaw.tool-catalog-ready";
+const MCP_RUNTIME_READY_CRITERION_ID = "openclaw.mcp-runtime-ready";
+const SANDBOX_READY_CRITERION_ID = "openclaw.sandbox-ready";
+const HARNESS_READY_CRITERION_ID = "openclaw.harness-ready";
 
-export type ExecutionCapabilityReadinessCriterionId =
+type ExecutionCapabilityReadinessCriterionId =
   | typeof CONTEXT_ENGINE_READY_CRITERION_ID
   | typeof TOOL_CATALOG_READY_CRITERION_ID
   | typeof MCP_RUNTIME_READY_CRITERION_ID
@@ -44,7 +44,7 @@ export type ExecutionCapabilityReadinessSnapshot = {
     | { status: "unavailable" };
 };
 
-export type ExecutionCapabilitySnapshotDeps = {
+type ExecutionCapabilitySnapshotDeps = {
   agentIds(config: OpenClawConfig): string[];
   workspaceDir(config: OpenClawConfig, agentId: string): string;
   mcpConfig(

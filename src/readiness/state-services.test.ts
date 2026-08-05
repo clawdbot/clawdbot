@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  DELIVERY_RUNTIME_READY_CRITERION_ID,
-  SCHEDULER_READY_CRITERION_ID,
-  STATE_READY_CRITERION_ID,
-  createStateServiceReadinessResolver,
-} from "./state-services.js";
+import { createStateServiceReadinessResolver } from "./state-services.js";
+
+const STATE_READY_CRITERION_ID = "openclaw.state-ready";
+const DELIVERY_RUNTIME_READY_CRITERION_ID = "openclaw.delivery-runtime-ready";
+const SCHEDULER_READY_CRITERION_ID = "openclaw.scheduler-ready";
 
 const statePath = "/tmp/openclaw-state/state/openclaw.sqlite";
 

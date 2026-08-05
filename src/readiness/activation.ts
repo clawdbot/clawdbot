@@ -25,11 +25,11 @@ import {
 import type { ReadinessCondition } from "./conditions.js";
 import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "./subjects.js";
 
-export const CONFIG_CURRENT_CRITERION_ID = "openclaw.config-current";
+const CONFIG_CURRENT_CRITERION_ID = "openclaw.config-current";
 export const MODEL_ROUTE_READY_CRITERION_ID = "openclaw.model-route-ready";
-export const SECRETS_READY_CRITERION_ID = "openclaw.secrets-ready";
+const SECRETS_READY_CRITERION_ID = "openclaw.secrets-ready";
 
-export type ActivationReadinessCriterionId =
+type ActivationReadinessCriterionId =
   | typeof CONFIG_CURRENT_CRITERION_ID
   | typeof MODEL_ROUTE_READY_CRITERION_ID
   | typeof SECRETS_READY_CRITERION_ID;
@@ -90,7 +90,7 @@ export function listActivationReadinessSubjects(): ReadinessSubject[] {
   ];
 }
 
-export function buildConfigCurrentCondition(
+function buildConfigCurrentCondition(
   metadata: RuntimeConfigSnapshotMetadata | null = getRuntimeConfigSnapshotMetadata(),
   appliedHash: string | null = getRuntimeConfigAppliedHash(),
 ): ReadinessCondition {
@@ -114,7 +114,7 @@ export function buildConfigCurrentCondition(
   };
 }
 
-export function buildSecretsReadyCondition(
+function buildSecretsReadyCondition(
   owners: readonly DegradedSecretOwner[] = listActiveDegradedSecretOwners(),
 ): ReadinessCondition {
   if (owners.length === 0) {
@@ -138,7 +138,7 @@ export function buildSecretsReadyCondition(
   };
 }
 
-export function buildModelRouteReadyCondition(
+function buildModelRouteReadyCondition(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   sources: ModelRouteReadinessSources = {
