@@ -18,6 +18,7 @@ import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
+  resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
@@ -29,6 +30,7 @@ import {
   resolveSessionWriteLockTargetKey,
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
+import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { resolveCompactionFailureReason } from "./compact-reasons.js";
@@ -284,7 +286,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
-            webSearchEnabled: params.toolOverrides?.webSearch !== false,
           });
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
@@ -425,7 +426,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              return activeSession.compact(params.customInstructions);
+              return resolveEffectiveCompactionMode(params.config) === "default" &&
+                trigger !== "manual"
+                ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
+                : activeSession.compact(params.customInstructions);
             },
             compactionTimeoutMs,
             {

@@ -5,6 +5,10 @@ import {
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
+import {
+  isGatewayServerBackedHttpTestFile,
+  isGatewayServerTestFile,
+} from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
@@ -612,29 +616,6 @@ function createAgentCoreSplitShards() {
   ];
 }
 
-const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
-  "src/gateway/embeddings-http.test.ts",
-  "src/gateway/models-http.test.ts",
-  "src/gateway/openai-http.test.ts",
-  "src/gateway/openresponses-http.test.ts",
-  "src/gateway/probe.auth.integration.test.ts",
-]);
-
-const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
-  "src/gateway/gateway.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  "src/gateway/sessions-history-http.test.ts",
-]);
-
-function isGatewayServerTestFile(file) {
-  return (
-    file.startsWith("src/gateway/") &&
-    !file.startsWith("src/gateway/server-methods/") &&
-    !GATEWAY_SERVER_EXCLUDED_TESTS.has(file) &&
-    (file.includes("server") || GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file))
-  );
-}
-
 function resolveGatewayStartupShardName(file) {
   const name = relative("src/gateway", file).replaceAll("\\", "/");
   if (name.startsWith("server-startup-config") || name.startsWith("server-startup-early")) {
@@ -643,9 +624,7 @@ function resolveGatewayStartupShardName(file) {
   if (
     name.startsWith("server-runtime") ||
     name.startsWith("server.health") ||
-    name.startsWith("server.lazy") ||
-    name.startsWith("server/health-state") ||
-    name.startsWith("server/readiness")
+    name.startsWith("server.lazy")
   ) {
     return "agentic-control-plane-startup-health-runtime";
   }
@@ -658,7 +637,7 @@ function resolveGatewayStartupShardName(file) {
 function resolveGatewayServerShardName(file) {
   const name = relative("src/gateway", file).replaceAll("\\", "/");
   if (
-    GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file) ||
+    isGatewayServerBackedHttpTestFile(file) ||
     name.startsWith("server.models") ||
     name.startsWith("server.talk")
   ) {
@@ -688,8 +667,6 @@ function resolveGatewayServerShardName(file) {
     name.startsWith("server-runtime") ||
     name.startsWith("server.lazy") ||
     name.startsWith("server.health") ||
-    name.startsWith("server/health-state") ||
-    name.startsWith("server/readiness") ||
     name === "server-close.test.ts"
   ) {
     return resolveGatewayStartupShardName(file);
@@ -725,10 +702,7 @@ function resolveGatewayServerShardName(file) {
   ) {
     return "agentic-control-plane-runtime-ui-tools";
   }
-  if (name.startsWith("server/")) {
-    return "agentic-control-plane-runtime-events";
-  }
-  if (name.startsWith("server.") || name.startsWith("server/")) {
+  if (name.startsWith("server.")) {
     return "agentic-control-plane-runtime-state";
   }
   return "agentic-control-plane-runtime";
@@ -748,7 +722,6 @@ function createGatewayServerSplitShards() {
     "agentic-control-plane-runtime",
     "agentic-control-plane-runtime-config",
     "agentic-control-plane-runtime-cron",
-    "agentic-control-plane-runtime-events",
     "agentic-control-plane-runtime-network",
     "agentic-control-plane-runtime-server",
     "agentic-control-plane-runtime-shared-token",
@@ -1158,8 +1131,9 @@ const SPLIT_NODE_SHARDS = new Map([
         configs: ["test/vitest/vitest.tui-pty.config.ts"],
         env: {
           OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+          OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1",
         },
-        requiresDist: false,
+        requiresDist: true,
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {

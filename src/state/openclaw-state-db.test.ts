@@ -4,8 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
@@ -19,6 +18,11 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
+import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
+import {
+  findOpenClawStateDatabaseSchemaMigrationRequiredError,
+  OpenClawStateDatabaseSchemaMigrationRequiredError,
+} from "./openclaw-state-db-schema-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -48,9 +52,37 @@ type StateDbTestDatabase = Pick<
 >;
 
 const stateDbTempDirs: string[] = [];
+let canonicalStateDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
+}
+
+function createInitialStateSchemaShape() {
+  const shape = createSqliteSchemaShapeFromSql(
+    new URL("./openclaw-state-schema.sql", import.meta.url),
+  );
+  for (const tableName of FIRST_USE_STATE_TABLES) {
+    delete shape[tableName];
+  }
+  return shape;
+}
+
+function expectStateSchemaMigrationRequired(
+  run: () => unknown,
+  expected: {
+    kind: OpenClawStateDatabaseSchemaMigrationRequiredError["kind"];
+    pathname: string;
+  },
+): void {
+  let caught: unknown;
+  try {
+    run();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
+  expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toMatchObject(expected);
 }
 
 function replaceManagedImageRecordsWithLegacyTable(
@@ -397,9 +429,13 @@ function createLegacyAuditStateDatabase(stateDir: string): string {
 }
 
 function createCanonicalAuditStateDatabase(stateDir: string): string {
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-  const databasePath = database.path;
-  closeOpenClawStateDatabaseForTest();
+  if (!canonicalStateDatabaseTemplatePath) {
+    throw new Error("canonical state database template was not initialized");
+  }
+  // These cases own post-initialization schema drift; fresh creation and migrations stay real below.
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  fs.copyFileSync(canonicalStateDatabaseTemplatePath, databasePath);
   return databasePath;
 }
 
@@ -1007,6 +1043,14 @@ function runConcurrentSchemaProbe(params: {
   return JSON.parse(resultLine) as string[];
 }
 
+beforeAll(() => {
+  const stateDir = createTempStateDir();
+  canonicalStateDatabaseTemplatePath = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  }).path;
+  closeOpenClawStateDatabaseForTest();
+});
+
 afterAll(() => {
   cleanupTempDirs(stateDbTempDirs);
 });
@@ -1042,9 +1086,12 @@ describe("openclaw state database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(collectSqliteSchemaShape(database.db)).toEqual(
-      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
-    );
+    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     expect(
       database.db
@@ -1153,9 +1200,7 @@ INSERT INTO device_identities VALUES (
       updated_at_ms: 20,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(database.db)).toEqual(
-      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
-    );
+    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
   });
 
   it("adopts a canonical native PortGuardian seed without losing records", () => {
@@ -1192,9 +1237,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       timestamp: 42.5,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(database.db)).toEqual(
-      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
-    );
+    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
   });
 
   it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
@@ -1957,6 +2000,79 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
+  it("classifies the released agent registry primary key as Doctor-repairable", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      ALTER TABLE agent_databases RENAME TO agent_databases_current;
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        size_bytes INTEGER
+      );
+      INSERT INTO agent_databases (
+        agent_id,
+        path,
+        schema_version,
+        last_seen_at,
+        size_bytes
+      )
+      SELECT
+        agent_id,
+        path,
+        schema_version,
+        last_seen_at,
+        size_bytes
+      FROM agent_databases_current;
+      DROP TABLE agent_databases_current;
+    `);
+    legacy.close();
+
+    expectStateSchemaMigrationRequired(() => openOpenClawStateDatabase(options), {
+      kind: "agent-databases-composite-primary-key",
+      pathname: databasePath,
+    });
+  });
+
+  it("keeps an unrecognized agent registry schema fail-closed and nonrepairable", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const malformed = new DatabaseSync(databasePath);
+    malformed.exec(`
+      DROP TABLE agent_databases;
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL
+      );
+    `);
+    malformed.close();
+
+    let caught: unknown;
+    try {
+      openOpenClawStateDatabase(options);
+    } catch (error) {
+      caught = error;
+    }
+    expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toBeUndefined();
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain(
+      "noncanonical agent database registry schema that cannot be repaired automatically",
+    );
+  });
+
   it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
     const stateDir = createTempStateDir();
     const databasePath = createLegacyAuditStateDatabase(stateDir);
@@ -1966,7 +2082,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       { kind: "audit-events-v2", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
     ]);
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/legacy audit event schema/);
+    expectStateSchemaMigrationRequired(() => openOpenClawStateDatabase(options), {
+      kind: "audit-events-v2",
+      pathname: databasePath,
+    });
 
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
@@ -2516,36 +2635,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
-  it("opens sidecar-free WAL state without creating files beside the source", async () => {
-    const stateDir = createTempStateDir();
-    const databasePath = createCanonicalAuditStateDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const walHeader = new DatabaseSync(databasePath);
-    walHeader.exec("PRAGMA journal_mode = WAL; PRAGMA wal_checkpoint(TRUNCATE);");
-    walHeader.close();
-    fs.rmSync(`${databasePath}-wal`, { force: true });
-    fs.rmSync(`${databasePath}-shm`, { force: true });
-    const beforeBytes = fs.readFileSync(databasePath);
-    const beforeEntries = fs.readdirSync(stateDir).toSorted();
-
-    const database = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
-    expect(database).toBeDefined();
-    const openedPath = database?.db.prepare("PRAGMA database_list").get() as
-      | { file?: unknown }
-      | undefined;
-    expect(openedPath?.file).toEqual(expect.any(String));
-    expect(path.resolve(String(openedPath?.file))).not.toBe(path.resolve(databasePath));
-    expect(database?.db.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
-    });
-    const privateDirectory = path.dirname(String(openedPath?.file));
-    expect(database?.walMaintenance.close()).toBe(true);
-
-    expect(fs.existsSync(privateDirectory)).toBe(false);
-    expect(fs.readFileSync(databasePath)).toEqual(beforeBytes);
-    expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
-  });
-
   it("reports success when retrying transient read-only snapshot cleanup", async () => {
     const stateDir = createTempStateDir();
     const databasePath = createCanonicalAuditStateDatabase(stateDir);
@@ -2604,53 +2693,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(fs.readFileSync(`${writer.path}-wal`)).toEqual(beforeWal);
     expect(fs.statSync(`${writer.path}-shm`).size).toBe(beforeShmSize);
     expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
-  });
-
-  it("reads committed WAL rows without recreating a missing source SHM", async () => {
-    const { DatabaseSync } = requireNodeSqlite();
-    const sourceDir = createTempStateDir();
-    const writer = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: sourceDir } });
-    writer.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint = 0;");
-    insertTaskRunProbe(writer.db, "task-wal-without-shm");
-    const fixtureDir = createTempStateDir();
-    const fixturePath = path.join(fixtureDir, "wal-without-shm.sqlite");
-    fs.copyFileSync(writer.path, fixturePath);
-    fs.copyFileSync(`${writer.path}-wal`, `${fixturePath}-wal`);
-    const mainOnlyPath = path.join(createTempStateDir(), "main-only.sqlite");
-    fs.copyFileSync(writer.path, mainOnlyPath);
-    closeOpenClawStateDatabaseForTest();
-    expect(fs.existsSync(`${fixturePath}-shm`)).toBe(false);
-    const immutable = new DatabaseSync(`${pathToFileURL(mainOnlyPath).href}?mode=ro&immutable=1`, {
-      readOnly: true,
-    });
-    expect(
-      immutable
-        .prepare("SELECT task_id FROM task_runs WHERE task_id = ?")
-        .get("task-wal-without-shm"),
-    ).toBeUndefined();
-    immutable.close();
-    const beforeMain = fs.readFileSync(fixturePath);
-    const beforeWal = fs.readFileSync(`${fixturePath}-wal`);
-    const beforeEntries = fs.readdirSync(fixtureDir).toSorted();
-
-    const database = await openExistingOpenClawStateDatabaseReadOnly({ path: fixturePath });
-    expect(
-      database?.db
-        .prepare("SELECT task_id FROM task_runs WHERE task_id = ?")
-        .get("task-wal-without-shm"),
-    ).toEqual({ task_id: "task-wal-without-shm" });
-    const openedPath = database?.db.prepare("PRAGMA database_list").get() as
-      | { file?: unknown }
-      | undefined;
-    const privateDirectory = path.dirname(String(openedPath?.file));
-    expect(path.resolve(String(openedPath?.file))).not.toBe(path.resolve(fixturePath));
-    expect(database?.walMaintenance.close()).toBe(true);
-
-    expect(fs.existsSync(privateDirectory)).toBe(false);
-    expect(fs.existsSync(`${fixturePath}-shm`)).toBe(false);
-    expect(fs.readFileSync(fixturePath)).toEqual(beforeMain);
-    expect(fs.readFileSync(`${fixturePath}-wal`)).toEqual(beforeWal);
-    expect(fs.readdirSync(fixtureDir).toSorted()).toEqual(beforeEntries);
   });
 
   it("rejects noncanonical indexes from read-only state without rewriting them", async () => {
@@ -2720,6 +2762,17 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
     ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
     expect(checkpointCallback).not.toHaveBeenCalled();
+  });
+
+  it("configures checkpoint lock waits before schema mutation", () => {
+    const stateDir = createTempStateDir();
+
+    withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) => {
+        expect(readSqliteNumberPragma(db, "busy_timeout")).toBe(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+      },
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
   });
 
   it("runs full integrity before a pending state schema migration", () => {
@@ -3283,9 +3336,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
     const databasePaths = runConcurrentSchemaProbe({ mode: "upgrade", moduleUrl, rootDir });
-    const expectedShape = createSqliteSchemaShapeFromSql(
-      new URL("./openclaw-state-schema.sql", import.meta.url),
-    );
+    const expectedShape = createInitialStateSchemaShape();
     const { DatabaseSync } = requireNodeSqlite();
 
     expect(databasePaths).toHaveLength(1);
@@ -3317,9 +3368,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
     const databasePaths = runConcurrentSchemaProbe({ mode: "fresh", moduleUrl, rootDir });
-    const expectedShape = createSqliteSchemaShapeFromSql(
-      new URL("./openclaw-state-schema.sql", import.meta.url),
-    );
+    const expectedShape = createInitialStateSchemaShape();
     const { DatabaseSync } = requireNodeSqlite();
 
     expect(databasePaths).toHaveLength(1);

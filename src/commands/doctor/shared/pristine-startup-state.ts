@@ -31,7 +31,6 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "cron",
   "discovery",
   "env",
-  "hooks",
   "marketplaces",
   "mcp",
   "media",
@@ -47,6 +46,51 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "transcripts",
   "web",
 ]);
+
+// Canonical internal entries have no legacy machine state to import. Keep every
+// older or external hook shape on Doctor's full migration path.
+function hasOnlyMigrationSafeInternalHooks(config: Record<string, unknown>): boolean {
+  const hooks = config.hooks;
+  if (hooks === undefined) {
+    return true;
+  }
+  if (!isRecord(hooks) || Object.keys(hooks).some((key) => key !== "internal")) {
+    return false;
+  }
+
+  const internal = hooks.internal;
+  if (internal === undefined) {
+    return true;
+  }
+  if (
+    !isRecord(internal) ||
+    Object.keys(internal).some((key) => !["enabled", "entries"].includes(key)) ||
+    (internal.enabled !== undefined && typeof internal.enabled !== "boolean")
+  ) {
+    return false;
+  }
+
+  if (internal.entries === undefined) {
+    return true;
+  }
+  if (!isRecord(internal.entries)) {
+    return false;
+  }
+  return Object.values(internal.entries).every((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") {
+      return false;
+    }
+    if (entry.env === undefined) {
+      return true;
+    }
+    return (
+      isRecord(entry.env) && Object.values(entry.env).every((value) => typeof value === "string")
+    );
+  });
+}
 
 function containsObjectKey(value: unknown, targetKey: string): boolean {
   if (Array.isArray(value)) {
@@ -140,6 +184,9 @@ function hasOnlyMigrationSafePluginEntries(
 
 function configIsPristineCoreStateSafe(config: Record<string, unknown>): boolean {
   if ([...STATEFUL_CONFIG_KEYS].some((key) => Object.hasOwn(config, key))) {
+    return false;
+  }
+  if (!hasOnlyMigrationSafeInternalHooks(config)) {
     return false;
   }
   if (containsObjectKey(config.agents, "memorySearch")) {

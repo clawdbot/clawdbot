@@ -30,7 +30,7 @@ export function resolveDefaultVitestNoOutputTimeoutMs(argv?: string[]): number;
 export function resolveVitestSpawnParams(
   env?: NodeJS.ProcessEnv,
   platform?: NodeJS.Platform,
-): SpawnOptions & { env: NodeJS.ProcessEnv; detached: boolean; stdio: string[] };
+): { env: NodeJS.ProcessEnv; detached: boolean; stdio: string[] };
 export function shouldSuppressVitestStderrLine(line: string): boolean;
 export function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null;
 export function resolveExplicitTestFileNoPassArgs(argv: string[]): string[];
@@ -41,6 +41,14 @@ export function resolveMissingExplicitTestFiles(
   fsImpl?: VitestFs,
 ): string[];
 export function resolveImplicitVitestArgs(argv: string[], cwd?: string): string[];
+export function resolveBoundedVitestInvocations(
+  argv: string[],
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    gatewayServerTargetChunks?: string[][];
+  },
+): string[][];
 export function installVitestNoOutputWatchdog(params: {
   streams?: Array<{ on(event: string, listener: (...args: unknown[]) => void): unknown } | null>;
   timeoutMs: number | null;
@@ -61,14 +69,18 @@ export function spawnWatchedVitestProcess(params: {
   onNoOutputTimeout?: () => void;
 }): {
   child: ChildProcess;
-  getForwardedSignal: () => NodeJS.Signals | null;
+  completion: Promise<{
+    code: number | null;
+    signal: ChildProcess["signalCode"];
+  }>;
+  getForwardedSignal: () => ChildProcess["signalCode"];
   teardown: () => void;
 };
 export function resolveTestProjectsRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function resolveTestProjectsRunnerSpawnParams(
   env: NodeJS.ProcessEnv,
   platform?: NodeJS.Platform,
-): SpawnOptions & { env: NodeJS.ProcessEnv; detached: boolean; stdio: "inherit" };
+): { env: NodeJS.ProcessEnv; detached: boolean; stdio: "inherit" };
 export function runTestProjectsDelegation(
   argv: string[],
   env: NodeJS.ProcessEnv,

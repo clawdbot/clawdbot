@@ -1,12 +1,10 @@
 // Session resolve tests cover canonical/legacy key lookup, store migration,
 // agent scoping, listed-session selection, and protocol error mapping.
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
-  canonicalizeSessionEntryAliasesMock: vi.fn(),
   listSessionsFromStoreMock: vi.fn(),
   resolveGatewaySessionStoreTargetWithStoreMock: vi.fn(),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
@@ -20,15 +18,6 @@ vi.mock("../agents/agent-scope.js", async () => {
   return {
     ...actual,
     listAgentIds: hoisted.listAgentIdsMock,
-  };
-});
-
-vi.mock("../config/sessions.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
-  return {
-    ...actual,
-    canonicalizeSessionEntryAliases: hoisted.canonicalizeSessionEntryAliasesMock,
   };
 });
 
@@ -67,7 +56,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
   };
 
   beforeEach(() => {
-    hoisted.canonicalizeSessionEntryAliasesMock.mockReset();
     hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -81,15 +69,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: targetStore,
     }));
-    hoisted.canonicalizeSessionEntryAliasesMock.mockImplementation(async () => {
-      const entry = expectDefined(
-        targetStore[legacyKey] ?? targetStore[canonicalKey],
-        "canonical session entry",
-      );
-      targetStore[canonicalKey] = entry;
-      delete targetStore[legacyKey];
-      return { canonicalKey, entry };
-    });
   });
 
   it("hides canonical keys that fail the spawnedBy visibility filter", async () => {
@@ -133,22 +112,16 @@ describe("resolveSessionKeyFromResolveParams", () => {
     await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
   });
 
-  it("re-checks migrated legacy keys through the same visibility filter", async () => {
-    const store = {
-      [legacyKey]: { sessionId: "sess-legacy", spawnedBy: "controller-1", updatedAt: Date.now() },
-    } satisfies Record<string, SessionEntry>;
-    targetStore = store;
-
-    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-
-    expect(hoisted.canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.canonicalizeSessionEntryAliasesMock).toHaveBeenCalledWith({
-      storePath,
-      target: {
-        canonicalKey,
-        storeKeys: [canonicalKey, legacyKey],
-      },
+  it("rejects legacy keys with doctor repair guidance", async () => {
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error("stop the Gateway and run openclaw doctor --fix"), {
+        code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+      });
     });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({ cfg: {}, p: { key: canonicalKey } }),
+    ).rejects.toThrow("openclaw doctor --fix");
   });
 
   it("does not let allowMissing mask a deleted-agent error", async () => {
@@ -309,6 +282,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "main",
     });
+    expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith(
+      expect.objectContaining({ lightweightListRows: true }),
+    );
     expect(result).toEqual({
       ok: false,
       error: {

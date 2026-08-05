@@ -1,7 +1,12 @@
 // Plugin registry loader tests cover CLI plugin registry loading and cache reset behavior.
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { measureCliCommandStartup } from "./command-startup-timing.js";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
@@ -25,6 +30,7 @@ describe("plugin-registry-loader", () => {
 
   afterEach(() => {
     loggingState.forceConsoleToStderr = originalForceStderr;
+    vi.unstubAllEnvs();
   });
 
   it("routes plugin load logs to stderr and restores state", async () => {
@@ -84,5 +90,33 @@ describe("plugin-registry-loader", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
     });
+  });
+
+  it("attributes module import separately from runtime loading", async () => {
+    const dir = tempDirs.make("openclaw-plugin-registry-startup-");
+    const timelinePath = join(dir, "timeline.jsonl");
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", "timeline");
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
+
+    await measureCliCommandStartup("plugin-registry", () =>
+      ensureCliPluginRegistryLoaded({
+        scope: "all",
+      }),
+    );
+
+    const events = (await readFile(timelinePath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const starts = events.filter((event) => event.type === "span.start");
+    const outer = starts.find(
+      (event) => (event.attributes as { stage?: string } | undefined)?.stage === "plugin-registry",
+    );
+    expect(outer).toBeDefined();
+    expect(
+      starts
+        .filter((event) => event.parentSpanId === outer?.spanId)
+        .map((event) => (event.attributes as { stage?: string } | undefined)?.stage),
+    ).toEqual(["plugin-registry-module-import", "plugin-registry-runtime-load"]);
   });
 });

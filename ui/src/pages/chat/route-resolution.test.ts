@@ -467,6 +467,50 @@ describe("gateway-backed session route resolution", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      connectionChange: "gateway client replacement",
+      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+        snapshot.client = {} as NonNullable<typeof snapshot.client>;
+      },
+    },
+    {
+      connectionChange: "hello replacement on the same gateway client",
+      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+        snapshot.hello = {
+          snapshot: { sessionDefaults: { mainKey: "main" } },
+        } as NonNullable<typeof snapshot.hello>;
+      },
+    },
+  ])("does not trust a carried session after $connectionChange", async ({ replaceConnection }) => {
+    const oldSession = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const currentSession = row({
+      key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
+      displayName: "Deploy monitor",
+    });
+    const { context, list } = contextFor(() => result([currentSession]));
+    context.gateway.snapshot.hello = {
+      snapshot: { sessionDefaults: { mainKey: "main" } },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    const pathname = "/chat/roboclaw/deploy-monitor-12345678";
+
+    prepareSessionNavigationHandoff(context.gateway, pathname, oldSession.key);
+    replaceConnection(context.gateway.snapshot);
+
+    const loaded = await loadChatRoute(
+      context,
+      { pathname, search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: currentSession.key });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
   it("prefers the current location key over a residual colliding handoff", async () => {
     const current = row({
       key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",

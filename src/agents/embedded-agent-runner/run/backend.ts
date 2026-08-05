@@ -9,6 +9,7 @@ import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
+import { settleRequesterAfterSessionSpawns } from "../../subagent-registry.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -17,7 +18,22 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 export async function runEmbeddedAttemptWithBackend(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  return runAgentHarnessAttempt(params);
+  const result = await runAgentHarnessAttempt(params);
+  if (
+    result.agentHarnessId !== "openclaw" &&
+    params.sessionKey &&
+    result.acceptedSessionSpawns?.length
+  ) {
+    // Native harnesses return only after releasing active-run ownership.
+    // Settle before dispatch can replace the successful result with a late abort.
+    settleRequesterAfterSessionSpawns({
+      requesterSessionKey: params.sessionKey,
+      requesterTurnRunId: params.runId,
+      requesterYielded: result.yieldDetected === true,
+      acceptedSessionSpawns: result.acceptedSessionSpawns,
+    });
+  }
+  return result;
 }
 
 /** Runs one operation-specific settled-turn finalization through the selected harness. */

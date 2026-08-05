@@ -9,11 +9,8 @@ import {
   readSessionTranscriptActiveLeafEvents,
   resolveSessionTranscriptActiveLeafEntryId,
 } from "../../config/sessions/session-accessor.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
@@ -48,6 +45,7 @@ export async function admitChatSend(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
+  onAdmissionOwned?: () => Promise<boolean>;
 }) {
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
@@ -378,6 +376,21 @@ export async function admitChatSend(params: {
       runId: clientRunId,
     });
     return { ok: false as const };
+  }
+  if (params.onAdmissionOwned) {
+    let proceed: boolean;
+    try {
+      proceed = await params.onAdmissionOwned();
+    } catch (error) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      throw error;
+    }
+    if (!proceed) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      return { ok: false as const };
+    }
   }
 
   let releaseGatewayRootContinuation: (() => void) | undefined;

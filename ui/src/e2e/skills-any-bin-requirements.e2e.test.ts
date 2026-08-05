@@ -83,6 +83,7 @@ describeControlUiE2e("Control UI alternative skill binary requirements", () => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "skills.install"],
       methodResponses: {
         "skills.status": {
           workspaceDir: "/tmp/openclaw-e2e/workspace",

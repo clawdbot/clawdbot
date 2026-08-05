@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   ONE_PIXEL_PNG_B64,
@@ -18,16 +19,23 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 
+async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<void> {
+  const context = await suite.browser.newContext({
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 900, width: 1280 },
+  });
+  try {
+    await run(await context.newPage());
+  } finally {
+    await context.close();
+  }
+}
+
 suite.define(() => {
   it("grows the first prompt through ten lines before using a narrow scrollbar", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-    try {
+    await withNewSessionPage(async (page) => {
+      const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new`);
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
@@ -79,24 +87,16 @@ suite.define(() => {
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { message: longPrompt },
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.create": { key: "agent:main:image-draft", runStarted: true },
-      },
-    });
-    try {
+    await withNewSessionPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.create": { key: "agent:main:image-draft", runStarted: true },
+        },
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
@@ -118,55 +118,47 @@ suite.define(() => {
           },
         ],
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("shows the initial prompt while the newly created session is still running", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:visible-initial-prompt";
-    const message = "keep this prompt visible while the agent works";
-    const activeOutputTimestamp = Date.now() + 60_000;
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.create": { key: sessionKey, runStarted: true },
-        "sessions.list": createdSessionListResult(sessionKey),
-        "chat.startup": {
-          messages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "toolCall",
-                  id: "active-tool-call",
-                  name: "read",
-                  arguments: { path: "SKILL.md" },
-                },
-              ],
-              timestamp: activeOutputTimestamp,
-              __openclaw: { id: "active-assistant", seq: 2 },
-            },
-            {
-              role: "toolResult",
-              toolCallId: "active-tool-call",
-              toolName: "read",
-              content: [{ type: "text", text: "working" }],
-              timestamp: activeOutputTimestamp + 1,
-              __openclaw: { id: "active-tool-result", seq: 3 },
-            },
-          ],
-          sessionId: "visible-initial-prompt",
-          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:visible-initial-prompt";
+      const message = "keep this prompt visible while the agent works";
+      const activeOutputTimestamp = Date.now() + 60_000;
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.create": { key: sessionKey, runStarted: true },
+          "sessions.list": createdSessionListResult(sessionKey),
+          "chat.startup": {
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "active-tool-call",
+                    name: "read",
+                    arguments: { path: "SKILL.md" },
+                  },
+                ],
+                timestamp: activeOutputTimestamp,
+                __openclaw: { id: "active-assistant", seq: 2 },
+              },
+              {
+                role: "toolResult",
+                toolCallId: "active-tool-call",
+                toolName: "read",
+                content: [{ type: "text", text: "working" }],
+                timestamp: activeOutputTimestamp + 1,
+                __openclaw: { id: "active-tool-result", seq: 3 },
+              },
+            ],
+            sessionId: "visible-initial-prompt",
+            sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+          },
         },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start thread" }).click();
@@ -185,32 +177,24 @@ suite.define(() => {
         throw new Error("expected visible prompt and tool rows");
       }
       expect(userRow.y).toBeLessThan(toolRow.y);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps the initial prompt visible across a Gateway reconnect", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:reconnected-initial-prompt";
-    const message = "keep this first prompt through reconnect";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.create": { key: sessionKey, runStarted: true },
-        "sessions.list": createdSessionListResult(sessionKey),
-        "chat.startup": {
-          messages: [],
-          sessionId: "reconnected-initial-prompt",
-          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:reconnected-initial-prompt";
+      const message = "keep this first prompt through reconnect";
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.create": { key: sessionKey, runStarted: true },
+          "sessions.list": createdSessionListResult(sessionKey),
+          "chat.startup": {
+            messages: [],
+            sessionId: "reconnected-initial-prompt",
+            sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+          },
         },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start thread" }).click();
@@ -256,55 +240,47 @@ suite.define(() => {
 
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("reconciles an image-bearing initial prompt into one user row", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:single-image-prompt";
-    const message = "testing if dual prompts show";
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup"],
-      methodResponses: {
-        "sessions.create": {
-          key: sessionKey,
-          runId: "initial-image-send",
-          runStarted: true,
-          messageSeq: 1,
-        },
-        "sessions.list": createdSessionListResult(sessionKey),
-        "chat.startup": {
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: { type: "url", url: "/persisted-image.png" },
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:single-image-prompt";
+      const message = "testing if dual prompts show";
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.startup"],
+        methodResponses: {
+          "sessions.create": {
+            key: sessionKey,
+            runId: "initial-image-send",
+            runStarted: true,
+            messageSeq: 1,
+          },
+          "sessions.list": createdSessionListResult(sessionKey),
+          "chat.startup": {
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image",
+                    source: { type: "url", url: "/persisted-image.png" },
+                  },
+                  { type: "text", text: message },
+                ],
+                timestamp: Date.now(),
+                __openclaw: {
+                  id: "persisted-image-prompt",
+                  idempotencyKey: "initial-image-send:user",
+                  seq: 1,
                 },
-                { type: "text", text: message },
-              ],
-              timestamp: Date.now(),
-              __openclaw: {
-                id: "persisted-image-prompt",
-                idempotencyKey: "initial-image-send:user",
-                seq: 1,
               },
-            },
-          ],
-          sessionId: "single-image-prompt",
-          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+            ],
+            sessionId: "single-image-prompt",
+            sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+          },
         },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
@@ -333,32 +309,24 @@ suite.define(() => {
       await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
       await pollLocatorText(userRow).toContain(message);
       await pollLocatorText(userRow).not.toContain("Attached image");
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("waits for pasted image reads before enabling session creation", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await page.addInitScript(() => {
-      const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
-        ?.value as FileReader["readAsDataURL"];
-      FileReader.prototype.readAsDataURL = function (blob: Blob) {
-        (globalThis as unknown as { finishPastedImageRead?: () => void }).finishPastedImageRead =
-          () => readAsDataUrl.call(this, blob);
-      };
-    });
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.create": { key: "agent:main:delayed-image-draft", runStarted: true },
-      },
-    });
-    try {
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
+          ?.value as FileReader["readAsDataURL"];
+        FileReader.prototype.readAsDataURL = function (blob: Blob) {
+          (globalThis as unknown as { finishPastedImageRead?: () => void }).finishPastedImageRead =
+            () => readAsDataUrl.call(this, blob);
+        };
+      });
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.create": { key: "agent:main:delayed-image-draft", runStarted: true },
+        },
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
       const submit = page.getByRole("button", { name: "Start thread" });
@@ -384,43 +352,35 @@ suite.define(() => {
         message: "include the image that is still loading",
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("releases a completed file when the rest of its pasted batch is aborted", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await page.addInitScript(() => {
-      const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
-        ?.value as FileReader["readAsDataURL"];
-      let readCount = 0;
-      FileReader.prototype.readAsDataURL = function (blob: Blob) {
-        readCount += 1;
-        if (readCount === 1) {
-          readAsDataUrl.call(this, blob);
-        }
-      };
-      const createObjectURL = URL.createObjectURL.bind(URL);
-      const revokeObjectURL = URL.revokeObjectURL.bind(URL);
-      const proof = { created: 0, revoked: 0 };
-      (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
-      URL.createObjectURL = (blob: Blob) => {
-        proof.created += 1;
-        return createObjectURL(blob);
-      };
-      URL.revokeObjectURL = (url: string) => {
-        proof.revoked += 1;
-        revokeObjectURL(url);
-      };
-    });
-    await installMockGateway(page);
-    try {
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
+          ?.value as FileReader["readAsDataURL"];
+        let readCount = 0;
+        FileReader.prototype.readAsDataURL = function (blob: Blob) {
+          readCount += 1;
+          if (readCount === 1) {
+            readAsDataUrl.call(this, blob);
+          }
+        };
+        const createObjectURL = URL.createObjectURL.bind(URL);
+        const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+        const proof = { created: 0, revoked: 0 };
+        (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
+        URL.createObjectURL = (blob: Blob) => {
+          proof.created += 1;
+          return createObjectURL(blob);
+        };
+        URL.revokeObjectURL = (url: string) => {
+          proof.revoked += 1;
+          revokeObjectURL(url);
+        };
+      });
+      await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
       await pastePng(composer, 2);
@@ -450,71 +410,62 @@ suite.define(() => {
           ),
         )
         .toBe(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("releases pasted image previews after remove, reset, disconnect, and success", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await page.addInitScript(() => {
-      const createObjectURL = URL.createObjectURL.bind(URL);
-      const revokeObjectURL = URL.revokeObjectURL.bind(URL);
-      const proof = { created: 0, revoked: 0 };
-      (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
-      URL.createObjectURL = (blob: Blob) => {
-        proof.created += 1;
-        return createObjectURL(blob);
-      };
-      URL.revokeObjectURL = (url: string) => {
-        proof.revoked += 1;
-        revokeObjectURL(url);
-      };
-    });
-    await installMockGateway(page, {
-      methodResponses: {
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        const createObjectURL = URL.createObjectURL.bind(URL);
+        const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+        const proof = { created: 0, revoked: 0 };
+        (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
+        URL.createObjectURL = (blob: Blob) => {
+          proof.created += 1;
+          return createObjectURL(blob);
+        };
+        URL.revokeObjectURL = (url: string) => {
+          proof.revoked += 1;
+          revokeObjectURL(url);
+        };
+      });
+      await installMockGateway(page, {
+        methodResponses: {
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "writer", name: "Writer" },
+            ],
+          },
+          "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
         },
-        "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
-      },
-    });
-    const proof = () =>
-      page.evaluate(
-        () =>
-          (globalThis as unknown as { attachmentUrlProof: { created: number; revoked: number } })
-            .attachmentUrlProof,
-      );
-    const navigate = (routeId: string, search = "") =>
-      page.evaluate(
-        ({ targetRouteId, targetSearch }) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: {
-              context: {
-                navigate: (routeId: string, options?: { search?: string }) => void;
+      });
+      const proof = () =>
+        page.evaluate(
+          () =>
+            (globalThis as unknown as { attachmentUrlProof: { created: number; revoked: number } })
+              .attachmentUrlProof,
+        );
+      const navigate = (routeId: string, search = "") =>
+        page.evaluate(
+          ({ targetRouteId, targetSearch }) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: {
+                context: {
+                  navigate: (routeId: string, options?: { search?: string }) => void;
+                };
               };
             };
-          };
-          if (!app.runtime) {
-            throw new Error("OpenClaw application runtime is unavailable");
-          }
-          app.runtime.context.navigate(targetRouteId, { search: targetSearch });
-        },
-        { targetRouteId: routeId, targetSearch: search },
-      );
-
-    try {
+            if (!app.runtime) {
+              throw new Error("OpenClaw application runtime is unavailable");
+            }
+            app.runtime.context.navigate(targetRouteId, { search: targetSearch });
+          },
+          { targetRouteId: routeId, targetSearch: search },
+        );
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
 
@@ -565,54 +516,45 @@ suite.define(() => {
         (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
       );
       await expect.poll(async () => await proof()).toEqual({ created: 4, revoked: 4 });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("locks the submitted draft until creation settles and restores it after failure", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:locked-new-session-draft";
-    const submittedMessage = "keep this submitted draft atomic";
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:locked-new-session-draft";
+      const submittedMessage = "keep this submitted draft atomic";
+      const gateway = await installMockGateway(page, {
+        workspaceGit: true,
+        methodResponses: {
+          "agents.list": {
+            agents: [
+              {
+                id: "main",
+                identity: { name: "Main" },
+                name: "Main",
+                workspace: WORKSPACE,
+                workspaceGit: true,
+              },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+            repositoryStatus: "git",
+          },
+          "sessions.list": {
+            count: 0,
+            defaults: SESSION_LIST_DEFAULTS,
+            path: "",
+            sessions: [],
+            ts: Date.now(),
+          },
+          "sessions.create": { key: sessionKey },
         },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "sessions.list": {
-          count: 0,
-          defaults: SESSION_LIST_DEFAULTS,
-          path: "",
-          sessions: [],
-          ts: Date.now(),
-        },
-        "sessions.create": { key: sessionKey },
-      },
-    });
-
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.deferNext("sessions.create");
 
@@ -660,72 +602,63 @@ suite.define(() => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps a rejected first message visible and retryable after reload", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:rejected-first-message";
-    const message = "keep this rejected first message";
-    const runError = "send blocked by session policy";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:rejected-first-message";
+      const message = "keep this rejected first message";
+      const runError = "send blocked by session policy";
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "agents.list": {
+            agents: [
+              {
+                id: "main",
+                identity: { name: "Main" },
+                name: "Main",
+                workspace: WORKSPACE,
+                workspaceGit: true,
+              },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+            repositoryStatus: "git",
+          },
+          "sessions.list": {
+            count: 1,
+            defaults: SESSION_LIST_DEFAULTS,
+            path: "",
+            sessions: [
+              {
+                hasActiveRun: false,
+                key: sessionKey,
+                kind: "direct",
+                status: "done",
+                updatedAt: Date.now(),
+              },
+            ],
+            ts: Date.now(),
+          },
+          "sessions.create": {
+            key: sessionKey,
+            runStarted: false,
+            runError: { code: "INVALID_REQUEST", message: runError },
+          },
+          "chat.history": {
+            messages: [],
+            sessionId: "rejected-first-message",
+            sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+          },
+          "chat.send": { runId: "retry-run", status: "started" },
         },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "sessions.list": {
-          count: 1,
-          defaults: SESSION_LIST_DEFAULTS,
-          path: "",
-          sessions: [
-            {
-              hasActiveRun: false,
-              key: sessionKey,
-              kind: "direct",
-              status: "done",
-              updatedAt: Date.now(),
-            },
-          ],
-          ts: Date.now(),
-        },
-        "sessions.create": {
-          key: sessionKey,
-          runStarted: false,
-          runError: { code: "INVALID_REQUEST", message: runError },
-        },
-        "chat.history": {
-          messages: [],
-          sessionId: "rejected-first-message",
-          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
-        },
-        "chat.send": { runId: "retry-run", status: "started" },
-      },
-    });
-
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
@@ -763,49 +696,40 @@ suite.define(() => {
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("adopts a created session when rejected-turn persistence exceeds browser storage", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await page.addInitScript(() => {
-      const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
-        ?.value as Storage["setItem"];
-      Storage.prototype.setItem = function (key: string, value: string) {
-        if (key.startsWith("openclaw.control.chatComposer.v2:")) {
-          throw new DOMException("Quota exceeded", "QuotaExceededError");
-        }
-        return setItem.call(this, key, value);
-      };
-    });
-    const sessionKey = "agent:main:storage-failed-initial-turn";
-    const message = "retry this in the session that already exists";
-    const runError = "initial send rejected";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.create": {
-          key: sessionKey,
-          runStarted: false,
-          runError: { code: "INVALID_REQUEST", message: runError },
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
+          ?.value as Storage["setItem"];
+        Storage.prototype.setItem = function (key: string, value: string) {
+          if (key.startsWith("openclaw.control.chatComposer.v2:")) {
+            throw new DOMException("Quota exceeded", "QuotaExceededError");
+          }
+          return setItem.call(this, key, value);
+        };
+      });
+      const sessionKey = "agent:main:storage-failed-initial-turn";
+      const message = "retry this in the session that already exists";
+      const runError = "initial send rejected";
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.create": {
+            key: sessionKey,
+            runStarted: false,
+            runError: { code: "INVALID_REQUEST", message: runError },
+          },
+          "sessions.list": createdSessionListResult(sessionKey),
+          "chat.history": {
+            messages: [],
+            sessionId: "storage-failed-initial-turn",
+            sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+          },
+          "chat.send": { runId: "storage-failure-retry", status: "started" },
         },
-        "sessions.list": createdSessionListResult(sessionKey),
-        "chat.history": {
-          messages: [],
-          sessionId: "storage-failed-initial-turn",
-          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
-        },
-        "chat.send": { runId: "storage-failure-retry", status: "started" },
-      },
-    });
-
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
@@ -829,8 +753,6 @@ suite.define(() => {
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

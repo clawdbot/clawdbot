@@ -25,12 +25,12 @@ export const telegramChannelConfigUiHints = {
     },
     nativeCommands: true,
     streaming: {
-      "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
-      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial").',
+      "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "progress"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
+      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
       chunkMode:
         'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
       "block.enabled":
-        'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',
+        "Enable normal Telegram block replies. This takes precedence over editable preview delivery.",
       "block.coalesce": "Merge streamed Telegram block replies before sending final delivery.",
       "preview.chunk.minChars":
         'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',

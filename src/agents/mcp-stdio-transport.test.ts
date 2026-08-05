@@ -246,4 +246,23 @@ describe("OpenClawStdioClientTransport", () => {
     child.stderr.write("server diagnostic");
     expect(transport.stderr?.read()?.toString()).toBe("server diagnostic");
   });
+
+  it("reports an oversized stdout frame without an unhandled error crash", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const onerror = vi.fn();
+    Object.assign(transport, { onerror });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const oversized = Buffer.alloc(10 * 1024 * 1024 + 1, 0x20);
+    expect(() => child.stdout.emit("data", oversized)).not.toThrow();
+    expect(onerror).toHaveBeenCalledTimes(1);
+    const reported = onerror.mock.calls.at(0)?.at(0) as Error;
+    expect(reported).toBeInstanceOf(Error);
+    expect(reported.message).toMatch(/exceeded maximum size/);
+  });
 });

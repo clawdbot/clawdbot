@@ -1,6 +1,7 @@
 /** Read-only provider/model auth availability with provider-route selection. */
 import {
   findNormalizedProviderValue,
+  normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -15,15 +16,12 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import {
-  isConfiguredAwsSdkAuthProfileForProvider,
-  getRuntimeAuthProfileStoreSnapshot,
-  resolveAuthProfileEligibility,
-} from "./auth-profiles.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {
   type AuthProfileOrderResolution,
+  isConfiguredAwsSdkAuthProfileForProvider,
+  resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "./auth-profiles/order.js";
 import {
@@ -31,18 +29,26 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
+import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
-import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
+import {
+  isAuthCooldownBypassedForProvider,
+  isProfileInCooldown,
+  resolveProfileUnusableUntil,
+} from "./auth-profiles/usage-state.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "./model-auth-env-vars.js";
 import { resolveProviderEnvAuthEvidence } from "./model-auth-env.js";
 import { isKnownEnvApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import {
-  hasUsableCustomProviderApiKey,
-  hasRuntimeAvailableProviderAuth,
   hasSyntheticLocalProviderAuthConfig,
+  hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
-} from "./model-auth.js";
+} from "./model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   createOpenAIModelRoutesResolver,
@@ -54,6 +60,7 @@ import {
   buildProviderModelAuthSourcePlan,
   fromProviderModelAuthReadiness,
   toProviderModelAuthReadiness,
+  type ProviderModelAuthAuthorization,
   type ProviderModelAuthEvidence,
   type ProviderModelAuthProfileSource,
 } from "./provider-model-auth-source-plan.js";
@@ -88,6 +95,7 @@ export type ModelAuthAvailabilityEvaluation = {
   evidence?: ModelAuthAvailabilityEvidence;
 };
 export type ModelAuthAvailabilityResolver = {
+  providerDiscoveryProviderIds: readonly string[];
   evaluateModelAuth(
     provider: string,
     ref?: ModelAuthAvailabilityRef,
@@ -500,6 +508,21 @@ export function createModelAuthAvailabilityResolver(
     if (binding.kind === "profile-incompatible") {
       return { availability: false, evidence: "profile" };
     }
+    // Config-backed inline provider keys have no auth profile, so a recorded
+    // billing/auth cooldown must hide them from browse availability the same way
+    // it blocks their resolution — otherwise a cooled key still looks usable.
+    // Mirrors resolveInlineProviderApiKeyUnusableUntil, but reads the cooldown
+    // via usage-state primitives so this hot browse path stays independent of
+    // the auth-profiles usage module that many callers mock in tests.
+    const inlineUsageStats = isAuthCooldownBypassedForProvider(provider)
+      ? undefined
+      : store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
+    const inlineKeyUnusableUntil = inlineUsageStats
+      ? resolveProfileUnusableUntil(inlineUsageStats)
+      : null;
+    if (inlineKeyUnusableUntil != null && inlineKeyUnusableUntil > now) {
+      return { availability: false, evidence: "provider-config" };
+    }
     if (binding.kind === "literal") {
       return {
         availability: modeAllowed(provider, target, configuredBearerMode),
@@ -534,14 +557,8 @@ export function createModelAuthAvailabilityResolver(
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
       return {
         availability: managed
-          ? hasRuntimeAvailableProviderAuth({
-              provider,
-              modelApi: target.api ?? undefined,
-              cfg: params.cfg,
-              workspaceDir: params.workspaceDir,
-              env,
-              allowPluginSyntheticAuth: false,
-            }) || undefined
+          ? Boolean(resolveManagedSecretRefRuntimeProviderAuth({ provider, cfg: params.cfg })) ||
+            undefined
           : undefined,
         selectedAuthMode: configuredBearerMode,
         evidence: managed ? "runtime" : "synthetic",
@@ -556,14 +573,9 @@ export function createModelAuthAvailabilityResolver(
         };
       }
       const available = resolveSecretRefReadOnlyAvailability(apiKeyRef, params.cfg, env);
-      const runtimeAvailable = hasRuntimeAvailableProviderAuth({
-        provider,
-        modelApi: target.api ?? undefined,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env,
-        allowPluginSyntheticAuth: false,
-      });
+      const runtimeAvailable = Boolean(
+        resolveManagedSecretRefRuntimeProviderAuth({ provider, cfg: params.cfg }),
+      );
       return {
         availability: runtimeAvailable ? true : available,
         selectedAuthMode: configuredBearerMode,
@@ -620,11 +632,15 @@ export function createModelAuthAvailabilityResolver(
       selectedAuthMode: configured?.auth,
     };
   };
-  const directSource = (evaluation: AuthSourceEvaluation) =>
+  const directSource = (
+    evaluation: AuthSourceEvaluation,
+    authorization: ProviderModelAuthAuthorization = "declared",
+  ) =>
     buildProviderModelAuthDirectSource({
       mode: evaluation.selectedAuthMode,
       availability: evaluation.availability,
       evidence: evaluation.evidence ?? "none",
+      authorization,
     });
   const automaticProfileSource = (
     provider: string,
@@ -686,14 +702,28 @@ export function createModelAuthAvailabilityResolver(
       (hasDirectMaterial && shouldPreferExplicitConfigApiKeyAuth(params.cfg, provider));
     const environment = envAuth(provider);
     const environmentMode = environment ? (configured?.auth ?? environment.mode) : undefined;
+    // Mirrors the runtime classification in runtime-plan/prepare-auth.ts: a
+    // credential is ambient only when it came from the environment and the
+    // provider entry declares no apiKey material pointing at it. Availability
+    // and runtime must agree, or status advertises a credential the run will
+    // refuse (or the reverse).
+    const ambientEnvironmentCredential =
+      !required && environmentMode !== undefined && environmentMode !== "aws-sdk"
+        ? !hasDirectMaterial
+        : false;
     const direct =
       !required && environmentMode
         ? buildProviderModelAuthDirectSource({
             mode: environmentMode,
             availability: modeAllowed(provider, target, environmentMode),
             evidence: environmentMode === "aws-sdk" ? "aws-sdk" : "environment",
+            authorization: ambientEnvironmentCredential ? "ambient" : "declared",
           })
-        : directSource(unprofiledEvaluation(provider, target));
+        : ((evaluation) =>
+            directSource(
+              evaluation,
+              evaluation.evidence === "environment" && !hasDirectMaterial ? "ambient" : "declared",
+            ))(unprofiledEvaluation(provider, target));
     const hasDirectFallback = hasDirectMaterial || direct.evidence !== "none";
     return {
       binding,
@@ -1005,7 +1035,50 @@ export function createModelAuthAvailabilityResolver(
       selectedRoute,
     };
   };
+  const providerDiscoveryProviderIds = new Set<string>();
+  const addProviderDiscoveryProviderId = (provider: string | undefined) => {
+    if (!provider) {
+      return;
+    }
+    const normalized = normalizeProvider(provider);
+    if (normalized) {
+      providerDiscoveryProviderIds.add(normalized);
+    }
+  };
+  for (const credential of Object.values(store.profiles)) {
+    addProviderDiscoveryProviderId(credential.provider);
+  }
+  for (const profile of Object.values(params.cfg.auth?.profiles ?? {})) {
+    addProviderDiscoveryProviderId(profile.provider);
+  }
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+    if (envAuth(provider)) {
+      addProviderDiscoveryProviderId(provider);
+    }
+  }
+  for (const plugin of params.metadataSnapshot?.index?.plugins ?? []) {
+    if (
+      !plugin.enabled ||
+      !(plugin.syntheticAuthRefs ?? []).some((ref) =>
+        synthetic.has(normalizeProviderIdForAuth(ref)),
+      )
+    ) {
+      continue;
+    }
+    for (const provider of [
+      ...(plugin.contributions?.providers ?? []),
+      ...(plugin.contributions?.modelCatalogProviders ?? []),
+    ]) {
+      addProviderDiscoveryProviderId(provider);
+    }
+  }
+  if (synthetic.has("codex")) {
+    addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
+  }
   return {
+    providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
     evaluateModelAuth,
     resolveProviderAuthAvailability,
     hasSyntheticAuth: (provider) =>

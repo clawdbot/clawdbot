@@ -18,7 +18,12 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
-import { findPreparedModelCandidate, type ModelSetupPrepareOption } from "./prepare-options.ts";
+import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
+import {
+  findPreparedModelCandidate,
+  type ModelSetupPrepareOption,
+  providerAutoSetupKind,
+} from "./prepare-options.ts";
 import { detectModelSetup, verifyModelSetup } from "./rpc.ts";
 import {
   activationTargetId,
@@ -42,7 +47,7 @@ type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[numbe
 
 export type ModelSetupRouteData = {
   state: ModelSetupPageState;
-  client: GatewayBrowserClient | null;
+  connection: ModelSetupDetectionConnection;
   firstRun: boolean;
 };
 
@@ -91,8 +96,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private moreSignInOpen = false;
   @state() private iconUrls: Record<string, string> = {};
 
-  private observedClient: GatewayBrowserClient | null = null;
-  private dataClient: GatewayBrowserClient | null = null;
+  private observedConnection: (ModelSetupRouteData["connection"] & { connected: boolean }) | null =
+    null;
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
@@ -102,6 +107,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
+    (gateway) => this.synchronizeGateway(gateway.snapshot),
   );
   private readonly wizard = new ModelSetupWizardRunner({
     getClient: () => this.context?.gateway.snapshot.client ?? null,
@@ -112,7 +118,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.wizardValue = initialWizardValue(next.step);
       }
     },
-    onDone: (startMethod) => void this.handleWizardDone(startMethod),
+    onDone: (startMethod, preparedModelRef) =>
+      void this.handleWizardDone(startMethod, preparedModelRef),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
@@ -140,7 +147,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         return;
       }
       this.pageState = { phase: "ready", result: outcome.value };
-      this.dataClient = outcome.client;
       this.syncManualProvider(this.pageState);
     },
   });
@@ -237,34 +243,65 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 
   override willUpdate(changed: PropertyValues) {
+    const snapshot = this.context.gateway.snapshot;
     if (changed.has("routeData") && this.routeData) {
-      this.pageState = this.routeData.state;
-      this.dataClient = this.routeData.client;
-      this.observedClient = this.routeData.client;
-      this.syncManualProvider(this.routeData.state);
+      const { connection } = this.routeData;
+      const current =
+        snapshot.phase === "connected" &&
+        snapshot.client === connection.client &&
+        snapshot.hello === connection.hello;
+      if (current) {
+        this.pageState = this.routeData.state;
+        this.observedConnection = { ...connection, connected: true };
+        this.syncManualProvider(this.pageState);
+      }
     }
   }
 
   override updated() {
-    const snapshot = this.context.gateway.snapshot;
-    if (snapshot.client === this.observedClient) {
-      this.reconcileIcons();
+    this.synchronizeGateway(this.context.gateway.snapshot);
+    this.reconcileIcons();
+  }
+
+  private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
+    const connection = {
+      client: snapshot.client,
+      hello: snapshot.hello,
+      connected: snapshot.phase === "connected",
+    };
+    if (!this.observedConnection) {
+      this.observedConnection = connection;
+      if (
+        connection.connected &&
+        this.routeData &&
+        (this.routeData.connection.client !== connection.client ||
+          this.routeData.connection.hello !== connection.hello)
+      ) {
+        void this.detect();
+      }
       return;
     }
-    this.observedClient = snapshot.client;
+    if (
+      connection.client === this.observedConnection.client &&
+      connection.hello === this.observedConnection.hello &&
+      connection.connected === this.observedConnection.connected
+    ) {
+      return;
+    }
+    this.observedConnection = connection;
     void this.detectTask.run([null, null]);
     this.activationState = { phase: "idle" };
     void this.activationTask.run([null, null]);
     this.verifyState = { phase: "idle" };
     void this.verifyTask.run([null]);
     this.resetIcons();
+    this.pendingPrepareOption = null;
     void this.wizard.cancel();
-    if (!snapshot.client || snapshot.client === this.dataClient) {
+    this.pageState = { phase: "loading" };
+    if (!connection.connected || !connection.client) {
       return;
     }
-    this.pageState = { phase: "loading" };
-    this.dataClient = snapshot.client;
-    if (this.canUseSetup(snapshot.client)) {
+    if (this.canUseSetup(connection.client)) {
       void this.detect();
     }
   }
@@ -512,10 +549,23 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     input?.focus();
   }
 
-  private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
+  private async handleWizardDone(
+    startMethod: ModelSetupWizardStartMethod,
+    preparedModelRef?: string,
+  ): Promise<void> {
     const prepareOption =
       startMethod === "openclaw.setup.prepare.start" ? this.pendingPrepareOption : null;
     this.pendingPrepareOption = null;
+    if (prepareOption && preparedModelRef) {
+      const kind = providerAutoSetupKind(prepareOption.id);
+      this.wizard.close();
+      void this.activate(
+        { kind, modelRef: preparedModelRef },
+        activationTargetId(kind, preparedModelRef),
+        preparedModelRef,
+      );
+      return;
+    }
     const result = await this.detect();
     if (!result) {
       this.wizard.fail(t("modelSetup.errors.requestFailed"));

@@ -69,28 +69,18 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     acpDispatchSessionKey,
     buildMessageReceivedHookContext,
     cfg,
-    completeDispatchReplyOperation,
     ctx,
-    deliverBindingPayload,
     dispatcher,
-    getDispatchReplyOperation,
     hookRunner,
     isInternalWebchatTurn,
     markIdle,
-    markProcessing,
     params,
     recordAgentDispatchCompleted,
     recordProcessed,
-    releasePreDispatchLifecycleAdmission,
     replyRoute,
-    routeReplyChannel,
     sessionAgentId,
     sessionKey,
     sessionStoreEntry,
-    shouldRouteToOriginating,
-    shouldSuppressTyping,
-    suppressAcpChildUserDelivery,
-    timestamp,
   } = state;
   const sendBindingNotice = async (
     payload: ReplyPayload,
@@ -100,7 +90,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (suppressAutomaticSourceDelivery) {
       return false;
     }
-    return await deliverBindingPayload(payload, mode, transcriptOwner);
+    return await state.deliverBindingPayload(payload, mode, transcriptOwner);
   };
 
   // Hook contexts use transport-native ids (for example Slack `U123`), while
@@ -199,7 +189,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     entry: sessionStoreEntry.entry,
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
     channel:
-      (shouldRouteToOriginating ? routeReplyChannel : undefined) ??
+      (state.shouldRouteToOriginating ? state.routeReplyChannel : undefined) ??
       sessionDeliveryChannel(sessionStoreEntry.entry) ??
       replyRoute.channel ??
       ctx.Surface ??
@@ -320,9 +310,9 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     requested: params.replyOptions?.sourceReplyDeliveryMode,
     strictMessageToolOnly: ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn,
     sendPolicy,
-    suppressAcpChildUserDelivery,
+    suppressAcpChildUserDelivery: state.suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
-    shouldSuppressTyping,
+    shouldSuppressTyping: state.shouldSuppressTyping,
     messageToolAvailable,
     defaultVisibleReplies: harnessDefaultVisibleReplies,
   });
@@ -423,7 +413,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordAgentDispatchCompleted?: boolean;
     sessionMetadataChanges?: DispatchFromConfigResult["sessionMetadataChanges"];
   }): DispatchFromConfigResult => {
-    void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(dispatcher));
+    void state.releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(dispatcher));
     if (opts?.recordAgentDispatchCompleted) {
       recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
     }
@@ -443,7 +433,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     });
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
-    const operation = getDispatchReplyOperation();
+    const operation = state.getDispatchReplyOperation();
     // Feedback only for pre-run drops: the user never saw output. Finalization or
     // terminal-settle stalls already produced/settled output, so a notice is noise.
     const droppedBeforeOutput =
@@ -453,24 +443,25 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         operation.staleExpiryReason === "stuck_recovery");
     const queuedFinal = droppedBeforeOutput
       ? dispatcher.sendFinalReply({
-          text: "⚠️ Your reply was dropped because the gateway was overloaded. Please retry.",
+          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
           isError: true,
         })
       : false;
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
-    completeDispatchReplyOperation();
+    state.completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts: dispatcher.getQueuedCounts(),
     });
   };
 
-  let pluginFallbackReason:
-    | "plugin-bound-fallback-missing-plugin"
-    | "plugin-bound-fallback-no-handler"
-    | undefined;
+  const bindingState: {
+    pluginFallbackReason?:
+      | "plugin-bound-fallback-missing-plugin"
+      | "plugin-bound-fallback-no-handler";
+  } = {};
   const emitMessageReceivedHooks = () => {
     if (
       ctx.SuppressMessageReceivedHooks !== true &&
@@ -491,14 +482,14 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         triggerInternalHook(
           createInternalHookEvent("message", "received", sessionKey, {
             ...toInternalMessageReceivedContext(messageReceivedHookContext),
-            timestamp,
+            timestamp: state.timestamp,
           }),
         ),
         "dispatch-from-config: message_received internal hook failed",
       );
     }
   };
-  markProcessing();
+  state.markProcessing();
   if (await capturePendingConversationTurnReply({ cfg, ctx })) {
     emitMessageReceivedHooks();
     commitInboundDedupeIfClaimed();
@@ -513,50 +504,35 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       }),
     };
   }
-  const nextState = extendPreparedDispatchState(
-    state,
-    {
-      sendBindingNotice,
-      pluginOwnedBinding,
-      persistPluginBindingUserTurn,
-      sendPolicy,
-      chatType,
-      emptyFinalAllowedAsSilent,
-      noVisibleReplyFallbackDirected,
-      sourceReplyPolicy,
-      sourceReplyDeliveryMode,
-      sessionStableSourceReplyDeliveryMode,
-      suppressAutomaticSourceDelivery,
-      suppressDelivery,
-      sendPolicyDenied,
-      deliverySuppressionReason,
-      suppressHookUserDelivery,
-      suppressHookReplyLifecycle,
-      reasoningPayloadsEnabled,
-      commentaryPayloadsEnabled,
-      attachSourceReplyDeliveryMode,
-      explicitCommandTurnCtx,
-      shouldDeliverPluginBindingReply,
-      inboundDedupeClaim,
-      commitInboundDedupeIfClaimed,
-      finishReplyOperationBusyDispatch,
-      finishReplyOperationAbortedDispatch,
-      emitMessageReceivedHooks,
-    },
-    {
-      pluginFallbackReason: {
-        get: () => pluginFallbackReason,
-        set: (
-          value:
-            | "plugin-bound-fallback-missing-plugin"
-            | "plugin-bound-fallback-no-handler"
-            | undefined,
-        ) => {
-          pluginFallbackReason = value;
-        },
-      },
-    },
-  );
+  const nextState = extendPreparedDispatchState(state, {
+    sendBindingNotice,
+    pluginOwnedBinding,
+    persistPluginBindingUserTurn,
+    sendPolicy,
+    chatType,
+    emptyFinalAllowedAsSilent,
+    noVisibleReplyFallbackDirected,
+    sourceReplyPolicy,
+    sourceReplyDeliveryMode,
+    sessionStableSourceReplyDeliveryMode,
+    suppressAutomaticSourceDelivery,
+    suppressDelivery,
+    sendPolicyDenied,
+    deliverySuppressionReason,
+    suppressHookUserDelivery,
+    suppressHookReplyLifecycle,
+    reasoningPayloadsEnabled,
+    commentaryPayloadsEnabled,
+    attachSourceReplyDeliveryMode,
+    explicitCommandTurnCtx,
+    shouldDeliverPluginBindingReply,
+    inboundDedupeClaim,
+    commitInboundDedupeIfClaimed,
+    finishReplyOperationBusyDispatch,
+    finishReplyOperationAbortedDispatch,
+    emitMessageReceivedHooks,
+    bindingState,
+  });
   return { status: "ready" as const, state: nextState };
 }
 

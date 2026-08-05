@@ -331,6 +331,64 @@ suite.define(() => {
     }
   });
 
+  it("sorts threads from the keyboard and identifies destructive selection targets", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:alpha", "Alpha thread", 1),
+          sessionRow("agent:main:zulu", "Zulu thread", 2),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const table = page.locator(".sessions-table");
+      const rowNames = () =>
+        table.locator("tbody .session-data-row .session-label-chip").allTextContents();
+      await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
+
+      for (const name of ["Key", "Kind", "Updated", "Tokens"]) {
+        await table.getByRole("columnheader", { name }).getByRole("button", { name }).waitFor();
+      }
+
+      const updatedHeader = table.getByRole("columnheader", { name: "Updated" });
+      expect(await updatedHeader.getAttribute("aria-sort")).toBe("descending");
+      await updatedHeader.getByRole("button", { name: "Updated" }).press("Space");
+      await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
+      expect(await updatedHeader.getAttribute("aria-sort")).toBe("ascending");
+
+      const keyHeader = table.getByRole("columnheader", { name: "Key" });
+      await keyHeader.getByRole("button", { name: "Key" }).press("Enter");
+      await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
+      expect(await keyHeader.getAttribute("aria-sort")).toBe("descending");
+      expect(await updatedHeader.getAttribute("aria-sort")).toBeNull();
+
+      const keyHeaderBounds = await keyHeader.boundingBox();
+      if (!keyHeaderBounds) {
+        throw new Error("Expected visible session sort header");
+      }
+      await page.mouse.click(
+        keyHeaderBounds.x + keyHeaderBounds.width - 2,
+        keyHeaderBounds.y + keyHeaderBounds.height / 2,
+      );
+      await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
+      expect(await keyHeader.getAttribute("aria-sort")).toBe("ascending");
+
+      await table.getByRole("checkbox", { name: "Select thread: agent:main:alpha" }).waitFor();
+      await table.getByRole("checkbox", { name: "Select thread: agent:main:zulu" }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows a rejected Sessions-page custom group instead of leaking a page error", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -340,7 +398,12 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.put"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
@@ -360,7 +423,7 @@ suite.define(() => {
         message: "group name exceeds 512 characters",
       });
 
-      const error = page.locator(".sessions-error");
+      const error = page.getByRole("alert");
       await error.waitFor({ state: "visible" });
       await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
       expect(pageErrors).toEqual([]);
@@ -409,7 +472,13 @@ suite.define(() => {
         },
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.delete",
+        "sessions.groups.list",
+        "sessions.groups.rename",
+      ],
       sessionKey: "agent:main:main",
       sessionGroups: ["Apps", "Research"],
     });
@@ -524,7 +593,12 @@ suite.define(() => {
     );
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.rename"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.rename",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
@@ -597,7 +671,13 @@ suite.define(() => {
         "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+        "sessions.patch",
+      ],
       sessionKey: "agent:main:session-0",
       sessionGroups: ["Alpha", "Beta"],
     });
@@ -760,7 +840,12 @@ suite.define(() => {
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       sessionKey: "agent:main:main",
       // Stored-but-empty catalog groups stay visible as sections/move targets.
       sessionGroups: ["First group"],

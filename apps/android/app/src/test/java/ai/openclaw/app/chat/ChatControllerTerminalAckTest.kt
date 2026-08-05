@@ -9,7 +9,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -18,26 +17,23 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ChatControllerTerminalAckTest {
-  private val json = Json { ignoreUnknownKeys = true }
+  private val json = chatControllerTestJson
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun composerOwnerMustMatchBeforeSendAdmission() =
     runTest {
       val requestedMethods = mutableListOf<String>()
       var defaultAgentId: String? = "main"
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, _ ->
-            requestedMethods += method
-            """{"runId":"run-started","status":"started"}"""
-          },
+        createChatController(
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
           currentDefaultAgentId = { defaultAgentId },
-        )
+        ) { method, _ ->
+          requestedMethods += method
+          """{"runId":"run-started","status":"started"}"""
+        }
       controller.handleGatewayEvent("health", null)
       val ambiguousOwner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
       assertFalse(controller.canSendForOwner(ambiguousOwner))
@@ -83,7 +79,6 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun composerOwnerIsRecheckedAfterPendingSettingsComplete() =
     runTest {
       val settingsStarted = CompletableDeferred<Unit>()
@@ -91,26 +86,23 @@ class ChatControllerTerminalAckTest {
       var defaultAgentId: String? = "main"
       var sendCount = 0
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, _ ->
-            when (method) {
-              "sessions.patch" -> {
-                settingsStarted.complete(Unit)
-                settingsGate.await()
-                "{}"
-              }
-              "chat.send" -> {
-                sendCount += 1
-                """{"runId":"run-started","status":"started"}"""
-              }
-              else -> "{}"
-            }
-          },
+        createChatController(
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
           currentDefaultAgentId = { defaultAgentId },
-        )
+        ) { method, _ ->
+          when (method) {
+            "sessions.patch" -> {
+              settingsStarted.complete(Unit)
+              settingsGate.await()
+              "{}"
+            }
+            "chat.send" -> {
+              sendCount += 1
+              """{"runId":"run-started","status":"started"}"""
+            }
+            else -> "{}"
+          }
+        }
       controller.prepareMainSessionKey("agent:main:node-test")
       controller.handleGatewayEvent("health", null)
       controller.setThinkingLevel("high")
@@ -139,27 +131,23 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun unjournaledNotEnqueuedSendRemainsRejectedAfterOwnerChange() =
     runTest {
       val requestGate = CompletableDeferred<Unit>()
       var defaultAgentId: String? = "main"
       var defaultAgentRevision = 0L
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, _ ->
-            if (method == "chat.send") {
-              requestGate.await()
-              throw GatewayRequestNotEnqueued("not enqueued")
-            }
-            "{}"
-          },
+        createChatController(
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
           currentDefaultAgentId = { defaultAgentId },
           currentDefaultAgentRevision = { defaultAgentRevision },
-        )
+        ) { method, _ ->
+          if (method == "chat.send") {
+            requestGate.await()
+            throw GatewayRequestNotEnqueued("not enqueued")
+          }
+          "{}"
+        }
       controller.prepareMainSessionKey("agent:main:node-test")
       controller.handleGatewayEvent("health", null)
 
@@ -188,20 +176,14 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun terminalTimeoutAckRemovesOptimisticUserEchoAndSurfacesFailedAcceptance() =
     runTest {
       var requestedMethod: String? = null
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, _ ->
-            requestedMethod = method
-            """{"runId":"run-timeout","status":"timeout"}"""
-          },
-          currentDefaultAgentId = { "main" },
-        )
+        createChatController { method, _ ->
+          requestedMethod = method
+          """{"runId":"run-timeout","status":"timeout"}"""
+        }
       controller.handleGatewayEvent("health", null)
 
       val accepted =
@@ -219,16 +201,10 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun nonTerminalStartedAckRetainsOptimisticUserEchoAndPendingRun() =
     runTest {
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { _, _ -> """{"runId":"run-started","status":"started"}""" },
-          currentDefaultAgentId = { "main" },
-        )
+        createChatController { _, _ -> """{"runId":"run-started","status":"started"}""" }
       controller.handleGatewayEvent("health", null)
 
       val accepted =
@@ -245,38 +221,32 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun canonicalAckRunIdPreservesClientHistoryIdentity() =
     runTest {
       var clientRunId: String? = null
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            when (method) {
-              "chat.send" -> {
-                clientRunId =
-                  requireNotNull(paramsJson)
-                    .let(json::parseToJsonElement)
-                    .jsonObject["idempotencyKey"]
-                    ?.jsonPrimitive
-                    ?.content
-                """{"runId":"canonical-run","status":"started"}"""
-              }
-              "chat.history" ->
-                historyResponse(
-                  "session-1",
-                  listOf(
-                    ReplayHistoryMessage("user", "canonical", 1_000, idempotencyKey = "$clientRunId:user"),
-                    ReplayHistoryMessage("assistant", "done", 2_000),
-                  ),
-                )
-              else -> "{}"
+        createChatController { method, paramsJson ->
+          when (method) {
+            "chat.send" -> {
+              clientRunId =
+                requireNotNull(paramsJson)
+                  .let(json::parseToJsonElement)
+                  .jsonObject["idempotencyKey"]
+                  ?.jsonPrimitive
+                  ?.content
+              """{"runId":"canonical-run","status":"started"}"""
             }
-          },
-          currentDefaultAgentId = { "main" },
-        )
+            "chat.history" ->
+              historyResponse(
+                "session-1",
+                listOf(
+                  ReplayHistoryMessage("user", "canonical", 1_000, idempotencyKey = "$clientRunId:user"),
+                  ReplayHistoryMessage("assistant", "done", 2_000),
+                ),
+              )
+            else -> "{}"
+          }
+        }
       controller.handleGatewayEvent("health", null)
 
       assertTrue(controller.sendMessageAwaitAcceptance("canonical", "off", emptyList()))
@@ -298,32 +268,26 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun terminalOkAckClearsOptimisticUserEchoAndRefreshesHistory() =
     runTest {
       val requestedMethods = mutableListOf<String>()
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, _ ->
-            requestedMethods += method
-            when (method) {
-              "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
-              "chat.history" ->
-                """
-                {
-                  "sessionId": "session-1",
-                  "messages": [
-                    { "role": "assistant", "content": "cached success reply", "timestamp": 1 }
-                  ]
-                }
-                """.trimIndent()
-              else -> "{}"
-            }
-          },
-          currentDefaultAgentId = { "main" },
-        )
+        createChatController { method, _ ->
+          requestedMethods += method
+          when (method) {
+            "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
+            "chat.history" ->
+              """
+              {
+                "sessionId": "session-1",
+                "messages": [
+                  { "role": "assistant", "content": "cached success reply", "timestamp": 1 }
+                ]
+              }
+              """.trimIndent()
+            else -> "{}"
+          }
+        }
       controller.handleGatewayEvent("health", null)
 
       val accepted =
@@ -346,16 +310,10 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun terminalErrorAckRemovesOptimisticUserEchoAndSurfacesErrorText() =
     runTest {
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { _, _ -> """{"runId":"run-error","status":"error"}""" },
-          currentDefaultAgentId = { "main" },
-        )
+        createChatController { _, _ -> """{"runId":"run-error","status":"error"}""" }
       controller.handleGatewayEvent("health", null)
 
       val accepted =
@@ -372,18 +330,12 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun definitiveRpcRejectionRestoresComposerOwnership() =
     runTest {
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { _, _ ->
-            throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "message rejected"))
-          },
-          currentDefaultAgentId = { "main" },
-        )
+        createChatController { _, _ ->
+          throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "message rejected"))
+        }
       controller.handleGatewayEvent("health", null)
 
       val accepted = controller.sendMessageAwaitAcceptance("rejected", "off", emptyList())
@@ -395,16 +347,10 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun requestNotEnqueuedRestoresComposerOwnership() =
     runTest {
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { _, _ -> throw GatewayRequestNotEnqueued("not connected") },
-          currentDefaultAgentId = { "main" },
-        )
+        createChatController { _, _ -> throw GatewayRequestNotEnqueued("not connected") }
       controller.handleGatewayEvent("health", null)
 
       val accepted = controller.sendMessageAwaitAcceptance("never sent", "off", emptyList())

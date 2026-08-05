@@ -5,6 +5,7 @@
  * union with approval assertions and the audit log.
  */
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -14,7 +15,6 @@ import {
 } from "../../system-agent/operations.js";
 import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install.js";
 import { stringEnum } from "../schema/typebox.js";
-import { stableStringify } from "../stable-stringify.js";
 import { textResult, ToolInputError, readStringParam, type AnyAgentTool } from "./common.js";
 
 export type SystemAgentToolOptions = {

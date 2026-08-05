@@ -242,7 +242,7 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
   if (operation.kind === "doctor-fix") {
     return [
       "OpenClaw rescue cannot run doctor repairs from a message channel because they can change the inference route powering this session.",
-      "Exit OpenClaw and run `openclaw doctor --fix` in a terminal.",
+      "On the machine running OpenClaw, with OpenClaw stopped, run `openclaw doctor --fix`.",
     ].join(" ");
   }
   if (operation.kind === "plugin-install") {

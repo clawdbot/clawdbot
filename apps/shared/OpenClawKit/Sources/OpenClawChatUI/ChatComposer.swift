@@ -938,6 +938,32 @@ struct OpenClawChatComposer: View {
                 .onChange(of: self.viewModel.input) { _, _ in
                     self.updateSlashPopoverPresentation()
                 }
+            #elseif os(iOS)
+            ChatComposerTextViewIOS(
+                text: self.$viewModel.input,
+                shouldFocus: self.isFocused,
+                isEnabled: self.isComposerEnabled,
+                minHeight: self.textMinHeight,
+                maxHeight: self.textMaxHeight,
+                onFocusChange: { focused in
+                    self.isFocused = focused
+                },
+                onHistoryUp: {
+                    !self.isSlashPopoverPresented && self.viewModel.recallPreviousInput(caretOnFirstLine: $0)
+                },
+                onHistoryDown: { !self.isSlashPopoverPresented && self.viewModel.recallNextInput() })
+                .padding(.horizontal, self.cleanFieldTextInset)
+                .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
+                .onChange(of: self.isFocused) { _, focused in
+                    if focused {
+                        self.updateSlashPopoverPresentation()
+                    } else {
+                        self.setSlashPanelPresented(false)
+                    }
+                }
             #else
             TextField(
                 "",

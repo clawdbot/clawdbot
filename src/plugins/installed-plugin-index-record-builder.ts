@@ -6,6 +6,7 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
+import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
 import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
@@ -27,8 +28,6 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
   return {
     sidecar: record.activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
-    deferConfiguredChannelFullLoadUntilAfterListen:
-      record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
     agentHarnesses: normalizeSortedUniqueStringEntries([
       ...(record.activation?.onAgentHarnesses ?? []),
       ...(record.cliBackends ?? []),
@@ -254,6 +253,18 @@ export function buildInstalledPluginIndexRecords(params: {
       record.packageChannel ?? candidate?.packageManifest?.channel,
     );
     const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
+    const doctorContractPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
+    const doctorContractHash = doctorContractPath
+      ? safeHashFile({
+          filePath: doctorContractPath,
+          pluginId: record.id,
+          diagnostics: params.diagnostics,
+          required: false,
+        })
+      : undefined;
+    const doctorContractFile = doctorContractPath
+      ? safeFileSignature(doctorContractPath)
+      : undefined;
     const manifestFile = hasOptionalMissingPluginManifestFile(record)
       ? undefined
       : safeFileSignature(record.manifestPath);
@@ -275,6 +286,8 @@ export function buildInstalledPluginIndexRecords(params: {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
+      ...(doctorContractHash ? { doctorContractHash } : {}),
+      ...(doctorContractFile ? { doctorContractFile } : {}),
       ...(manifestFile ? { manifestFile } : {}),
       source: record.source,
       rootDir: record.rootDir,

@@ -29,10 +29,11 @@ import {
   type QaScenarioCommandResult,
 } from "./test-file-scenario-command-lifecycle.js";
 import { isDockerE2eScenario, runDockerE2eBatch } from "./test-file-scenario-docker-batch.js";
+import { readScriptProducerEvidence } from "./test-file-scenario-script-evidence.js";
 import {
-  readJsonFileIfExists,
-  readScriptProducerEvidence,
-} from "./test-file-scenario-script-evidence.js";
+  readNativeVitestExecutionFailure,
+  resolveNativeVitestReportPath,
+} from "./test-file-scenario-vitest-report.js";
 export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
@@ -101,10 +102,6 @@ export function isQaTestFileScenario(
   );
 }
 
-function resolveNativeVitestReportPath(scenario: QaTestFileScenario, outputDir: string): string {
-  return path.join(outputDir, `${scenario.id}.vitest-report.json`);
-}
-
 function vitestReporterArgs(
   scenario: QaTestFileScenario,
   context: { outputDir: string },
@@ -146,7 +143,7 @@ function playwrightSteps(
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+      args: ["scripts/ensure-playwright-chromium.mjs"],
     },
     {
       command: process.execPath,
@@ -239,32 +236,6 @@ function withScenarioCoverage(
   scenario: QaTestFileScenario,
 ) {
   return { ...entry, coverage: coverageForScenario(scenario) };
-}
-
-async function readNativeVitestExecutionFailure(params: {
-  outputDir: string;
-  scenario: QaTestFileScenario;
-}): Promise<string | undefined> {
-  const reportPath = resolveNativeVitestReportPath(params.scenario, params.outputDir);
-  const report = await readJsonFileIfExists(reportPath);
-  if (!report || typeof report !== "object") {
-    return `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`;
-  }
-  const { numFailedTests, numPassedTests, success } = report as {
-    numFailedTests?: unknown;
-    numPassedTests?: unknown;
-    success?: unknown;
-  };
-  if (
-    success !== true ||
-    typeof numPassedTests !== "number" ||
-    !Number.isSafeInteger(numPassedTests) ||
-    numPassedTests < 1 ||
-    numFailedTests !== 0
-  ) {
-    return "Vitest exited successfully without reporting a successfully executed test.";
-  }
-  return undefined;
 }
 
 async function runScenarioCommandSteps(params: {
@@ -486,6 +457,9 @@ function buildTestFileEvidence(params: {
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
+    // Failed scripts still need generic fallback evidence unless their producer
+    // already recorded that scenario identity at the authoritative boundary.
+    const producerEntryIds = new Set(producerEntries.map((entry) => entry.test.id));
     const fallbackResults = params.results.filter(
       (result) => !result.producerEvidence || result.includeFallbackEvidence,
     );
@@ -527,7 +501,8 @@ function buildTestFileEvidence(params: {
           const { execution: _execution, ...withoutExecution } = entry;
           return withoutExecution;
         }),
-        ...(fallbackEvidence?.entries ?? []),
+        ...(fallbackEvidence?.entries.filter((entry) => !producerEntryIds.has(entry.test.id)) ??
+          []),
       ],
     });
   }

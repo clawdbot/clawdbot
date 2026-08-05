@@ -122,6 +122,7 @@ function buildConfig(noVncEnabled: boolean): SandboxConfig {
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
+    dockerTmpfsSource: "default",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -513,9 +514,10 @@ describe("ensureSandboxBrowser create args", () => {
     expect(result?.noVncUrl).toBeUndefined();
   });
 
-  it("applies read-only skill overlays after browser custom binds", async () => {
-    // Browser sandboxes share workspace mount semantics with shell sandboxes:
-    // protected skill overlays must win over custom binds.
+  it("skips browser user binds that conflict with protected skill overlay container paths", async () => {
+    // Protected skill overlays are authoritative; a browser bind targeting the same
+    // container path is skipped so the read-only skill overlay wins and Docker does
+    // not reject the container with a "Duplicate mount point" error.
     const workspaceDir = makeTempDir();
     const customRoot = makeTempDir();
     mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
@@ -534,14 +536,18 @@ describe("ensureSandboxBrowser create args", () => {
 
     const bindArgs = collectDockerFlagValues(requireDockerCreateArgs(), "-v");
     const workspaceMountIdx = bindArgs.indexOf(`${workspaceDir}:/workspace:z`);
-    const customMountIdx = bindArgs.indexOf(`${customRoot}:/workspace/skills:rw`);
-    const protectedMountIdx = bindArgs.indexOf(
-      `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
-    );
+    const customMount = `${customRoot}:/workspace/skills:rw`;
+    const protectedMount = `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`;
+    const protectedMountIdx = bindArgs.indexOf(protectedMount);
 
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
-    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
-    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
+    // User bind is skipped because it conflicts with the protected skill overlay
+    expect(bindArgs).not.toContain(customMount);
+    // Protected skill overlay is present and appended after user binds
+    expect(protectedMountIdx).toBeGreaterThan(workspaceMountIdx);
+    expect(runtimeMocks.log).toHaveBeenCalledWith(
+      expect.stringContaining(`skipping user bind "${customMount}"`),
+    );
   });
 
   it("includes the explicit env policy epoch in the browser config hash when needed", async () => {

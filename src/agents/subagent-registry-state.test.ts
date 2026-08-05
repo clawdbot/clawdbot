@@ -41,7 +41,7 @@ function createRun(runId: string): SubagentRunRecord {
     task: `task ${runId}`,
     cleanup: "keep",
     createdAt: 1,
-    startedAt: 1,
+    execution: { status: "running", startedAt: 1 },
   };
 }
 
@@ -126,7 +126,7 @@ describe("subagent registry state read cache", () => {
   it("refreshes session-list projections from authoritative writes", () => {
     const savedRun = createRun("run-saved");
     savedRun.model = "openai/gpt-5.6";
-    savedRun.outcome = { status: "ok", error: "not projected" };
+    savedRun.execution.outcome = { status: "ok", error: "not projected" };
     mocks.saveSubagentRegistryToSqlite.mockImplementationOnce(() => {
       throw new Error("disk unavailable");
     });
@@ -137,9 +137,9 @@ describe("subagent registry state read cache", () => {
     expect(projected).toMatchObject({
       runId: savedRun.runId,
       model: savedRun.model,
-      outcome: { status: "ok" },
+      execution: { outcome: { status: "ok" } },
     });
-    expect(projected?.outcome).not.toHaveProperty("error");
+    expect(projected?.execution.outcome).not.toHaveProperty("error");
     expect(mocks.loadSubagentSessionListRunsFromSqlite).not.toHaveBeenCalled();
   });
 

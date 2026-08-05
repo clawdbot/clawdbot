@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Qqbot plugin module implements remind logic behavior.
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -270,10 +271,6 @@ function formatDelay(ms: number): string {
   return `${hours}h${minutes}m`;
 }
 
-function formatSchedulerError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function prepareRemindCronAction(
   params: RemindParams,
   ctx: RemindExecuteContext = {},
@@ -363,7 +360,7 @@ export async function executeScheduledRemind(
     });
   } catch (error) {
     return json({
-      error: `Failed to run Gateway cron action: ${formatSchedulerError(error)}`,
+      error: `Failed to run Gateway cron action: ${formatErrorMessage(error)}`,
       action: plan.action,
     });
   }

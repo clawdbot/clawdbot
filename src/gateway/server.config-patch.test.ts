@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -318,6 +319,66 @@ describe("gateway config methods", () => {
     expect(res.payload?.path).toBe(createConfigIO().configPath);
     requireConfigObject(res.payload?.config, "updated config");
   });
+
+  it.each([
+    { change: "deletes an earlier mapping", ids: ["bravo"], unidentifiedFirst: false },
+    { change: "reorders existing mappings", ids: ["bravo", "alpha"], unidentifiedFirst: false },
+    { change: "deletes an earlier unidentified mapping", ids: ["bravo"], unidentifiedFirst: true },
+  ])(
+    "keeps redacted hook secrets with their owner when config.set $change",
+    async ({ ids, unidentifiedFirst }) => {
+      const { resetConfigRuntimeState } = await import("../config/config.js");
+      const original = await getCurrentConfigObject();
+      const configured = structuredClone(original.config);
+      configured.hooks = {
+        ...requireConfigObject(configured.hooks ?? {}, "original hooks config"),
+        mappings: [
+          {
+            ...(unidentifiedFirst ? {} : { id: "alpha" }),
+            sessionKey: "synthetic-alpha-session",
+          },
+          { id: "bravo", sessionKey: "synthetic-bravo-session" },
+        ],
+      };
+
+      try {
+        await writeJsonFile(original.path, configured);
+        resetConfigRuntimeState();
+        const current = await getCurrentConfigObject();
+        const visibleHooks = requireConfigObject(current.config.hooks, "redacted hooks config");
+        const visibleMappings = visibleHooks.mappings as Array<{
+          id: string;
+          sessionKey: string;
+        }>;
+        expect(visibleMappings.map((mapping) => mapping.sessionKey)).toEqual([
+          REDACTED_SENTINEL,
+          REDACTED_SENTINEL,
+        ]);
+
+        const submitted = structuredClone(current.config);
+        const submittedHooks = requireConfigObject(submitted.hooks, "submitted hooks config");
+        submittedHooks.mappings = ids.map((id) =>
+          visibleMappings.find((mapping) => mapping.id === id),
+        );
+
+        const response = await sendConfigSet(configRawPayload(submitted, current.hash));
+
+        expect(response.error).toBeUndefined();
+        expect(response.ok).toBe(true);
+        expect(JSON.stringify(response.payload)).not.toContain("synthetic-alpha-session");
+        expect(JSON.stringify(response.payload)).not.toContain("synthetic-bravo-session");
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8")) as {
+          hooks?: { mappings?: Array<{ id: string; sessionKey: string }> };
+        };
+        expect(persisted.hooks?.mappings).toEqual(
+          ids.map((id) => ({ id, sessionKey: `synthetic-${id}-session` })),
+        );
+      } finally {
+        await restoreConfigFileForTest(original);
+        resetConfigRuntimeState();
+      }
+    },
+  );
 
   it("rejects config.set when a stale snapshot drops an agent entry without changing disk", async () => {
     const { resetConfigRuntimeState } = await import("../config/config.js");

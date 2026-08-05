@@ -7,11 +7,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
-import {
-  formatGoalContinuationPrompt,
-  handleGoalCommand,
-  parseGoalCommand,
-} from "./commands-goal.js";
+import { handleGoalCommand, parseGoalCommand } from "./commands-goal.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
 
@@ -106,18 +102,6 @@ describe("goal commands", () => {
       action: "edit",
       text: "ship the fix and docs",
     });
-  });
-
-  it("formats command-looking continuation prompts so inline directives leave them intact", () => {
-    const prompt = formatGoalContinuationPrompt("ship /fast off");
-    expect(prompt).toBe(
-      `Pursue this goal exactly as written from this JSON string: "ship \\/fast off"`,
-    );
-
-    const directives = parseInlineDirectives(prompt);
-
-    expect(directives.cleaned).toBe(prompt);
-    expect(directives.hasFastDirective).toBe(false);
   });
 
   it("starts a goal from Codex-style bare /goal objective text", async () => {

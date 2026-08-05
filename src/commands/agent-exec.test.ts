@@ -2,16 +2,18 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-outcome.js";
+import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
   loadAuthProfileStoreForRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../agents/auth-profiles.js";
+import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -331,6 +333,61 @@ describe("agent exec command composition", () => {
       },
     });
     await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("flushes opted-in identity evidence through its owned direct-local writer", async () => {
+    const root = await makeTempRoot("openclaw-agent-exec-audit-");
+    const admittedAt = Date.now();
+    setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
+    try {
+      const { runtime } = createRuntime();
+      const result = await agentExecCommand("inspect", { stateDir: root }, runtime, {
+        runAgent: vi.fn(async () => {
+          expect(
+            enqueueExecutionIdentityContextAtAdmission(
+              {
+                runId: "agent-exec-run",
+                agentId: "main",
+                ingress: {
+                  kind: "local-cli",
+                  boundary: "agent-command.local",
+                  state: "present",
+                },
+                runtime: { kind: "embedded" },
+              },
+              {
+                enabled: true,
+                contextId: "agent-exec-context",
+                executionId: "agent-exec-execution",
+                now: admittedAt,
+                runtimeInstanceId: "agent-exec-runtime",
+              },
+            ),
+          ).toMatchObject({ accepted: true });
+          return successResult();
+        }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        const row = database
+          .prepare("SELECT context_json FROM execution_identity_contexts WHERE execution_id = ?")
+          .get("agent-exec-execution") as { context_json: string };
+        expect(JSON.parse(row.context_json)).toMatchObject({
+          contextId: "agent-exec-context",
+          executionId: "agent-exec-execution",
+          runId: "agent-exec-run",
+          ingress: { kind: "local-cli", state: "present" },
+        });
+      } finally {
+        database.close();
+      }
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("discovers operator-installed plugins while run state stays ephemeral", async () => {

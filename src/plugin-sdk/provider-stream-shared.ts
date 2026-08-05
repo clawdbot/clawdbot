@@ -21,6 +21,7 @@ import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrapp
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { findCodeRegions } from "../shared/text/code-regions.js";
 export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
@@ -79,6 +80,7 @@ function promotePlainTextToolCalls(
     createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
     message,
+    resolveProtectedRanges: findCodeRegions,
   });
 }
 
@@ -127,6 +129,7 @@ function scrubProviderTerminalMessage(
     matcher,
     message,
     preserveEmptyTextBlocks,
+    resolveProtectedRanges: findCodeRegions,
   });
 }
 
@@ -165,6 +168,7 @@ function wrapPlainTextToolCallStream(
               matcher,
               preserveEmptyTextBlocks,
             ),
+          resolveProtectedRanges: findCodeRegions,
           stopAfterDone: true,
         },
       );

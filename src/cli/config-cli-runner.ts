@@ -301,8 +301,10 @@ export async function runConfigOperations(params: {
   const explicitSetPaths: PathSegment[][] = [];
   for (const operation of operations) {
     if (operation.mutation === "delete") {
-      unsetAtPath(next, operation.setPath);
-      unsetPaths.push(operation.setPath);
+      const unsetResult = unsetAtPath(next, operation.setPath);
+      if (!unsetResult.removed || unsetResult.leafContainer !== "array") {
+        unsetPaths.push(operation.setPath);
+      }
       continue;
     }
     explicitSetPaths.push(operation.setPath);

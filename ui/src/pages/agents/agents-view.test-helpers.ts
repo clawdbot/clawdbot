@@ -6,6 +6,14 @@ export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
 ): AgentsViewProps {
   return {
+    access: {
+      canCreateAgent: true,
+      canPatchConfig: true,
+      canUpdateConfig: true,
+      canUpdateIdentity: true,
+      canWriteFiles: true,
+      canRunCron: true,
+    },
     basePath: "",
     authToken: null,
     loading: false,
@@ -23,6 +31,7 @@ export function createAgentViewTestProps(
       loading: false,
       saving: false,
       dirty: false,
+      error: null,
     },
     channels: {
       snapshot: null,

@@ -138,6 +138,25 @@ export class ExtensionRelayBridge {
     return [...this.tabs.values()].map((tab) => tab.info);
   }
 
+  /**
+   * DevTools-style descriptors for `/json/list`: RelayTabInfo plus the `id`
+   * and `type` fields CDP discovery clients expect. `id` is the live debugger
+   * targetId once a tab is attached; before that it is the same `tab-<tabId>`
+   * fallback ensureTabAttached mints, so unattached tabs still list stably.
+   * No per-target webSocketDebuggerUrl: all CDP traffic multiplexes over the
+   * single browser endpoint (`/cdp`).
+   */
+  devtoolsTargetDescriptors(): Array<RelayTabInfo & { id: string; type: string }> {
+    return [...this.tabs.values()].map((tab) => ({
+      tabId: tab.info.tabId,
+      url: tab.info.url,
+      title: tab.info.title,
+      active: tab.info.active,
+      id: tab.attached?.targetId ?? `tab-${tab.info.tabId}`,
+      type: "page",
+    }));
+  }
+
   /** Number of connected CDP clients (diagnostics). */
   get cdpClientCount(): number {
     return this.clients.size;
@@ -927,6 +946,13 @@ export class ExtensionRelayBridge {
         }
         await this.callExtension({ type: "activateTab", tabId: found.tabId });
         this.respond(client, request, {});
+        return;
+      }
+      case "Target.getBrowserContexts": {
+        // Real Chrome reports only contexts made via Target.createBrowserContext
+        // here — never the default one — so the relay's answer is always empty.
+        // Puppeteer's connect bootstrap (chrome-devtools-mcp) requires this.
+        this.respond(client, request, { browserContextIds: [] });
         return;
       }
       case "Target.createBrowserContext": {

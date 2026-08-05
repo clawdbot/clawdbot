@@ -205,7 +205,12 @@ describe("Gateway queued session rotation", () => {
           enabled: true,
           allow: ["queued-rotation-tracer"],
           load: { paths: [pluginDir] },
-          entries: { "queued-rotation-tracer": { enabled: true } },
+          entries: {
+            "queued-rotation-tracer": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
           slots: { memory: "none" },
         },
         agents: {
@@ -248,7 +253,10 @@ describe("Gateway queued session rotation", () => {
         name: "queued-session-rotation",
         gatewayToken: "secret-token",
         config,
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined },
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
       });
       instances.push(instance);
       await instance.startGateway();
@@ -290,7 +298,7 @@ describe("Gateway queued session rotation", () => {
         expect(JSON.stringify(modelServer.requests[1]?.body)).toContain("OPENCLAW_E2E_AFTER_RESET");
       } finally {
         await client.abortChat({ sessionKey }).catch(() => undefined);
-        client.stop();
+        void client.stop();
         modelServer.releaseHeldResponse();
       }
     },

@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import type { SessionCapability } from "../lib/sessions/index.ts";
+import { createSessionCapability, type SessionCapability } from "../lib/sessions/index.ts";
 import type { SessionDataControllerHost } from "./session-data-controller-catalog.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 
@@ -42,43 +42,71 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
       sessions,
     };
   });
-  let eventListener: ((event: { event: string; payload: unknown }) => void) | undefined;
-  const sessions = {
-    state: {
-      result: null,
-      agentId: "main",
-      modelOverrides: {},
-      loading: false,
-      error: null,
-      deletedSessions: [],
-      groups: [],
-      sectionOrder: [],
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const client = {
+    request: <T>(method: string, params?: unknown): Promise<T> => {
+      if (method === "sessions.groups.list") {
+        return Promise.resolve({ names: [], sectionOrder: [] } as T);
+      }
+      if (method === "sessions.subscribe") {
+        return Promise.resolve({ subscribed: true } as T);
+      }
+      const { archived, ...options } = (params ?? {}) as NonNullable<
+        Parameters<SessionCapability["list"]>[0]
+      > & { archived?: true | "all" };
+      if (!archived && !options.spawnedBy) {
+        return Promise.resolve({
+          ts: 1,
+          path: "",
+          count: 0,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [],
+        } as T);
+      }
+      return list({
+        ...options,
+        ...(archived ? { archivedFilter: archived === true ? "archived" : "all" } : {}),
+      }) as Promise<T>;
     },
-    canonicalListRevision: 1,
-    subscribe: () => () => undefined,
-    subscribeCreated: () => () => undefined,
-    groupsLoad: () => Promise.resolve(),
-    list,
-  } as unknown as SessionCapability;
+  } as GatewayBrowserClient;
   const gateway = {
     snapshot: {
       phase: "connected",
-      client: {} as GatewayBrowserClient,
+      client,
       hello: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
     },
     subscribe: () => () => undefined,
-    subscribeEvents(listener: (event: { event: string; payload: unknown }) => void) {
-      eventListener = listener;
-      return () => {
-        eventListener = undefined;
-      };
+    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
     },
-  };
-  const context = { gateway, sessions } as unknown as ApplicationContext;
+  } as const;
+  const sessions = createSessionCapability(gateway);
   let selectedAgentId = "main";
   let selectedStatusFilter = statusFilter;
+  const context = {
+    gateway,
+    sessions,
+    agents: {
+      state: {
+        connected: true,
+        client,
+        agentsList: {
+          defaultId: "main",
+          agents: [{ id: "main" }, { id: "research" }],
+        },
+      },
+      subscribe: () => () => undefined,
+    },
+    agentSelection: {
+      get state() {
+        return { selectedId: selectedAgentId, scopeId: selectedAgentId };
+      },
+      subscribe: () => () => undefined,
+    },
+  } as unknown as ApplicationContext;
   const host = {
     isConnected: true,
     connected: true,
@@ -101,13 +129,15 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
     list,
     selectAgent: (agentId: string) => {
       selectedAgentId = agentId;
+      controller.synchronizeSessionScope();
     },
     selectStatusFilter: (nextStatusFilter: "archived" | "all") => {
       selectedStatusFilter = nextStatusFilter;
       controller.resetForStatusFilter(nextStatusFilter);
     },
     publishSessionChanged: (payload: Record<string, unknown> = {}) => {
-      eventListener?.({
+      const event = {
+        type: "event" as const,
         event: "sessions.changed",
         payload: {
           sessionKey: "agent:main:remote-change",
@@ -115,7 +145,10 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
           reason: "archive",
           ...payload,
         },
-      });
+      };
+      for (const listener of eventListeners) {
+        listener(event);
+      }
     },
   };
 }
@@ -128,8 +161,7 @@ describe("filtered sidebar session event refresh", () => {
       const { controller, list, publishSessionChanged } =
         createFilteredSessionController(statusFilter);
       controller.hostConnected();
-      await Promise.resolve();
-      await Promise.resolve();
+      await controller.refreshSidebarSessions();
       list.mockClear();
 
       publishSessionChanged();
@@ -156,8 +188,7 @@ describe("filtered sidebar session event refresh", () => {
         120,
       );
       controller.hostConnected();
-      await Promise.resolve();
-      await Promise.resolve();
+      await controller.refreshSidebarSessions();
       expect(controller.sessionsResult?.sessions).toHaveLength(60);
 
       await controller.loadMoreSidebarSessions();
@@ -180,8 +211,7 @@ describe("filtered sidebar session event refresh", () => {
     vi.useFakeTimers();
     const { controller, list, publishSessionChanged } = createFilteredSessionController("all");
     controller.hostConnected();
-    await Promise.resolve();
-    await Promise.resolve();
+    await controller.refreshSidebarSessions();
     list.mockClear();
 
     publishSessionChanged({ sessionKey: "agent:research:remote-change", agentId: "research" });
@@ -196,12 +226,12 @@ describe("filtered sidebar session event refresh", () => {
     const { controller, list, publishSessionChanged, selectAgent } =
       createFilteredSessionController("archived");
     controller.hostConnected();
-    await Promise.resolve();
-    await Promise.resolve();
+    await controller.refreshSidebarSessions();
     list.mockClear();
 
     publishSessionChanged();
     selectAgent("research");
+    list.mockClear();
     await vi.advanceTimersByTimeAsync(200);
 
     expect(list).not.toHaveBeenCalled();
@@ -214,8 +244,7 @@ describe("filtered sidebar session event refresh", () => {
       120,
     );
     controller.hostConnected();
-    await Promise.resolve();
-    await Promise.resolve();
+    await controller.refreshSidebarSessions();
     await controller.loadMoreSidebarSessions();
     expect(controller.sessionsResult?.sessions).toHaveLength(120);
     list.mockClear();
@@ -230,12 +259,43 @@ describe("filtered sidebar session event refresh", () => {
     controller.hostDisconnected();
   });
 
+  it("retires an in-flight child snapshot when the status filter changes", async () => {
+    const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    await controller.refreshSidebarSessions();
+    let resolveChildPage!: (value: Awaited<ReturnType<typeof list>>) => void;
+    const childPage = new Promise<Awaited<ReturnType<typeof list>>>((resolve) => {
+      resolveChildPage = resolve;
+    });
+    list.mockImplementationOnce(async () => await childPage);
+
+    const pendingChildren = controller.loadChildSessions("agent:main:parent");
+    expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(true);
+
+    selectStatusFilter("all");
+    resolveChildPage({
+      ts: 2,
+      path: "",
+      count: 1,
+      totalCount: 1,
+      nextOffset: null,
+      hasMore: false,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "agent:main:stale-child", kind: "direct", updatedAt: 2 }],
+    });
+    await pendingChildren;
+
+    expect(controller.childSessionRowsByParent).toEqual({});
+    expect(controller.loadedChildSessionKeys.has("agent:main:parent")).toBe(false);
+    expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(false);
+    controller.hostDisconnected();
+  });
+
   it("bounds refresh latency while same-agent events continue arriving", async () => {
     vi.useFakeTimers();
     const { controller, list, publishSessionChanged } = createFilteredSessionController("all");
     controller.hostConnected();
-    await Promise.resolve();
-    await Promise.resolve();
+    await controller.refreshSidebarSessions();
     list.mockClear();
 
     publishSessionChanged();
@@ -254,8 +314,7 @@ describe("filtered sidebar session event refresh", () => {
     vi.useFakeTimers();
     const { controller, list, publishSessionChanged } = createFilteredSessionController("archived");
     controller.hostConnected();
-    await Promise.resolve();
-    await Promise.resolve();
+    await controller.refreshSidebarSessions();
     list.mockClear();
 
     publishSessionChanged();
@@ -269,8 +328,7 @@ describe("filtered sidebar session event refresh", () => {
     vi.useFakeTimers();
     const { controller, list, publishSessionChanged } = createFilteredSessionController("archived");
     controller.hostConnected();
-    await Promise.resolve();
-    await Promise.resolve();
+    await controller.refreshSidebarSessions();
     list.mockClear();
     let resolveFirstRefresh!: (value: Awaited<ReturnType<typeof list>>) => void;
     const firstRefresh = new Promise<Awaited<ReturnType<typeof list>>>((resolve) => {

@@ -43,12 +43,18 @@ type RuntimeLifecycleSnapshot = {
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
   healthState?: string | null;
+  lifecycle?: ChannelAccountSnapshot["lifecycle"] | null;
+  ingressUnavailable?: true | null;
   terminalDisconnect?: boolean | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  busy?: boolean | null;
+  activeRuns?: number | null;
+  lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
 };
 
 type StatusSnapshotExtra = Record<string, unknown>;
@@ -298,6 +304,21 @@ export function buildComputedAccountStatusSnapshot<TExtra extends StatusSnapshot
   );
 }
 
+function buildResolvedComputedAccountStatusSnapshot<
+  ResolvedAccount,
+  Probe,
+  Audit,
+  TExtra extends StatusSnapshotExtra,
+>(
+  params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
+  { extra, ...snapshot }: ComputedAccountStatusSnapshot<TExtra>,
+) {
+  return buildComputedAccountStatusSnapshot(
+    { ...snapshot, runtime: params.runtime, probe: params.probe },
+    extra,
+  );
+}
+
 /** Build a full status adapter when only configured/extras vary per account. */
 export function createComputedAccountStatusAdapter<
   ResolvedAccount,
@@ -313,22 +334,8 @@ export function createComputedAccountStatusAdapter<
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
     ...buildComputedAccountStatusAdapterBase(options),
-    buildAccountSnapshot: (params) => {
-      const typedParams = params as ComputedAccountStatusAdapterParams<
-        ResolvedAccount,
-        Probe,
-        Audit
-      >;
-      const { extra, ...snapshot } = options.resolveAccountSnapshot(typedParams);
-      return buildComputedAccountStatusSnapshot(
-        {
-          ...snapshot,
-          runtime: typedParams.runtime,
-          probe: typedParams.probe,
-        },
-        extra,
-      );
-    },
+    buildAccountSnapshot: (params) =>
+      buildResolvedComputedAccountStatusSnapshot(params, options.resolveAccountSnapshot(params)),
   };
 }
 
@@ -347,22 +354,11 @@ export function createAsyncComputedAccountStatusAdapter<
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
     ...buildComputedAccountStatusAdapterBase(options),
-    buildAccountSnapshot: async (params) => {
-      const typedParams = params as ComputedAccountStatusAdapterParams<
-        ResolvedAccount,
-        Probe,
-        Audit
-      >;
-      const { extra, ...snapshot } = await options.resolveAccountSnapshot(typedParams);
-      return buildComputedAccountStatusSnapshot(
-        {
-          ...snapshot,
-          runtime: typedParams.runtime,
-          probe: typedParams.probe,
-        },
-        extra,
-      );
-    },
+    buildAccountSnapshot: async (params) =>
+      buildResolvedComputedAccountStatusSnapshot(
+        params,
+        await options.resolveAccountSnapshot(params),
+      ),
   };
 }
 
@@ -398,7 +394,18 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
       ? { lastTransportActivityAt: runtime.lastTransportActivityAt }
       : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
+    ...(runtime?.lifecycle ? { lifecycle: runtime.lifecycle } : {}),
+    // Absence means unknown; only a recorded ingress failure crosses the projection.
+    ...(runtime?.ingressUnavailable === true ? { ingressUnavailable: true as const } : {}),
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
+    ...(typeof runtime?.busy === "boolean" ? { busy: runtime.busy } : {}),
+    ...(typeof runtime?.activeRuns === "number" ? { activeRuns: runtime.activeRuns } : {}),
+    ...(typeof runtime?.lastRunActivityAt === "number"
+      ? { lastRunActivityAt: runtime.lastRunActivityAt }
+      : {}),
+    ...(typeof runtime?.activeRunStartedAt === "number"
+      ? { activeRunStartedAt: runtime.activeRunStartedAt }
+      : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }

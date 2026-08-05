@@ -24,6 +24,29 @@ function createMemoryStore(): WorkboardKeyedStore {
 }
 
 describe("Workboard dispatcher ownership", () => {
+  it("dispatches a card whose create input tried to inject archivedAt", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const now = 10;
+    const card = await store.create({
+      title: "Injected archive",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+      metadata: { archivedAt: now },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-injected" });
+
+    await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now, maxStarts: 1 },
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      execution: { runId: "run-injected" },
+    });
+  });
+
   it("falls back to one default owner for persisted blank and unassigned agents", async () => {
     const keyed = createMemoryStore();
     const store = new WorkboardStore(keyed);

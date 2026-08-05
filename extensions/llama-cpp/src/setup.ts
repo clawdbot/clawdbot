@@ -98,7 +98,7 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
       }
       return {
         modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
-        detail: `${candidate.model.id} (downloaded)`,
+        detail: "Ready locally",
       };
     } catch {
       // Discovery is read-only: a missing model or native module is not a setup error.
@@ -148,13 +148,14 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     const totalmemBytes = os.totalmem();
     if (!meetsLlamaCppDefaultModelRamFloor(totalmemBytes)) {
       await ctx.prompter.note(
-        `This machine has ${formatRamGb(totalmemBytes)} GB RAM; the bundled local model needs 16 GB+. Use Ollama/LM Studio with a smaller model, or a cloud provider.`,
+        `This Gateway has ${formatRamGb(totalmemBytes)} GB RAM; the recommended model needs 16 GB+. Use Ollama or LM Studio with a smaller model, configure an existing GGUF, or choose a cloud provider.`,
         "Setup skipped",
       );
       return { profiles: [] };
     }
     const consent = await ctx.prompter.confirm({
-      message: "Download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) for local llama.cpp inference?",
+      message:
+        "OpenClaw will download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) and run it directly inside this Gateway. Continue?",
       initialValue: false,
     });
     if (!consent) {

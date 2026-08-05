@@ -1,7 +1,20 @@
-/** Read response text while enforcing max bytes before and during streaming. */
+export type BoundedResponseOptions = {
+  createTooLargeError?: (message: string) => Error;
+  formatTooLargeMessage?: (label: string, maxBytes: number) => string;
+  signal?: AbortSignal;
+  timeoutPromise?: Promise<never>;
+};
+
+export function createBoundedResponseTooLargeError(message: string): Error & { code: "ETOOBIG" };
+export function readBoundedResponseBytes(
+  response: Response,
+  label: string,
+  maxBytes: number,
+  options?: BoundedResponseOptions,
+): Promise<Buffer>;
 export function readBoundedResponseText(
-  response: unknown,
-  label: unknown,
-  maxBytes: unknown,
-  options?: Record<string, unknown>,
+  response: Response,
+  label: string,
+  maxBytes: number,
+  options?: BoundedResponseOptions,
 ): Promise<string>;

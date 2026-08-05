@@ -4,7 +4,7 @@ import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createCliProcessVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(cliProcessTestFiles, {
+  const config = createScopedVitestConfig(cliProcessTestFiles, {
     env,
     fileParallelism: false,
     isolate: true,
@@ -13,6 +13,17 @@ export function createCliProcessVitestConfig(env?: Record<string, string | undef
     pool: "forks",
     useNonIsolatedRunner: false,
   });
+  return {
+    ...config,
+    test: {
+      ...config.test,
+      env: {
+        ...config.test?.env,
+        // Avoid TSX's unbounded wait on esbuild's synchronous worker IPC in source-child tests.
+        ESBUILD_WORKER_THREADS: "0",
+      },
+    },
+  };
 }
 
 export default createCliProcessVitestConfig();

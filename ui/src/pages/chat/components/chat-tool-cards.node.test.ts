@@ -204,6 +204,86 @@ describe("tool-card extraction", () => {
     expect(cards[1]?.outputText).toBe("B contents");
   });
 
+  it.each([
+    ["canonical IDs", { id: "call-b" }],
+    ["snake-case tool-call IDs", { tool_call_id: "call-b" }],
+    ["camel-case tool-call IDs", { toolCallId: "call-b" }],
+    ["provider tool-use IDs", { tool_use_id: "call-b" }],
+    ["camel-case tool-use IDs", { toolUseId: "call-b" }],
+    ["legacy call IDs", { callId: "call-b" }],
+  ])(
+    "keeps a same-name result with different %s separate from an open call",
+    (_label, resultId) => {
+      const cards = extractToolCards(
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call-a",
+              name: "read",
+              input: { path: "a.txt" },
+            },
+            {
+              type: "tool_result",
+              ...resultId,
+              name: "read",
+              text: "B failed",
+              isError: true,
+            },
+          ],
+        },
+        "msg:separate-owners",
+      );
+
+      expect(cards).toHaveLength(2);
+      expect(cards[0]).toMatchObject({ callId: "call-a", name: "read" });
+      expect(cards[0]?.completed).toBeUndefined();
+      expect(cards[0]?.outputText).toBeUndefined();
+      expect(cards[0]?.isError).toBeUndefined();
+      expect(cards[1]).toMatchObject({
+        callId: "call-b",
+        name: "read",
+        completed: true,
+        outputText: "B failed",
+        isError: true,
+      });
+    },
+  );
+
+  it.each([
+    ["only the call owns an ID", { id: "call-a" }, {}],
+    ["only the result owns an ID", {}, { tool_use_id: "call-b" }],
+  ])("preserves legacy same-name fallback when %s", (_label, callId, resultId) => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            ...callId,
+            name: "read",
+            input: { path: "legacy.txt" },
+          },
+          {
+            type: "tool_result",
+            ...resultId,
+            name: "read",
+            text: "Legacy contents",
+          },
+        ],
+      },
+      "msg:legacy-owner",
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      name: "read",
+      completed: true,
+      outputText: "Legacy contents",
+    });
+  });
+
   it("does not reuse nameless same-name calls after an empty result", () => {
     const cards = extractToolCards(
       {

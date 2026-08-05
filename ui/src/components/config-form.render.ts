@@ -37,6 +37,7 @@ type ConfigFormProps = {
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
+  onRemove?: (path: Array<string | number>) => void;
 };
 
 function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
@@ -231,11 +232,13 @@ export function renderConfigForm(props: ConfigFormProps) {
         unsupported,
         disabled: props.disabled ?? false,
         showLabel: false,
+        showHeaderMeta: true,
         searchCriteria,
         revealSensitive: props.revealSensitive ?? false,
         isSensitivePathRevealed: props.isSensitivePathRevealed,
         onToggleSensitivePath: props.onToggleSensitivePath,
         onPatch: props.onPatch,
+        onRemove: props.onRemove,
       });
     return html`
       <section class="settings-section" id=${params.id}>

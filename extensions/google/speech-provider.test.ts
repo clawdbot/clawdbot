@@ -452,6 +452,39 @@ describe("Google speech provider", () => {
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("env-google-key");
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])(
+    "uses the canonical endpoint for a %s Google model-provider base URL",
+    async (_label, baseUrl) => {
+      const requestMock = installGoogleTtsRequestMock();
+      const provider = buildGoogleSpeechProvider();
+
+      await provider.synthesize({
+        text: "Read this plainly.",
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                baseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+        providerConfig: { apiKey: "google-test-key" },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      });
+
+      const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      }) as { headers?: HeadersInit };
+      expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
+    },
+  );
+
   it("can reuse a configured Google model-provider API key without auth profiles", async () => {
     const requestMock = installGoogleTtsRequestMock();
     const provider = buildGoogleSpeechProvider();

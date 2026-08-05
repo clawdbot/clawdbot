@@ -394,7 +394,11 @@ export function createSlackMessageHandler(params: {
       opts.eventScope
         ? createSlackThreadTsResolver({ client: opts.eventScope.client })
         : threadTsResolver
-    ).resolve({ message, source: opts.source });
+    ).resolve({
+      message,
+      source: opts.source,
+      ...(opts.turnAdoptionLifecycle ? { turnAdoptionLifecycle: opts.turnAdoptionLifecycle } : {}),
+    });
     const teamId = opts.eventScope?.teamId;
     const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId, teamId);
     const conversationKey = buildTopLevelSlackConversationKey(

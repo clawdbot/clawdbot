@@ -89,6 +89,16 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
   "cron.webhookToken":
     "Bearer token attached to automation webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
+  "cron.webhookSsrfPolicy":
+    "SSRF policy applied to every outbound automation webhook. Private, loopback, link-local, and internal targets stay blocked unless this policy explicitly allows them. Keep unset for strict delivery.",
+  "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allows automation webhooks to private and internal network targets. Keep disabled unless every configured webhook destination is trusted.",
+  "cron.webhookSsrfPolicy.allowedHostnames":
+    "Exact hostnames or IP literals allowed for automation webhook delivery, including otherwise blocked targets. Keep the list minimal.",
+  "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
+    "Allows automation webhooks to RFC 2544 benchmark-range IPs (198.18.0.0/15). Use only with trusted fake-IP proxy environments.",
+  "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
+    "Allows automation webhooks to IPv6 Unique Local Addresses (fc00::/7). Use only with trusted fake-IP proxy environments.",
   "cron.sessionRetention":
     "Controls how long completed automation run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
   transcripts:

@@ -141,8 +141,29 @@
   font-weight: 600;
 }
 
-.model-setup__row .callout {
-  margin-top: 10px;
+.model-setup__failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-setup__failure-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--danger);
+}
+
+.model-setup__failure-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.model-setup__failure span:last-child {
+  overflow-wrap: anywhere;
 }
 
 .model-setup__more {

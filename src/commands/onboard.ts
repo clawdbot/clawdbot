@@ -424,6 +424,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "nonInteractive",
   "classic",
   "tui",
+  "skipUi",
 ]);
 
 function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
@@ -578,7 +579,10 @@ export async function setupWizardCommand(
       normalizedOpts.workspace === undefined &&
       snapshot.exists &&
       !snapshot.valid &&
-      !snapshot.sourceConfig
+      // A snapshot always carries a sourceConfig object (empty on failure), so
+      // only readError distinguishes "config could not be read" from "config
+      // parsed but configures no workspace", where the default is correct.
+      snapshot.readError !== undefined
     ) {
       rejectOption(
         runtime,

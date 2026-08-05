@@ -23,7 +23,6 @@ import {
   expireDueOperatorApprovals,
   forceDenyOperatorApproval,
   getOperatorApprovalDetailed,
-  getOperatorApprovalDetailedByLocator,
   insertOperatorApproval,
   listPendingOperatorApprovals,
   listTerminalOperatorApprovals,
@@ -174,8 +173,9 @@ describe("operator approval store", () => {
       inserted.record,
     );
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),
@@ -479,8 +479,9 @@ describe("operator approval store", () => {
       }),
     ).toEqual({ outcome: "conflict" });
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),

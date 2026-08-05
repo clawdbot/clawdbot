@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
@@ -28,12 +29,6 @@ export type MeetingBrowserNodePolicyOptions = {
 type PolicyDecision =
   | { approved: true; params: Record<string, unknown> }
   | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -258,7 +253,7 @@ export function createMeetingBrowserNodeInvokePolicy(
       if (ctx.command !== options.commandName) {
         return denied(options, `unsupported ${options.displayName} node command: ${ctx.command}`);
       }
-      const params = asRecord(ctx.params);
+      const params = asOptionalRecord(ctx.params) ?? {};
       const action = readString(params.action);
       if (action === "setup" && options.useConfiguredSetupCommands) {
         const setupParams: Record<string, unknown> = { action };

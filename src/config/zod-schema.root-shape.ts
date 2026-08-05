@@ -12,6 +12,7 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
@@ -31,6 +32,13 @@ import {
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+
+// OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
+// The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
+const MetricNamePrefixSchema = z
+  .string()
+  .max(128)
+  .regex(/^(?:[A-Za-z][A-Za-z0-9_./-]*)?$/);
 
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
@@ -80,9 +88,10 @@ export const OpenClawSchemaShape = {
           tracesEndpoint: z.string().optional(),
           metricsEndpoint: z.string().optional(),
           logsEndpoint: z.string().optional(),
-          protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
+          protocol: z.literal("http/protobuf").optional(),
           headers: z.record(z.string(), z.string()).optional(),
           serviceName: z.string().optional(),
+          metricNamePrefix: MetricNamePrefixSchema.optional(),
           traces: z.boolean().optional(),
           metrics: z.boolean().optional(),
           logs: z.boolean().optional(),
@@ -108,6 +117,7 @@ export const OpenClawSchemaShape = {
       audit: z
         .strictObject({
           enabled: z.boolean().optional(),
+          executionIdentity: z.boolean().optional(),
           messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
         })
         .optional(),
@@ -143,12 +153,7 @@ export const OpenClawSchemaShape = {
       attachOnly: z.boolean().optional(),
       defaultProfile: z.string().optional(),
       snapshotDefaults: BrowserSnapshotDefaultsSchema,
-      ssrfPolicy: z
-        .strictObject({
-          dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-          allowedHostnames: z.array(z.string()).optional(),
-        })
-        .optional(),
+      ssrfPolicy: SsrFPolicyConfigSchema.optional(),
       profiles: z
         .record(
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
@@ -309,6 +314,7 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
       webhookToken: SecretInputSchema.optional().register(sensitive),
+      webhookSsrfPolicy: SsrFPolicyConfigSchema.optional(),
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       failureAlert: z
         .strictObject({

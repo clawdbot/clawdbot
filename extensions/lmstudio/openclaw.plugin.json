@@ -44,6 +44,7 @@
       "method": "custom",
       "choiceId": "lmstudio",
       "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect server",
       "appGuidedSecret": true,
       "choiceLabel": "LM Studio",
       "choiceHint": "Connect to a running LM Studio server and use an already loaded model",

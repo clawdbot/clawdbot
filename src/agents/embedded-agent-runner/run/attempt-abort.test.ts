@@ -6,6 +6,7 @@ import {
   createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
+import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
@@ -136,6 +137,76 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     expect(state.markAborted).not.toHaveBeenCalled();
     expect(state.setPromptError).not.toHaveBeenCalled();
     controller.dispose();
+  });
+
+  it("hands an external timeout to the live attempt exactly once", async () => {
+    const source = new AbortController();
+    const runAbortController = new AbortController();
+    const state = createAbortState();
+    const abortActiveSession = vi.fn(async () => {});
+    const onAttemptTimeout = vi.fn();
+    const releaseHeldLockForAbort = vi.fn(async () => {});
+    const attempt = {
+      abortSignal: source.signal,
+      onAttemptTimeout,
+      runId: "run-external-timeout",
+      sessionFile: "agent:main:main",
+      sessionId: "session-external-timeout",
+      sessionKey: "agent:main:main",
+      timeoutMs: 60_000,
+    };
+    const controller = createEmbeddedAttemptExternalAbortController({
+      abortSignal: source.signal,
+      cleanupAfterEarlyAbort: vi.fn(async () => {}),
+      runAbortController,
+      runId: attempt.runId,
+      state: state.port,
+    });
+    const abortRun = createEmbeddedAttemptRunAbort({
+      abortActiveSession,
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt,
+      getQueueHandle: () => ({}) as EmbeddedAgentQueueHandle,
+      isProbeSession: true,
+      log: { warn: vi.fn() },
+      runAbortController,
+      sessionLockController: { releaseHeldLockForAbort },
+      state: state.port,
+    });
+    controller.setRunAbort(abortRun);
+    controller.setCompactionState({
+      isPendingOrRetrying: () => false,
+      isInFlight: () => false,
+    });
+    controller.arm();
+    const timeout = prepareEmbeddedAttemptTimeout({
+      attempt,
+      activeSession: { isCompacting: false, isStreaming: false },
+      compactionState: { isCompacting: () => false },
+      compactionTimeoutMs: 1_000,
+      isProbeSession: true,
+      abortRun,
+      markTimedOutDuringCompaction: state.markTimedOutDuringCompaction,
+      markTimedOutByRunBudget: vi.fn(),
+    });
+
+    try {
+      const reason = new Error("upstream request timed out");
+      reason.name = "TimeoutError";
+      source.abort(reason);
+      await Promise.resolve();
+
+      expect(state.markExternalAbort).toHaveBeenCalledOnce();
+      expect(state.markAborted).toHaveBeenCalledOnce();
+      expect(state.markTimedOut).toHaveBeenCalledOnce();
+      expect(onAttemptTimeout).toHaveBeenCalledOnce();
+      expect(abortActiveSession).toHaveBeenCalledOnce();
+      expect(mocks.markActiveEmbeddedRunAbandoned).toHaveBeenCalledOnce();
+      expect(releaseHeldLockForAbort).toHaveBeenCalledOnce();
+    } finally {
+      timeout.clearTimers();
+      controller.dispose();
+    }
   });
 
   it("cleans prepared resources before rejecting a pre-fired signal", async () => {

@@ -62,6 +62,7 @@ const MIN_PREVIEW_DWELL_MS = 4_000;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
+  updateLazy: (resolveText: () => string | undefined) => void;
   updatePreview: (preview: TelegramDraftPreview) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
@@ -94,6 +95,8 @@ export type TelegramDraftStream = {
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
 };
+
+type TelegramDraftUpdate = string | { resolveText: () => string | undefined };
 
 type TelegramDraftMessageSnapshot = {
   text: string;
@@ -647,7 +650,18 @@ export function createTelegramDraftStream(params: {
       : undefined;
   };
 
-  const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
+  const sendOrEditStreamMessage = async (update: TelegramDraftUpdate): Promise<boolean> => {
+    const isLazy = typeof update !== "string";
+    const text = isLazy ? update.resolveText() : update;
+    if (text === undefined) {
+      // Sanitizer-empty newest values consume their pending slot without sending or mutating the
+      // last delivered draft. Counting the consumed slot as a flush is intentional.
+      return true;
+    }
+    if (isLazy) {
+      lastRequestedPreview = undefined;
+      lastRequestedText = text;
+    }
     if (streamState.stopped && !streamState.final) {
       return false;
     }
@@ -725,6 +739,13 @@ export function createTelegramDraftStream(params: {
     lastRequestedPreview = preview;
     lastRequestedText = text;
     updateDraft(text);
+  };
+
+  const requestLazyDraftUpdate = (resolveText: () => string | undefined) => {
+    if (streamState.stopped || streamState.final) {
+      return;
+    }
+    updateDraft({ resolveText });
   };
 
   const updatePreview = (preview: TelegramDraftPreview) => {
@@ -988,6 +1009,7 @@ export function createTelegramDraftStream(params: {
 
   return {
     update: requestDraftUpdate,
+    updateLazy: requestLazyDraftUpdate,
     updatePreview,
     flush: loop.flush,
     messageId: () => streamMessageId,

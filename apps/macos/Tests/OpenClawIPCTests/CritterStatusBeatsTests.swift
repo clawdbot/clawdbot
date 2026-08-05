@@ -81,4 +81,49 @@ struct CritterStatusBeatsTests {
             endedAt: startedAt.addingTimeInterval(10),
             minimumDuration: 10))
     }
+
+    @Test func `remote authentication failure raises attention and recovery clears it`() {
+        let gatewayStatus = GatewayProcessManager.Status.stopped
+        let authFailure = RemoteGatewayAuthIssue.tokenMismatch.statusMessage
+
+        #expect(CritterStatusLabel.needsAttention(
+            connectionMode: .remote,
+            controlState: .degraded(authFailure),
+            gatewayStatus: gatewayStatus,
+            isPaused: false,
+            isSleeping: true))
+        #expect(!CritterStatusLabel.needsAttention(
+            connectionMode: .remote,
+            controlState: .connected,
+            gatewayStatus: gatewayStatus,
+            isPaused: false,
+            isSleeping: false))
+    }
+
+    @Test func `attention follows the configured owner`() {
+        #expect(CritterStatusLabel.needsAttention(
+            connectionMode: .local,
+            controlState: .connected,
+            gatewayStatus: .failed("boom"),
+            isPaused: false,
+            isSleeping: false))
+        #expect(!CritterStatusLabel.needsAttention(
+            connectionMode: .local,
+            controlState: .connected,
+            gatewayStatus: .stopped,
+            isPaused: false,
+            isSleeping: true))
+        #expect(!CritterStatusLabel.needsAttention(
+            connectionMode: .unconfigured,
+            controlState: .degraded("ignored"),
+            gatewayStatus: .stopped,
+            isPaused: false,
+            isSleeping: false))
+        #expect(!CritterStatusLabel.needsAttention(
+            connectionMode: .remote,
+            controlState: .degraded("auth failed"),
+            gatewayStatus: .stopped,
+            isPaused: true,
+            isSleeping: true))
+    }
 }

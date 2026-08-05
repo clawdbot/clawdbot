@@ -637,7 +637,7 @@ describe("google gemini cli backend auth bridge", () => {
     }
   });
 
-  it("keeps expired but refreshable legacy OAuth profiles on the compatibility path", async () => {
+  it("stages expired legacy OAuth credentials for Gemini CLI-owned refresh", async () => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const context = buildGeminiOAuthPrepareContext(workspaceDir);
       if (!context.authCredential) {

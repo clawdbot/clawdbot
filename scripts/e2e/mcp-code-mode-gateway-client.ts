@@ -4,7 +4,7 @@ import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "
 import { pathToFileURL } from "node:url";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import {
   extractMcpCodeModePlannedTools,

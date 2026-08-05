@@ -191,6 +191,7 @@ function createTestContext(): {
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSourceReplyPayloads: [],
       messageToolOnlySourceReplyDelivered: false,
@@ -386,6 +387,7 @@ describe("handleToolExecutionStart read path checks", () => {
       channelData: {
         askUser: {
           questionId,
+          optionValues: ["Staging (Recommended)", "Production"],
         },
       },
       presentationTextMode: "fallback",
@@ -570,6 +572,7 @@ describe("handleToolExecutionStart read path checks", () => {
         channelData: {
           askUser: {
             questionId: activation.questionId,
+            optionValues: ["Staging", "Production"],
           },
         },
       }),
@@ -1633,6 +1636,43 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     ]);
   });
 
+  it("records preview suppression text only for confirmed current-source sends", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-other-route",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-other",
+        text: "Other route text",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-current-source",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-source",
+        text: "QA-MSTEAMS-DM-OK",
+      },
+      isError: false,
+      result: {
+        details: {
+          ok: true,
+          sourceReplyRoute: "current-source",
+        },
+      },
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
+  });
+
   it("records rich-content delivery when visible text is blank", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-rich-content";
@@ -1689,6 +1729,93 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         to: "chat-reply",
       }),
     ]);
+  });
+
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: {
+        ok: true,
+        messageId: "message-reply",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "visible reply",
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: {
+        ok: true,
+        pollId: "poll-1",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "preferred default?",
+    },
+  ])("records confirmed current-source $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-current-source-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([testCase.expected]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: { ok: true, messageId: "message-reply" },
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: { ok: true, pollId: "poll-1" },
+    },
+  ])("does not record off-route $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-off-route-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
   });
 
   it("records conversation creation target evidence", async () => {
@@ -1912,6 +2039,63 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas).toEqual([
       expect.objectContaining({ toolName: "exec", isError: true }),
     ]);
+  });
+
+  it("projects outcome-unknown exec results as errors with typed details", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "The command may have executed. Do not rerun it automatically.",
+        },
+      ],
+      details: {
+        status: "failed",
+        exitCode: null,
+        failureKind: "outcome-unknown",
+        reason: "outcome-unknown",
+        nodeInvokeFailure: {
+          failureCode: "TIMEOUT",
+          message: "node invoke timed out",
+          nodeCommandDispatched: true,
+        },
+        durationMs: 10,
+        aggregated: "The command may have executed. Do not rerun it automatically.",
+      },
+    };
+
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-outcome-unknown",
+      isError: false,
+      result,
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
+    const toolResult = events.find(
+      (event) => event.stream === "tool" && event.data?.phase === "result",
+    );
+    expect(toolResult?.data).toMatchObject({
+      isError: true,
+      result: {
+        details: {
+          reason: "outcome-unknown",
+          nodeInvokeFailure: {
+            failureCode: "TIMEOUT",
+            nodeCommandDispatched: true,
+          },
+        },
+      },
+    });
+    resetAgentEventsForTest();
   });
 
   it.each([

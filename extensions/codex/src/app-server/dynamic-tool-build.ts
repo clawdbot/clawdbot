@@ -335,6 +335,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       toolBuildStages.mark(name);
     },
     onToolOutcome: params.onToolOutcome,
+    isTurnTainted: params.isTurnTainted,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
   });
   const codexScopedTools = addCodexMessageToolOnlyFinalControl(
@@ -614,7 +615,9 @@ export function resolveCodexSandboxEnvironmentSelection(
   environment: CodexSandboxExecEnvironment | undefined,
   nativeToolSurfaceEnabled: boolean,
 ): CodexTurnEnvironmentParams[] | undefined {
-  return environment && nativeToolSurfaceEnabled ? [environment] : undefined;
+  // Omitting this selection while a turn sets cwd restores Codex's local
+  // environment; an explicit empty selection keeps native tools disabled.
+  return nativeToolSurfaceEnabled ? (environment ? [environment] : undefined) : [];
 }
 /** Chooses the cwd visible to Codex native execution after sandbox exec-server setup. */
 export function resolveCodexAppServerExecutionCwd(params: {
@@ -643,10 +646,16 @@ export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
     networkAccess: codexNetworkAccessForOpenClawSandbox(sandbox) ? "enabled" : "restricted",
   };
 }
+
+function usesDockerNetworkConfig(sandbox: OpenClawSandboxContext | undefined): boolean {
+  const backendId = sandbox?.backendId.trim().toLowerCase();
+  return backendId === "docker" || backendId === "podman";
+}
+
 function codexNetworkAccessForOpenClawSandbox(
   sandbox: OpenClawSandboxContext | undefined,
 ): boolean {
-  if (sandbox?.backendId !== "docker") {
+  if (!usesDockerNetworkConfig(sandbox)) {
     return true;
   }
   const network = sandbox?.docker?.network?.trim().toLowerCase();

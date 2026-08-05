@@ -68,6 +68,11 @@ type PluginAuthoringBuildOptions = {
 type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
+  json?: boolean;
+};
+
+export type PluginDoctorOptions = {
+  json?: boolean;
 };
 
 type PluginAuthoringInitOptions = {
@@ -252,9 +257,10 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("doctor")
     .description("Report plugin load issues")
-    .action(async () => {
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginDoctorOptions) => {
       const { runPluginsDoctorCommand } = await loadPluginsRuntime();
-      await runPluginsDoctorCommand();
+      await runPluginsDoctorCommand(opts);
     });
 
   plugins
@@ -273,6 +279,7 @@ export function registerPluginsCli(program: Command) {
     .description("Validate simple tool plugin metadata")
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--json", "Print JSON")
     .action(async (opts: PluginAuthoringValidateOptions) => {
       const { runPluginsValidateCommand } = await loadPluginsAuthoringCommands();
       await runPluginsValidateCommand(opts);
@@ -329,5 +336,6 @@ export function registerPluginsCli(program: Command) {
       await runPluginMarketplaceListCommand(source, opts);
     });
 
+  applyParentDefaultHelpAction(marketplace);
   applyParentDefaultHelpAction(plugins);
 }

@@ -90,6 +90,10 @@ export type GatewayService = {
   ) => Promise<GatewayServiceRuntime>;
 };
 
+type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
+  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
+};
+
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),
 );
@@ -179,17 +183,26 @@ export function formatGatewayServiceStartRepairIssues(
 
 export async function readGatewayServiceState(
   service: GatewayService,
-  args: GatewayServiceEnvArgs = {},
+  args: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
   const command = await service.readCommand(baseEnv).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
+  // Callers that may mutate the selected service can reject persisted selector
+  // drift before isLoaded/readRuntime invoke the native service manager.
+  args.validateEnvBeforeStatusRead?.(env);
   // Propagate the status read deadline so a wedged service manager fails soft
   // instead of hanging both probes. readCommand parses local files and needs no
   // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
-    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(() => undefined),
+    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
+      (error: unknown) =>
+        ({
+          status: "unknown",
+          detail: String(error),
+        }) satisfies GatewayServiceRuntime,
+    ),
   ]);
   return {
     installed: command !== null,

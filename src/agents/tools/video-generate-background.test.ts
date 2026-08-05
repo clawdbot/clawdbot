@@ -1,7 +1,8 @@
 // Video generation background tests cover detached task lifecycle, keepalive
 // progress and completion delivery through the durable requester-agent handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAgentRunContext, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   announceDeliveryMocks,

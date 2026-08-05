@@ -119,7 +119,7 @@ function createRuntime(): RuntimeEnv {
 
 describe("WhatsApp setup promotion contract", () => {
   it("exposes authDir on the setup-only plugin surface", () => {
-    expect(whatsappSetupPlugin.setup?.singleAccountKeysToMove).toEqual(["authDir"]);
+    expect(whatsappSetupPlugin.setupContract?.singleAccountKeysToMove).toEqual(["authDir"]);
   });
 });
 

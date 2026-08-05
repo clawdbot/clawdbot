@@ -326,6 +326,23 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
+  it("does not replay the initiating user turn into an approved-exec continuation", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "authenticated approved-exec result",
+        trigger: "user",
+        leafMessage: {
+          content: "run the command again",
+          provenance: { kind: "inter_session", sourceTool: "exec_approval_followup" },
+        },
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "authenticated approved-exec result",
+    });
+  });
+
   it("preserves user-directed inter-session orphan context", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({

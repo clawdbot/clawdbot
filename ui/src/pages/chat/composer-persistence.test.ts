@@ -1127,7 +1127,7 @@ describe("chat composer persistence", () => {
     ]);
   });
 
-  it("restores attachments and Skill Workshop revision metadata", () => {
+  it("does not persist Skill Workshop revision requests for reconnect replay", () => {
     const item: ChatQueueItem = {
       ...reconnectItem("rich", 1),
       attachments: [
@@ -1141,13 +1141,11 @@ describe("chat composer persistence", () => {
       skillWorkshopRevision: { proposalId: "proposal-1", agentId: "owner" },
     };
     const state = createState();
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(true);
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(false);
 
     const restored = createState();
-    expect(restoreChatComposerState(restored)).toBe(true);
-    expect(restored.chatQueue).toEqual([
-      { ...item, sessionKey: "agent:lily:main", agentId: "lily" },
-    ]);
+    expect(restoreChatComposerState(restored)).toBe(false);
+    expect(restored.chatQueue).toEqual([]);
   });
 
   it("normalizes interrupted and in-flight states before durable replay", () => {

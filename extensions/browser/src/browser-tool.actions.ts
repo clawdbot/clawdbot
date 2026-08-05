@@ -180,6 +180,25 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   };
 }
 
+/** Protect page-controlled model text while preserving the shipped structured result contract. */
+export function formatBrowserExternalToolResult(params: {
+  kind: "act" | "download" | "tabs";
+  payload: unknown;
+}): AgentToolResult<unknown> {
+  const result = jsonResult(params.payload);
+  const wrapped = wrapBrowserExternalJson({
+    kind: params.kind,
+    payload: params.payload,
+    includeWarning: false,
+  });
+  // The Browser tool already marks the turn as network-tainted, and replay
+  // strips details; changing this public structured payload breaks callers.
+  return {
+    ...result,
+    content: [{ type: "text", text: wrapped.wrappedText }],
+  };
+}
+
 function formatConsoleToolResult(result: {
   targetId?: string;
   url?: string;
@@ -409,7 +428,7 @@ export async function executeDownloadAction(params: {
           profile,
         });
   params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
-  return jsonResult(result);
+  return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
 /** Execute browser actions with profile-aware timeout defaults and stale-tab recovery. */
@@ -520,7 +539,7 @@ function formatActToolResult(
   result: unknown,
   aborted: BrowserBatchAbort | null,
 ): AgentToolResult<unknown> {
-  const formatted = jsonResult(result);
+  const formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
   if (!aborted) {
     return formatted;
   }
@@ -528,7 +547,7 @@ function formatActToolResult(
   // finishActResult, so only the closed case tells the model to snapshot manually.
   const note =
     aborted.reason === "navigation"
-      ? `Batch aborted after action ${aborted.afterAction} because the page navigated to ${aborted.url}; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
+      ? `Batch aborted after action ${aborted.afterAction} because the page navigated; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
       : `Batch aborted after action ${aborted.afterAction} because the page or browser context closed; ${aborted.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
   return {
     ...formatted,

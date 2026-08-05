@@ -35,12 +35,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
-import {
-  buildDirectChatContext,
-  buildGroupChatContext,
-  buildGroupIntro,
-  resolveGroupSilentReplyBehavior,
-} from "./groups.js";
+import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import {
   buildInboundMetaSystemPrompt,
@@ -183,16 +178,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     : "";
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
-  const allowEmptyAssistantReplyAsSilent =
-    (isDirectChat &&
-      silentReplyConversationType === "direct" &&
-      silentReplySettings.policy === "allow") ||
-    (isGroupChat &&
-      resolveGroupSilentReplyBehavior({
-        sessionEntry,
-        defaultActivation,
-        silentReplyPolicy: silentReplySettings.policy,
-      }).allowEmptyAssistantReplyAsSilent);
+  const allowEmptyAssistantReplyAsSilent = isGroupChat && silentReplySettings.policy === "allow";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },

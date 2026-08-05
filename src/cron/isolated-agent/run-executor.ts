@@ -17,6 +17,7 @@ import type { CliSessionBinding } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -34,6 +35,7 @@ import {
   resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
+import { appendCronDeliveryInstruction } from "./run-delivery-trace.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   ensureSelectedAgentHarnessPlugin,
@@ -138,7 +140,7 @@ function resolveCronBootstrapContextMode(
 
 function buildCronDeliveryTargetRuntimeContext(params: {
   resolvedDeliveryOk: boolean;
-  messageToolPromptEnabled: boolean;
+  messageToolAvailable: boolean;
   resolvedDelivery: {
     channel?: string;
     accountId?: string;
@@ -149,7 +151,7 @@ function buildCronDeliveryTargetRuntimeContext(params: {
 }): string | undefined {
   if (
     !params.resolvedDeliveryOk ||
-    !params.messageToolPromptEnabled ||
+    !params.messageToolAvailable ||
     !params.sourceDelivery.messageTool.requireExplicitTarget
   ) {
     return undefined;
@@ -205,6 +207,7 @@ function createCronPromptExecutor(params: {
   runSessionKey: string;
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
+  pluginRegistry?: PluginRegistry;
   lane?: string;
   resolvedVerboseLevel: VerboseLevel;
   immutableThinkLevel: ThinkLevel | undefined;
@@ -222,7 +225,6 @@ function createCronPromptExecutor(params: {
     ok?: boolean;
   };
   resolvedDeliveryOk: boolean;
-  messageToolPromptEnabled: boolean;
   deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
@@ -276,12 +278,36 @@ function createCronPromptExecutor(params: {
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   // Cron prompts may intentionally have nothing to report; both runners must agree on silence.
   const allowEmptyAssistantReplyAsSilent = true;
-  const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
-    resolvedDeliveryOk: params.resolvedDeliveryOk,
-    messageToolPromptEnabled: params.messageToolPromptEnabled,
-    resolvedDelivery: params.resolvedDelivery,
-    sourceDelivery,
-  });
+  const finalizePromptForResolvedTools = ({
+    prompt,
+    messageToolAvailable,
+  }: {
+    prompt: string;
+    messageToolAvailable: boolean;
+  }) => {
+    const deliveryMessageToolAvailable = sourceDelivery.messageTool.enabled && messageToolAvailable;
+    if (sourceReplyDeliveryMode === "message_tool_only" && !deliveryMessageToolAvailable) {
+      throw new Error(
+        "Cron source delivery requires the message tool, but the selected runtime does not expose it. Allow the message tool, choose a compatible runtime, or use automatic delivery.",
+      );
+    }
+    const promptWithDeliveryGuidance = appendCronDeliveryInstruction({
+      commandBody: prompt,
+      deliveryRequested: params.deliveryRequested === true,
+      messageToolEnabled: deliveryMessageToolAvailable,
+      resolvedDeliveryOk: params.resolvedDeliveryOk,
+      requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+    });
+    const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
+      resolvedDeliveryOk: params.resolvedDeliveryOk,
+      messageToolAvailable: deliveryMessageToolAvailable,
+      resolvedDelivery: params.resolvedDelivery,
+      sourceDelivery,
+    });
+    return deliveryTargetRuntimeContext
+      ? `${promptWithDeliveryGuidance}\n\n${deliveryTargetRuntimeContext}`.trim()
+      : promptWithDeliveryGuidance;
+  };
   let pendingUserTurn:
     | {
         promptText: string;
@@ -313,9 +339,6 @@ function createCronPromptExecutor(params: {
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const modelPrompt = deliveryTargetRuntimeContext
-      ? `${promptText}\n\n${deliveryTargetRuntimeContext}`.trim()
-      : promptText;
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -343,6 +366,7 @@ function createCronPromptExecutor(params: {
           sessionKey: params.runSessionKey,
           agentHarnessRuntimeOverride,
           workspaceDir: params.workspaceDir,
+          pluginRegistry: params.pluginRegistry,
         });
       },
       fallbacksOverride: cronFallbacksOverride,
@@ -473,8 +497,8 @@ function createCronPromptExecutor(params: {
                 sessionFile,
                 workspaceDir: params.workspaceDir,
                 config: params.cfgWithAgentDefaults,
-                prompt: modelPrompt,
-                transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
+                prompt: promptText,
+                finalizePromptForResolvedTools,
                 modelProvider: providerOverride,
                 provider: executionProvider,
                 model: modelOverride,
@@ -537,6 +561,12 @@ function createCronPromptExecutor(params: {
         const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
+          sessionTarget: {
+            agentId: params.agentId,
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.runSessionKey,
+            storePath: params.cronSession.storePath,
+          },
           promptCacheKey,
           agentId: params.agentId,
           trigger: "cron",
@@ -548,13 +578,12 @@ function createCronPromptExecutor(params: {
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
-          sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
           config: params.cfgWithAgentDefaults,
           skillsSnapshot: params.skillsSnapshot,
-          prompt: modelPrompt,
-          transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
+          prompt: promptText,
+          finalizePromptForResolvedTools,
           lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
@@ -672,7 +701,6 @@ export async function executeCronRun(params: {
     ok?: boolean;
   };
   resolvedDeliveryOk: boolean;
-  messageToolPromptEnabled: boolean;
   deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
@@ -704,6 +732,7 @@ export async function executeCronRun(params: {
   runTimeoutOverrideMs?: number;
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
+  pluginRegistry?: PluginRegistry;
 }): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
@@ -724,6 +753,7 @@ export async function executeCronRun(params: {
     runSessionKey: params.runSessionKey,
     usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
+    pluginRegistry: params.pluginRegistry,
     lane: params.lane,
     resolvedVerboseLevel,
     immutableThinkLevel: params.immutableThinkLevel,
@@ -734,7 +764,6 @@ export async function executeCronRun(params: {
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
     resolvedDeliveryOk: params.resolvedDeliveryOk,
-    messageToolPromptEnabled: params.messageToolPromptEnabled,
     deliveryRequested: params.deliveryRequested,
     sourceDelivery: params.sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
@@ -840,7 +869,9 @@ export async function executeCronRun(params: {
         await loadCronSubagentRegistryRuntime();
       hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
         const descendantStartedAt =
-          typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+          typeof entry.execution.startedAt === "number"
+            ? entry.execution.startedAt
+            : entry.createdAt;
         return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
       });
       hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
@@ -872,4 +903,5 @@ export async function executeCronRun(params: {
     liveSelection: params.liveSelection,
   };
 }
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

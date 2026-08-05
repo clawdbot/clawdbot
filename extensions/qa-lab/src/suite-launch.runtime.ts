@@ -322,6 +322,9 @@ async function resolveSuiteExecutionPlan(
     channelGroups.some(
       (group) => group.channelId !== undefined && group.channelId !== params?.channelId,
     ) ||
+    flowScenarios.some(
+      (scenario) => scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined,
+    ) ||
     (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
   if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
     return { kind: "flow" };

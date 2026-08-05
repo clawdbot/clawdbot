@@ -610,7 +610,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "second tool done" });
       await elapseProgressDraftStartDelay();
@@ -645,7 +645,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.dispatcher.sendFinalReply({ text: "text-only answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -676,7 +676,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "queued work" });
       await elapseProgressDraftStartDelay();

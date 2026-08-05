@@ -43,6 +43,17 @@ const preparedSnapshotState = vi.hoisted(() => ({
   inlineProviderModels: [] as PreparedModelRuntimeSnapshot["inlineProviderModels"],
 }));
 
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
+}));
+
 vi.mock("../model-suppression.js", () => {
   // Mirrors the canonical manifest-driven suppression in
   // extensions/qwen/openclaw.plugin.json and src/plugins/manifest-model-suppression.ts.
@@ -154,6 +165,8 @@ vi.mock("../model-suppression.js", () => {
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
   const discoveryContext = await import("../model-discovery-context.js");
+  const { PreparedModelRuntimeOwnerNotPublishedError } =
+    await import("../prepared-model-runtime.errors.js");
   const createSnapshot = (input: {
     agentId?: string;
     agentDir: string;
@@ -187,6 +200,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     return snapshot;
   };
   return {
+    PreparedModelRuntimeOwnerNotPublishedError,
     getPreparedModelRuntimeSnapshot: (input: Parameters<typeof createSnapshot>[0]) => {
       preparedSnapshotState.getInputs.push(input);
       return preparedSnapshotState.enabled ? createSnapshot(input) : undefined;
@@ -906,6 +920,7 @@ describe("resolveModel", () => {
     const preparedModelRuntime = {
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
       config: cfg,
       metadataSnapshot: { plugins: [] } as never,
       modelCatalog: { entries: [], routeVariants: [] },

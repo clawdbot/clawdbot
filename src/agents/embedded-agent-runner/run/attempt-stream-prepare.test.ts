@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ToolSearchTargetTranscriptProjection } from "../../tool-search.js";
+import {
+  projectToolSearchTargetTranscriptMessages,
+  type ToolSearchTargetTranscriptProjection,
+} from "../../tool-search.js";
 
 const mocks = vi.hoisted(() => ({
   buildSubscriptionParams: vi.fn(),
@@ -335,6 +338,85 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(returned).toMatchObject({ details: { id: 42 } });
     expect(Object.isFrozen(returned)).toBe(true);
     expect(Object.isFrozen(returned.details)).toBe(true);
+  });
+
+  it("marks accepted canonical failures in hidden tool transcript projections", async () => {
+    const projections: ToolSearchTargetTranscriptProjection[] = [];
+    const failedResult = {
+      content: [{ type: "text" as const, text: "Backend request failed" }],
+      details: { status: "error" },
+    };
+    const prepared = prepareCatalogExecutor(projections);
+
+    const returned = await prepared.toolSearchCatalogExecutor({
+      tool: {
+        name: "search_query",
+        description: "Query a search backend",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        execute: vi.fn(async () => failedResult),
+      } as never,
+      toolName: "search_query",
+      source: "mcp",
+      sourceName: "searchServer",
+      toolCallId: "call-search-query",
+      parentToolCallId: "call-tool-call",
+      input: {},
+      acceptResultBeforeProjection: async (candidate) => candidate,
+    });
+
+    expect(returned).toBe(failedResult);
+    expect(projections).toEqual([
+      expect.objectContaining({
+        toolCallId: "call-search-query",
+        result: failedResult,
+        isError: true,
+      }),
+    ]);
+    expect(
+      projectToolSearchTargetTranscriptMessages([], projections).find(
+        (message) => message.role === "toolResult",
+      ),
+    ).toMatchObject({
+      toolCallId: "call-search-query",
+      toolName: "search_query",
+      isError: true,
+    });
+  });
+
+  it("records thrown hidden tool failures and rethrows them", async () => {
+    const projections: ToolSearchTargetTranscriptProjection[] = [];
+    const prepared = prepareCatalogExecutor(projections);
+
+    await expect(
+      prepared.toolSearchCatalogExecutor({
+        tool: {
+          name: "search_query",
+          description: "Query a search backend",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          execute: vi.fn(async () => {
+            throw new Error("transport disconnected");
+          }),
+        } as never,
+        toolName: "search_query",
+        source: "mcp",
+        sourceName: "searchServer",
+        toolCallId: "call-search-query",
+        parentToolCallId: "call-tool-call",
+        input: {},
+        acceptResultBeforeProjection: async (candidate) => candidate,
+      }),
+    ).rejects.toThrow("transport disconnected");
+
+    expect(projections).toEqual([
+      expect.objectContaining({
+        toolCallId: "call-search-query",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "transport disconnected" }],
+          details: { status: "error", error: "transport disconnected" },
+        },
+      }),
+    ]);
   });
 
   it("distinguishes an accepted abort from normal steering closure and sessions_yield", () => {
