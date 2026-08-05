@@ -260,38 +260,6 @@ describe("createDraftStreamLoop", () => {
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "hello");
   });
 
-  it("keeps generic payload fields atomic while newer updates queue", async () => {
-    type Update = { text: string; blocks: string[] };
-    let releaseFirst: (() => void) | undefined;
-    const firstSend = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    const sendOrEditStreamMessage = vi.fn(async (update: Update) => {
-      if (update.text === "first") {
-        await firstSend;
-      }
-      return true;
-    });
-    const loop = createDraftStreamLoop<Update>({
-      throttleMs: 0,
-      isStopped: () => false,
-      emptyValue: { text: "", blocks: [] },
-      isEmpty: (update) => !update.text,
-      sendOrEditStreamMessage,
-    });
-
-    loop.update({ text: "first", blocks: ["first-blocks"] });
-    await flushMicrotasks();
-    loop.update({ text: "latest", blocks: ["latest-blocks"] });
-    releaseFirst?.();
-    await loop.flush();
-
-    expect(sendOrEditStreamMessage.mock.calls).toEqual([
-      [{ text: "first", blocks: ["first-blocks"] }],
-      [{ text: "latest", blocks: ["latest-blocks"] }],
-    ]);
-  });
-
   it("preserves concurrent update text when sendOrEditStreamMessage returns false", async () => {
     let deliver!: (() => void) | undefined;
     const deliverPromise = new Promise<void>((resolve) => {
@@ -359,5 +327,37 @@ describe("createDraftStreamLoop", () => {
     await loop.flush();
 
     expect(sendOrEditStreamMessage.mock.calls).toEqual([[initial], [latest], [latest]]);
+  });
+
+  it("keeps generic payload fields atomic while newer updates queue", async () => {
+    type Update = { text: string; blocks: string[] };
+    let releaseFirst: (() => void) | undefined;
+    const firstSend = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const sendOrEditStreamMessage = vi.fn(async (update: Update) => {
+      if (update.text === "first") {
+        await firstSend;
+      }
+      return true;
+    });
+    const loop = createDraftStreamLoop<Update>({
+      throttleMs: 0,
+      isStopped: () => false,
+      emptyValue: { text: "", blocks: [] },
+      isEmpty: (update) => !update.text,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update({ text: "first", blocks: ["first-blocks"] });
+    await flushMicrotasks();
+    loop.update({ text: "latest", blocks: ["latest-blocks"] });
+    releaseFirst?.();
+    await loop.flush();
+
+    expect(sendOrEditStreamMessage.mock.calls).toEqual([
+      [{ text: "first", blocks: ["first-blocks"] }],
+      [{ text: "latest", blocks: ["latest-blocks"] }],
+    ]);
   });
 });
