@@ -3987,6 +3987,25 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(sync).not.toHaveBeenCalled();
   });
 
+  it("preserves structured provider failures through queued compaction", async () => {
+    contextEngineCompactMock.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "Provider returned 503",
+      failure: { reason: "server_error", status: 503, code: "upstream_unavailable" },
+      result: undefined,
+    });
+
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "Provider returned 503",
+      failure: { reason: "server_error", status: 503, code: "upstream_unavailable" },
+    });
+  });
+
   it("surfaces a hung/throwing engine compact() as a clean ok:false result", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     // The safety-timeout wrapper rejects on timeout; a thrown rejection here
