@@ -2454,5 +2454,42 @@ describe("session_status tool", () => {
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
   });
+
+  it("preserves a compatible auth profile when changing the session model", async () => {
+    let persistedStore: Record<string, SessionEntry> | undefined;
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+        authProfileOverride: "session-status-team:prod",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      auth: {
+        profiles: { "session-status-team:prod": { provider: "openai", mode: "api_key" } },
+      },
+    };
+    updateSessionStoreMock.mockImplementation(
+      (_storePath: string, store: Record<string, SessionEntry>) => {
+        persistedStore = structuredClone(store);
+      },
+    );
+
+    const result = await getSessionStatusTool().execute("call4", { model: "openai/gpt-5.4" });
+
+    expect(result.details).toMatchObject({ modelOverride: null });
+    const saved = persistedStore?.main;
+    if (!saved) {
+      throw new Error("Expected session_status to persist the selected model");
+    }
+    expect(saved.authProfileOverride).toBe("session-status-team:prod");
+    expect(saved.authProfileOverrideSource).toBe("user");
+    expect(saved.authProfileOverrideCompactionCount).toBe(2);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

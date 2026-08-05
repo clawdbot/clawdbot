@@ -2,13 +2,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditHandlers, testApi } from "./audit.js";
 
-const listAuditEvents = vi.hoisted(() => vi.fn());
+const { inspectExecutionIdentityRun, listAuditEvents } = vi.hoisted(() => ({
+  inspectExecutionIdentityRun: vi.fn(),
+  listAuditEvents: vi.fn(),
+}));
 
 vi.mock("../../audit/audit-event-store.js", () => ({ listAuditEvents }));
+vi.mock("../../audit/execution-identity-context.js", () => ({ inspectExecutionIdentityRun }));
 
 const accountRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 
-async function runAuditHandler(method: "audit.activity.list" | "audit.list", params: object) {
+async function runAuditHandler(
+  method: "audit.activity.list" | "audit.list" | "audit.run.inspect",
+  params: object,
+) {
   const respond = vi.fn();
   await expectDefined(
     auditHandlers[method],
@@ -39,6 +46,19 @@ describe("audit gateway methods", () => {
         },
       ],
       nextCursor: 10,
+    });
+    inspectExecutionIdentityRun.mockReset();
+    inspectExecutionIdentityRun.mockReturnValue({
+      schemaVersion: 1,
+      run: { runId: "run-1", status: "unknown" },
+      identity: {
+        state: "unknown",
+        reasonCode: "run_not_found",
+        missingEvidence: ["run.record"],
+        remediation: [{ code: "verify_run_id", text: "Verify the exact run id." }],
+      },
+      decisions: [],
+      coverage: { state: "unknown", missingEvidence: ["run.record"] },
     });
   });
 
@@ -231,4 +251,46 @@ describe("audit gateway methods", () => {
       );
     },
   );
+
+  it("projects bounded run discovery and exact execution selection", async () => {
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: " 2 ",
+      executionLimit: 10,
+      decisionCursor: " 1 ",
+      decisionLimit: 25,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 2,
+      executionLimit: 10,
+      decisionOffset: 1,
+      decisionLimit: 25,
+    });
+
+    await runAuditHandler("audit.run.inspect", {
+      executionId: "execution-1",
+      decisionLimit: 20,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      executionId: "execution-1",
+      decisionLimit: 20,
+    });
+  });
+
+  it("rejects malformed run inspection before storage access", async () => {
+    expect(
+      await runAuditHandler("audit.run.inspect", { runId: "", extra: true }),
+    ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    expect(
+      await runAuditHandler("audit.run.inspect", { runId: "run-1", decisionCursor: "0" }),
+    ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    expect(
+      await runAuditHandler("audit.run.inspect", {
+        runId: "run-1",
+        executionId: "execution-1",
+      }),
+    ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    expect(inspectExecutionIdentityRun).not.toHaveBeenCalled();
+  });
 });

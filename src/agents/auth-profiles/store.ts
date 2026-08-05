@@ -43,6 +43,7 @@ import {
 import {
   clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
+  getPreparedRuntimeAuthProfileStoreSnapshot as getPreparedRuntimeAuthProfileStoreSnapshotImpl,
   getRuntimeAuthProfileStoreSnapshot as getRuntimeAuthProfileStoreSnapshotImpl,
   getRuntimeAuthProfileStoreSnapshotRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
@@ -1315,6 +1316,14 @@ export function getRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
 ): AuthProfileStore | undefined {
   return getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+}
+
+/** Return the lifecycle-published effective auth store without persisted fallback reads. */
+export function getPreparedRuntimeAuthProfileStoreSnapshot(
+  agentDir?: string,
+  inheritedAuthDir?: string,
+): AuthProfileStore | undefined {
+  return getPreparedRuntimeAuthProfileStoreSnapshotImpl(agentDir, inheritedAuthDir);
 }
 
 /** Replace runtime auth-profile snapshots, used by tests and prepared runtimes. */

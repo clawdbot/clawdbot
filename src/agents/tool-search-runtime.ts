@@ -34,6 +34,7 @@ import {
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
+import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
   CatalogSource,
@@ -208,32 +209,6 @@ export function readToolSearchId(args: unknown): string {
     throw new ToolInputError("id must be a non-empty string.");
   }
   return value.trim();
-}
-
-function readToolSearchLimit(value: unknown, config: ToolSearchConfig): number {
-  if (value === undefined) {
-    return config.searchDefaultLimit;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new ToolInputError("limit must be a positive integer.");
-  }
-  return Math.min(value, config.maxSearchLimit);
-}
-
-export function readToolSearchArgs(
-  args: unknown,
-  config: ToolSearchConfig,
-): { query: string; limit: number } {
-  const params = asToolParamsRecord(args);
-  const query = params.query;
-  if (typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
-  const options = isRecord(params.options) ? params.options : undefined;
-  return {
-    query,
-    limit: readToolSearchLimit(params.limit ?? options?.limit, config),
-  };
 }
 
 export function readToolSearchCallArgs(

@@ -78,6 +78,12 @@
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true
+      },
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "route",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": false
       }
     },
     "install": {

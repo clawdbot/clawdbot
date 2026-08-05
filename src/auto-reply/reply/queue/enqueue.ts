@@ -124,6 +124,7 @@ export function enqueueFollowupRun(
   // publish an external queued identity for work that will never be admitted.
   const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
   if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
+    run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
     return false;
   }
@@ -131,16 +132,19 @@ export function enqueueFollowupRun(
     return false;
   }
 
+  const elidedSummaryLines: string[] = [];
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     inFlight: queue.inFlight,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    onSummaryElide: (lines) => elidedSummaryLines.push(...lines),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
         queue.summarySources.push(...dropped);
         return;
       }
       for (const item of dropped) {
+        item.onQueueDisposition?.("queue-cap-old");
         completeFollowupRunLifecycle(item);
       }
     },
@@ -150,13 +154,18 @@ export function enqueueFollowupRun(
     const overflow = queue.summarySources.length - queue.summaryLines.length;
     if (overflow > 0) {
       const removed = queue.summarySources.splice(0, overflow);
-      for (const item of removed) {
+      for (const [index, item] of removed.entries()) {
+        const summaryLine = elidedSummaryLines[index];
+        if (summaryLine === undefined) {
+          throw new Error("followup queue summary source lost its elided line");
+        }
         const contextKey = resolveFollowupDeliveryContextKey(item);
         const lastElision = queue.summaryElisions.at(-1);
         if (lastElision?.contextKey === contextKey) {
           const compactSource = createOverflowSummaryRetrySource(item);
           lastElision.count += 1;
           lastElision.sources.push(compactSource);
+          lastElision.summaryLines.push(summaryLine);
           lastElision.sourceRefs.set(item, compactSource);
           if (queue.activeSummarySources.has(item)) {
             queue.activeSummarySources.add(compactSource);
@@ -167,6 +176,7 @@ export function enqueueFollowupRun(
             contextKey,
             count: 1,
             sources: [compactSource],
+            summaryLines: [summaryLine],
             sourceRefs: new WeakMap([[item, compactSource]]),
           });
           if (queue.activeSummarySources.has(item)) {
@@ -178,6 +188,7 @@ export function enqueueFollowupRun(
     }
   }
   if (!shouldEnqueue) {
+    run.onQueueDisposition?.("queue-cap");
     completeFollowupRunLifecycle(run);
     return false;
   }

@@ -14,11 +14,11 @@ import type {
 import {
   drainSessionBackfill,
   markSessionBackfillRewindBaseline,
-  normalizeSessionBackfillSelection,
   recordSessionBackfillRewindBatch,
   resetSessionBackfillIngestionState,
   rewindSessionBackfillIngestionState,
 } from "./session-backfill-lifecycle.js";
+import { normalizeSessionBackfillSelection } from "./session-backfill-selection.js";
 import {
   SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
@@ -46,9 +46,6 @@ const SESSION_BACKFILL_QUERY_PREFIX = "__dreaming_session_backfill__";
 const TOP_CANDIDATE_LIMIT = 5;
 const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
 
-export { normalizeSessionBackfillSelection } from "./session-backfill-lifecycle.js";
-export type { SessionBackfillResult } from "./session-backfill-contract.js";
-
 export type MemorySessionBackfillOptions = {
   agent?: string;
   from?: string;
@@ -74,7 +71,7 @@ type SessionBackfillScan = {
   stateKey: string;
 };
 
-export type RunSessionBackfillParams = {
+type RunSessionBackfillParams = {
   agentId: string;
   workspaceDir: string;
   from?: string;

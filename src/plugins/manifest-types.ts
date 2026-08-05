@@ -147,7 +147,6 @@ export type PluginManifestSecretProviderIntegration = {
   jsonOnly?: boolean;
   env?: Record<string, string>;
   passEnv?: string[];
-  allowInsecurePath?: boolean;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";

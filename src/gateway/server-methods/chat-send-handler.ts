@@ -402,6 +402,14 @@ export async function handleChatSend(
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.
+                onFollowupQueueDisposition: (reason) => {
+                  context.logGateway.info("chat queue turn intentionally skipped", {
+                    runId: clientRunId,
+                    sessionKey,
+                    outcome: "skipped",
+                    reason,
+                  });
+                },
                 turnAdoptionLifecycle: {
                   // Gateway cancel identity only — share collect key via ownerKey.
                   admission: "cancel-only",

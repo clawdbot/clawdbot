@@ -12,6 +12,7 @@ import type {
 import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import WebSocket from "ws";
+import { resolveXaiRealtimeApiKey } from "./realtime-voice-auth.runtime.js";
 import {
   XAI_REALTIME_BASE_RECONNECT_DELAY_MS,
   XAI_REALTIME_CONNECT_TIMEOUT_MS,
@@ -21,7 +22,6 @@ import {
   XAI_REALTIME_MAX_RECONNECT_ATTEMPTS,
   XAI_REALTIME_WS_MAX_PAYLOAD_BYTES,
   readXaiRealtimeErrorDetail,
-  resolveXaiRealtimeApiKey,
   toXaiRealtimeWsUrl,
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";

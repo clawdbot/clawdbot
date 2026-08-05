@@ -276,7 +276,7 @@ export function bootstrapApplication(
     startup.password ?? "",
     startup.pendingBootstrapToken ?? "",
     undefined,
-    { persistDefaultConnectionSettings: documentMode === null },
+    { persistDefaultConnectionSettings: documentMode === null, basePath },
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
