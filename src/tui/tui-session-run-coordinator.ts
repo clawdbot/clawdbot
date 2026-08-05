@@ -6,11 +6,38 @@ import type { ChatEvent, TuiHistoryLoadResult, TuiStateAccess } from "./tui-type
 const MAX_TRACKED_RUNS = 200;
 const RETAINED_TRACKED_RUNS = 150;
 const TRACKED_RUN_RETENTION_MS = 10 * 60 * 1000;
+const HISTORY_RELOAD_QUEUED = 1;
+const HISTORY_RELOAD_OWNED = 1 << 1;
+const HISTORY_RELOAD_DISPLAYED = 1 << 2;
+const HISTORY_RELOAD_GAP_RECOVERY = 1 << 3;
+
+/** A small FIFO membership tracker for run IDs that need no lifecycle metadata. */
+export function createTuiRunIdTracker() {
+  const runIds = new Set<string>();
+  return {
+    note: (runId: string) => {
+      if (runId) {
+        runIds.add(runId);
+      }
+      if (runIds.size > MAX_TRACKED_RUNS) {
+        runIds.delete(runIds.values().next().value as string);
+      }
+    },
+    forget: (runId: string) => void runIds.delete(runId),
+    has: (runId: string) => runIds.has(runId),
+    clear: () => runIds.clear(),
+  };
+}
 
 type HistoryOwnedRun = {
   runId: string;
   result: TuiHistoryLoadResult;
   previouslyDisplayed: boolean;
+};
+
+type TuiHistoryReloadRun = {
+  flags: number;
+  deferredEvent?: ChatEvent;
 };
 
 type TuiSessionRunCoordinatorContext = {
@@ -37,11 +64,7 @@ export class TuiSessionRunCoordinator {
 
   pendingHistoryRefresh = false;
 
-  private readonly historyReloadRunIds = new Set<string>();
-  private readonly historyOwnedReloadRunIds = new Set<string>();
-  private readonly historyDisplayedReloadRunIds = new Set<string>();
-  private readonly queuedHistoryReloadRunIds = new Set<string>();
-  private readonly deferredHistoryRunEvents = new Map<string, ChatEvent>();
+  private readonly historyReloadRuns = new Map<string, TuiHistoryReloadRun>();
   private readonly sessionMessagePersistenceRunIds = new Set<string>();
   private readonly confirmedStreamRunIds = new Set<string>();
   private readonly retiredOrphanRunIds = new Map<string, number>();
@@ -257,14 +280,18 @@ export class TuiSessionRunCoordinator {
   }
 
   isHistoryReloadingRun(runId: string): boolean {
-    return this.historyReloadRunIds.has(runId);
+    return this.historyReloadRuns.has(runId);
   }
 
   deferHistoryRunEvent(event: ChatEvent): void {
-    const previous = this.deferredHistoryRunEvents.get(event.runId);
+    const reload = this.historyReloadRuns.get(event.runId);
+    if (!reload) {
+      return;
+    }
+    const previous = reload.deferredEvent;
     // A terminal event remains authoritative over a delayed streaming delta.
     if (!previous || previous.state === "delta" || event.state !== "delta") {
-      this.deferredHistoryRunEvents.set(event.runId, event);
+      reload.deferredEvent = event;
     }
   }
 
@@ -297,8 +324,15 @@ export class TuiSessionRunCoordinator {
     }
 
     const generation = this.historyReloadGeneration;
-    const runIds = Array.from(this.queuedHistoryReloadRunIds);
-    this.queuedHistoryReloadRunIds.clear();
+    // Snapshot each run's flags before awaiting; an overlapping gap owns the
+    // next drain and must not inherit or erase this drain's finalization.
+    const reloads: Array<{ runId: string; flags: number }> = [];
+    for (const [runId, reload] of this.historyReloadRuns) {
+      if (reload.flags & HISTORY_RELOAD_QUEUED) {
+        reloads.push({ runId, flags: reload.flags });
+        reload.flags = 0;
+      }
+    }
     this.historyReloadQueued = false;
     this.historyReloadInFlight = true;
 
@@ -306,15 +340,19 @@ export class TuiSessionRunCoordinator {
       if (generation !== this.historyReloadGeneration) {
         return;
       }
-      for (const runId of runIds) {
-        this.historyReloadRunIds.delete(runId);
-        const deferred = this.deferredHistoryRunEvents.get(runId);
-        this.deferredHistoryRunEvents.delete(runId);
-        const historyOwned = this.historyOwnedReloadRunIds.delete(runId);
-        const previouslyDisplayed = this.historyDisplayedReloadRunIds.delete(runId);
+      for (const { runId, flags } of reloads) {
+        const current = this.historyReloadRuns.get(runId);
+        if (!current || current.flags & HISTORY_RELOAD_QUEUED) {
+          continue;
+        }
+        this.historyReloadRuns.delete(runId);
+        const deferred = current.deferredEvent;
+        const historyOwned = Boolean(flags & HISTORY_RELOAD_OWNED);
+        const previouslyDisplayed = Boolean(flags & HISTORY_RELOAD_DISPLAYED);
+        const gapRecovery = Boolean(flags & HISTORY_RELOAD_GAP_RECOVERY);
         const restoredInFlight = result.loaded && result.inFlightRunId === runId;
 
-        if (historyOwned && !restoredInFlight) {
+        if (historyOwned && !restoredInFlight && (result.loaded || !gapRecovery)) {
           this.context.finalizeHistoryOwnedRun({ runId, result, previouslyDisplayed });
         }
         if (deferred && (!result.loaded || historyOwned || restoredInFlight)) {
@@ -355,16 +393,35 @@ export class TuiSessionRunCoordinator {
     }
     for (const runId of queuedRunIds) {
       this.historyReloadQueued = true;
-      this.historyReloadRunIds.add(runId);
-      this.queuedHistoryReloadRunIds.add(runId);
+      const reload = this.historyReloadRuns.get(runId) ?? { flags: 0 };
+      reload.flags |= HISTORY_RELOAD_QUEUED;
       if (historyOwned.has(runId)) {
-        this.historyOwnedReloadRunIds.add(runId);
+        reload.flags |= HISTORY_RELOAD_OWNED;
       }
       if (displayed.has(runId)) {
-        this.historyDisplayedReloadRunIds.add(runId);
+        reload.flags |= HISTORY_RELOAD_DISPLAYED;
       }
+      this.historyReloadRuns.set(runId, reload);
     }
     this.drainHistoryReloadQueue();
+  }
+
+  queueGapHistoryReload(runIds: Iterable<string>, displayedRunIds: Iterable<string> = []): void {
+    if (!this.context.loadHistory) {
+      void this.context.refreshSessionInfo?.();
+      return;
+    }
+    const trackedRunIds = Array.from(runIds);
+    if (trackedRunIds.length === 0) {
+      this.queueHistoryReload();
+      return;
+    }
+    for (const runId of trackedRunIds) {
+      const reload = this.historyReloadRuns.get(runId) ?? { flags: 0 };
+      reload.flags |= HISTORY_RELOAD_GAP_RECOVERY;
+      this.historyReloadRuns.set(runId, reload);
+    }
+    this.queueHistoryReload(trackedRunIds, trackedRunIds, displayedRunIds);
   }
 
   clear(): void {
@@ -377,11 +434,7 @@ export class TuiSessionRunCoordinator {
     this.liveTerminalErrorMessages.clear();
     this.completedRuns.clear();
     this.postFinalizingRuns.clear();
-    this.historyReloadRunIds.clear();
-    this.historyOwnedReloadRunIds.clear();
-    this.historyDisplayedReloadRunIds.clear();
-    this.queuedHistoryReloadRunIds.clear();
-    this.deferredHistoryRunEvents.clear();
+    this.historyReloadRuns.clear();
     this.confirmedStreamRunIds.clear();
     this.retiredOrphanRunIds.clear();
     this.rejectUnconfirmedRuns = false;

@@ -14,6 +14,7 @@ import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
   NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  QUEUE_CAP_REJECTION_TEXT,
 } from "./dispatch-from-config.payloads.js";
 import {
   clearPendingFinalDeliveryAfterSuccess,
@@ -24,45 +25,29 @@ import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
-    acpDispatchSessionKey,
-    attachSourceReplyDeliveryMode,
     cfg,
     chatType,
-    commentaryPayloadsEnabled,
-    commitInboundDedupeIfClaimed,
-    completeDispatchReplyOperation,
     ctx,
     deliveryChannel,
-    deliverySuppressionReason,
+    deliberateSilentTerminalReply,
     dispatcher,
     emptyFinalAllowedAsSilent,
-    explicitCommandTurnCtx,
-    flushPendingCommentaryProgress,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
-    hasDeliveredRoutedBlockReply,
     isRoutedReplyDelivered,
-    markIdle,
     markInboundDedupeReplayUnsafe,
-    maybeApplyTtsWithFinalizationLease,
-    normalizeReplyMediaPayload,
-    preserveProgressCallbackStartOrder,
-    reasoningPayloadsEnabled,
-    recordAgentDispatchCompleted,
-    recordProcessed,
+    noVisibleReplyFallbackDirected,
+    pendingContinuation,
     replyResult,
     replyRoute,
     routeReplyToOriginating,
-    sendFinalPayload,
     sendPolicyDenied,
     sessionAgentId,
     sessionKey,
     sessionStoreEntry,
-    sessionTtsAuto,
-    sourceReplyDeliveryMode,
-    suppressAutomaticSourceDelivery,
     suppressDelivery,
     throwIfDispatchOperationAborted,
+    turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
@@ -81,12 +66,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   });
   // Final delivery is outside the progress wrappers. Wait until every source-ordered callback
   // has at least started so a delayed tool/reasoning transition cannot appear after the final.
-  if (preserveProgressCallbackStartOrder) {
-    await state.progressCallbackStartTail;
+  if (state.preserveProgressCallbackStartOrder) {
+    await state.progressState.progressCallbackStartTail;
   }
   // Backstop: silent/streaming-delivered turns end without a visible final
   // reply; trailing commentary must still land.
-  await flushPendingCommentaryProgress();
+  await state.flushPendingCommentaryProgress();
   const beforeAgentRunBlocked = replies.some(
     (reply) => getReplyPayloadMetadata(reply)?.beforeAgentRunBlocked === true,
   );
@@ -107,29 +92,27 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   // Uses the same helper as the source-reply visibility policy so the bypass
   // and the policy stay aligned.
   const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
-    suppressAutomaticSourceDelivery &&
+    state.suppressAutomaticSourceDelivery &&
     !sendPolicyDenied &&
     getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
-    (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    (ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx);
   const sentFinalPayloadDedupeKeys = new Set<string>();
-  let sawDedupedAgainstBlock = false;
-  let sawVisibleFinalDelivery = false;
   for (const [replyIndex, reply] of replies.entries()) {
     throwIfDispatchOperationAborted();
     // Durable reasoning is a channel-owned lane; generic channels keep the
     // historical suppression unless they explicitly opt in.
-    if (reply.isReasoning === true && !reasoningPayloadsEnabled) {
+    if (reply.isReasoning === true && !state.reasoningPayloadsEnabled) {
       continue;
     }
-    if (reply.isCommentary === true && !commentaryPayloadsEnabled) {
+    if (reply.isCommentary === true && !state.commentaryPayloadsEnabled) {
       continue;
     }
     if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
       if (hasOutboundReplyContent(reply, { trimText: true })) {
         logVerbose(
           [
-            `dispatch-from-config: final reply suppressed by ${deliverySuppressionReason || "source delivery policy"}`,
-            `(session=${acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+            `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
+            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
             `provider=${ctx.Provider ?? "unknown"}`,
             `surface=${ctx.Surface ?? "unknown"}`,
             `chatType=${chatType ?? "unknown"}`,
@@ -146,22 +129,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    const finalReply = await state.sendFinalPayload(reply, { deliveryId: String(replyIndex) });
     if (finalReply.dedupedAgainstBlock) {
-      sawDedupedAgainstBlock = true;
+      // The delivering block already settled into the turn ledger.
       continue;
     }
     attemptedFinalDelivery = true;
     queuedFinal = finalReply.queuedFinal || queuedFinal;
     routedFinalCount += finalReply.routedFinalCount;
-    // Routed drops of empty payloads report ok without sending anything; only a
-    // contentful final proves visibility for the no-visible-reply fallback gate.
-    if (
-      hasOutboundReplyContent(reply, { trimText: true }) &&
-      (finalReply.queuedFinal || finalReply.routedFinalCount > 0)
-    ) {
-      sawVisibleFinalDelivery = true;
-    }
     if (finalReply.queuedFinal) {
       if (finalReply.dispatcherOutcome) {
         finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
@@ -223,18 +198,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     if (
       ttsMode === "final" &&
       replies.length === 0 &&
-      state.blockCount > 0 &&
-      state.accumulatedBlockTtsText.trim()
+      state.progressState.blockCount > 0 &&
+      state.progressState.accumulatedBlockTtsText.trim()
     ) {
       try {
         await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
         throwIfDispatchOperationAborted();
-        const ttsSyntheticReply = await maybeApplyTtsWithFinalizationLease({
-          payload: { text: state.accumulatedBlockTtsText },
+        const ttsSyntheticReply = await state.maybeApplyTtsWithFinalizationLease({
+          payload: { text: state.progressState.accumulatedBlockTtsText },
           cfg,
           channel: deliveryChannel,
           kind: "final",
-          ttsAuto: sessionTtsAuto,
+          ttsAuto: state.sessionTtsAuto,
           agentId: sessionAgentId,
           accountId: replyRoute.accountId,
         });
@@ -247,13 +222,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             {
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: state.accumulatedBlockTtsText,
+              spokenText: state.progressState.accumulatedBlockTtsText,
               trustedLocalMedia: true,
             },
-            state.accumulatedBlockTtsText,
+            state.progressState.accumulatedBlockTtsText,
             { visibleTextAlreadyDelivered: true },
           );
-          const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+          const normalizedTtsOnlyPayload = await state.normalizeReplyMediaPayload(ttsOnlyPayload);
           throwIfDispatchOperationAborted();
           const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
             abortSignal: getDispatchAbortSignal(),
@@ -263,7 +238,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             queuedFinal = result.ok || queuedFinal;
             if (isRoutedReplyDelivered(result)) {
               routedFinalCount += 1;
-              sawVisibleFinalDelivery = true;
             }
             if (!result.ok) {
               logVerbose(
@@ -273,9 +247,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           } else {
             throwIfDispatchOperationAborted();
             markInboundDedupeReplayUnsafe();
-            const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
-            queuedFinal = didQueue || queuedFinal;
-            sawVisibleFinalDelivery = didQueue || sawVisibleFinalDelivery;
+            queuedFinal =
+              turnLedger.sendQueued("final", normalizedTtsOnlyPayload).queued || queuedFinal;
           }
         }
       } catch (err) {
@@ -290,29 +263,47 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
-  let counts = dispatcher.getQueuedCounts();
-  let noVisibleReplyFallbackDelivered = false;
-  // Visible agent turns must never end silently: empty model completions get a
-  // core fallback final. emptyFinalAllowedAsSilent is the only sanctioned silence.
-  // Routed streamed blocks bypass dispatcher counts, so blockCount and the
-  // deduped-against-block signal must also prove the turn was empty before falling back.
-  if (
+  // Observed delivery is plugin-attested visibility, a trust level the transport
+  // ledger intentionally does not own. Directedness gates both the fallback and
+  // eligibility: only a turn that positively addressed the bot may surface a
+  // visible failure notice.
+  const replyAdmission = state.replyOperationRunState.admission;
+  const replyAcceptedByActiveRun = replyAdmission?.status === "accepted";
+  const queueCapRejected =
+    replyAdmission?.status === "skipped" && replyAdmission.reason === "queue-cap";
+  const noVisibleReplyFallbackAllowed = () =>
+    noVisibleReplyFallbackDirected &&
     !suppressDelivery &&
     !sendPolicyDenied &&
-    sourceReplyDeliveryMode !== "message_tool_only" &&
-    !sawVisibleFinalDelivery &&
-    !getObservedReplyDelivery() &&
+    state.sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
-    !sawDedupedAgainstBlock &&
-    !hasDeliveredRoutedBlockReply() &&
-    state.blockCount === 0 &&
-    counts.tool === 0 &&
-    counts.block === 0 &&
-    counts.final === 0
-  ) {
+    !deliberateSilentTerminalReply &&
+    !pendingContinuation &&
+    !getObservedReplyDelivery() &&
+    !replyAcceptedByActiveRun &&
+    !turnLedger.hasVisibleDelivery() &&
+    !turnLedger.hasForeignQueuedAdmissions();
+  let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
+  if (noVisibleReplyFallbackAllowed()) {
+    // Only a turn that still looks empty pays for settlement: pending admissions
+    // must resolve (beforeDeliver cancellation, pre-transport failure) before the
+    // silence verdict. Turns with settled visibility or a policy-suppressed
+    // fallback skip the wait, so deliveries that legitimately outlive the turn
+    // (queued same-session mirroring) cannot deadlock the gate on themselves.
+    queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
+  }
+  let counts = dispatcher.getQueuedCounts();
+  let noVisibleReplyFallbackDelivered = false;
+  // The agent-result classifier owns deliberate silence and pending continuation;
+  // carry those facts here because filtered reply payloads cannot safely rederive either.
+  // An aborted or timed-out settle leaves delivery state unknown; admission
+  // then keeps its legacy trust and the turn ends without a fallback.
+  if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
     try {
       throwIfDispatchOperationAborted();
-      const fallbackPayload: ReplyPayload = { text: NO_VISIBLE_REPLY_FALLBACK_TEXT };
+      const fallbackPayload: ReplyPayload = {
+        text: queueCapRejected ? QUEUE_CAP_REJECTION_TEXT : NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      };
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),
         kind: "final",
@@ -332,16 +323,23 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       } else {
         throwIfDispatchOperationAborted();
         markInboundDedupeReplayUnsafe();
-        // Queue admission, not settled delivery: a beforeDeliver hook can still
-        // cancel this payload. Accepted tradeoff until a unified visible-delivery
-        // signal exists; every sibling in this function shares the semantics.
-        const didQueue = dispatcher.sendFinalReply(fallbackPayload);
-        if (didQueue) {
-          queuedFinal = true;
-          noVisibleReplyFallbackDelivered = true;
-          // Re-snapshot so the queued fallback is reflected in reported counts,
-          // matching the TTS-only path which enqueues before the snapshot.
-          counts = dispatcher.getQueuedCounts();
+        const fallbackSend = turnLedger.sendQueued("final", fallbackPayload);
+        if (fallbackSend.queued) {
+          // Settlement decides the flag: a beforeDeliver hook can still cancel
+          // the admitted fallback, and a cancelled fallback must keep the
+          // eligibility flag alive for channel-level recovery. The bounded
+          // abort-aware wait keeps a wedged transport from blocking
+          // finalization; on abort/timeout (and for untracked dispatchers)
+          // admission stays the strongest fact so channels cannot double-send.
+          const fallbackSettle = await turnLedger.settleQueued(getDispatchAbortSignal());
+          throwIfDispatchOperationAborted();
+          if (fallbackSettle !== "settled" || turnLedger.hasVisibleDelivery()) {
+            queuedFinal = true;
+            noVisibleReplyFallbackDelivered = true;
+            // Re-snapshot so the delivered fallback is reflected in reported counts,
+            // matching the TTS-only path which enqueues before the snapshot.
+            counts = dispatcher.getQueuedCounts();
+          }
         }
       }
     } catch (err) {
@@ -354,30 +352,39 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
   }
   counts.final += routedFinalCount;
-  commitInboundDedupeIfClaimed();
-  recordAgentDispatchCompleted("completed");
-  recordProcessed(
-    "completed",
-    state.pluginFallbackReason ? { reason: state.pluginFallbackReason } : undefined,
+  state.commitInboundDedupeIfClaimed();
+  const dispatchOutcome = queueCapRejected ? "skipped" : "completed";
+  const dispatchReason = queueCapRejected ? "queue-cap" : state.bindingState.pluginFallbackReason;
+  state.recordAgentDispatchCompleted(
+    dispatchOutcome,
+    dispatchReason ? { reason: dispatchReason } : undefined,
   );
-  markIdle("message_completed");
-  completeDispatchReplyOperation();
+  state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
+  state.markIdle(queueCapRejected ? "message_queue_cap_rejected" : "message_completed");
+  state.completeDispatchReplyOperation();
   return {
     status: "complete" as const,
-    result: attachSourceReplyDeliveryMode({
+    result: state.attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
-      ...(state.sessionMetadataChangesForResult
-        ? { sessionMetadataChanges: state.sessionMetadataChangesForResult }
+      ...(state.routeState.sessionMetadataChangesForResult
+        ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
         : {}),
       ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
-      // Eligibility keys off visible delivery, not queue/route admission: an
-      // empty routed final reports ok without sending, and must not mask a
-      // failed fallback from channel-level recovery.
-      ...(!sawVisibleFinalDelivery &&
+      // Eligibility keys off settled visible delivery: a suppressed or cancelled
+      // final (including the core fallback itself) leaves channel-level recovery
+      // eligible, while any settled visible delivery clears it. An aborted or
+      // timed-out settle leaves delivery unresolved, and a fallback reported as
+      // delivered must not stay recoverable — either could double-send.
+      ...(noVisibleReplyFallbackDirected &&
+      queuedSettleResult === "settled" &&
+      !turnLedger.hasVisibleDelivery() &&
       !noVisibleReplyFallbackDelivered &&
       !getObservedReplyDelivery() &&
-      !emptyFinalAllowedAsSilent
+      !replyAcceptedByActiveRun &&
+      !emptyFinalAllowedAsSilent &&
+      !deliberateSilentTerminalReply &&
+      !pendingContinuation
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),

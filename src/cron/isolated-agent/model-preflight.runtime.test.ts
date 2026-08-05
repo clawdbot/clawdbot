@@ -42,28 +42,41 @@ describe("preflightCronModelProvider", () => {
     resetCronModelProviderPreflightCacheForTest();
   });
 
-  it("skips network checks for cloud provider URLs", async () => {
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
+  it.each(["https://api.openai.com/v1", "http://128.0.0.1:8000/v1"])(
+    "skips network checks for non-local provider URL %s",
+    async (baseUrl) => {
+      const result = await preflightCronModelProvider({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl,
+                models: [],
+              },
             },
           },
         },
-      },
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+        provider: "openai",
+        model: "gpt-5.4",
+      });
 
-    expect(result).toEqual({ status: "available" });
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ status: "available" });
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("treats any HTTP response from a local OpenAI-compatible endpoint as reachable", async () => {
+  it.each([
+    "127.0.0.1",
+    "127.0.0.2",
+    "127.255.255.254",
+    "10.0.0.1",
+    "172.16.0.1",
+    "192.168.0.222",
+    "[::1]",
+    "[::ffff:7f00:1]",
+    "[::ffff:127.0.0.1]",
+  ])("treats any HTTP response from local endpoint host %s as reachable", async (host) => {
     mockReachableResponse(401);
 
     const result = await preflightCronModelProvider({
@@ -72,7 +85,7 @@ describe("preflightCronModelProvider", () => {
           providers: {
             vllm: {
               api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8000/v1",
+              baseUrl: `http://${host}:8000/v1`,
               models: [],
             },
           },
@@ -84,7 +97,7 @@ describe("preflightCronModelProvider", () => {
 
     expect(result).toEqual({ status: "available" });
     const request = requireFetchPreflightRequest();
-    expect(request.url).toBe("http://127.0.0.1:8000/v1/models");
+    expect(request.url).toBe(`http://${host}:8000/v1/models`);
     expect(request.timeoutMs).toBe(2500);
   });
 

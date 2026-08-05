@@ -23,6 +23,7 @@ data class GatewayRequestFrame(
   val id: String,
   val method: String,
   val params: JsonElement? = null,
+  val traceparent: String? = null,
 )
 
 @Serializable
@@ -333,6 +334,7 @@ enum class GatewayMethod(
   SessionsUnsubscribe("sessions.unsubscribe"),
   SessionsMessagesSubscribe("sessions.messages.subscribe"),
   SessionsMessagesUnsubscribe("sessions.messages.unsubscribe"),
+  SessionsViewersSet("sessions.viewers.set"),
   SessionsPreview("sessions.preview"),
   SessionsDescribe("sessions.describe"),
   SessionsCompactionList("sessions.compaction.list"),
@@ -456,7 +458,7 @@ enum class GatewayMethod(
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
   PluginsRefresh("plugins.refresh"),
-  ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
+  ControlUiSessionPullRequestsSubscribe("controlUi.sessionPullRequests.subscribe"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
   GatewaySuspendResume("gateway.suspend.resume"),
@@ -500,6 +502,13 @@ enum class GatewayMethod(
   SessionsCompanionState("sessions.companion.state"),
   SessionsCompanionReset("sessions.companion.reset"),
   Ready("ready"),
+  MemorySearch("memory.search"),
+  SkillsProposalsEventsList("skills.proposals.events.list"),
+  SkillsProposalsEvaluate("skills.proposals.evaluate"),
+  HooksStatus("hooks.status"),
+  TasksRetry("tasks.retry"),
+  TasksDismiss("tasks.dismiss"),
+  AuditRunInspect("audit.run.inspect"),
 }
 
 enum class GatewayEvent(
@@ -518,6 +527,7 @@ enum class GatewayEvent(
   SessionTyping("session.typing"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
+  ControlUiSessionPullRequestsChanged("controlUi.sessionPullRequests.changed"),
   Presence("presence"),
   Tick("tick"),
   TalkMode("talk.mode"),
@@ -536,6 +546,7 @@ enum class GatewayEvent(
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),
+  SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),

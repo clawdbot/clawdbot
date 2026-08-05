@@ -1,11 +1,11 @@
 // Chat model select state derivation.
-import { formatFastModeCurrentStatus } from "../../../../src/shared/fast-mode.js";
 import type {
   FastMode,
   GatewaySessionRow,
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import {
   buildCatalogDisplayLookup,
@@ -22,6 +22,7 @@ type ChatModelSelectStateInput = {
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
+  restrictOptionsToCatalog?: boolean;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
 };
@@ -180,6 +181,7 @@ function buildChatModelOptions(
   displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
   currentOverride: string,
   defaultModel: string,
+  restrictOptionsToCatalog: boolean,
 ): ChatModelSelectOption[] {
   const seen = new Set<string>();
   const options: ChatModelSelectOption[] = [];
@@ -202,13 +204,13 @@ function buildChatModelOptions(
     addOption(option.value, option.label);
   }
 
-  if (currentOverride) {
+  if (!restrictOptionsToCatalog && currentOverride) {
     addAvailableOption(
       currentOverride,
       formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
     );
   }
-  if (defaultModel) {
+  if (!restrictOptionsToCatalog && defaultModel) {
     addAvailableOption(
       defaultModel,
       formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup),
@@ -236,8 +238,23 @@ export function resolveChatModelSelectState(
   );
   const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
   const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
-  const defaultSelectable =
-    !defaultModel || !unavailableValues.has(normalizeChatModelAvailabilityKey(defaultModel));
+  const options = buildChatModelOptions(
+    catalog,
+    displayLookup,
+    currentOverride,
+    defaultModel,
+    state.restrictOptionsToCatalog === true,
+  );
+  const defaultSelectable = state.restrictOptionsToCatalog
+    ? Boolean(
+        defaultModel &&
+        options.some(
+          (option) =>
+            normalizeChatModelAvailabilityKey(option.value) ===
+            normalizeChatModelAvailabilityKey(defaultModel),
+        ),
+      )
+    : !defaultModel || !unavailableValues.has(normalizeChatModelAvailabilityKey(defaultModel));
 
   return {
     currentOverride,
@@ -245,7 +262,7 @@ export function resolveChatModelSelectState(
     defaultModel,
     defaultDisplay,
     defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
-    options: buildChatModelOptions(catalog, displayLookup, currentOverride, defaultModel),
+    options,
   };
 }
 
@@ -263,11 +280,25 @@ export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
 }
 
 export function resolveChatFastModeStatus(session: GatewaySessionRow | undefined): string {
-  return formatFastModeCurrentStatus({
-    mode: session?.effectiveFastMode ?? session?.fastMode,
-    source: session?.effectiveFastModeSource,
-    fastAutoOnSeconds: session?.fastAutoOnSeconds,
-  });
+  const mode = session?.effectiveFastMode ?? session?.fastMode;
+  const value =
+    mode === "auto"
+      ? t("chat.commandResults.fast.autoValue", {
+          seconds: String(session?.fastAutoOnSeconds ?? 60),
+        })
+      : t(mode === true ? "chat.commandResults.fast.on" : "chat.commandResults.fast.off");
+  const source = session?.effectiveFastModeSource;
+  const sourceSuffix =
+    source === "session"
+      ? t("chat.commandResults.fast.sourceSession")
+      : source === "agent"
+        ? t("chat.commandResults.fast.sourceAgent")
+        : source === "config"
+          ? t("chat.commandResults.fast.sourceModel")
+          : source === "default"
+            ? t("chat.commandResults.fast.sourceDefault")
+            : "";
+  return `${t("chat.commandResults.fast.current", { value })}${sourceSuffix}.`;
 }
 
 function resolveProviderFromModelValue(

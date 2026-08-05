@@ -12,6 +12,16 @@ const DETAILS_STACK = Symbol("markdownDetailsStack");
 
 type DetailsFrame = { hasSummary: boolean };
 type DetailsBlockState = StateBlock & { [DETAILS_STACK]?: DetailsFrame[] };
+type DetailsToken = ReturnType<StateBlock["push"]>;
+type DetailsTokenSink = {
+  push(type: string, tag: string, nesting: -1 | 0 | 1): DetailsToken;
+};
+type MarkdownRawHtmlContext =
+  | "comment"
+  | "processing_instruction"
+  | "declaration"
+  | "cdata"
+  | { element: string };
 
 type MarkdownDisclosureTag = {
   end: number;
@@ -79,7 +89,7 @@ export function scanMarkdownDisclosureLine(
   return tags.length > 0 ? tags : null;
 }
 
-function pushInlineParagraph(state: StateBlock, content: string, line: number): void {
+function pushInlineParagraph(state: DetailsTokenSink, content: string, line: number): void {
   if (!content.trim()) {
     return;
   }
@@ -92,7 +102,7 @@ function pushInlineParagraph(state: StateBlock, content: string, line: number): 
   state.push("paragraph_close", "p", -1);
 }
 
-function pushSummary(state: StateBlock, label: string, line: number): void {
+function pushSummary(state: DetailsTokenSink, label: string, line: number): void {
   const open = state.push("summary_open", "summary", 1);
   open.map = [line, line + 1];
   const inline = state.push("inline", "", 0);
@@ -102,27 +112,16 @@ function pushSummary(state: StateBlock, label: string, line: number): void {
   state.push("summary_close", "summary", -1);
 }
 
-function detailsBlockRule(
-  state: DetailsBlockState,
-  startLine: number,
-  _endLine: number,
-  silent: boolean,
+function pushDisclosureLine(
+  state: DetailsTokenSink,
+  line: string,
+  lineNumber: number,
+  stack: DetailsFrame[],
 ): boolean {
-  if ((state.sCount[startLine] ?? 0) - state.blkIndent >= 4) {
-    return false;
-  }
-  const start = (state.bMarks[startLine] ?? 0) + (state.tShift[startLine] ?? 0);
-  const end = state.eMarks[startLine] ?? state.src.length;
-  const line = state.src.slice(start, end);
   const tags = scanMarkdownDisclosureLine(line);
   if (!tags) {
     return false;
   }
-  if (silent) {
-    return true;
-  }
-
-  const stack = (state[DETAILS_STACK] ??= []);
   const kinds = tags.map((tag) => markdownDisclosureTagKind(tag.raw));
   const nextSummaryClose = Array.from({ length: tags.length }, () => -1);
   let nearestSummaryClose = -1;
@@ -135,7 +134,7 @@ function detailsBlockRule(
   let cursor = 0;
   let pendingText = "";
   const flushText = () => {
-    pushInlineParagraph(state, pendingText, startLine);
+    pushInlineParagraph(state, pendingText, lineNumber);
     pendingText = "";
   };
 
@@ -167,7 +166,7 @@ function detailsBlockRule(
       const close = closeIndex >= 0 ? tags[closeIndex] : undefined;
       if (frame && !frame.hasSummary && close) {
         flushText();
-        pushSummary(state, line.slice(tag.end, close.start), startLine);
+        pushSummary(state, line.slice(tag.end, close.start), lineNumber);
         frame.hasSummary = true;
         cursor = close.end;
         index = closeIndex;
@@ -181,8 +180,65 @@ function detailsBlockRule(
   }
   pendingText += line.slice(cursor);
   flushText();
+  return true;
+}
+
+function detailsBlockRule(
+  state: DetailsBlockState,
+  startLine: number,
+  _endLine: number,
+  silent: boolean,
+): boolean {
+  if ((state.sCount[startLine] ?? 0) - state.blkIndent >= 4) {
+    return false;
+  }
+  const start = (state.bMarks[startLine] ?? 0) + (state.tShift[startLine] ?? 0);
+  const end = state.eMarks[startLine] ?? state.src.length;
+  const line = state.src.slice(start, end);
+  if (!scanMarkdownDisclosureLine(line)) {
+    return false;
+  }
+  if (silent) {
+    return true;
+  }
+
+  pushDisclosureLine(state, line, startLine, (state[DETAILS_STACK] ??= []));
   state.line = startLine + 1;
   return true;
+}
+
+function openingRawHtmlContext(line: string): MarkdownRawHtmlContext | null {
+  const trimmed = line.trimStart();
+  if (trimmed.startsWith("<!--")) {
+    return "comment";
+  }
+  if (trimmed.startsWith("<?")) {
+    return "processing_instruction";
+  }
+  if (trimmed.startsWith("<![CDATA[")) {
+    return "cdata";
+  }
+  if (/^<![A-Z]/.test(trimmed)) {
+    return "declaration";
+  }
+  const element = /^<(pre|script|style|textarea)(?=[\s>]|$)/i.exec(trimmed)?.[1];
+  return element ? { element: element.toLowerCase() } : null;
+}
+
+function closesRawHtmlContext(context: MarkdownRawHtmlContext, line: string): boolean {
+  if (typeof context === "object") {
+    return line.toLowerCase().includes(`</${context.element}>`);
+  }
+  if (context === "comment") {
+    return line.includes("-->");
+  }
+  if (context === "processing_instruction") {
+    return line.includes("?>");
+  }
+  if (context === "declaration") {
+    return line.includes(">");
+  }
+  return line.includes("]]>");
 }
 
 export function installMarkdownDetails(markdownParser: MarkdownIt): void {
@@ -190,22 +246,113 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
     alt: ["paragraph", "reference", "blockquote"],
   });
 
-  // Streaming can end with open details; balance only our structured tokens at EOF.
+  // CommonMark type-6/7 HTML blocks can absorb a later disclosure closer until
+  // the next blank line. Continue scanning those blocks while a disclosure is
+  // open, but leave raw HTML block types 1-5 entirely literal.
   markdownParser.core.ruler.after("block", "details_balance", (state) => {
-    let depth = 0;
+    const output: DetailsToken[] = [];
+    const stack: DetailsFrame[] = [];
+
     for (const token of state.tokens) {
       if (token.type === "details_open") {
-        depth += 1;
-      } else if (token.type === "details_close") {
-        depth = Math.max(0, depth - 1);
+        stack.push({ hasSummary: false });
+        output.push(token);
+        continue;
       }
+      if (token.type === "summary_open") {
+        const frame = stack.at(-1);
+        if (frame) {
+          frame.hasSummary = true;
+        }
+        output.push(token);
+        continue;
+      }
+      if (token.type === "details_close") {
+        stack.pop();
+        output.push(token);
+        continue;
+      }
+      if (token.type !== "html_block" || stack.length === 0) {
+        output.push(token);
+        continue;
+      }
+
+      let level = token.level;
+      const replacement: DetailsToken[] = [];
+      const sink: DetailsTokenSink = {
+        push(type, tag, nesting) {
+          const next = new state.Token(type, tag, nesting);
+          next.block = true;
+          if (nesting < 0) {
+            level -= 1;
+          }
+          next.level = level;
+          if (nesting > 0) {
+            level += 1;
+          }
+          replacement.push(next);
+          return next;
+        },
+      };
+      const lines = token.content.split("\n");
+      let pendingHtml = "";
+      let rawHtmlContext: MarkdownRawHtmlContext | null = null;
+      const flushHtml = () => {
+        if (!pendingHtml) {
+          return;
+        }
+        const raw = sink.push("html_block", "", 0);
+        raw.content = pendingHtml;
+        raw.map = token.map;
+        pendingHtml = "";
+      };
+      for (const [lineOffset, line] of lines.entries()) {
+        const hasLineBreak = lineOffset < lines.length - 1;
+        if (rawHtmlContext) {
+          pendingHtml += line + (hasLineBreak ? "\n" : "");
+          if (closesRawHtmlContext(rawHtmlContext, line)) {
+            rawHtmlContext = null;
+          }
+          continue;
+        }
+        const openingContext = openingRawHtmlContext(line);
+        if (openingContext) {
+          pendingHtml += line + (hasLineBreak ? "\n" : "");
+          if (!closesRawHtmlContext(openingContext, line)) {
+            rawHtmlContext = openingContext;
+          }
+          continue;
+        }
+        if (!scanMarkdownDisclosureLine(line)) {
+          pendingHtml += line + (hasLineBreak ? "\n" : "");
+          continue;
+        }
+        flushHtml();
+        const lineNumber = (token.map?.[0] ?? 0) + lineOffset;
+        pushDisclosureLine(sink, line, lineNumber, stack);
+      }
+      flushHtml();
+      output.push(...replacement);
     }
-    while (depth > 0) {
+
+    // Streaming can end with open details; balance only our structured tokens at EOF.
+    while (stack.length > 0) {
       const token = new state.Token("details_close", "details", -1);
       token.block = true;
-      state.tokens.push(token);
-      depth -= 1;
+      output.push(token);
+      stack.pop();
     }
+    let level = 0;
+    for (const token of output) {
+      if (token.nesting < 0) {
+        level -= 1;
+      }
+      token.level = level;
+      if (token.nesting > 0) {
+        level += 1;
+      }
+    }
+    state.tokens = output;
   });
 
   markdownParser.renderer.rules.details_open = (tokens, index) =>

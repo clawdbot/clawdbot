@@ -3,7 +3,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  formatSqliteSessionFileMarker,
   listSessionEntries,
   loadTranscriptEventsSync,
   resolveStorePath,
@@ -44,13 +43,18 @@ type QaSessionTranscriptSeedParams = {
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const MAX_COMPACTION_SUMMARIES = 16;
+const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
 
 type QaSessionTranscriptSummary = {
   assistantMirrors?: Array<{ identity: string; text: string }>;
   assistantToolCallCounts: Record<string, number>;
+  compactionSummaries: string[];
   completedToolCallCounts: Record<string, number>;
   eventCursor: number;
+  userMessageCount: number;
   successfulToolCallCounts: Record<string, number>;
+  successfulToolCallEvents?: Array<{ name: string; timestamp: number; toolCallId: string }>;
   finalText: string;
   hasDirectReplySelfMessage: boolean;
   lastAssistantContentTypes?: string[];
@@ -119,7 +123,11 @@ function summarizeSessionTranscriptEvents(
   const assistantMirrors: Array<{ identity: string; text: string }> = [];
   const assistantToolCallCounts: Record<string, number> = {};
   const completedToolCallCounts: Record<string, number> = {};
+  const compactionSummaries: string[] = [];
   const successfulToolCallCounts: Record<string, number> = {};
+  const successfulToolCallEvents: NonNullable<
+    QaSessionTranscriptSummary["successfulToolCallEvents"]
+  > = [];
   const assistantToolNamesByCallId = new Map<string, string>();
   const completedToolCallIds = new Set<string>();
   const successfulToolCallIds = new Set<string>();
@@ -129,13 +137,28 @@ function summarizeSessionTranscriptEvents(
   let lastAssistantStopReason: string | undefined;
   let lastAssistantToolNames: string[] = [];
   let lastMessageRole: string | undefined;
+  let userMessageCount = 0;
 
   for (const event of events) {
+    if (isRecord(event) && event.type === "compaction") {
+      const summary = readNonEmptyString(event.summary);
+      if (summary) {
+        if (compactionSummaries.length === MAX_COMPACTION_SUMMARIES) {
+          compactionSummaries.shift();
+        }
+        compactionSummaries.push(summary);
+      }
+      continue;
+    }
     const message = readSessionTranscriptEventMessage(event);
     if (!message) {
       continue;
     }
     lastMessageRole = readNonEmptyString(message.role);
+    if (message.role === "user") {
+      userMessageCount += 1;
+      continue;
+    }
     if (message.role === "toolResult") {
       const toolCallId = readNonEmptyString(message.toolCallId);
       const toolName = readNonEmptyString(message.toolName);
@@ -157,6 +180,17 @@ function summarizeSessionTranscriptEvents(
       ) {
         successfulToolCallIds.add(toolCallId);
         successfulToolCallCounts[toolName] = (successfulToolCallCounts[toolName] ?? 0) + 1;
+        if (typeof message.timestamp === "number" && Number.isFinite(message.timestamp)) {
+          // Keep owner-authenticated result chronology bounded for long-lived QA sessions.
+          if (successfulToolCallEvents.length === MAX_SUCCESSFUL_TOOL_CALL_EVENTS) {
+            successfulToolCallEvents.shift();
+          }
+          successfulToolCallEvents.push({
+            name: toolName,
+            timestamp: message.timestamp,
+            toolCallId,
+          });
+        }
       }
       continue;
     }
@@ -198,9 +232,12 @@ function summarizeSessionTranscriptEvents(
   return {
     ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
     assistantToolCallCounts,
+    compactionSummaries,
     completedToolCallCounts,
     eventCursor,
+    userMessageCount,
     successfulToolCallCounts,
+    ...(successfulToolCallEvents.length > 0 ? { successfulToolCallEvents } : {}),
     finalText,
     hasDirectReplySelfMessage: scanner.findings().length > 0,
     ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
@@ -214,8 +251,10 @@ function summarizeSessionTranscriptEvents(
 function emptySessionTranscriptSummary(eventCursor: number): QaSessionTranscriptSummary {
   return {
     assistantToolCallCounts: {},
+    compactionSummaries: [],
     completedToolCallCounts: {},
     eventCursor,
+    userMessageCount: 0,
     successfulToolCallCounts: {},
     finalText: "",
     hasDirectReplySelfMessage: false,
@@ -333,11 +372,6 @@ async function seedQaSessionTranscript(
     sessionKey,
     storePath,
     entry: {
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "qa",
-        sessionId,
-        storePath,
-      }),
       sessionId,
       updatedAt: params.updatedAt,
       ...(label ? { origin: { label } } : {}),

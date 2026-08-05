@@ -4,6 +4,7 @@ import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js"
 import {
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
+  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -11,8 +12,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
+  hasSessionEntriesByStatusReadOnly,
   listSessionEntries,
   listSessionEntriesReadOnly,
+  resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntry,
 } from "./session-accessor.js";
 
@@ -64,6 +67,74 @@ describe("session accessor readonly listing", () => {
 
     expect(listSessionEntriesReadOnly({ agentId, env })).toEqual([]);
     expect(fs.existsSync(databasePath)).toBe(false);
+    expect(countRegisteredAgentDatabases(env)).toBe(0);
+  });
+
+  it("probes lifecycle status without creating or registering a missing database", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-status-missing-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+    clearRegisteredAgentDatabases(env);
+
+    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["running"])).toBe(false);
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(countRegisteredAgentDatabases(env)).toBe(0);
+  });
+
+  it("distinguishes non-session agent state from a running session row", async () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-status-existing-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+    openOpenClawAgentDatabase({ agentId, env, path: databasePath });
+    closeOpenClawAgentDatabasesForTest();
+    clearRegisteredAgentDatabases(env);
+
+    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["running"])).toBe(false);
+    expect(countRegisteredAgentDatabases(env)).toBe(0);
+
+    await upsertSessionEntry(
+      { agentId, env, sessionKey: "agent:worker-1:main" },
+      { sessionId: "session-1", status: "running", updatedAt: 10 },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    clearRegisteredAgentDatabases(env);
+
+    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["running"])).toBe(true);
+    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["done"])).toBe(false);
+    expect(countRegisteredAgentDatabases(env)).toBe(0);
+  });
+
+  it("resolves a missing session identity without creating or registering a database", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-identity-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+    clearRegisteredAgentDatabases(env);
+
+    expect(
+      resolveTranscriptSessionKeyBySessionId({ agentId, env, sessionId: "missing-session" }),
+    ).toBeUndefined();
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(countRegisteredAgentDatabases(env)).toBe(0);
+  });
+
+  it("resolves an existing session identity without registering its database", async () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-existing-identity-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const sessionKey = "agent:worker-1:main";
+    await upsertSessionEntry(
+      { agentId, env, sessionKey },
+      { sessionId: "session-1", updatedAt: 1 },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    clearRegisteredAgentDatabases(env);
+
+    expect(resolveTranscriptSessionKeyBySessionId({ agentId, env, sessionId: "session-1" })).toBe(
+      sessionKey,
+    );
     expect(countRegisteredAgentDatabases(env)).toBe(0);
   });
 

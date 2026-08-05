@@ -1,17 +1,15 @@
-import {
-  catalogRawRecord,
-  clampText,
-  createDockPanelLayout,
-  type BoardFace,
-  type BoardProvider,
-  type BoardTab,
-  type BoardViewSnapshot,
-  type ChatPageHost,
-  type ControlUiSessionPullRequest,
-  type GatewayBrowserClient,
-  type SessionCatalogPullRequestSummary,
-  type ApplicationContext,
-} from "./chat-pane-deps.ts";
+import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import { clampText } from "../../lib/format.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };

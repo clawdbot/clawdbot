@@ -1,11 +1,21 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveStorePath } from "../../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  updateSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import {
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
+import { resolveDefaultAgentId } from "../../agent-scope.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -18,23 +28,81 @@ import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 
 export function buildContextEngineCompactionSessionTarget(params: {
-  agentId: string;
+  agentId?: string;
   config?: RunEmbeddedAgentParams["config"];
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
 }): ContextEngineSessionTarget {
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const agentId = params.sessionTarget?.agentId ?? sqliteMarker?.agentId ?? params.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
+  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
+  const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
+  const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
+  const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
+  const completeTarget = Boolean(
+    targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
+  );
+  const marker = completeTarget ? undefined : parseSqliteSessionFileMarker(params.sessionFile);
+  const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
+  const candidateSessionKey = targetSessionKey ?? suppliedSessionKey;
+  const candidateKeyAgentId = parseAgentSessionKey(candidateSessionKey)?.agentId;
+  const suppliedEntry =
+    marker && candidateSessionKey
+      ? loadSessionEntry({
+          agentId: marker.agentId,
+          sessionKey: candidateSessionKey,
+          storePath: marker.storePath,
+        })
+      : undefined;
+  const markerMatches = marker
+    ? listSessionEntries({
+        agentId: marker.agentId,
+        storePath: marker.storePath,
+      }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+    : [];
+  const preferredMarkerSessionKey = marker
+    ? resolvePreferredSessionKeyForSessionIdMatches(
+        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        marker.sessionId,
+      )
+    : undefined;
+  const markerSessionKey = marker
+    ? suppliedEntry?.sessionId === marker.sessionId
+      ? candidateSessionKey
+      : candidateSessionKey && !suppliedEntry
+        ? candidateSessionKey
+        : (preferredMarkerSessionKey ?? (markerMatches.length === 0 ? marker.sessionId : undefined))
+    : undefined;
+  if (marker && !markerSessionKey) {
+    throw new Error("Legacy compaction transcript identity is ambiguous");
+  }
+  if (
+    marker &&
+    ((targetAgentId && targetAgentId !== marker.agentId) ||
+      (targetSessionId && targetSessionId !== marker.sessionId) ||
+      (candidateKeyAgentId && candidateKeyAgentId !== marker.agentId) ||
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(marker.storePath)) ||
+      (candidateSessionKey && suppliedEntry && suppliedEntry.sessionId !== marker.sessionId))
+  ) {
+    throw new Error("Legacy compaction transcript identity is inconsistent");
+  }
+  const sessionKey = completeTarget
+    ? targetSessionKey
+    : marker
+      ? markerSessionKey
+      : (targetSessionKey ?? suppliedSessionKey ?? targetSessionId ?? params.sessionId);
+  const agentId =
+    targetAgentId ??
+    marker?.agentId ??
+    params.agentId ??
+    resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(params.config ?? {}));
   const storePath =
-    params.sessionTarget?.storePath ??
-    sqliteMarker?.storePath ??
+    targetStorePath ??
+    marker?.storePath ??
     resolveStorePath(params.config?.session?.store, { agentId });
   return {
     agentId,
-    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    sessionId: targetSessionId ?? marker?.sessionId ?? params.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
     ...(storePath ? { storePath } : {}),
     ...(params.sessionTarget?.threadId !== undefined

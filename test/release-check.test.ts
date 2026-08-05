@@ -5,6 +5,7 @@ import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mjs";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -48,6 +49,7 @@ import {
 } from "../scripts/release-check.ts";
 import { listStaticExtensionAssetOutputs } from "../scripts/runtime-postbuild.mjs";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
+import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
@@ -725,6 +727,7 @@ describe("collectMissingPackPaths", () => {
       "dist/agents/compaction-planning.worker.js",
       "dist/agents/model-provider-auth.worker.js",
       "dist/audit/audit-event-writer.worker.js",
+      "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
       "dist/config/sessions/session-transcript-reconcile.worker.js",
       "dist/state/openclaw-database-verify.worker.js",
       "dist/system-agent/setup-inference-detection.worker.js",
@@ -765,6 +768,7 @@ describe("collectMissingPackPaths", () => {
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
         "dist/audit/audit-event-writer.worker.js",
+        "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
         "dist/config/sessions/session-transcript-reconcile.worker.js",
         "dist/state/openclaw-database-verify.worker.js",
         "dist/system-agent/setup-inference-detection.worker.js",
@@ -911,6 +915,14 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toStrictEqual([]);
   });
 
+  it("accepts npm 12 name-keyed pack results", () => {
+    expect(
+      collectPackUnpackedSizeErrors({
+        openclaw: makePackResult("openclaw-2026.3.14.tgz", 120_354_302),
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("flags oversized pack results that risk low-memory startup failures", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
@@ -928,6 +940,20 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toEqual([
       "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
     ]);
+  });
+});
+
+describe("resolveNpmJsonEntries", () => {
+  it("normalizes npm <=11 arrays and npm 12 name-keyed objects", () => {
+    const entry = makePackResult("openclaw-2026.7.2.tgz", 120_354_302);
+
+    expect(resolveNpmJsonEntries([entry])).toEqual([entry]);
+    expect(resolveNpmJsonEntries(entry)).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ "@openclaw/demo": entry })).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual(
+      resolveRuntimeNpmJsonEntries({ openclaw: entry }),
+    );
   });
 });
 

@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
@@ -19,8 +20,8 @@ import {
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
-import { createExecTool } from "./bash-tools.exec.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
@@ -123,6 +124,7 @@ describe("gateway-hosted exec approvals", () => {
         clientDisplayName: "approval operator",
         mode: GATEWAY_CLIENT_MODES.TEST,
         scopes: [ADMIN_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
         requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
         timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
       });

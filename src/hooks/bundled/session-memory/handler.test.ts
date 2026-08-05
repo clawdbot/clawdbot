@@ -5,13 +5,16 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../../config/sessions/legacy-sqlite-marker.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
+import { getRecentSessionContentFromEvents } from "./transcript.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -28,6 +31,71 @@ const loggerMocks = vi.hoisted(() => ({
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
+
+async function readFileTranscript(filePath: string, messageCount = 15): Promise<string | null> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    return getRecentSessionContentFromEvents(
+      content
+        .trim()
+        .split("\n")
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as unknown];
+          } catch {
+            return [];
+          }
+        }),
+      messageCount,
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function getRecentSessionContentWithResetFallback(
+  filePath: string,
+  messageCount = 15,
+): Promise<string | null> {
+  const active = await readFileTranscript(filePath, messageCount);
+  if (active) {
+    return active;
+  }
+  const candidates = (await fs.readdir(path.dirname(filePath)))
+    .filter((name) => name.startsWith(`${path.basename(filePath)}.reset.`))
+    .toSorted();
+  const latest = candidates.at(-1);
+  return latest
+    ? await readFileTranscript(path.join(path.dirname(filePath), latest), messageCount)
+    : active;
+}
+
+async function findPreviousSessionFile(params: {
+  sessionsDir: string;
+  currentSessionFile?: string;
+  sessionId?: string;
+}): Promise<string | undefined> {
+  const files = await fs.readdir(params.sessionsDir);
+  const currentName = params.currentSessionFile
+    ? path.basename(params.currentSessionFile)
+    : undefined;
+  if (currentName?.includes(".reset.") && files.includes(currentName)) {
+    return path.join(params.sessionsDir, currentName);
+  }
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    return undefined;
+  }
+  const activeName = `${sessionId}.jsonl`;
+  if (files.includes(activeName)) {
+    return path.join(params.sessionsDir, activeName);
+  }
+  const reset = files
+    .filter((name) => name.startsWith(`${activeName}.reset.`))
+    .toSorted()
+    .at(-1);
+  return reset ? path.join(params.sessionsDir, reset) : undefined;
+}
 
 let handler: typeof import("./handler.js").default;
 let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
@@ -87,17 +155,55 @@ async function runNewWithPreviousSessionEntry(params: {
   workspaceDirOverride?: string;
   timestamp?: Date;
 }): Promise<{ files: string[]; memoryContent: string }> {
+  const baseConfig =
+    params.cfg ??
+    ({
+      agents: { defaults: { workspace: params.tempDir } },
+    } satisfies OpenClawConfig);
+  const legacySessionFile = params.previousSessionEntry.sessionFile;
+  const marker = parseSqliteSessionFileMarker(legacySessionFile);
+  const storePath =
+    marker?.storePath ?? baseConfig.session?.store ?? path.join(params.tempDir, "sessions.json");
+  if (legacySessionFile && !marker) {
+    const content = await fs.readFile(legacySessionFile, "utf8").catch(() => "");
+    if (content) {
+      let parentId: string | null = null;
+      const events = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line, index) => {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          const id = typeof event.id === "string" ? event.id : `fixture-${index + 1}`;
+          const normalized = Object.assign(event, { id });
+          if (!Object.hasOwn(normalized, "parentId")) {
+            normalized.parentId = parentId;
+          }
+          parentId = id;
+          return normalized;
+        });
+      await replaceTranscriptEvents(
+        {
+          agentId: "main",
+          sessionId: params.previousSessionEntry.sessionId,
+          sessionKey: params.sessionKey ?? "agent:main:main",
+          storePath,
+        },
+        events,
+      );
+    }
+  }
+  const cfg = {
+    ...baseConfig,
+    session: { ...baseConfig.session, store: storePath },
+  } satisfies OpenClawConfig;
   const event = createHookEvent(
     "command",
     params.action ?? "new",
     params.sessionKey ?? "agent:main:main",
     {
-      cfg:
-        params.cfg ??
-        ({
-          agents: { defaults: { workspace: params.tempDir } },
-        } satisfies OpenClawConfig),
-      previousSessionEntry: params.previousSessionEntry,
+      cfg,
+      previousSessionEntry: { sessionId: params.previousSessionEntry.sessionId },
       ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
     },
   );
@@ -170,30 +276,6 @@ async function createSessionMemoryWorkspace(params?: {
     content: params.activeSession.content,
   });
   return { tempDir, sessionsDir, activeSessionFile };
-}
-
-async function writeSessionTranscript(params: {
-  name: string;
-  content: string;
-}): Promise<{ tempDir: string; sessionsDir: string; sessionFile: string }> {
-  const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
-  const sessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: params.name,
-    content: params.content,
-  });
-  return { tempDir, sessionsDir, sessionFile };
-}
-
-async function readSessionTranscript(params: {
-  sessionContent: string;
-  messageCount?: number;
-}): Promise<string | null> {
-  const { sessionFile } = await writeSessionTranscript({
-    name: "test-session.jsonl",
-    content: params.sessionContent,
-  });
-  return getRecentSessionContentWithResetFallback(sessionFile, params.messageCount);
 }
 
 function expectMemoryConversation(params: {
@@ -320,6 +402,65 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("Inactive branch content");
   });
 
+  it("fills the configured memory window past ineligible tail messages", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sqlite-filtered-tail";
+    const sessionKey = "agent:main:main";
+    const events: Array<Record<string, unknown>> = [
+      {
+        type: "message",
+        id: "kept-user",
+        parentId: null,
+        message: { role: "user", content: "Keep this user context" },
+      },
+      {
+        type: "message",
+        id: "kept-assistant",
+        parentId: "kept-user",
+        message: { role: "assistant", content: "Keep this assistant context" },
+      },
+    ];
+    let parentId = "kept-assistant";
+    for (let index = 0; index < 20; index += 1) {
+      const id = `tool-result-${index}`;
+      events.push({
+        type: "message",
+        id,
+        parentId,
+        message: { role: "toolResult", content: `ignored tool result ${index}` },
+      });
+      parentId = id;
+    }
+    events.push({
+      type: "message",
+      id: "no-reply-tail",
+      parentId,
+      message: { role: "assistant", content: "NO_REPLY" },
+    });
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, events);
+
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+        hooks: {
+          internal: {
+            entries: { "session-memory": { enabled: true, messages: 2 } },
+          },
+        },
+        session: { store: storePath },
+      },
+      previousSessionEntry: { sessionId },
+    });
+
+    expect(memoryContent).toContain("user: Keep this user context");
+    expect(memoryContent).toContain("assistant: Keep this assistant context");
+    expect(memoryContent).not.toContain("ignored tool result");
+    expect(memoryContent).not.toContain("NO_REPLY");
+  });
+
   it("sanitizes model artifacts before writing session memory", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
@@ -394,8 +535,33 @@ describe("session-memory hook", () => {
       });
 
       expect(files).toEqual(["2025-12-31-2330.md"]);
-      expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15(?: EST| GMT-5)?/);
+      expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15 America\/New_York/);
       expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
+    });
+  });
+
+  it("prefers configured user timezone over the host timezone", async () => {
+    await withEnvAsync({ TZ: "America/New_York" }, async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+
+      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        cfg: {
+          agents: {
+            defaults: {
+              workspace: tempDir,
+              userTimezone: "Asia/Jakarta",
+            },
+          },
+        },
+        timestamp: new Date("2026-01-01T18:30:15.000Z"),
+        previousSessionEntry: {
+          sessionId: "configured-timezone-session",
+        },
+      });
+
+      expect(files).toEqual(["2026-01-02-0130.md"]);
+      expect(memoryContent).toMatch(/^# Session: 2026-01-02 01:30:15 Asia\/Jakarta/);
     });
   });
 
@@ -470,108 +636,6 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Stored in the bound workspace");
     expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
     await expectPathMissing(path.join(mainWorkspace, "memory"));
-  });
-
-  it("filters out non-message entries (tool calls, system)", async () => {
-    const sessionContent = createMockSessionContent([
-      { role: "user", content: "Hello" },
-      { type: "tool_use", tool: "search", input: "test" },
-      { role: "assistant", content: "World" },
-      { type: "tool_result", result: "found it" },
-      { role: "user", content: "Thanks" },
-    ]);
-    const memoryContent = await readSessionTranscript({ sessionContent });
-
-    expect(memoryContent).toContain("user: Hello");
-    expect(memoryContent).toContain("assistant: World");
-    expect(memoryContent).toContain("user: Thanks");
-    expect(memoryContent).not.toContain("tool_use");
-    expect(memoryContent).not.toContain("tool_result");
-    expect(memoryContent).not.toContain("search");
-  });
-
-  it("filters out inter-session user messages", async () => {
-    const sessionContent = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "Forwarded internal instruction",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Acknowledged" },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "External follow-up" },
-      }),
-    ].join("\n");
-    const memoryContent = await readSessionTranscript({ sessionContent });
-
-    expect(memoryContent).not.toContain("Forwarded internal instruction");
-    expect(memoryContent).toContain("assistant: Acknowledged");
-    expect(memoryContent).toContain("user: External follow-up");
-  });
-
-  it("filters out command messages starting with /", async () => {
-    const sessionContent = createMockSessionContent([
-      { role: "user", content: "/help" },
-      { role: "assistant", content: "Here is help info" },
-      { role: "user", content: "Normal message" },
-      { role: "user", content: "/new" },
-    ]);
-    const memoryContent = await readSessionTranscript({ sessionContent });
-
-    expect(memoryContent).not.toContain("/help");
-    expect(memoryContent).not.toContain("/new");
-    expect(memoryContent).toContain("assistant: Here is help info");
-    expect(memoryContent).toContain("user: Normal message");
-  });
-
-  it("respects custom messages config (limits to N messages)", async () => {
-    const entries = [];
-    for (let i = 1; i <= 10; i++) {
-      entries.push({ role: "user", content: `Message ${i}` });
-    }
-    const sessionContent = createMockSessionContent(entries);
-    const memoryContent = await readSessionTranscript({
-      sessionContent,
-      messageCount: 3,
-    });
-
-    expect(memoryContent).not.toContain("user: Message 1\n");
-    expect(memoryContent).not.toContain("user: Message 7\n");
-    expect(memoryContent).toContain("user: Message 8");
-    expect(memoryContent).toContain("user: Message 9");
-    expect(memoryContent).toContain("user: Message 10");
-  });
-
-  it("filters messages before slicing (fix for #2681)", async () => {
-    const entries = [
-      { role: "user", content: "First message" },
-      { type: "tool_use", tool: "test1" },
-      { type: "tool_result", result: "result1" },
-      { role: "assistant", content: "Second message" },
-      { type: "tool_use", tool: "test2" },
-      { type: "tool_result", result: "result2" },
-      { role: "user", content: "Third message" },
-      { type: "tool_use", tool: "test3" },
-      { type: "tool_result", result: "result3" },
-      { role: "assistant", content: "Fourth message" },
-    ];
-    const sessionContent = createMockSessionContent(entries);
-    const memoryContent = await readSessionTranscript({
-      sessionContent,
-      messageCount: 3,
-    });
-
-    expect(memoryContent).not.toContain("First message");
-    expect(memoryContent).toContain("user: Third message");
-    expect(memoryContent).toContain("assistant: Second message");
-    expect(memoryContent).toContain("assistant: Fourth message");
   });
 
   it("falls back to latest .jsonl.reset.* transcript when active file is empty", async () => {
@@ -799,163 +863,6 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Stored in agent workspace");
     // Verify memory did NOT leak to the default workspace
     await expectPathMissing(path.join(defaultWorkspace, "memory"));
-  });
-
-  it("handles session files with fewer messages than requested", async () => {
-    const sessionContent = createMockSessionContent([
-      { role: "user", content: "Only message 1" },
-      { role: "assistant", content: "Only message 2" },
-    ]);
-    const memoryContent = await readSessionTranscript({ sessionContent });
-
-    expect(memoryContent).toContain("user: Only message 1");
-    expect(memoryContent).toContain("assistant: Only message 2");
-  });
-
-  it("preserves delivery-mirror with unique text when no raw assistant precedes it (message-tool scenario)", async () => {
-    // When a delivery-mirror row is the only assistant reply (e.g., the
-    // response comes from a message-tool send, not a raw model turn),
-    // it must be preserved — not filtered out by a blanket DM skip.
-    const sessionContent = [
-      JSON.stringify({ type: "message", message: { role: "user", content: "Turn on the lights" } }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Lights turned on" }],
-        },
-      }),
-    ].join("\n");
-
-    const memoryContent = await readSessionTranscript({ sessionContent });
-    const assistantLines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
-    // The delivery-mirror is the only assistant reply — must be preserved
-    expect(assistantLines).toEqual(["assistant: Lights turned on"]);
-    expect(memoryContent).toContain("Lights turned on");
-  });
-
-  it("filters delivery-mirror duplicates but preserves standalone gateway-injected assistant rows (fixes #92563)", async () => {
-    const sessionContent = [
-      JSON.stringify({ type: "message", message: { role: "user", content: "What is 2+2?" } }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "claude",
-          content: [
-            { type: "thinking", text: "..." },
-            { type: "text", text: "2+2 = 4" },
-          ],
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "2+2 = 4" }],
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "gateway-injected",
-          content: [{ type: "text", text: "standalone gateway reply" }],
-        },
-      }),
-    ].join("\n");
-
-    const memoryContent = await readSessionTranscript({ sessionContent });
-    const assistantLines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
-    // delivery-mirror duplicate is filtered, gateway-injected standalone is preserved
-    expect(assistantLines).toEqual(["assistant: 2+2 = 4", "assistant: standalone gateway reply"]);
-    expect(memoryContent).toContain("standalone gateway reply");
-  });
-
-  it("preserves delivery-mirror after user turn even when mirroring older assistant text", async () => {
-    // Without the user-turn reset of `lastAssistantText`, a delivery-mirror
-    // row after a user message that echoes a *previous* turn's assistant
-    // content would be incorrectly filtered.
-    const sessionContent = [
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Your number is 123-4567" },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Your number is 123-4567" }],
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "I changed it to 987-6543" },
-      }),
-      // This delivery-mirror echoes the old assistant text from a previous turn.
-      // In the new turn, it must NOT be filtered — there is no other assistant
-      // reply in this turn to deduplicate against.
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Your number is 123-4567" }],
-        },
-      }),
-    ].join("\n");
-
-    const memoryContent = await readSessionTranscript({ sessionContent });
-    const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
-    expect(lines).toEqual([
-      "assistant: Your number is 123-4567",
-      "assistant: Your number is 123-4567",
-    ]);
-  });
-
-  it("preserves delivery-mirror after an omitted slash-command user turn", async () => {
-    const sessionContent = [
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Done" },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Done" }],
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "/new" },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Done" }],
-        },
-      }),
-    ].join("\n");
-
-    const memoryContent = await readSessionTranscript({ sessionContent });
-    const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
-    expect(lines).toEqual(["assistant: Done", "assistant: Done"]);
-    expect(memoryContent).not.toContain("user: /new");
   });
 
   it("keeps sibling home-prefix paths intact in completion logs", async () => {

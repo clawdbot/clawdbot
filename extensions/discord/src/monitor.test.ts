@@ -928,8 +928,12 @@ vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueS
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
 
-const { DiscordMessageListener, DiscordReactionListener, registerDiscordListener } =
-  await import("./monitor/listeners.js");
+const {
+  DiscordMessageListener,
+  DiscordReactionListener,
+  DiscordReactionRemoveListener,
+  registerDiscordListener,
+} = await import("./monitor/listeners.js");
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -956,6 +960,7 @@ function makeReactionEvent(overrides?: {
   guildId?: string;
   channelId?: string;
   userId?: string;
+  username?: string;
   messageId?: string;
   emojiName?: string;
   botAsAuthor?: boolean;
@@ -986,7 +991,7 @@ function makeReactionEvent(overrides?: {
     user: {
       id: userId,
       bot: false,
-      username: "testuser",
+      username: overrides?.username ?? "testuser",
       discriminator: "0",
     },
     message: {
@@ -1096,6 +1101,18 @@ describe("discord DM reaction handling", () => {
         "discord:acc-1:dm:user-1",
       );
     }
+  });
+
+  it("keeps the actor id when a reaction removal does not include a Discord username", async () => {
+    const data = makeReactionEvent({ userId: "user-42", username: "", botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionRemoveListener(makeReactionListenerParams());
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+    const text = firstMockArg(enqueueSystemEventSpy, "enqueueSystemEvent");
+    expect(text).toContain("Discord reaction removed: 👍 by user-42 on");
   });
 
   it("blocks DM reactions when dmPolicy is disabled", async () => {

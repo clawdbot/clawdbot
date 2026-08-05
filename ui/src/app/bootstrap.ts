@@ -1,3 +1,4 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import {
@@ -31,8 +32,8 @@ import type {
   ApplicationContext,
   ApplicationNavigationPreferences,
   ApplicationNavigationPreferencesSnapshot,
-  ApplicationSkillWorkshopRevisionHandoff,
   ApplicationTheme,
+  ApplicationThemeServerSelection,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -49,6 +50,7 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
@@ -77,6 +79,7 @@ function createApplicationTheme(
   initialSettings: UiSettings,
 ): ApplicationTheme & { dispose: () => void } {
   let settings = initialSettings;
+  let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
@@ -117,6 +120,13 @@ function createApplicationTheme(
   return {
     get mode() {
       return settings.themeMode;
+    },
+    get serverSelection() {
+      return serverSelection;
+    },
+    recordServerSelection(theme, scope) {
+      serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
+      publish();
     },
     setMode(mode: ThemeMode, element) {
       const currentSettings = loadSettings();
@@ -194,26 +204,6 @@ function createApplicationNavigationPreferences(
   };
 }
 
-function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionHandoff {
-  let pending: Parameters<ApplicationSkillWorkshopRevisionHandoff["prepare"]>[0] | null = null;
-  return {
-    prepare: (handoff) => {
-      pending = handoff;
-    },
-    consume: (sessionKey) => {
-      if (!pending || pending.sessionKey !== sessionKey) {
-        return null;
-      }
-      const handoff = pending;
-      pending = null;
-      return handoff;
-    },
-    clear: () => {
-      pending = null;
-    },
-  };
-}
-
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
@@ -232,6 +222,12 @@ type BootstrapApplicationDependencies = {
   sessionPathBuilderReady?: Promise<void>;
 };
 
+type PendingRouterStartNavigation = {
+  routeId: RouteId;
+  location: RouteLocation;
+  mode: "push" | "replace";
+};
+
 export function bootstrapApplication(
   dependencies: BootstrapApplicationDependencies = {},
 ): ApplicationRuntime {
@@ -246,6 +242,14 @@ export function bootstrapApplication(
     ? resolvePageGatewaySettings(persistedSettings)
     : persistedSettings;
   const startup = resolveApplicationStartupSettings(initialSettings, startupLocation);
+  if (
+    startup.location.pathname !== startupLocation.pathname ||
+    startup.location.search !== startupLocation.search ||
+    startup.location.hash !== startupLocation.hash
+  ) {
+    // Remove URL credentials before deferred routing or Gateway authentication can expose them.
+    history.replace(startup.location);
+  }
   if (startup.changed) {
     if (documentMode) {
       persistSessionToken(startup.settings.gatewayUrl, startup.settings.token);
@@ -272,7 +276,7 @@ export function bootstrapApplication(
     startup.password ?? "",
     startup.pendingBootstrapToken ?? "",
     undefined,
-    { persistDefaultConnectionSettings: documentMode === null },
+    { persistDefaultConnectionSettings: documentMode === null, basePath },
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
@@ -344,6 +348,10 @@ export function bootstrapApplication(
   const initialUserMessage = createInitialUserMessageHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
+  let routerStarted = false;
+  // Pre-start navigations are invisible to history; retain the latest request so
+  // router.start() cannot resolve the stale browser URL over the user's route.
+  let pendingRouterStartNavigation: PendingRouterStartNavigation | null = null;
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null
       ? {
@@ -430,15 +438,23 @@ export function bootstrapApplication(
     skillWorkshopRevision,
     initialUserMessage,
     navigate: (routeId, options) => {
+      const location = routeLocation(routeId, options);
+      if (!routerStarted) {
+        pendingRouterStartNavigation = { routeId, location, mode: "push" };
+      }
       void router
-        .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
+        .navigate(routeId, context, { history: "push" }, location)
         .catch((error: unknown) => {
           console.error("[openclaw] route navigation failed", error);
         });
     },
     replace: (routeId, options) => {
+      const location = routeLocation(routeId, options);
+      if (!routerStarted) {
+        pendingRouterStartNavigation = { routeId, location, mode: "replace" };
+      }
       void router
-        .navigate(routeId, context, { history: "replace" }, routeLocation(routeId, options))
+        .navigate(routeId, context, { history: "replace" }, location)
         .catch((error: unknown) => {
           console.error("[openclaw] route replacement failed", error);
         });
@@ -482,6 +498,12 @@ export function bootstrapApplication(
       });
       if (!documentMode) {
         steps.push(async () => {
+          const pendingNavigation = pendingRouterStartNavigation;
+          pendingRouterStartNavigation = null;
+          routerStarted = true;
+          if (pendingNavigation) {
+            history[pendingNavigation.mode](pendingNavigation.location);
+          }
           await startApplicationRouter(router, history, basePath, context);
           return stopRouter;
         });

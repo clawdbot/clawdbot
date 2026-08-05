@@ -57,7 +57,6 @@ function mergeBootstrapPlugin(
     doctor: mergePluginSection(runtimePlugin.doctor, setupPlugin.doctor),
     reload: mergePluginSection(runtimePlugin.reload, setupPlugin.reload),
     config: mergePluginSection(runtimePlugin.config, setupPlugin.config),
-    setup: mergePluginSection(runtimePlugin.setup, setupPlugin.setup),
     messaging: mergePluginSection(runtimePlugin.messaging, setupPlugin.messaging),
     actions: mergePluginSection(runtimePlugin.actions, setupPlugin.actions),
     secrets: mergePluginSection(runtimePlugin.secrets, setupPlugin.secrets),

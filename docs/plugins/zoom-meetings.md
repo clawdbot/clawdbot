@@ -13,13 +13,15 @@ The `zoom-meetings` plugin joins Zoom meeting links as a guest through the Zoom 
 Talk-back uses the same local audio prerequisites as the [Google Meet plugin](/plugins/google-meet): macOS, the `BlackHole 2ch` virtual audio device, and SoX.
 
 ```bash
+openclaw plugins install @openclaw/zoom-meetings
+openclaw gateway restart
 brew install blackhole-2ch sox
 sudo reboot
 system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-The plugin is included and enabled by default. Add an entry only to customize it, then check setup:
+The plugin is enabled by default after installation. Add an entry only to customize it, then check setup:
 
 ```json5
 {

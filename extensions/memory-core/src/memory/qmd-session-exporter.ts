@@ -9,7 +9,6 @@ import {
   buildSessionEntry,
   isSessionArchiveArtifactName,
   listSessionTranscriptCorpusEntriesForAgent,
-  resolveSessionIdentityForTranscriptFile,
   type SessionFileEntry,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -121,21 +120,22 @@ export class QmdSessionExporter {
           continue;
         }
         tracked.add(sessionFile);
-        const identity = this.buildSessionArtifactMapping(
-          sessionFile,
-          targetName,
-          target,
-          corpusEntry,
+        artifactMappings.push(
+          this.buildSessionArtifactMapping(sessionFile, targetName, target, corpusEntry),
         );
-        if (identity) {
-          artifactMappings.push(identity);
-        }
         keep.add(target);
         continue;
       }
       const entry = await buildSessionEntry(sessionFile, {
         generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
         generatedByCronRun: corpusEntry.generatedByCronRun === true,
+        ...(corpusEntry.transcriptSource === "sqlite" && corpusEntry.storePath
+          ? {
+              agentId: corpusEntry.agentId,
+              sessionId: corpusEntry.sessionId,
+              storePath: corpusEntry.storePath,
+            }
+          : {}),
         ...(corpusEntry.sessionKey ? { sessionKey: corpusEntry.sessionKey } : {}),
         ...(corpusEntry.updatedAtMs !== undefined ? { updatedAtMs: corpusEntry.updatedAtMs } : {}),
       });
@@ -143,15 +143,9 @@ export class QmdSessionExporter {
         continue;
       }
       tracked.add(sessionFile);
-      const identity = this.buildSessionArtifactMapping(
-        sessionFile,
-        targetName,
-        target,
-        corpusEntry,
+      artifactMappings.push(
+        this.buildSessionArtifactMapping(sessionFile, targetName, target, corpusEntry),
       );
-      if (identity) {
-        artifactMappings.push(identity);
-      }
       const needsWrite =
         !state ||
         state.target !== target ||
@@ -236,20 +230,16 @@ export class QmdSessionExporter {
     sessionFile: string,
     artifactPath: string,
     target: string,
-    corpusEntry?: SessionTranscriptCorpusEntry,
-  ): QmdSessionArtifactMapping | null {
-    const identity = corpusEntry ?? resolveSessionIdentityForTranscriptFile(sessionFile);
-    if (!identity?.agentId) {
-      return null;
-    }
+    corpusEntry: SessionTranscriptCorpusEntry,
+  ): QmdSessionArtifactMapping {
     return {
-      agentId: identity.agentId,
+      agentId: corpusEntry.agentId,
       archived: isSessionArchiveArtifactName(path.basename(sessionFile)),
       artifactPath,
       collection: this.config.collectionName,
       memoryKey: formatSessionTranscriptMemoryHitKey({
-        agentId: identity.agentId,
-        sessionId: identity.sessionId,
+        agentId: corpusEntry.agentId,
+        sessionId: corpusEntry.sessionId,
       }),
       searchPath: this.buildSearchPath(
         this.config.collectionName,
@@ -257,7 +247,7 @@ export class QmdSessionExporter {
         path.relative(this.workspaceDir, target),
         target,
       ),
-      sessionId: identity.sessionId,
+      sessionId: corpusEntry.sessionId,
     };
   }
 

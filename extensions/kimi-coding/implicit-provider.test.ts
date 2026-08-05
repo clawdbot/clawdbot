@@ -54,7 +54,8 @@ describe("Kimi implicit provider (#22409)", () => {
       headers: {
         "User-Agent": "claude-code/0.1.0",
       },
-      models: [
+      // Credential-aware catalog assembly may prioritize the configured default.
+      models: expect.arrayContaining([
         {
           id: "kimi-for-coding",
           name: "Kimi Code",
@@ -87,6 +88,7 @@ describe("Kimi implicit provider (#22409)", () => {
             max: "max",
           },
           input: ["text", "image"],
+          compat: { codeMode: "preferred" },
           cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
           contextWindow: 1048576,
           maxTokens: 131072,
@@ -105,13 +107,15 @@ describe("Kimi implicit provider (#22409)", () => {
             max: "max",
           },
           input: ["text", "image"],
+          compat: { codeMode: "preferred" },
           cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
           contextWindow: 262144,
           maxTokens: 131072,
         },
-      ],
+      ]),
       apiKey: "test-key",
     });
+    expect(provider.models).toHaveLength(4);
   });
 
   it("ignores retired kimi-coding provider overrides", async () => {

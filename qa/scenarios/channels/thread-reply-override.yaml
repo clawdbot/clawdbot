@@ -17,11 +17,12 @@ scenario:
     - extensions/matrix/src/matrix/monitor/threads.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
-    profiles: { "matrix:adapter": 10, "matrix:all": 6, "matrix:transport": 5 }
     kind: flow
     channel: matrix
     timeoutMs: 60000
     retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Changes native thread routing and must not inherit an existing room session.
     summary: Require the canonical Matrix adapter to surface the native m.thread relation through threadId.
     config:
       conversationId: main

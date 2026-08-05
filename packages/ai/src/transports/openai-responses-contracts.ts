@@ -6,8 +6,11 @@ import type {
   ResponseOutputMessage,
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
-import type { OpenAIApiReasoningEffort, OpenAIReasoningEffort } from "../internal/openai.js";
-import type { BaseOpenAIStreamOptions } from "./openai-transport-shared.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import type {
+  OpenAIApiReasoningEffort,
+  OpenAIReasoningEffort,
+} from "../providers/openai-reasoning-effort.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -41,6 +44,32 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
+};
+
+const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
+export type ResponsesPromptObservation = {
+  egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
+  payloadVariant: "initial" | "encrypted-content-retry";
+  promptSource: "instructions" | "input.developer" | "input.system" | "missing";
+  expectedChars: number;
+  observedChars: number;
+  matchesAssembledPrompt: boolean;
+};
+type ResponsesPromptObserver = (observation: ResponsesPromptObservation) => void;
+
+export const responsesPromptObserver = {
+  set(options: object, observer: ResponsesPromptObserver): void {
+    Reflect.set(options, PROMPT_OBSERVER, observer);
+  },
+  get(options: object) {
+    return Reflect.get(options, PROMPT_OBSERVER) as ResponsesPromptObserver | undefined;
+  },
+  copy(source: object | undefined, target: object): void {
+    const observer = source && responsesPromptObserver.get(source);
+    if (observer) {
+      responsesPromptObserver.set(target, observer);
+    }
+  },
 };
 
 export type OpenAIResponsesReplayContext = {

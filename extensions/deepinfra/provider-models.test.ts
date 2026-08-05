@@ -227,7 +227,7 @@ describe("hasDeepInfraApiKey", () => {
 
 describe("discoverDeepInfraModels (chat-only shim)", () => {
   it("returns static catalog in test environment", async () => {
-    const models = await discoverDeepInfraModels();
+    const models = await discoverDeepInfraModels({ env: { VITEST: "true" } });
     const modelIds = models.map((m) => m.id);
     const streamingUsageIncompatibleModelIds = models
       .filter((m) => !m.compat?.supportsUsageInStreaming)

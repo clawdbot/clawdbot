@@ -9,17 +9,13 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
-import {
-  qqbotConfigAdapter,
-  qqbotMeta,
-  qqbotSetupAdapterShared,
-  qqbotSetupContract,
-} from "./bridge/config-shared.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupContract } from "./bridge/config-shared.js";
 import {
   applyQQBotAccountConfig,
   DEFAULT_ACCOUNT_ID,
@@ -287,9 +283,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       return Boolean(backup?.appId && backup?.clientSecret);
     },
   },
-  setup: {
-    ...qqbotSetupAdapterShared,
-  },
   setupContract: qqbotSetupContract,
   approvalCapability: getQQBotApprovalCapability(),
   groups: {
@@ -389,26 +382,14 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         channelRuntime: ctx.channelRuntime as GatewayContext["channelRuntime"],
         onReady: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway ready`);
-          ctx.setStatus({
-            ...ctx.getStatus(),
-            running: true,
-            connected: true,
-            lastConnectedAt: Date.now(),
-            lastError: null,
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
           persistAccountCredentialSnapshot(account);
         },
         onResumed: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway resumed`);
-          ctx.setStatus({
-            ...ctx.getStatus(),
-            running: true,
-            connected: true,
-            lastConnectedAt: Date.now(),
-            lastError: null,
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           persistAccountCredentialSnapshot(account);
         },
         onError: (error) => {
@@ -428,6 +409,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           ctx.setStatus({
             ...ctx.getStatus(),
             connected: false,
+            lifecycle: fatal ? "blocked" : "recovering",
             ...(fatal && reason ? { lastError: reason } : {}),
           });
         },
@@ -465,6 +447,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       tokenSource: snapshot.tokenSource ?? "none",
       running: snapshot.running ?? false,
       connected: snapshot.connected ?? false,
+      lifecycle: snapshot.lifecycle ?? undefined,
       lastConnectedAt: snapshot.lastConnectedAt ?? null,
       lastError: snapshot.lastError ?? null,
     }),
@@ -476,6 +459,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       tokenSource: account?.secretSource,
       running: runtime?.running ?? false,
       connected: runtime?.connected ?? false,
+      lifecycle: runtime?.lifecycle,
       lastConnectedAt: runtime?.lastConnectedAt ?? null,
       lastError: runtime?.lastError ?? null,
       lastInboundAt: runtime?.lastInboundAt ?? null,

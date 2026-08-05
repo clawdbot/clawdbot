@@ -129,6 +129,7 @@ export default function register(api) {
       id: "my-engine",
       name: "My Context Engine",
       ownsCompaction: true,
+      acceptedHostParams: ["sessionKey"],
     },
 
     async ingest({ sessionId, message, isHeartbeat }) {
@@ -192,12 +193,20 @@ Then enable it in config:
 
 Required members:
 
-| Member             | Kind     | Purpose                                                  |
-| ------------------ | -------- | -------------------------------------------------------- |
-| `info`             | Property | Engine id, name, version, and whether it owns compaction |
-| `ingest(params)`   | Method   | Store a single message                                   |
-| `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`) |
-| `compact(params)`  | Method   | Summarize/reduce context                                 |
+| Member             | Kind     | Purpose                                                                            |
+| ------------------ | -------- | ---------------------------------------------------------------------------------- |
+| `info`             | Property | Engine id, name, version, accepted host parameters, and whether it owns compaction |
+| `ingest(params)`   | Method   | Store a single message                                                             |
+| `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`)                           |
+| `compact(params)`  | Method   | Summarize/reduce context                                                           |
+
+Set `info.acceptedHostParams` to the host-added lifecycle fields the engine
+accepts. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
+`sessionTarget`, and `runtimeContext`. OpenClaw intersects the declaration with
+the fields available for each lifecycle method, so undeclared or unknown keys
+are never injected. Engines without this declaration receive the pre-host-field
+legacy parameter set through 2026-08-12; after that date, undeclared engines
+receive every current host field.
 
 `assemble` returns an `AssembleResult` with:
 
@@ -262,10 +271,9 @@ rendered directly to users and does not create a dedicated reporting surface.
 - `diagnostics`: closed fallback and degraded reason codes when known
 
 Fields that can be unknown are represented as `null`; discriminator fields such
-as runtime mode and selection source remain non-nullable. Older engines remain
-compatible: if a strict legacy engine rejects `runtimeSettings` as an unknown
-property, OpenClaw retries the lifecycle call without it instead of quarantining
-the engine.
+as runtime mode and selection source remain non-nullable. Engines that accept
+`runtimeSettings` must include it in `info.acceptedHostParams` during the
+compatibility window.
 
 ### Host requirements
 

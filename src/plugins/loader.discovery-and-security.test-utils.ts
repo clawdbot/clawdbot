@@ -441,7 +441,11 @@ describe("loadOpenClawPlugins", () => {
           fs.writeFileSync(
             path.join(memoryLanceDir, "openclaw.plugin.json"),
             JSON.stringify(
-              { id: "memory-lancedb", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
+              {
+                id: "memory-lancedb",
+                kind: "memory",
+                configSchema: { type: "object", additionalProperties: true },
+              },
               null,
               2,
             ),
@@ -457,7 +461,10 @@ describe("loadOpenClawPlugins", () => {
                 slots: { memory: "memory-lancedb" },
                 entries: {
                   "memory-core": { enabled: true },
-                  "memory-lancedb": { enabled: true },
+                  "memory-lancedb": {
+                    enabled: true,
+                    config: { dreaming: { enabled: false } },
+                  },
                 },
               },
             },
@@ -574,10 +581,13 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "shadow",
         bundledFilename: "shadow.cjs",
         loadRegistry: () => {
-          writeBundledPlugin({
+          const bundled = writeBundledPlugin({
             id: "shadow",
             body: simplePluginBody("shadow"),
             filename: "shadow.cjs",
+          });
+          updatePluginManifest(bundled.plugin, {
+            contracts: { agentToolResultMiddleware: ["codex"] },
           });
 
           const override = writePlugin({
@@ -599,7 +609,13 @@ describe("loadOpenClawPlugins", () => {
         },
         expectedLoadedOrigin: "config",
         expectedDisabledOrigin: "bundled",
-        assert: expectPluginSourcePrecedence,
+        assert: (
+          registry: PluginRegistry,
+          scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
+        ) => {
+          expectPluginSourcePrecedence(registry, scenario);
+          expect(registry.agentToolResultMiddlewareOwners).toEqual([]);
+        },
       },
       {
         label: "bundled beats auto-discovered global duplicate",

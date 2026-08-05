@@ -160,6 +160,7 @@ export function loadGatewaySessionRow(
   const now = options?.now ?? Date.now();
   const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(sessionKey, {
     clone: false,
+    includeStoreChildEntries: true,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
   if (!entry) {

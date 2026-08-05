@@ -151,9 +151,10 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 function normalizeManualAuthProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
-  return normalized === "openai" || normalized === "codex" || normalized === "openai-codex"
-    ? "openai"
-    : normalized;
+  if (normalized === "openai-codex" || normalized === "codex-cli") {
+    throw new Error(`"${normalized}" is a legacy provider ID; use --provider openai.`);
+  }
+  return normalized === "openai" || normalized === "codex" ? "openai" : normalized;
 }
 
 function isOpenAIProvider(provider: string): boolean {
@@ -542,8 +543,10 @@ async function runProviderAuthMethod(params: {
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
+  params.signal?.throwIfAborted();
   const selectedProviderId = normalizeProviderId(params.provider.id);
   await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
 
@@ -556,6 +559,7 @@ async function runProviderAuthMethod(params: {
     runtime: params.runtime,
     allowSecretRefPrompt: false,
     isRemote: params.isRemote ?? isRemoteEnvironment(),
+    signal: params.signal,
     openUrl:
       params.openUrl ??
       (async (url) => {
@@ -566,6 +570,7 @@ async function runProviderAuthMethod(params: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
     },
   });
+  params.signal?.throwIfAborted();
   const resultProviderIds = new Set(
     result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
   );
@@ -921,6 +926,7 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 };
 
@@ -1083,6 +1089,7 @@ export async function runModelsAuthLoginFlow(
     setDefault: opts.setDefault,
     env: opts.env,
     isRemote: opts.isRemote,
+    signal: opts.signal,
     openUrl: opts.openUrl,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);

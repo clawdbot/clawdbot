@@ -6,7 +6,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-  NODE_BROWSER_PROXY_COMMAND,
+  NODE_BROWSER_PROXY_COMMANDS,
   NODE_DEVICE_APPS_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FILE_COMMANDS,
@@ -26,14 +26,13 @@ const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
-// Desktop computer use (pointer/keyboard injection). Declarable at pairing on
-// desktop platforms (macOS/Windows/Linux) but invocable only with explicit
-// commands.allow opt-in (arming).
-const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
+// Desktop computer use is advertised only while the node-local control is
+// enabled. Pairing approval of that advertised surface is the durable grant.
+const COMPUTER_COMMANDS = ["computer.act"];
 
-// Android accessibility tree reads and UI actions expose or control sensitive
-// on-screen content. Keep both declarable, but require explicit arming.
-const MOBILE_UI_DANGEROUS_COMMANDS = ["mobile.ui.observe", "mobile.ui.act"];
+// Android advertises these only while Accessibility Control is enabled. The
+// action tool adds its own model-visible confirmation contract for mutations.
+const MOBILE_UI_COMMANDS = ["mobile.ui.observe", "mobile.ui.act"];
 
 const ANDROID_DEVICE_COMMANDS = [
   ...MOBILE_NODE_COMMANDS.device,
@@ -80,7 +79,7 @@ const SYSTEM_COMMANDS = [
   ...NODE_EXEC_APPROVALS_COMMANDS,
   ...NODE_FILE_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
-  NODE_BROWSER_PROXY_COMMAND,
+  ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
 ];
@@ -88,7 +87,7 @@ const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
   ...NODE_FILE_COMMANDS,
-  NODE_BROWSER_PROXY_COMMAND,
+  ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   ...SCREEN_COMMANDS,
@@ -104,8 +103,6 @@ const UNKNOWN_PLATFORM_COMMANDS = [
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
-  ...COMPUTER_DANGEROUS_COMMANDS,
-  ...MOBILE_UI_DANGEROUS_COMMANDS,
   ...CONTACTS_DANGEROUS_COMMANDS,
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
@@ -138,9 +135,7 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
-    // Dangerous: pairing may approve the advertised surface, while runtime
-    // policy strips it until gateway.nodes.commands.allow explicitly arms it.
-    ...MOBILE_UI_DANGEROUS_COMMANDS,
+    ...MOBILE_UI_COMMANDS,
   ],
   macos: [
     ...CAMERA_COMMANDS,
@@ -154,29 +149,16 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
-    // Dangerous: declarable at pairing so the surface gets approved once, but
-    // excluded from the runtime allowlist until explicitly armed (see
-    // resolveNodeCommandAllowlistInternal).
-    ...COMPUTER_DANGEROUS_COMMANDS,
+    ...COMPUTER_COMMANDS,
   ],
-  linux: [
-    ...SYSTEM_COMMANDS,
-    ...SCREEN_COMMANDS,
-    // Dangerous: declarable at pairing so the surface gets approved once, but
-    // excluded from the runtime allowlist until explicitly armed (see
-    // resolveNodeCommandAllowlistInternal).
-    ...COMPUTER_DANGEROUS_COMMANDS,
-  ],
+  linux: [...SYSTEM_COMMANDS, ...SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
-    // Dangerous: declarable at pairing so the surface gets approved once, but
-    // excluded from the runtime allowlist until explicitly armed (see
-    // resolveNodeCommandAllowlistInternal).
-    ...COMPUTER_DANGEROUS_COMMANDS,
+    ...COMPUTER_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
@@ -421,9 +403,8 @@ function resolveNodeCommandAllowlistInternal(
   const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
   const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
-  // Dangerous built-ins in PLATFORM_DEFAULTS (e.g. computer.act on desktop nodes) stay
-  // declarable/approvable at pairing but never enter the runtime allowlist by
-  // default; the pairing variant opts in via includeDangerousDefaults.
+  // Dangerous built-ins that also appear in PLATFORM_DEFAULTS stay declarable
+  // at pairing but do not enter the runtime allowlist by default.
   const dangerousBuiltinCommands =
     options?.includeDangerousDefaults === true
       ? new Set<string>()
@@ -446,14 +427,9 @@ function resolveNodeCommandAllowlistInternal(
   if (cfg.wizard?.appRecommendations === false) {
     allow.delete(NODE_DEVICE_APPS_COMMAND);
   }
-  // In pairing mode, denylisted dangerous defaults stay declarable so a node
-  // retains the surface it can later be armed for: arming removes them from
-  // commands.deny and adds them to commands.allow. Fresh setup seeds commands.deny
-  // with DEFAULT_DANGEROUS_NODE_COMMANDS, so without this exemption a declarable
-  // dangerous default (e.g. computer.act on desktop nodes) would be stripped from the
-  // pairing surface and stay uninvocable even after arming, because the live
-  // node session never retained the command. Invoke-time policy still gates
-  // every call on the runtime allowlist, which honors deny in full.
+  // In pairing mode, denylisted dangerous defaults stay declarable so an
+  // explicit persistent allow can authorize them without another pairing.
+  // Invoke-time policy still honors deny in full.
   const denyExemptDeclarable =
     options?.includeDangerousDefaults === true
       ? new Set(DEFAULT_DANGEROUS_NODE_COMMANDS)

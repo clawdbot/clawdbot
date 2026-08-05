@@ -10,8 +10,8 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("persistUserTurnTranscript", () => {
@@ -101,7 +101,7 @@ describe("persistUserTurnTranscript", () => {
       content: "What is in this image?",
       timestamp: 123,
       __openclaw: {
-        senderIsOwner: true,
+        senderIsOwner: false,
         media: [{ path: "/tmp/image.png", contentType: "image/png" }],
       },
       provenance,
@@ -346,7 +346,7 @@ describe("persistUserTurnTranscript", () => {
         provenance,
         __openclaw: {
           hookOwned: true,
-          senderIsOwner: true,
+          senderIsOwner: false,
           transport: {
             channel: "reef",
             conversationRef: "conv_0123456789abcdef0123456789abcdef",

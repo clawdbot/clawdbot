@@ -26,6 +26,22 @@ describe("CustomEditor", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { name: "Kitty Shift+Enter", input: "\u001b[13;2u" },
+    { name: "Ctrl+J", input: "\n" },
+  ])("inserts a newline without submitting on $name", ({ input }) => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("first line");
+
+    editor.handleInput(input);
+
+    expect(editor.getText()).toBe("first line\n");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("routes alt+enter to the follow-up handler", () => {
     const tui = { requestRender: vi.fn() } as unknown as TUI;
     const editor = new CustomEditor(tui, editorTheme);
@@ -195,5 +211,58 @@ describe("CustomEditor", () => {
     editor.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith("/help");
+  });
+
+  it.each(["  !cmd", "  !cmd\n", "!cmd\n", "\n!cmd\n"])(
+    "preserves %j when trimming would create executable bang input",
+    (input) => {
+      const tui = { requestRender: vi.fn() } as unknown as TUI;
+      const editor = new CustomEditor(tui, editorTheme);
+      const onSubmit = vi.fn();
+      editor.onSubmit = onSubmit;
+      editor.setText(input);
+
+      editor.handleInput("\r");
+
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith(input);
+      expect(editor.getText()).toBe("");
+    },
+  );
+
+  it("leaves harmless bang-prefixed multiline chat on pi-tui's normal submit path", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText(" \n!cmd\nnotes");
+
+    editor.handleInput("\r");
+
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("!cmd\nnotes");
+    expect(editor.getText()).toBe("");
+  });
+
+  it("does not expand stored paste text for ordinary input", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    editor.setText("draft");
+    const getExpandedText = vi.spyOn(editor, "getExpandedText");
+
+    editor.handleInput("x");
+
+    expect(getExpandedText).not.toHaveBeenCalled();
+    expect(editor.getText()).toBe("draftx");
+  });
+
+  it("keeps pi-tui trimming for ordinary submissions", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("  ordinary message  ");
+
+    editor.handleInput("\r");
+
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("ordinary message");
   });
 });

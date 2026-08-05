@@ -86,6 +86,25 @@ function applyCapturedConfigUpdate(cfg: OpenClawConfig): OpenClawConfig {
   return mutator(cfg);
 }
 
+async function withStdinIsTty<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
+  const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+  const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
+  const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
+  Object.defineProperty(stdin, "isTTY", {
+    configurable: true,
+    value: isTTY,
+  });
+  try {
+    return await run();
+  } finally {
+    if (hadOwnIsTTY && previousIsTTYDescriptor) {
+      Object.defineProperty(stdin, "isTTY", previousIsTTYDescriptor);
+    } else {
+      Reflect.deleteProperty(stdin, "isTTY");
+    }
+  }
+}
+
 describe("models auth logout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -227,30 +246,20 @@ describe("models auth logout", () => {
 
   it("keeps the profile when an interactive confirmation is declined", async () => {
     mocks.confirm.mockResolvedValue(false);
-    const stdin = process.stdin as unknown as { isTTY: boolean };
-    const priorIsTty = stdin.isTTY;
-    stdin.isTTY = true;
-    try {
+    await withStdinIsTty(true, async () => {
       const runtime = createRuntime();
       await modelsAuthLogoutCommand({ profileId: "openai:manual" }, runtime);
       expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
       expect(runtime.logs).toContain("Cancelled.");
-    } finally {
-      stdin.isTTY = priorIsTty;
-    }
+    });
   });
 
   it("refuses to remove without --yes when stdin is not a TTY", async () => {
-    const stdin = process.stdin as unknown as { isTTY: boolean };
-    const priorIsTty = stdin.isTTY;
-    stdin.isTTY = false;
-    try {
+    await withStdinIsTty(false, async () => {
       await expect(
         modelsAuthLogoutCommand({ profileId: "openai:manual" }, createRuntime()),
       ).rejects.toThrow("Pass --yes to remove it non-interactively.");
       expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
-    } finally {
-      stdin.isTTY = priorIsTty;
-    }
+    });
   });
 });

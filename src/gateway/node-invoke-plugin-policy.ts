@@ -189,6 +189,9 @@ export async function applyPluginNodeInvokePolicy(params: {
     threadId?: unknown;
   };
   timeoutMs?: number;
+  signal?: AbortSignal;
+  resolveRemainingTimeoutMs?: () => number | undefined;
+  onNodeCommandDispatched?: () => void;
   idempotencyKey?: string;
   isInvocationCurrent?: () => boolean | Promise<boolean>;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
@@ -264,9 +267,21 @@ export async function applyPluginNodeInvokePolicy(params: {
         details: { command: params.command, reason: allowed.reason },
       };
     }
-    // Once the registry owns the request, any failure is ambiguous to callers:
-    // the node may have acted before the response was lost or rejected.
-    nodeCommandDispatched = true;
+    const remainingTimeoutMs = params.resolveRemainingTimeoutMs?.();
+    if (remainingTimeoutMs === 0 && params.timeoutMs !== 0) {
+      return {
+        ok: false,
+        code: "TIMEOUT",
+        message: "node invoke timed out",
+      };
+    }
+    const requestedTimeoutMs = override.timeoutMs ?? params.timeoutMs;
+    const timeoutMs =
+      typeof remainingTimeoutMs === "number" && remainingTimeoutMs > 0
+        ? typeof requestedTimeoutMs === "number" && requestedTimeoutMs > 0
+          ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
+          : remainingTimeoutMs
+        : requestedTimeoutMs;
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
@@ -275,8 +290,15 @@ export async function applyPluginNodeInvokePolicy(params: {
         : {}),
       command: params.command,
       params: override.params ?? params.params,
-      timeoutMs: override.timeoutMs ?? params.timeoutMs,
+      timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      onDispatchReady: () => {
+        // Only the registry knows that the transport send succeeded. Preserve
+        // pre-send failures as retry-safe while making later failures ambiguous.
+        nodeCommandDispatched = true;
+        params.onNodeCommandDispatched?.();
+      },
     });
     if (!res.ok) {
       return {

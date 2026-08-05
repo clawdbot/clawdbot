@@ -42,6 +42,73 @@ extended-stable package and publication constraints.
 - Use `$openclaw-testing` for proof selection, `$autoreview` before handoff,
   and `$openclaw-pr-maintainer` for GitHub operations.
 
+## Flag SDK and Config Backports
+
+Extended-stable is a maintenance line, not an API or configuration delivery
+vehicle. Treat every backport that changes either surface as a visible
+**SDK/config backport warning**:
+
+- the public plugin SDK: exports, entrypoints, declarations, API-baseline
+  hashes, plugin contracts, or public package export metadata;
+- configuration/defaults: schema or help text, generated config baselines,
+  config keys/defaults, plugin/channel configuration metadata, doctor
+  migrations, or compatibility behavior.
+
+When a mainline fix touches one of these areas, first find the branch-local
+form that fixes the published bug without changing the SDK or config contract.
+Use the already-shipped SDK seam and existing configuration, or keep the repair
+inside the affected plugin/runtime. Do not add an SDK helper, export, config
+key, default, migration, compatibility alias, or generated baseline update
+merely because it makes a backport apply. If a surface change remains useful,
+flag it rather than treating a clean cherry-pick as enough evidence.
+
+The ledger and staging PR must show the warning, source commit, published
+maintenance-line impact, no-surface-change adaptation considered, affected
+public SDK/config records, focused proof, and the maintainer decision. Treat a
+consumer bug that happens to need a new SDK/config capability as particularly
+high risk; a material security or reliability defect owned by the SDK/config
+surface is important context, not an implicit approval.
+
+Before the staging PR, collect this evidence against the exact canonical branch
+tip recorded before applying any candidates. The first command is optional
+owner-path context for investigating a warning. The generated public-contract
+manifests in the second command are the warning trigger:
+
+```bash
+baseline_sha=<canonical-extended-stable-tip-before-backports>
+
+git diff --name-status "$baseline_sha"..HEAD -- \
+  src/plugin-sdk \
+  src/plugins/contracts \
+  src/config \
+  src/commands/doctor \
+  scripts/lib/plugin-sdk-entrypoints.json \
+  scripts/lib/plugin-sdk-private-local-only-subpaths.json \
+  scripts/lib/plugin-sdk-deprecated-public-subpaths.json \
+  scripts/generate-plugin-sdk-api-baseline.ts \
+  scripts/generate-config-doc-baseline.ts \
+  docs/.generated/plugin-sdk-api-baseline.sha256 \
+  docs/.generated/config-baseline.sha256 \
+  docs/.generated/config-baseline.counts.json
+
+git diff --numstat "$baseline_sha"..HEAD -- \
+  docs/.generated/plugin-sdk-api-baseline.sha256 \
+  docs/.generated/config-baseline.sha256 \
+  docs/.generated/config-baseline.counts.json
+```
+
+Nonempty manifest output is the warning. Include it in the release ledger and
+PR body, then either remove the unnecessary surface change or record why the
+maintainer accepted it. Owner-path output with unchanged manifests is optional
+review context, not a warning by itself. A recorded decision is not a reusable
+waiver.
+
+Do not use a SHA of all SDK/config source as an automated warning: it would
+noise on harmless implementation-only repairs. The two generated hash manifests
+are the stable public-contract signal. If this becomes CI, run the comparison
+after `pnpm release:prep` and annotate the staging PR with changed records and
+the required maintainer decision; do not add a caller-controlled bypass.
+
 ## Resolve the Active Line
 
 1. Run `git status -sb`. Do not overwrite unrelated work.
@@ -247,19 +314,24 @@ ledger and release set before changing branches.
 5. Set the intended root version and run `pnpm release:prep` on the same staging
    branch. Verify every publishable official plugin package has that exact
    version. Do not create the tag or dispatch publication before the PR lands.
-6. Run `$autoreview` until no accepted/actionable findings remain.
-7. Open one coordinated PR targeting the canonical extended-stable branch.
+6. Run the **Flag SDK and Config Backports** comparison against the recorded
+   canonical tip. For nonempty manifest output, attach the warning evidence and
+   maintainer decision before continuing.
+7. Run `$autoreview` until no accepted/actionable findings remain.
+8. Open one coordinated PR targeting the canonical extended-stable branch.
    Never target `main` and never push the target branch directly.
-8. Keep unpublished security work in the approved private advisory fork until
+9. Keep unpublished security work in the approved private advisory fork until
    disclosure is authorized.
 
 The PR body must list the intended maintenance tag, exact npm publication
 inventory, every source commit and optional PR, impact, adaptations, focused
-and combined proof, security status, rollback considerations, and exact scan
-bounds. Update the durable ledger with branch/tag/version/SHA provenance and
-unresolved blocked candidates so the next run carries them forward. Dispatch
-npm preflight only after the canonical branch or tag has that exact final
-version and SHA.
+and combined proof, security status, rollback considerations, exact scan
+bounds, and the SDK/config warning result. For a flagged candidate, include the
+changed path/manifest records, owner-boundary reason, focused proof, and
+maintainer decision; otherwise state that the warning comparison was empty.
+Update the durable ledger with branch/tag/version/SHA provenance and unresolved
+blocked candidates so the next run carries them forward. Dispatch npm preflight
+only after the canonical branch or tag has that exact final version and SHA.
 
 ## Stabilize the landed candidate
 

@@ -1,46 +1,51 @@
 import {
   GATEWAY_SERVER_CAPS,
+  type SessionObserverDigest,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
+import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
   boardProviderForSession,
-  buildAgentMainSessionKey,
-  hasOperatorApprovalsAccess,
-  hasOperatorWriteAccess,
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-  isWorkboardEnabledInConfigSnapshot,
-  loadSettings,
-  normalizeAgentId,
-  normalizeSessionKeyForUiComparison,
-  patchSettings,
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  activatePanel,
-  detachPanelToColumn,
-  fitSidebarLayout,
-  openSlot,
-  resizeColumn,
-  renderChatResizableDivider,
-  resolveAgentIdFromSessionKey,
-  resolveUiGlobalAliasAgentId,
-  resolveSessionKey,
-  t,
-  updateBoardSessionView,
   type BoardCommandEvent,
   type BoardProvider,
-  type BoardSessionView,
-  type BoardTab,
-  type BoardViewSnapshot,
-  type SessionObserverDigest,
-  type SidebarLayout,
-  type SidebarSide,
-  type WorkboardCardChipProps,
-} from "./chat-pane-deps.ts";
+} from "../../lib/board/provider.ts";
+import { updateBoardSessionView, type BoardSessionView } from "../../lib/board/settings.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
+  resolveAgentIdFromSessionKey,
+  resolveUiGlobalAliasAgentId,
+} from "../../lib/sessions/session-key.ts";
+import type { WorkboardCardChipProps } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import {
   boardChatDockLayout,
   type ResolvedBoardView,
   type VisibleBoardDock,
 } from "./chat-pane-shared.ts";
+import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  detachPanelToColumn,
+  fitSidebarLayout,
+  openSlot,
+  resizeColumn,
+  type SidebarLayout,
+  type SidebarSide,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
   protected commitSidebarLayout(layout: SidebarLayout): void {
@@ -189,30 +194,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           sessionKey: key,
         };
       } else {
-        boardProviderForSession(
-          key,
-          client,
-          true,
-          gateway.phase === "connected",
+        this.boardProviderLease.update(client, gateway.phase === "connected", {
           canPinWidgets,
           canPinMcpApps,
           canMutate,
           canGrant,
-        );
+        });
       }
       return this.boardProviderLease.provider;
     }
     this.releaseBoardProviderLease();
-    return boardProviderForSession(
-      sessionKey,
-      client,
-      available,
-      gateway?.phase === "connected",
-      canPinWidgets,
-      canPinMcpApps,
-      canMutate,
-      canGrant,
-    );
+    return boardProviderForSession(sessionKey, available);
   }
 
   protected releaseBoardProviderLease(): void {

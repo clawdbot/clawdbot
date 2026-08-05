@@ -163,9 +163,12 @@ describe("browser plugin", () => {
       restartPrefixes: ["browser"],
       hotPrefixes: ["browser.profiles"],
     });
-    expect(browserPluginNodeHostCommands).toHaveLength(1);
-    expect(browserPluginNodeHostCommands[0]?.command).toBe("browser.proxy");
+    expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
+      "browser.proxy",
+      "browser.proxy.upload.v1",
+    ]);
     expect(browserPluginNodeHostCommands[0]?.cap).toBe("browser");
+    expect(browserPluginNodeHostCommands[1]?.cap).toBe("browser");
     expect(browserPluginNodeHostCommands[0]?.isAvailable?.({ config: {}, env: {} })).toBe(true);
     expect(
       browserPluginNodeHostCommands[0]?.isAvailable?.({
@@ -180,6 +183,8 @@ describe("browser plugin", () => {
       }),
     ).toBe(false);
     expect(typeof browserPluginNodeHostCommands[0]?.handle).toBe("function");
+    expect(typeof browserPluginNodeHostCommands[1]?.handle).toBe("function");
+    expect(typeof browserPluginNodeHostCommands[1]?.watchAvailability).toBe("function");
     expect(browserSecurityAuditCollectors).toHaveLength(1);
   });
 
@@ -214,6 +219,7 @@ describe("browser plugin", () => {
     }
 
     expect(tool.name).toBe("browser");
+    expect(tool.resultContentSource).toBe("network");
     expect(tool.description).toContain("action=profiles");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
@@ -376,8 +382,26 @@ describe("browser plugin", () => {
   });
 
   it("lazy-loads node host and audit runtime handlers", async () => {
+    const abortController = new AbortController();
     await expect(browserPluginNodeHostCommands[0]?.handle("{}")).resolves.toBe("ok");
-    expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenCalledWith("{}");
+    await expect(
+      browserPluginNodeHostCommands[1]?.handle("{}", undefined, {
+        sendNodeEvent: vi.fn(),
+        signal: abortController.signal,
+      }),
+    ).resolves.toBe("ok");
+    expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenNthCalledWith(
+      1,
+      "{}",
+      "browser.proxy",
+      undefined,
+    );
+    expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenNthCalledWith(
+      2,
+      "{}",
+      "browser.proxy.upload.v1",
+      abortController.signal,
+    );
 
     await expect(browserSecurityAuditCollectors[0]?.({} as never)).resolves.toStrictEqual([]);
     expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();

@@ -77,7 +77,7 @@ export async function sweepCronRunSessions(params: {
 
   // Timer ticks can be frequent; throttle per agent/store target to avoid
   // repeated session-store I/O while preserving a force path for tests.
-  if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+  if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
 
@@ -135,8 +135,6 @@ export async function sweepCronRunSessions(params: {
         agentId: params.agentId,
         storePath,
         removals,
-        preserveActiveWork: true,
-        restrictArchivedTranscriptsToStoreDir: true,
         ...(archiveRetentionMs == null
           ? {}
           : {

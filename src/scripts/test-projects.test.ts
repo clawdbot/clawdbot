@@ -97,7 +97,7 @@ describe("test-projects args", () => {
   it("keeps split test entries in their owner configs", () => {
     expect(buildVitestRunPlans(["src/agents/openai-transport-stream.base.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.agents.config.ts",
+        config: "test/vitest/vitest.agents-core.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/agents/openai-transport-stream.base.test.ts"],
         watchMode: false,
@@ -116,19 +116,25 @@ describe("test-projects args", () => {
   it("expands a test filename prefix into standalone sibling suites", () => {
     expect(buildVitestRunPlans(["src/agents/openai-transport-stream"])).toEqual([
       {
-        config: "test/vitest/vitest.agents.config.ts",
+        config: "test/vitest/vitest.agents-core.config.ts",
         forwardedArgs: [],
         includePatterns: [
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.incomplete-output.test.ts",
+          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
           "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
           "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
           "src/agents/openai-transport-stream.replay-sanitization.test.ts",
-          "src/agents/openai-transport-stream.streaming.test.ts",
           "src/agents/openai-transport-stream.usage-and-calls.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents-core-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/openai-transport-stream.streaming.test.ts"],
         watchMode: false,
       },
     ]);
@@ -367,10 +373,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes agents targets to the agents config", () => {
+  it("routes agent tool targets to the agents-tools config", () => {
     expect(buildVitestRunPlans(["src/agents/tools/image-tool.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.agents.config.ts",
+        config: "test/vitest/vitest.agents-tools.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/agents/tools/image-tool.test.ts"],
         watchMode: false,

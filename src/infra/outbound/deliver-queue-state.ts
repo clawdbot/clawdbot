@@ -5,10 +5,11 @@ import type { OutboundDeliveryQueuePolicy, PlatformSendRoute } from "./deliver-c
 import { OutboundDeliveryError } from "./deliver-types.js";
 import {
   ackDelivery,
+  failDelivery,
   failDeliveryAfterPlatformSend,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -22,6 +23,45 @@ export const isDeliveryAbortError = (err: unknown): boolean =>
 export type QueuedPostSendState = "marked" | "acked" | "failed";
 
 export type QueuedPreSendState = "marked" | "acked";
+
+type QueuedDeliveryFailureRecorder = typeof failDelivery | typeof failDeliveryAfterPlatformSend;
+
+/** Keeps live and recovered queue transitions on the same producer claim. */
+export function createQueuedDeliveryOwner(params: {
+  queueId: string;
+  stateDir?: string;
+  expectedPlatformSendAttemptId?: string | null | (() => string | null | undefined);
+}) {
+  const resolveExpectedPlatformSendAttemptId = () =>
+    typeof params.expectedPlatformSendAttemptId === "function"
+      ? params.expectedPlatformSendAttemptId()
+      : params.expectedPlatformSendAttemptId;
+  return {
+    ack(options?: Parameters<typeof ackDelivery>[2]): Promise<void> {
+      const expectedPlatformSendAttemptId = resolveExpectedPlatformSendAttemptId();
+      if (expectedPlatformSendAttemptId !== undefined) {
+        return ackDelivery(params.queueId, params.stateDir, {
+          ...options,
+          expectedPlatformSendAttemptId,
+        });
+      }
+      return options
+        ? ackDelivery(params.queueId, params.stateDir, options)
+        : params.stateDir !== undefined
+          ? ackDelivery(params.queueId, params.stateDir)
+          : ackDelivery(params.queueId);
+    },
+    fail(record: QueuedDeliveryFailureRecorder, error: string): Promise<void> {
+      const expectedPlatformSendAttemptId = resolveExpectedPlatformSendAttemptId();
+      if (expectedPlatformSendAttemptId !== undefined) {
+        return record(params.queueId, error, params.stateDir, expectedPlatformSendAttemptId);
+      }
+      return params.stateDir !== undefined
+        ? record(params.queueId, error, params.stateDir)
+        : record(params.queueId, error);
+    },
+  };
+}
 
 export async function persistQueuedPreSendState(params: {
   queueId: string;
@@ -69,13 +109,23 @@ export async function persistQueuedPostSendState(params: {
   queuePolicy: OutboundDeliveryQueuePolicy;
   stateDir?: string;
   producerClaimId?: string;
+  expectedPlatformSendAttemptId?: string | null;
+  retainSpoolArtifacts?: boolean;
+  onPostSendMarkerError?: (error: unknown) => void;
 }): Promise<QueuedPostSendState> {
+  const expectedPlatformSendAttemptId =
+    params.producerClaimId ?? params.expectedPlatformSendAttemptId;
+  const owner = createQueuedDeliveryOwner({
+    queueId: params.queueId,
+    stateDir: params.stateDir,
+    expectedPlatformSendAttemptId,
+  });
   try {
-    if (params.producerClaimId) {
+    if (expectedPlatformSendAttemptId !== undefined) {
       await markDeliveryPlatformOutcomeUnknown(
         params.queueId,
         params.stateDir,
-        params.producerClaimId,
+        expectedPlatformSendAttemptId,
       );
     } else if (params.stateDir !== undefined) {
       await markDeliveryPlatformOutcomeUnknown(params.queueId, params.stateDir);
@@ -95,27 +145,20 @@ export async function persistQueuedPostSendState(params: {
       );
       return "failed";
     }
+    params.onPostSendMarkerError?.(markErr);
     log.warn(
       `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; falling back to direct ack (${params.queuePolicy}): ${formatErrorMessage(markErr)}`,
     );
     try {
       // The platform already returned a result. If state marking is unavailable,
       // deleting the intent is safer than leaving it replayable.
-      if (params.stateDir !== undefined) {
-        await ackDelivery(params.queueId, params.stateDir);
-      } else {
-        await ackDelivery(params.queueId);
-      }
+      await owner.ack(params.retainSpoolArtifacts ? { retainSpoolArtifacts: true } : undefined);
       return "acked";
     } catch (ackErr: unknown) {
       const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
       // Keep the evidence in the same canonical row if both primary state
       // transitions fail; a generic failure update would make it replayable.
-      if (params.stateDir !== undefined) {
-        await failDeliveryAfterPlatformSend(params.queueId, error, params.stateDir);
-      } else {
-        await failDeliveryAfterPlatformSend(params.queueId, error);
-      }
+      await owner.fail(failDeliveryAfterPlatformSend, error);
       return "failed";
     }
   }

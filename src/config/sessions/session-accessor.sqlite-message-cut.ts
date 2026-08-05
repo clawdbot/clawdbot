@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   openOpenClawAgentDatabase,
@@ -18,7 +19,6 @@ import {
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
-  formatSqliteSessionMarkerForScope,
   getSessionKysely,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
@@ -39,7 +39,6 @@ import type {
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -124,12 +123,7 @@ function loadSessionBranchSummaries(
   );
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, { ...watermark, branches });
-  if (sessionBranchCache.size > SESSION_BRANCH_CACHE_MAX_ENTRIES) {
-    const oldestKey = sessionBranchCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      sessionBranchCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
   return cloneSessionBranchSummaries(branches);
 }
 
@@ -154,12 +148,6 @@ export async function listSqliteSessionBranches(
     const currentEntry = readSessionEntryRow(database, sourceKey)?.entry;
     if (!currentEntry?.sessionId) {
       return { status: "missing-session" };
-    }
-    if (
-      currentEntry.sessionFile?.trim() &&
-      !parseSqliteSessionFileMarker(currentEntry.sessionFile)
-    ) {
-      return { status: "unsupported-storage" };
     }
     return {
       status: "ok",
@@ -269,9 +257,6 @@ function mutateSqliteSessionAtMessageInTransaction(
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
-  if (currentEntry.sessionFile?.trim() && !parseSqliteSessionFileMarker(currentEntry.sessionFile)) {
-    return { status: "unsupported-storage" };
-  }
   const events = loadSqliteTranscriptEventsFromDatabase(database, currentEntry.sessionId);
   const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
   if (cut && "status" in cut) {
@@ -290,7 +275,6 @@ function mutateSqliteSessionAtMessageInTransaction(
     sessionId: nextSessionId,
     sessionKey: params.targetKey,
   };
-  const nextSessionFile = formatSqliteSessionMarkerForScope(targetScope);
   const header = createSessionTranscriptHeader({
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
@@ -328,7 +312,6 @@ function mutateSqliteSessionAtMessageInTransaction(
               entryId: params.entryId,
             }
           : undefined,
-      nextSessionFile,
       nextSessionId,
     }),
     ...(params.mode === "fork" && params.creation
@@ -480,7 +463,6 @@ function cloneMessageCutSessionEntry(params: {
   currentEntry: SessionEntry;
   forked: boolean;
   forkSource?: NonNullable<SessionEntry["forkSource"]>;
-  nextSessionFile: string;
   nextSessionId: string;
 }): SessionEntry {
   const baseEntry = params.forked
@@ -489,7 +471,6 @@ function cloneMessageCutSessionEntry(params: {
   return {
     ...baseEntry,
     sessionId: params.nextSessionId,
-    sessionFile: params.nextSessionFile,
     lifecycleRevision: params.forked ? randomUUID() : params.currentEntry.lifecycleRevision,
     updatedAt: Date.now(),
     systemSent: false,
@@ -511,12 +492,7 @@ function cloneMessageCutSessionEntry(params: {
     contextBudgetStatus: undefined,
     compactionCount: undefined,
     compactionCheckpoints: undefined,
-    memoryFlushAt: undefined,
-    memoryFlushCompactionCount: undefined,
-    memoryFlushContextHash: undefined,
-    memoryFlushFailureCount: undefined,
-    memoryFlushLastFailedAt: undefined,
-    memoryFlushLastFailureError: undefined,
+    memoryFlush: undefined,
     cliSessionBindings: undefined,
     cliSessionIds: undefined,
     claudeCliSessionId: undefined,

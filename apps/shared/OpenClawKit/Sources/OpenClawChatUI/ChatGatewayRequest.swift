@@ -80,6 +80,22 @@ public enum OpenClawChatGatewayRequests {
         OpenClawChatGatewayRequest(method: "models.list", timeoutMs: self.defaultTimeoutMs)
     }
 
+    public static func artifactDownload(
+        sessionKey: String,
+        agentID: String?,
+        artifactId: String) -> OpenClawChatGatewayRequest
+    {
+        var params: [String: AnyCodable] = [
+            "sessionKey": AnyCodable(sessionKey),
+            "artifactId": AnyCodable(artifactId),
+        ]
+        self.add(agentID, to: &params, key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "artifacts.download",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
     public static func chatMetadata(
         sessionKey: String,
         fallbackAgentID: String?) -> OpenClawChatGatewayRequest

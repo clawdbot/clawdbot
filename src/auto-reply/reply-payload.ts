@@ -7,6 +7,22 @@ import type {
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
 
+export type ReplyMediaAttachment = {
+  type?: "image" | "audio" | "video" | "file";
+  path?: string;
+  url?: string;
+  mediaUrl?: string;
+  filePath?: string;
+  mimeType?: string;
+  name?: string;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  /** Internal per-URL trust carried until mixed media is split for history projection. */
+  trustedLocalMedia?: boolean;
+};
+
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
@@ -18,6 +34,8 @@ export type ReplyPayload = {
   };
   mediaUrl?: string;
   mediaUrls?: string[];
+  /** Prepared metadata aligned with mediaUrls for client-facing history projection. */
+  attachments?: ReplyMediaAttachment[];
   /** Internal-only trust signal for gateway webchat local media embedding. */
   trustedLocalMedia?: boolean;
   /** Treat media as live-only content and avoid persisting the underlying media reference. */
@@ -215,6 +233,8 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Original runtime MEDIA references used to identify the persisted assistant row. */
+  assistantTranscriptMediaUrls?: string[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */

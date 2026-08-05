@@ -1,10 +1,9 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import {
   applyToolCatalogCompaction,
-  classifyTool,
   collectUniqueCatalogToolNames,
+  isDirectVisibleCatalogTool,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -63,19 +62,10 @@ export function applyToolSchemaDirectoryCatalog(params: {
     ...params,
     enabled: config.enabled,
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
-    // Required names must resolve to trusted OpenClaw tools; an MCP lookalike
-    // must never become a direct delivery or core-coding tool.
-    isVisibleCatalogTool: (tool) => {
-      if (!uniqueCatalogToolNames.has(tool.name)) {
-        return false;
-      }
-      const classified = classifyTool(tool);
-      return (
-        classified.source === "openclaw" &&
-        (directToolNames.has(tool.name) ||
-          (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
-      );
-    },
+    // The unique-name gate defers any cross-source name collision before the
+    // shared trust check runs.
+    isVisibleCatalogTool: (tool) =>
+      uniqueCatalogToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
   });
 }
 

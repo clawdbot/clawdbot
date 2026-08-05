@@ -27,20 +27,6 @@ export {
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
 
-/** Create a lazy value/function proxy for one property of a facade module. */
-export function createLazyFacadeValue<TFacade extends object, K extends keyof TFacade>(
-  loadFacadeModule: () => TFacade,
-  key: K,
-): TFacade[K] {
-  return ((...args: unknown[]) => {
-    const value = loadFacadeModule()[key];
-    if (typeof value !== "function") {
-      return value;
-    }
-    return (value as (...innerArgs: unknown[]) => unknown)(...args);
-  }) as TFacade[K];
-}
-
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),

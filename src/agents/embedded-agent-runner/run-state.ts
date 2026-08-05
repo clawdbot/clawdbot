@@ -86,7 +86,7 @@ export const ACTIVE_EMBEDDED_RUNS =
 export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
   embeddedRunState.activeRunsByRunId ??
   (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
-export const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
+const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
   embeddedRunState.activeRunLifecycleGenerations ??
   (embeddedRunState.activeRunLifecycleGenerations = new WeakMap<
     EmbeddedAgentQueueHandle,

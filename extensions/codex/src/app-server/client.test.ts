@@ -1,6 +1,5 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { inc as incrementSemver } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -9,7 +8,7 @@ import {
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
-import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
@@ -48,6 +47,38 @@ describe("CodexAppServerClient", () => {
 
     await expect(request).resolves.toEqual({ models: [] });
     expect(outbound.method).toBe("model/list");
+  });
+
+  it("isolates synchronous notification handler failures", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const error = new Error("notification observer failed");
+    const receiveNotification = vi.fn();
+
+    harness.client.addNotificationHandler(() => {
+      throw error;
+    });
+    harness.client.addNotificationHandler(receiveNotification);
+
+    const notification = {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "message-1",
+        delta: "hello",
+      },
+    };
+
+    expect(() => harness.send(notification)).not.toThrow();
+    expect(receiveNotification).toHaveBeenCalledWith(notification);
+    expect(warn).toHaveBeenCalledWith("codex app-server notification handler failed", { error });
+
+    const request = harness.client.request("model/list", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({ id: outbound.id, result: { models: [] } });
+    await expect(request).resolves.toEqual({ models: [] });
   });
 
   it("rejects unbounded guarded thread requests before acquiring the fence", async () => {
@@ -300,7 +331,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.143.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -330,33 +361,46 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.124.9`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.124.9`,
     );
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("blocks same-version Codex app-server prereleases below the stable floor", async () => {
+  it("blocks the previously bundled Codex app-server version", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.143.0-alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.145.0 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.143.0-alpha.2`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.145.0`,
     );
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("blocks same-version Codex app-server build metadata below the stable floor", async () => {
+  it("blocks Codex app-server prereleases of the exact supported version", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.143.0+alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.146.0-alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.143.0+alpha.2`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.146.0-alpha.2`,
+    );
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("blocks Codex app-server build metadata on the exact supported version", async () => {
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: "openclaw/0.146.0+alpha.2 (macOS; test)" },
+    });
+
+    await expect(initializing).rejects.toThrow(
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.146.0+alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -369,7 +413,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -382,16 +426,13 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
 
   it("blocks stable Codex app-server versions newer than generated schemas", async () => {
-    const newerVersion = incrementSemver(MAX_CODEX_APP_SERVER_VERSION, "patch");
-    if (!newerVersion) {
-      throw new Error(`invalid maximum Codex app-server version: ${MAX_CODEX_APP_SERVER_VERSION}`);
-    }
+    const newerVersion = "0.146.1";
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
@@ -399,7 +440,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -409,7 +450,7 @@ describe("CodexAppServerClient", () => {
     harness.send({ id: outbound.id, result: {} });
 
     await expect(initializing).rejects.toThrow(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -550,6 +591,62 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "srv-1",
       result: { contentItems: [{ type: "inputText", text: "ok" }], success: true },
+    });
+  });
+
+  it("interleaves a bounded remote file command with a pending dynamic tool request", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const remotePath = "/remote/codex-workspace/reports/slack-upload.txt";
+    const content = "authoritative remote attachment";
+    harness.client.addRequestHandler(async (request, signal) => {
+      if (request.method !== "item/tool/call") {
+        return undefined;
+      }
+      const response = await harness.client.request(
+        "command/exec",
+        {
+          command: ["node", "-e", "fixed-reader", "--", remotePath, "64", "0", "524288"],
+          env: { NODE_OPTIONS: null, NODE_PATH: null },
+        },
+        { signal, timeoutMs: 10_000 },
+      );
+      return {
+        contentItems: [{ type: "inputText", text: response.stdout }],
+        success: true,
+      };
+    });
+
+    harness.send({ id: "srv-remote-file", method: "item/tool/call", params: { tool: "message" } });
+    await vi.waitFor(() => expect(harness.writes).toHaveLength(1));
+    const fileRequest = JSON.parse(harness.writes[0] ?? "{}") as {
+      id?: number;
+      method?: string;
+      params?: { command?: string[]; env?: Record<string, string | null> };
+    };
+    expect(fileRequest).toMatchObject({
+      method: "command/exec",
+      params: {
+        command: ["node", "-e", "fixed-reader", "--", remotePath, "64", "0", "524288"],
+        env: { NODE_OPTIONS: null, NODE_PATH: null },
+      },
+    });
+
+    harness.send({
+      id: fileRequest.id,
+      result: {
+        exitCode: 0,
+        stdout: content,
+        stderr: "",
+      },
+    });
+    await vi.waitFor(() => expect(harness.writes).toHaveLength(2));
+    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({
+      id: "srv-remote-file",
+      result: {
+        contentItems: [{ type: "inputText", text: content }],
+        success: true,
+      },
     });
   });
 

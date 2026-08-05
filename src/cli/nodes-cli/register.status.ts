@@ -80,7 +80,12 @@ function formatNodeVersions(node: {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-function formatPathEnv(raw?: string): string | null {
+function isWindowsNodePlatform(platform?: string): boolean {
+  const normalized = normalizeOptionalLowercaseString(platform) ?? "";
+  return normalized === "win32" || normalized === "windows";
+}
+
+function formatPathEnv(raw?: string, platform?: string): string | null {
   if (typeof raw !== "string") {
     return null;
   }
@@ -88,9 +93,12 @@ function formatPathEnv(raw?: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const parts = trimmed.split(":").filter(Boolean);
+  const delimiter = isWindowsNodePlatform(platform) ? ";" : ":";
+  const parts = trimmed.split(delimiter).filter(Boolean);
   const display =
-    parts.length <= 3 ? trimmed : `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
+    parts.length <= 3
+      ? trimmed
+      : `${parts.slice(0, 2).join(delimiter)}${delimiter}…${delimiter}${parts.slice(-1)[0]}`;
   return shortenHomeInString(display);
 }
 
@@ -298,7 +306,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const rows = filtered.map((n) => {
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
-            const pathEnv = formatPathEnv(n.pathEnv);
+            const pathEnv = formatPathEnv(n.pathEnv, n.platform);
             const client = formatClientLabel(n);
             const lastActive = formatLastActive(now, n.lastActiveAtMs);
             const detailParts = [

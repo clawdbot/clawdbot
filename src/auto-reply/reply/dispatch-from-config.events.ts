@@ -3,6 +3,8 @@ import type { CommandSessionMetadataChange } from "./command-session-metadata.js
 import type { ReplySessionBinding } from "./get-reply.types.js";
 
 export type InternalReplyResolverOptions = {
+  onDeliberateSilentTerminalReply?: () => void;
+  onPendingContinuation?: () => void;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };

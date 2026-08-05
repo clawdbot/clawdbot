@@ -10,11 +10,16 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
+import { hasTelegramApprovalCallbackPrefix } from "./approval-callback-data.js";
 import {
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumThreadId,
   resolveTelegramMessageForumFlagHint,
+  shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
-import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
+import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
+import type { TelegramPollRegistryEntry } from "./poll-registry.js";
+import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 
 const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
   "commands",
@@ -41,9 +46,43 @@ type TelegramSequentialKeyContext = {
     channel_post?: Message;
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
-    message_reaction?: { chat?: { id?: number } };
+    message_reaction?: {
+      chat?: { id?: number; type?: string; is_forum?: boolean };
+      message_id?: number;
+    };
+    poll_answer?: { poll_id?: string };
   };
 };
+
+function getTelegramMessageReactionSequentialKey(
+  ctx: TelegramSequentialKeyContext,
+): string | undefined {
+  const reaction = ctx.update?.message_reaction;
+  if (
+    reaction?.chat?.is_forum === true &&
+    typeof reaction.chat.id === "number" &&
+    typeof reaction.message_id === "number"
+  ) {
+    return `telegram:${reaction.chat.id}:message:${reaction.message_id}`;
+  }
+  const msg =
+    ctx.message ??
+    ctx.channelPost ??
+    ctx.editedMessage ??
+    ctx.editedChannelPost ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.update?.channel_post ??
+    ctx.update?.edited_channel_post;
+  const isForum = resolveTelegramMessageForumFlagHint({
+    chatType: msg?.chat?.type,
+    isForum: msg?.chat?.is_forum,
+    isTopicMessage: msg?.is_topic_message,
+  });
+  return isForum && typeof msg?.chat.id === "number" && typeof msg.message_id === "number"
+    ? `telegram:${msg.chat.id}:message:${msg.message_id}`
+    : undefined;
+}
 
 export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
@@ -150,6 +189,18 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
   }
+  const update = ctx.update;
+  const pollId = update?.poll_answer?.poll_id;
+  if (pollId) {
+    const prepared = getPreparedTelegramPollAnswer(update);
+    const entry = prepared?.entry;
+    if (entry) {
+      return getTelegramPollAnswerSequentialKey(entry, ctx.me);
+    }
+    // Missing historical registry entries do no work, but keep duplicate answers
+    // for the same unknown poll together while the handler records the miss.
+    return `telegram:poll:${pollId}`;
+  }
   const msg =
     ctx.message ??
     ctx.channelPost ??
@@ -180,13 +231,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return "telegram:btw";
   }
   const callbackData = ctx.update?.callback_query?.data;
-  if (parseTelegramQuestionCallbackData(callbackData)) {
+  if (hasTelegramQuestionCallbackPrefix(callbackData)) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:question`;
     }
     return "telegram:question";
   }
-  if (callbackData && parseExecApprovalCommandText(callbackData) !== null) {
+  if (
+    hasTelegramApprovalCallbackPrefix(callbackData) ||
+    (callbackData && parseExecApprovalCommandText(callbackData) !== null)
+  ) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:approval`;
     }
@@ -201,9 +255,43 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   });
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
-    : messageThreadId;
+    : shouldUseTelegramDmThreadSession({
+          dmThreadId: messageThreadId,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+        })
+      ? messageThreadId
+      : undefined;
   if (typeof chatId === "number") {
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
+}
+
+function getTelegramPollAnswerSequentialKey(
+  entry: TelegramPollRegistryEntry,
+  botUser?: UserFromGetMe,
+): string {
+  const isGroup = entry.chat.type === "group" || entry.chat.type === "supergroup";
+  const isForum = entry.chat.type === "supergroup" && entry.chat.is_forum === true;
+  const threadId = isGroup
+    ? resolveTelegramForumThreadId({ isForum, messageThreadId: entry.messageThreadId })
+    : shouldUseTelegramDmThreadSession({
+          dmThreadId: entry.messageThreadId,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(botUser),
+        })
+      ? entry.messageThreadId
+      : undefined;
+  return threadId == null
+    ? `telegram:${entry.chat.id}`
+    : `telegram:${entry.chat.id}:topic:${threadId}`;
+}
+
+export function getTelegramSequentialConstraints(
+  ctx: TelegramSequentialKeyContext,
+): string | string[] {
+  const key = getTelegramSequentialKey(ctx);
+  const messageKey = getTelegramMessageReactionSequentialKey(ctx);
+  // A forum reaction reads the topic fact recorded by the message update it targets.
+  // Bridge that exact message without serializing unrelated forum topics.
+  return messageKey ? [key, messageKey] : key;
 }

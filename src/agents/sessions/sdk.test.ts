@@ -1,14 +1,18 @@
+import path from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-lock behavior.
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -16,6 +20,7 @@ const thinkingMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
@@ -32,7 +37,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
-import { SessionManager } from "./session-manager.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 
@@ -67,6 +72,38 @@ describe("createAgentSession runtime ownership", () => {
     expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
       getModelRegistryRuntime(modelRegistry).llmRuntime,
     );
+  });
+
+  it("keeps the default SQLite session inside an explicit agent directory", async () => {
+    const root = sdkSessionTempDirs.make("openclaw-sdk-session-");
+    const agentDir = path.join(root, "isolated-agent");
+    const cwd = path.join(root, "explicit-sdk-cwd");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    try {
+      const { session } = await createAgentSession({
+        agentDir,
+        cwd,
+        model: testModel,
+        resourceLoader: createEmptyResourceLoader(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: createTestModelRegistry(),
+      });
+
+      const target = session.sessionManager.getSessionTarget();
+      if (!target) {
+        throw new Error("Expected the default SDK session to have a transcript target");
+      }
+      expect(target.storePath).toBe(databasePath);
+      expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
+      await expect(loadTranscriptEvents(target)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "session", id: target.sessionId, cwd }),
+        ]),
+      );
+      session.dispose();
+    } finally {
+      disposeOpenClawAgentDatabaseByPath(databasePath);
+    }
   });
 });
 
@@ -183,32 +220,50 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
   return streamMocks.streamSimple.mock.lastCall?.[2] ?? {};
 }
 
-function appendPersistedAssistantMessage(params: {
-  sessionManager: SessionManager;
-  content: unknown;
-  stopReason?: "stop" | "aborted";
-}) {
-  params.sessionManager.appendMessage({
-    role: "assistant",
-    content: params.content,
-    api: "messages",
-    provider: "anthropic",
-    model: "sonnet-4.6",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+function createSessionManagerWithPersistedAssistantMessages(
+  messages: Array<{
+    content: unknown;
+    stopReason?: "stop" | "aborted";
+  }>,
+): SessionManager {
+  const timestamp = new Date().toISOString();
+  return SessionManager.fromEntries([
+    {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "sdk-persisted-content",
+      timestamp,
+      cwd: process.cwd(),
     },
-    stopReason: params.stopReason ?? "stop",
-    timestamp: Date.now(),
-  } as Parameters<SessionManager["appendMessage"]>[0]);
+    ...messages.map((message, index) => ({
+      type: "message",
+      id: `assistant-${String(index + 1)}`,
+      parentId: index === 0 ? null : `assistant-${String(index)}`,
+      timestamp,
+      message: {
+        role: "assistant",
+        content: message.content,
+        api: "messages",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: message.stopReason ?? "stop",
+        timestamp: Date.now(),
+      },
+    })),
+  ]);
 }
 
 async function createSessionFromManager(sessionManager: SessionManager) {
   const { session } = await createAgentSession({
+    authStorage: AuthStorage.inMemory(),
     model: testModel,
     resourceLoader: createEmptyResourceLoader(),
     sessionManager,
@@ -219,9 +274,9 @@ async function createSessionFromManager(sessionManager: SessionManager) {
 }
 
 async function createSessionWithPersistedAssistantContent(content: unknown) {
-  const sessionManager = SessionManager.inMemory();
-  appendPersistedAssistantMessage({ sessionManager, content });
-  return await createSessionFromManager(sessionManager);
+  return await createSessionFromManager(
+    createSessionManagerWithPersistedAssistantMessages([{ content }]),
+  );
 }
 
 describe("AgentSession getLastAssistantText", () => {
@@ -248,16 +303,92 @@ describe("AgentSession getLastAssistantText", () => {
   });
 
   it("skips aborted malformed content and returns the preceding assistant text", async () => {
-    const sessionManager = SessionManager.inMemory();
-    appendPersistedAssistantMessage({ sessionManager, content: "previous answer" });
-    appendPersistedAssistantMessage({
-      sessionManager,
-      content: null,
-      stopReason: "aborted",
-    });
+    const sessionManager = createSessionManagerWithPersistedAssistantMessages([
+      { content: "previous answer" },
+      { content: null, stopReason: "aborted" },
+    ]);
     const session = await createSessionFromManager(sessionManager);
 
     expect(session.getLastAssistantText()).toBe("previous answer");
+  });
+});
+
+describe("AgentSession tree navigation", () => {
+  it("leaves the tree unchanged when branch summarization returns reasoning only", async () => {
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    const sessionManager = SessionManager.inMemory();
+    const rootId = sessionManager.appendMessage({
+      role: "user",
+      content: "shared root",
+      timestamp: 1,
+    });
+    const abandonedLeafId = sessionManager.appendMessage({
+      role: "user",
+      content: "abandoned branch",
+      timestamp: 2,
+    });
+    sessionManager.branch(rootId);
+    const targetId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "target branch" }],
+      api: testModel.api,
+      provider: testModel.provider,
+      model: testModel.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 3,
+    });
+    sessionManager.branch(abandonedLeafId);
+    streamMocks.streamSimple.mockReset();
+    streamMocks.streamSimple.mockImplementation(() =>
+      createAssistantResultStream({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "internal summary reasoning" }],
+        api: testModel.api,
+        provider: testModel.provider,
+        model: testModel.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 4,
+      }),
+    );
+    const { session } = await createAgentSession({
+      authStorage,
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: createTestModelRegistry(authStorage),
+    });
+    const entriesBefore = sessionManager.getEntries();
+    const leafBefore = sessionManager.getLeafId();
+
+    await expect(session.navigateTree(targetId, { summarize: true })).rejects.toThrow(
+      "Branch summary failed: model returned no summary text",
+    );
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(sessionManager.getEntries()).toEqual(entriesBefore);
+    expect(sessionManager.getLeafId()).toBe(leafBefore);
+    expect(sessionManager.getEntries().some((entry) => entry.type === "branch_summary")).toBe(
+      false,
+    );
+    session.dispose();
   });
 });
 

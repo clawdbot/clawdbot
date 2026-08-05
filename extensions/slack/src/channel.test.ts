@@ -37,19 +37,21 @@ vi.mock("./send.runtime.js", () => ({
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  const createClient = () => ({
+    assistant: {
+      threads: {
+        setStatus: assistantThreadsSetStatusMock,
+      },
+    },
+    conversations: {
+      info: conversationsInfoMock,
+      open: conversationsOpenMock,
+    },
+  });
   return {
     ...actual,
-    createSlackWebClient: vi.fn(() => ({
-      assistant: {
-        threads: {
-          setStatus: assistantThreadsSetStatusMock,
-        },
-      },
-      conversations: {
-        info: conversationsInfoMock,
-        open: conversationsOpenMock,
-      },
-    })),
+    createSlackReadClient: vi.fn(createClient),
+    createSlackWebClient: vi.fn(createClient),
   };
 });
 
@@ -215,7 +217,6 @@ describe("slackPlugin actions", () => {
           slack: {
             botToken: "xoxb-test",
             appToken: "xapp-test",
-            capabilities: { interactiveReplies: true },
           },
         },
       },
@@ -241,9 +242,6 @@ describe("slackPlugin actions", () => {
             memberInfo: false,
             emojiList: false,
           },
-          capabilities: {
-            interactiveReplies: false,
-          },
           accounts: {
             default: {
               botToken: "xoxb-default",
@@ -255,9 +253,6 @@ describe("slackPlugin actions", () => {
                 memberInfo: false,
                 emojiList: false,
               },
-              capabilities: {
-                interactiveReplies: false,
-              },
             },
             work: {
               botToken: "xoxb-work",
@@ -268,9 +263,6 @@ describe("slackPlugin actions", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
-              },
-              capabilities: {
-                interactiveReplies: true,
               },
             },
           },
@@ -468,6 +460,101 @@ describe("slackPlugin actions", () => {
       mediaLocalRoots,
       mediaReadFile,
     });
+  });
+
+  it.each([
+    {
+      action: "send",
+      params: {
+        to: "channel:C123",
+        message: "render",
+        media: "renders/file.wav",
+      },
+      runtimeAction: "sendMessage",
+    },
+    {
+      action: "upload-file",
+      params: {
+        to: "channel:C123",
+        filePath: "renders/file.wav",
+        initialComment: "render",
+      },
+      runtimeAction: "uploadFile",
+    },
+  ] as const)("keeps host-owned media access authoritative for $action", async (testCase) => {
+    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+    const handleAction = requireSlackHandleAction();
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted"));
+    const mediaAccess = {
+      localRoots: ["/tmp/workspace-agent"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/workspace-agent",
+    };
+    const forgedReadFile = vi.fn(async () => Buffer.from("forged"));
+
+    await handleAction({
+      action: testCase.action,
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      params: testCase.params,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      conversationReadOrigin: "delegated",
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+      toolContext: {
+        currentChannelId: "C123",
+        mediaAccess: { localRoots: ["/tmp/forged"], readFile: forgedReadFile },
+        mediaLocalRoots: ["/tmp/forged"],
+        mediaReadFile: forgedReadFile,
+        conversationReadOrigin: "direct-operator",
+        requesterAccountId: "forged",
+        requesterSenderId: "forged",
+      },
+    } as never);
+
+    expect(requireMockCallArg(handleSlackActionMock, 0, 0).action).toBe(testCase.runtimeAction);
+    const actionContext = requireMockCallArg(handleSlackActionMock, 0, 2);
+    expect(actionContext.mediaAccess).toBe(mediaAccess);
+    expect(actionContext.mediaLocalRoots).toEqual(mediaAccess.localRoots);
+    expect(actionContext.mediaReadFile).toBeUndefined();
+    expect(actionContext.conversationReadOrigin).toBe("delegated");
+    expect(actionContext.requesterAccountId).toBe("default");
+    expect(actionContext.requesterSenderId).toBe("U123");
+    expect(actionContext.currentChannelId).toBe("C123");
+  });
+
+  it("does not inherit forged media capabilities from generic Slack tool context", async () => {
+    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+    const handleAction = requireSlackHandleAction();
+    const forgedReadFile = vi.fn(async () => Buffer.from("forged"));
+
+    await handleAction({
+      action: "upload-file",
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      params: { to: "channel:C123", filePath: "renders/file.wav" },
+      toolContext: {
+        currentChannelId: "C123",
+        mediaAccess: { localRoots: ["/tmp/forged"], readFile: forgedReadFile },
+        mediaLocalRoots: ["/tmp/forged"],
+        mediaReadFile: forgedReadFile,
+        conversationReadOrigin: "direct-operator",
+        requesterAccountId: "forged",
+        requesterSenderId: "forged",
+      },
+    } as never);
+
+    const actionContext = requireMockCallArg(handleSlackActionMock, 0, 2);
+    expect(actionContext.mediaAccess).toBeUndefined();
+    expect(actionContext.mediaLocalRoots).toBeUndefined();
+    expect(actionContext.mediaReadFile).toBeUndefined();
+    expect(actionContext.conversationReadOrigin).toBeUndefined();
+    expect(actionContext.requesterAccountId).toBeUndefined();
+    expect(actionContext.requesterSenderId).toBeUndefined();
+    expect(actionContext.currentChannelId).toBe("C123");
   });
 });
 
@@ -775,6 +862,12 @@ describe("slackPlugin messaging targets", () => {
     expect(messaging?.resolveDeliveryTarget?.({ conversationId: "c08gqh53ejm" })).toEqual({
       to: "channel:c08gqh53ejm",
     });
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "G08GQH53EJM" })).toEqual({
+      to: "channel:g08gqh53ejm",
+    });
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "user:U08GQH53EJM" })).toEqual({
+      to: "user:u08gqh53ejm",
+    });
     expect(
       messaging?.resolveDeliveryTarget?.({
         conversationId: "1712345678.123456",
@@ -783,6 +876,24 @@ describe("slackPlugin messaging targets", () => {
     ).toEqual({
       to: "channel:c08gqh53ejm",
       threadId: "1712345678.123456",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.654321",
+        parentConversationId: "user:U08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "user:u08gqh53ejm",
+      threadId: "1712345678.654321",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.777777",
+        parentConversationId: "G08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "channel:g08gqh53ejm",
+      threadId: "1712345678.777777",
     });
     expect(messaging?.resolveSessionTarget?.({ kind: "channel", id: "C08GQH53EJM" })).toBe(
       "channel:c08gqh53ejm",
@@ -1256,40 +1367,6 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
   });
 
-  it("normalizes slack button directives for direct outbound delivery", () => {
-    const normalized = slackPlugin.outbound?.normalizePayload?.({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            capabilities: { interactiveReplies: true },
-          },
-        },
-      },
-      accountId: "default",
-      payload: {
-        text: "Slack interactive minimal test\n[[slack_buttons: Test:test-value]]",
-      },
-    });
-
-    expect(normalized).toEqual({
-      text: "Slack interactive minimal test",
-      interactive: {
-        blocks: [
-          {
-            type: "text",
-            text: "Slack interactive minimal test",
-          },
-          {
-            type: "buttons",
-            buttons: [{ label: "Test", value: "test-value" }],
-          },
-        ],
-      },
-    });
-  });
-
   it("sends block payload media first, then the final block message", async () => {
     const sendSlack = vi
       .fn()
@@ -1436,7 +1513,7 @@ describe("slackPlugin directory", () => {
 });
 
 describe("slackPlugin agentPrompt", () => {
-  it("tells agents interactive replies are disabled by default", () => {
+  it("teaches agents to use typed presentation", () => {
     const hints = slackPlugin.agentPrompt?.messageToolHints?.({
       cfg: {
         channels: {
@@ -1449,43 +1526,7 @@ describe("slackPlugin agentPrompt", () => {
     });
 
     expect(hints).toContain(
-      "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
-    );
-    expect(hints).toContain(
-      "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
-    );
-    expect(hints).toContain(
-      "- For row-and-column data, use an explicit `presentation` table block; Slack renders it as a native table and retains a linear text summary for accessibility. Markdown pipe tables are not auto-promoted.",
-    );
-    expect(hints).toContain(
-      "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",
-    );
-    expect(hints).toContain(
-      "- Slack Block Kit or presentation text fields are sent as Slack mrkdwn directly; use `*bold*`, `_italic_`, `~strike~`, `<url|label>` links, and avoid Markdown headings or pipe tables there.",
-    );
-  });
-
-  it("shows Slack interactive reply directives when enabled", () => {
-    const hints = slackPlugin.agentPrompt?.messageToolHints?.({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            capabilities: { interactiveReplies: true },
-          },
-        },
-      },
-    });
-
-    expect(hints).toContain(
-      "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
-    );
-    expect(hints).toContain(
-      "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
-    );
-    expect(hints).toContain(
-      "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+      "- Use `presentation` buttons/selects for discrete choices or parameter picks instead of asking the user to type one.",
     );
     expect(hints).toContain(
       "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",

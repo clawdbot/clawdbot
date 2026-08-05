@@ -9,6 +9,7 @@ import {
   buildReleaseCandidateState,
   buildPublishCommand,
   buildTelegramArtifactInputs,
+  assertPlannedReleaseTagIsAbsent,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -78,14 +79,12 @@ describe("release candidate checklist", () => {
       toolingSha: "b".repeat(40),
     });
     const resumed = reconcileReleaseCandidateState(
-      JSON.parse(
-        JSON.stringify({
-          ...expected,
-          phase: "waiting",
-          fullReleaseRunId: "111",
-          npmPreflightRunId: "222",
-        }),
-      ),
+      structuredClone({
+        ...expected,
+        phase: "waiting",
+        fullReleaseRunId: "111",
+        npmPreflightRunId: "222",
+      }),
       expected,
     );
 
@@ -94,6 +93,19 @@ describe("release candidate checklist", () => {
       fullReleaseRunId: "111",
       npmPreflightRunId: "222",
     });
+  });
+
+  it("treats the release tag as a planned post-validation identity", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "a".repeat(40)]);
+
+    expect(options.targetSha).toBe("a".repeat(40));
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => true)).toThrow(
+      "already exists",
+    );
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => false)).not.toThrow();
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "not-a-sha"])).toThrow(
+      "--target-sha must be a full lowercase commit SHA",
+    );
   });
 
   it("rejects stale or conflicting release candidate state", () => {

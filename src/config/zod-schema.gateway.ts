@@ -220,6 +220,7 @@ export const GatewayConfigSchema = z
           .optional(),
         pairing: z
           .strictObject({
+            autoApproveLocal: z.boolean().optional(),
             autoApproveCidrs: z.array(z.string()).optional(),
             sshVerify: z
               .union([

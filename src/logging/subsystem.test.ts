@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "./logger.js";
+import { resetLogger, setLoggerOverride, testApi } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
@@ -148,7 +148,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("keeps setup-inference probe warnings in the file log while suppressing console", () => {
+  it("keeps setup-inference probe warnings in the file log while suppressing console", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "warn", consoleLevel: "warn", file });
     const warn = installConsoleMethodSpy("warn");
@@ -166,6 +166,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).not.toHaveBeenCalled();
+    await testApi.flushFileLogQueueForTests();
     const fileLog = fs.readFileSync(file, "utf8");
     expect(fileLog).toContain("embedded run failover decision");
     expect(fileLog).toContain("embedded run agent end");
@@ -335,7 +336,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
   });
 
-  it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
+  it("keeps long-lived subsystem loggers on the current-day rolling file", async () => {
     const logDir = path.dirname(logPathTracker.nextPath());
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
     const secondDay = path.join(logDir, "openclaw-2026-01-02.log");
@@ -347,6 +348,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.info("first day subsystem log");
     vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
     log.info("second day subsystem log");
+    await testApi.flushFileLogQueueForTests();
 
     expect(fs.readFileSync(firstDay, "utf8")).toContain("first day subsystem log");
     expect(fs.readFileSync(secondDay, "utf8")).toContain("second day subsystem log");

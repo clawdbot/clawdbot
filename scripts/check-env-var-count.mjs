@@ -77,7 +77,15 @@ function readBaseBudget(root, ref) {
   if (resolved.status !== 0) {
     throw new Error(`Could not resolve env-var count base ref: ${ref}`);
   }
-  const entry = execFileSync("git", ["ls-tree", "--name-only", ref, "--", BUDGET_PATH], {
+  const mergeBase = spawnSync("git", ["merge-base", "HEAD", ref], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  const baselineRef = mergeBase.stdout.trim();
+  if (mergeBase.status !== 0 || !baselineRef) {
+    throw new Error(`Could not resolve env-var count merge base for: ${ref}`);
+  }
+  const entry = execFileSync("git", ["ls-tree", "--name-only", baselineRef, "--", BUDGET_PATH], {
     cwd: root,
     encoding: "utf8",
   }).trim();
@@ -85,7 +93,10 @@ function readBaseBudget(root, ref) {
     return null;
   }
   return parseBudget(
-    execFileSync("git", ["show", `${ref}:${BUDGET_PATH}`], { cwd: root, encoding: "utf8" }),
+    execFileSync("git", ["show", `${baselineRef}:${BUDGET_PATH}`], {
+      cwd: root,
+      encoding: "utf8",
+    }),
   );
 }
 

@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
 import {
   addWorkboardCardComment,
   getWorkboardState,
@@ -27,6 +28,36 @@ const workboardCardModalTitleId = "workboard-card-modal-title";
 const workboardCardModalDescriptionId = "workboard-card-modal-description";
 export const workboardCardModalId = "workboard-card-modal";
 
+// Keep keystroke state local to the form. A parent render can restore stale
+// controlled values before the next field is edited or the draft is submitted.
+function syncDraftTextInput(
+  state: WorkboardUiState,
+  form: HTMLFormElement,
+  input: HTMLInputElement | HTMLTextAreaElement,
+  draftActionsBusy: boolean,
+) {
+  if (input.classList.contains("workboard-draft__title")) {
+    state.draftTitle = input.value;
+  } else if (input.classList.contains("workboard-draft__notes")) {
+    state.draftNotes = input.value;
+  } else if (input.classList.contains("workboard-draft__labels")) {
+    state.draftLabels = input.value;
+  } else if (input.classList.contains("workboard-comments__input")) {
+    state.draftCommentBody = input.value;
+  } else {
+    return;
+  }
+
+  const draftSubmit = form.querySelector<HTMLButtonElement>(".workboard-draft__submit");
+  if (draftSubmit) {
+    draftSubmit.disabled = draftActionsBusy || !state.draftTitle.trim();
+  }
+  const commentSubmit = form.querySelector<HTMLButtonElement>(".workboard-comments__submit");
+  if (commentSubmit) {
+    commentSubmit.disabled = draftActionsBusy || !state.draftCommentBody.trim();
+  }
+}
+
 function defineTemplate(
   id: WorkboardTemplateId,
   draftKey: string,
@@ -44,8 +75,30 @@ const workboardTemplates = [
   defineTemplate("plugin", "plugin", "plugin", "normal"),
 ];
 
-export function openCreateModal(state: WorkboardUiState) {
+export function openCreateModal(
+  state: WorkboardUiState,
+  props: Pick<WorkboardProps, "agentsList" | "defaultAgentId" | "scopeAgentId">,
+) {
   resetDraftState(state);
+  const scopedAgentId = props.scopeAgentId?.trim();
+  const defaultAgentId = props.agentsList?.defaultId?.trim() ?? props.defaultAgentId?.trim();
+  const selectedAgentId = scopedAgentId
+    ? scopedAgentId === defaultAgentId
+      ? ""
+      : scopedAgentId
+    : state.agentFilter === "all" || state.agentFilter === "default"
+      ? ""
+      : state.agentFilter;
+  if (
+    selectedAgentId &&
+    (props.agentsList
+      ? buildAssignableAgentOptions(props.agentsList, "").some(
+          (agent) => agent.id === selectedAgentId,
+        )
+      : Boolean(scopedAgentId))
+  ) {
+    state.draftAgentId = selectedAgentId;
+  }
   state.draftOpen = true;
 }
 
@@ -58,7 +111,7 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftPriority = card.priority;
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
-  state.draftSessionKey = card.sessionKey ?? "";
+  state.draftSessionKey = workboardCardSessionKey(card) ?? "";
   state.draftTemplateId = card.metadata?.templateId ?? "";
   state.draftCommentBody = "";
 }
@@ -145,6 +198,17 @@ export function renderCardModal(props: WorkboardProps) {
         id=${workboardCardModalId}
         class="workboard-draft"
         aria-busy=${draftActionsBusy ? "true" : "false"}
+        @input=${(event: InputEvent) => {
+          const input = event.target;
+          if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+            syncDraftTextInput(
+              state,
+              event.currentTarget as HTMLFormElement,
+              input,
+              draftActionsBusy,
+            );
+          }
+        }}
         @submit=${(event: SubmitEvent) => {
           event.preventDefault();
           if (draftActionsBusy) {
@@ -215,10 +279,6 @@ export function renderCardModal(props: WorkboardProps) {
                 placeholder=${t("workboard.titlePlaceholder")}
                 ?disabled=${draftActionsBusy}
                 .value=${state.draftTitle}
-                @input=${(event: InputEvent) => {
-                  state.draftTitle = (event.currentTarget as HTMLInputElement).value;
-                  props.onRequestUpdate?.();
-                }}
               />
             </label>
             <label class="workboard-field">
@@ -228,10 +288,6 @@ export function renderCardModal(props: WorkboardProps) {
                 placeholder=${t("workboard.notesPlaceholder")}
                 ?disabled=${draftActionsBusy}
                 .value=${state.draftNotes}
-                @input=${(event: InputEvent) => {
-                  state.draftNotes = (event.currentTarget as HTMLTextAreaElement).value;
-                  props.onRequestUpdate?.();
-                }}
               ></textarea>
             </label>
           </div>
@@ -283,14 +339,10 @@ export function renderCardModal(props: WorkboardProps) {
             <label class="workboard-field workboard-field--wide">
               <span>${t("workboard.fieldLabels")}</span>
               <input
-                class="input"
+                class="input workboard-draft__labels"
                 placeholder=${t("workboard.labelsPlaceholder")}
                 ?disabled=${draftActionsBusy}
                 .value=${state.draftLabels}
-                @input=${(event: InputEvent) => {
-                  state.draftLabels = (event.currentTarget as HTMLInputElement).value;
-                  props.onRequestUpdate?.();
-                }}
               />
             </label>
           </div>
@@ -316,14 +368,10 @@ export function renderCardModal(props: WorkboardProps) {
                     maxlength="2000"
                     ?disabled=${draftActionsBusy}
                     .value=${state.draftCommentBody}
-                    @input=${(event: InputEvent) => {
-                      state.draftCommentBody = (event.currentTarget as HTMLTextAreaElement).value;
-                      props.onRequestUpdate?.();
-                    }}
                   ></textarea>
                   <div class="workboard-modal__actions">
                     <button
-                      class="btn"
+                      class="btn workboard-comments__submit"
                       type="button"
                       ?disabled=${draftActionsBusy || !state.draftCommentBody.trim()}
                       @click=${() => {
@@ -342,7 +390,10 @@ export function renderCardModal(props: WorkboardProps) {
             : nothing}
         </div>
         <div class="workboard-modal__actions">
-          <button class="btn primary" ?disabled=${draftActionsBusy || !state.draftTitle.trim()}>
+          <button
+            class="btn primary workboard-draft__submit"
+            ?disabled=${draftActionsBusy || !state.draftTitle.trim()}
+          >
             ${editing ? t("common.save") : t("common.create")}
           </button>
           <button

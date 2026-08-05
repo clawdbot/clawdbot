@@ -8,6 +8,7 @@ import {
   formatPlanChecklistLines,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
+import { normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { truncateSlackText } from "./truncate.js";
 
@@ -77,9 +78,20 @@ function legacyLineTitle(line: ChannelProgressDraftLine): string {
   return `${line.icon ?? "•"} *${escapeSlackMrkdwn(line.label)}*`;
 }
 
+function isAuthoredProgressLine(line: ChannelProgressDraftLine): boolean {
+  return line.id === "reasoning" || line.id?.startsWith("commentary:") === true;
+}
+
 function legacyLineDetail(line: ChannelProgressDraftLine, maxChars: number): string {
   const detail = lineDetailParts(line).join(" · ");
-  return detail ? escapeSlackMrkdwn(compactDetail(detail, maxChars)) : "—";
+  if (detail) {
+    return escapeSlackMrkdwn(compactDetail(detail, maxChars));
+  }
+  if (isAuthoredProgressLine(line)) {
+    const text = line.text.replace(/^(?:🧠|💬)\s+/u, "");
+    return normalizeSlackOutboundText(compactDetail(text, maxChars));
+  }
+  return "—";
 }
 
 function lineTaskTitle(line: ChannelProgressDraftLine, maxLineChars: number): string {

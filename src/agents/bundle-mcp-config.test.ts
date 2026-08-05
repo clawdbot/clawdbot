@@ -97,4 +97,39 @@ describe("loadMergedBundleMcpConfig", () => {
 
     expect(merged.config.mcpServers).not.toHaveProperty("bundleProbe");
   });
+
+  it.each([
+    {
+      name: "excludes an enabled server",
+      override: false,
+      enabled: true,
+      expected: false,
+    },
+    {
+      name: "includes a disabled server",
+      override: true,
+      enabled: false,
+      expected: true,
+    },
+    {
+      name: "inherits configured state",
+      override: undefined,
+      enabled: true,
+      expected: true,
+    },
+  ])("$name", ({ override, enabled, expected }) => {
+    const merged = loadMergedBundleMcpConfig({
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            docs: { enabled, command: "node", args: ["docs.mjs"] },
+          },
+        },
+      },
+      ...(override === undefined ? {} : { toolOverrides: { mcpServers: { docs: override } } }),
+    });
+
+    expect(Object.hasOwn(merged.config.mcpServers, "docs")).toBe(expected);
+  });
 });

@@ -4,6 +4,7 @@ import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowli
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
+  createAccountStatusSink,
   createReplyToFanout,
   defineChannelMessageAdapter,
   resolveOutboundSendDep,
@@ -103,27 +104,30 @@ async function sendSignalOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaAccess?: Parameters<SignalSendFn>[2]["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  accountId?: string;
+  accountId?: string | null;
   deps?: { [channelId: string]: unknown };
   replyToId?: string | null;
 }) {
-  const { send, maxBytes } = await resolveSignalSendContext(params);
-  const to = resolveSignalSendTarget(params);
+  const accountId = params.accountId ?? undefined;
+  const { send, maxBytes } = await resolveSignalSendContext({ ...params, accountId });
+  const to = resolveSignalSendTarget({ ...params, accountId });
   const replyOptions = await resolveSignalReplyOptions({
     cfg: params.cfg,
     to,
-    accountId: params.accountId,
+    accountId,
     replyToId: params.replyToId,
   });
   return await send(to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     maxBytes,
-    accountId: params.accountId ?? undefined,
+    accountId,
     ...replyOptions,
   });
 }
@@ -180,15 +184,8 @@ function inferSignalTargetChatType(rawTo: string) {
   if (lower.startsWith("group:")) {
     return "group" as const;
   }
-  if (lower.startsWith("username:") || lower.startsWith("u:")) {
-    return "direct" as const;
-  }
   return "direct" as const;
 }
-
-type SignalMessageContextExtras = {
-  deps?: { [channelId: string]: unknown };
-};
 
 function attachSignalVisibleText<T extends object>(result: T, visibleText: string) {
   const meta =
@@ -213,27 +210,8 @@ const signalMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async (ctx) =>
-      await sendSignalOutbound({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: ctx.text,
-        accountId: ctx.accountId ?? undefined,
-        deps: (ctx as typeof ctx & SignalMessageContextExtras).deps,
-        replyToId: ctx.replyToId ?? undefined,
-      }),
-    media: async (ctx) =>
-      await sendSignalOutbound({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: ctx.text,
-        mediaUrl: ctx.mediaUrl,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
-        accountId: ctx.accountId ?? undefined,
-        deps: (ctx as typeof ctx & SignalMessageContextExtras).deps,
-        replyToId: ctx.replyToId ?? undefined,
-      }),
+    text: sendSignalOutbound,
+    media: sendSignalOutbound,
   },
 });
 
@@ -362,6 +340,7 @@ async function sendFormattedSignalMedia(ctx: {
   to: string;
   text: string;
   mediaUrl: string;
+  mediaAccess?: Parameters<SignalSendFn>[2]["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
@@ -400,6 +379,7 @@ async function sendFormattedSignalMedia(ctx: {
   const result = await send(to, formatted.text, {
     cfg: ctx.cfg,
     mediaUrl: ctx.mediaUrl,
+    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
     mediaLocalRoots: ctx.mediaLocalRoots,
     ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
     maxBytes,
@@ -579,10 +559,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             lastProbeAt: snapshot.lastProbeAt ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) => {
-          const baseUrl = account.baseUrl;
-          const { probeSignal } = await loadSignalProbeModule();
-          return await probeSignal(baseUrl, timeoutMs, {
+          const { probeSignalAccount } = await loadSignalProbeModule();
+          return await probeSignalAccount({
+            baseUrl: account.baseUrl,
+            timeoutMs,
             transportKind: account.transport.kind,
+            account: account.config.account,
           });
         },
         formatCapabilitiesProbe: ({ probe }) =>
@@ -600,8 +582,11 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
-          ctx.setStatus({
+          const statusSink = createAccountStatusSink({
             accountId: account.accountId,
+            setStatus: ctx.setStatus,
+          });
+          statusSink({
             baseUrl: account.baseUrl,
           });
           ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
@@ -613,6 +598,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             channelRuntime: ctx.channelRuntime,
             abortSignal: ctx.abortSignal,
             mediaMaxMb: account.config.mediaMaxMb,
+            statusSink,
           });
         },
       },
@@ -709,92 +695,15 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             payload,
             hint,
           }),
-        afterDeliverPayload: async (params) =>
-          await registerDeliveredSignalApprovalPayloadForReactions(params),
-        renderPresentation: async (params) => await renderSignalApprovalPayloadForReactions(params),
-        sendFormattedText: async ({
-          cfg,
-          to,
-          text,
-          accountId,
-          deps,
-          replyToId,
-          replyToIdSource,
-          replyToMode,
-          abortSignal,
-          onDeliveryResult,
-        }) =>
-          await sendFormattedSignalText({
-            cfg,
-            to,
-            text,
-            accountId,
-            deps,
-            replyToId,
-            replyToIdSource,
-            replyToMode,
-            abortSignal,
-            onDeliveryResult,
-          }),
-        sendFormattedMedia: async ({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-          mediaLocalRoots,
-          mediaReadFile,
-          accountId,
-          deps,
-          replyToId,
-          abortSignal,
-        }) =>
-          await sendFormattedSignalMedia({
-            cfg,
-            to,
-            text,
-            mediaUrl,
-            mediaLocalRoots,
-            mediaReadFile,
-            accountId,
-            deps,
-            replyToId,
-            abortSignal,
-          }),
+        afterDeliverPayload: registerDeliveredSignalApprovalPayloadForReactions,
+        renderPresentation: renderSignalApprovalPayloadForReactions,
+        sendFormattedText: sendFormattedSignalText,
+        sendFormattedMedia: sendFormattedSignalMedia,
       },
       attachedResults: {
         channel: "signal",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
-          await sendSignalOutbound({
-            cfg,
-            to,
-            text,
-            accountId: accountId ?? undefined,
-            deps,
-            replyToId,
-          }),
-        sendMedia: async ({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-          mediaLocalRoots,
-          mediaReadFile,
-          accountId,
-          deps,
-          replyToId,
-        }) =>
-          await sendSignalOutbound({
-            cfg,
-            to,
-            text,
-            mediaUrl,
-            mediaLocalRoots,
-            mediaReadFile,
-            accountId: accountId ?? undefined,
-            deps,
-            replyToId,
-          }),
+        sendText: sendSignalOutbound,
+        sendMedia: sendSignalOutbound,
       },
     },
   });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

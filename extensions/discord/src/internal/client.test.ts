@@ -106,6 +106,44 @@ describe("ComponentRegistry", () => {
     );
   });
 
+  it("preserves each message owner when replacing a one-off component wait", async () => {
+    const registry = new ComponentRegistry<Button>();
+    const firstMessage = {
+      id: "message-1",
+      channelId: "channel-1",
+      owner: "first",
+    } as never;
+    const secondMessage = {
+      id: "message-1",
+      channelId: "channel-1",
+      owner: "second",
+    } as never;
+
+    const first = registry.waitForMessageComponent(firstMessage, 5_000);
+    const second = registry.waitForMessageComponent(secondMessage, 5_000);
+    const firstResult = await first;
+    const resolved = registry.resolveOneOffComponent({
+      channelId: "channel-1",
+      customId: "choice:one",
+      messageId: "message-1",
+      values: ["one"],
+    });
+    const secondResult = await second;
+
+    expect(firstResult).toMatchObject({
+      success: false,
+      reason: "timed out",
+    });
+    expect(firstResult.message).toBe(firstMessage);
+    expect(resolved).toBe(true);
+    expect(secondResult).toMatchObject({
+      success: true,
+      customId: "choice:one",
+      values: ["one"],
+    });
+    expect(secondResult.message).toBe(secondMessage);
+  });
+
   it("caps oversized one-off component wait timers", () => {
     vi.useFakeTimers();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");

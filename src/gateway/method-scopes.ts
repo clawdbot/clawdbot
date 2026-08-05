@@ -1,13 +1,16 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
-import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
+import {
+  isAdminOnlyNodeInvokeCommand,
+  isBrowserProxyNodeInvokeCommand,
+} from "../infra/node-commands.js";
 import {
   getActivePluginHttpRouteRegistry,
   getActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import { resolveDynamicSessionMutationRequiredScope } from "../shared/session-method-scopes.js";
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
   isCoreGatewayMethodClassified,
@@ -22,6 +25,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -34,6 +38,7 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -50,8 +55,8 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 ];
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
-  // Gateway-pinned plugin descriptors prevent agent-scoped registry loads from
-  // changing gateway authorization. Node/dynamic sentinels are not operator scopes.
+  // Gateway method descriptors come from the process-root registry. Node/dynamic
+  // sentinels are not operator scopes.
   const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
   if (explicitScope) {
     return explicitScope;
@@ -80,53 +85,6 @@ export function isNodeRoleMethod(method: string): boolean {
 /** Resolves the required static operator scope for a gateway method, if one exists. */
 function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
   return resolveScopedMethod(method);
-}
-
-/**
- * sessions.patch fields a write-scoped operator may mutate: user-level chat
- * organization only. Any other field (model, sendPolicy, tool inheritance,
- * exec routing, ...) keeps requiring operator.admin — fail closed on unknowns.
- */
-const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
-  "key",
-  "agentId",
-  "label",
-  "category",
-  "boardFace",
-  "icon",
-  "pinned",
-  "archived",
-  "unread",
-]);
-
-function resolveSessionsPatchRequiredScopes(params: unknown): OperatorScope[] {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    // Malformed params cannot mutate anything; let the handler return the
-    // precise validation error instead of a misleading missing-scope error.
-    return [WRITE_SCOPE];
-  }
-  const safeOnly = Object.keys(params).every((key) => SESSIONS_PATCH_WRITE_SCOPE_FIELDS.has(key));
-  return safeOnly ? [WRITE_SCOPE] : [ADMIN_SCOPE];
-}
-
-function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return [WRITE_SCOPE];
-  }
-  const record = params as { incognito?: unknown; key?: unknown; parentSessionKey?: unknown };
-  // Incognito creation and inheritance expose process-only session state; cwd and
-  // execNode target privileged host resources. All require operator.admin.
-  if (
-    record.incognito === true ||
-    (typeof record.key === "string" && isIncognitoSessionKey(record.key)) ||
-    (typeof record.parentSessionKey === "string" &&
-      isIncognitoSessionKey(record.parentSessionKey)) ||
-    Object.hasOwn(params, "cwd") ||
-    Object.hasOwn(params, "execNode")
-  ) {
-    return [ADMIN_SCOPE];
-  }
-  return [WRITE_SCOPE];
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
@@ -193,7 +151,10 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     const command = record?.command;
     // Invalid persistent-profile mutations must reach the handler's precise fail-closed
     // rejection instead of being disguised as an admin-scope failure.
-    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(record?.params)) {
+    if (
+      isBrowserProxyNodeInvokeCommand(command) &&
+      isForbiddenBrowserProxyMutation(record?.params)
+    ) {
       return [WRITE_SCOPE];
     }
     return isAdminOnlyNodeInvokeCommand(command) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
@@ -213,44 +174,15 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
   }
   if (method === "sessions.patch") {
-    return resolveSessionsPatchRequiredScopes(params);
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
   if (method === "sessions.create") {
-    return resolveSessionsCreateRequiredScopes(params);
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
   if (method === "sessions.delete") {
-    return resolveSessionsDeleteRequiredScopes(params);
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? ADMIN_SCOPE];
   }
   return [WRITE_SCOPE];
-}
-
-/**
- * sessions.delete params a write-scoped archive-then-delete request may carry.
- * Internal controls (emitLifecycleHooks, expected* CAS guards) stay admin-only
- * — fail closed on anything outside this set.
- */
-const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
-  "key",
-  "agentId",
-  "deleteTranscript",
-  "archivedOnly",
-]);
-
-function resolveSessionsDeleteRequiredScopes(params: unknown): OperatorScope[] {
-  // archivedOnly is the explicit archive-then-delete opt-in: write scope may
-  // delete only already-archived sessions (the handler enforces the state,
-  // both pre-lock and under the lifecycle lock). Everything else — including
-  // internal fallback/synthetic dispatch, which never sets the flag, and any
-  // request carrying internal-only params — keeps requiring admin.
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return [ADMIN_SCOPE];
-  }
-  const record = params as { archivedOnly?: unknown };
-  if (record.archivedOnly !== true) {
-    return [ADMIN_SCOPE];
-  }
-  const safeOnly = Object.keys(params).every((key) => SESSIONS_DELETE_WRITE_SCOPE_FIELDS.has(key));
-  return safeOnly ? [WRITE_SCOPE] : [ADMIN_SCOPE];
 }
 
 function findMissingOperatorScope(
@@ -327,6 +259,12 @@ export function authorizeOperatorScopesForRequiredScope(
       return { allowed: true };
     }
     return { allowed: false, missingScope: READ_SCOPE };
+  }
+  if (requiredScope === TALK_SCOPE) {
+    if (scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+      return { allowed: true };
+    }
+    return { allowed: false, missingScope: TALK_SCOPE };
   }
   if (scopes.includes(requiredScope)) {
     return { allowed: true };

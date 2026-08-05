@@ -214,7 +214,11 @@ describe("harness context engine lifecycle", () => {
       sessionTarget,
     };
     const engine = createContextEngine({
-      info: { id: engineId, name: "Configured runtime settings proof engine" },
+      info: {
+        id: engineId,
+        name: "Configured runtime settings proof engine",
+        acceptedHostParams: ["runtimeSettings", "runtimeContext", "sessionTarget"],
+      },
       bootstrap: vi.fn(async (params) => {
         captured.push({
           hook: "bootstrap",

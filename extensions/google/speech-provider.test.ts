@@ -452,6 +452,39 @@ describe("Google speech provider", () => {
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("env-google-key");
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])(
+    "uses the canonical endpoint for a %s Google model-provider base URL",
+    async (_label, baseUrl) => {
+      const requestMock = installGoogleTtsRequestMock();
+      const provider = buildGoogleSpeechProvider();
+
+      await provider.synthesize({
+        text: "Read this plainly.",
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                baseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+        providerConfig: { apiKey: "google-test-key" },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      });
+
+      const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      }) as { headers?: HeadersInit };
+      expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
+    },
+  );
+
   it("can reuse a configured Google model-provider API key without auth profiles", async () => {
     const requestMock = installGoogleTtsRequestMock();
     const provider = buildGoogleSpeechProvider();
@@ -681,42 +714,20 @@ describe("Google speech provider", () => {
     );
   });
 
-  it("honors configured private-network opt-in for Google TTS", async () => {
-    installGoogleTtsRequestMock();
-
-    const provider = buildGoogleSpeechProvider();
-    await provider.synthesize({
-      text: "hello",
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              request: { allowPrivateNetwork: true },
-              models: [],
-            },
-          },
-        },
-      },
-      providerConfig: { apiKey: "google-test-key" },
+  it.each([
+    {
+      name: "honors configured private-network opt-in for Google TTS",
       target: "audio-file",
-      timeoutMs: 12_345,
-    });
-
-    const requestConfig = expectRecordFields(
-      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
-      {
-        allowPrivateNetwork: true,
-      },
-    );
-    expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
-  });
-
-  it("honors configured private-network opt-in for Google telephony TTS", async () => {
+    },
+    {
+      name: "honors configured private-network opt-in for Google telephony TTS",
+      target: "telephony",
+    },
+  ] as const)("$name", async ({ target }) => {
     installGoogleTtsRequestMock();
 
     const provider = buildGoogleSpeechProvider();
-    await provider.synthesizeTelephony?.({
+    const request = {
       text: "hello",
       cfg: {
         models: {
@@ -731,7 +742,12 @@ describe("Google speech provider", () => {
       },
       providerConfig: { apiKey: "google-test-key" },
       timeoutMs: 12_345,
-    });
+    };
+    if (target === "telephony") {
+      await provider.synthesizeTelephony?.(request);
+    } else {
+      await provider.synthesize({ ...request, target });
+    }
 
     const requestConfig = expectRecordFields(
       requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),

@@ -234,11 +234,6 @@
       "class": "core-runtime",
       "risk": ["formatting"]
     },
-    "proper-lockfile": {
-      "owner": "core:session-storage",
-      "class": "core-runtime",
-      "risk": ["filesystem-locking"]
-    },
     "quickjs-wasi": {
       "owner": "core:code-mode",
       "class": "core-runtime",

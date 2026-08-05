@@ -50,7 +50,8 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "maxTokensField": "max_tokens"
+              "maxTokensField": "max_tokens",
+              "codeMode": "capable"
             }
           },
           {
@@ -77,7 +78,8 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "maxTokensField": "max_tokens"
+              "maxTokensField": "max_tokens",
+              "codeMode": "capable"
             }
           }
         ]

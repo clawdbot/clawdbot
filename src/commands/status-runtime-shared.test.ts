@@ -9,6 +9,16 @@ import {
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
 
+const ready = {
+  contractVersion: 1,
+  evaluatedAtMs: 1234,
+  identity: { producerRef: "openclaw/gateway/current", subjects: [] },
+  ready: true,
+  conditions: [],
+  failures: [],
+  advisories: [],
+};
+
 const mocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn(),
   runSecurityAudit: vi.fn(),
@@ -18,13 +28,6 @@ const mocks = vi.hoisted(() => ({
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
   resolveModelAuthLabel: vi.fn(),
 }));
-
-const ready = {
-  ready: true,
-  conditions: [],
-  failures: [],
-  advisories: [],
-};
 
 vi.mock("../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: mocks.resolveReadOnlyChannelPluginsForConfig,
@@ -80,9 +83,7 @@ describe("status-runtime-shared", () => {
     vi.clearAllMocks();
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.runSecurityAudit.mockResolvedValue({ summary: { critical: 0 }, findings: [] });
-    mocks.callGateway.mockImplementation(async (params: { method?: string }) =>
-      params.method === "ready" ? ready : { ok: true },
-    );
+    mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
     mocks.resolveModelAuthLabel.mockReturnValue(undefined);
@@ -396,14 +397,12 @@ describe("status-runtime-shared", () => {
         timeoutMs: 1234,
         usage: true,
         deep: true,
-        includeReadiness: true,
         gatewayReachable: true,
         includeSecurityAudit: true,
       }),
     ).resolves.toEqual({
       securityAudit: { summary: { critical: 0 }, findings: [] },
       usage: { providers: [] },
-      readiness: ready,
       health: { ok: true },
       lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
@@ -421,6 +420,44 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("includes readiness from deep gateway health when requested", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true, readiness: ready });
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        includeReadiness: true,
+        gatewayReachable: true,
+      }),
+    ).resolves.toMatchObject({
+      readiness: ready,
+      health: { ok: true, readiness: ready },
+    });
+  });
+
+  it("fetches readiness without deep health when requested", async () => {
+    mocks.callGateway.mockResolvedValueOnce(ready);
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        includeReadiness: true,
+        gatewayReachable: true,
+      }),
+    ).resolves.toMatchObject({
+      readiness: ready,
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "ready",
+      params: {},
+      timeoutMs: undefined,
+      config: { gateway: {} },
+    });
+  });
+
   it("does not fetch readiness when the caller will not render it", async () => {
     await resolveStatusRuntimeSnapshot({
       config: { gateway: {} },
@@ -431,5 +468,35 @@ describe("status-runtime-shared", () => {
     expect(mocks.callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "ready" }),
     );
+  });
+
+  it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+        suppressHealthErrors: true,
+      }),
+    ).resolves.toMatchObject({
+      health: { error: "Error: gateway health probe timed out" },
+      lastHeartbeat: { ok: true },
+    });
+  });
+
+  it("does not suppress failed deep health probes for text status", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+      }),
+    ).rejects.toThrow("gateway health probe timed out");
   });
 });

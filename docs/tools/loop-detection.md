@@ -64,6 +64,8 @@ Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
 
 The per-agent setting overrides the global setting.
 
+You can also enable the global rolling-history detectors in **Settings -> Labs** in the Control UI.
+
 ### Field behavior
 
 | Field     | Default | Effect                                                                                            |

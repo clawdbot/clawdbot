@@ -575,8 +575,12 @@ export function createRequestWithChatNotFound(params: {
   chatId: string;
   input: string;
 }) {
-  return async <T>(fn: () => Promise<T>, label: string) =>
-    params.requestWithDiag(fn, label).catch((err: unknown) => {
+  return async <T>(
+    fn: () => Promise<T>,
+    label: string,
+    options?: { shouldLog?: (err: unknown) => boolean },
+  ) =>
+    params.requestWithDiag(fn, label, options).catch((err: unknown) => {
       throw wrapTelegramChatNotFoundError(err, {
         chatId: params.chatId,
         input: params.input,

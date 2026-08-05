@@ -109,3 +109,138 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 });
+
+describe("prepareEmbeddedRunTerminal run stats", () => {
+  type StatsInput = {
+    attempt?: Partial<EmbeddedRunAttemptResult>;
+    assistantTurns?: number;
+    bridgeCalls?: { search: number; describe: number; call: number };
+    config?: unknown;
+    provider?: string;
+    model?: string;
+    usage?: Partial<
+      Pick<
+        ReturnType<typeof createUsageAccumulator>,
+        "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+      >
+    >;
+  };
+
+  async function prepareStats(statsInput: StatsInput = {}) {
+    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+    const provider = statsInput.provider ?? "cost-test-provider";
+    const model = statsInput.model ?? "cost-model";
+    const assistant = {
+      ...assistantMessage("stop"),
+      provider,
+      model,
+    };
+    const usageAccumulator = createUsageAccumulator();
+    Object.assign(usageAccumulator, statsInput.usage);
+    usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
+    usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
+    return prepareEmbeddedRunTerminal({
+      runParams: {
+        sessionId: "session-1",
+        runId: "run-1",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "hi",
+        trigger: "user",
+        timeoutMs: 60_000,
+        ...(statsInput.config ? { config: statsInput.config as never } : {}),
+      },
+      attempt: attemptResult({
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+        ...statsInput.attempt,
+      }),
+      currentAttemptCompletedAssistant: assistant,
+      provider,
+      model,
+      activeErrorContext: { provider, model },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-1",
+      outerContextTokenMeta: {},
+      usageAccumulator,
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+  }
+
+  const COST_CONFIG = {
+    models: {
+      providers: {
+        "cost-test-provider": {
+          models: [
+            {
+              id: "cost-model",
+              cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 4 },
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  it.each([
+    { name: "engaged", codeModeEngaged: true, expected: true },
+    { name: "not engaged", codeModeEngaged: false, expected: false },
+    { name: "unreported (harness route)", codeModeEngaged: undefined, expected: false },
+  ])("stamps codeModeEngaged when $name", async ({ codeModeEngaged, expected }) => {
+    const prepared = await prepareStats({ attempt: { codeModeEngaged } });
+    expect(prepared.agentMeta.codeModeEngaged).toBe(expected);
+  });
+
+  it("stamps assistantTurns from the run accumulator and omits zero", async () => {
+    const counted = await prepareStats({ assistantTurns: 3 });
+    expect(counted.agentMeta.assistantTurns).toBe(3);
+
+    const empty = await prepareStats({ assistantTurns: 0 });
+    expect(empty.agentMeta).not.toHaveProperty("assistantTurns");
+  });
+
+  it("stamps run-accumulated bridge call counts and omits them when absent", async () => {
+    const withBridge = await prepareStats({
+      bridgeCalls: { search: 2, describe: 1, call: 5 },
+    });
+    expect(withBridge.agentMeta.bridgeCalls).toEqual({ search: 2, describe: 1, call: 5 });
+
+    const withoutBridge = await prepareStats({});
+    expect(withoutBridge.agentMeta).not.toHaveProperty("bridgeCalls");
+  });
+
+  it("computes costUsd from accumulated usage including cache pricing", async () => {
+    const prepared = await prepareStats({
+      config: COST_CONFIG,
+      usage: {
+        input: 1_000_000,
+        output: 500_000,
+        cacheRead: 2_000_000,
+        cacheWrite: 250_000,
+        total: 3_750_000,
+      },
+    });
+    // (1M*$1 + 0.5M*$2 + 2M*$0.5 + 0.25M*$4) per million tokens.
+    expect(prepared.agentMeta.costUsd).toBeCloseTo(4, 10);
+  });
+
+  it("omits costUsd when the model has no cost data", async () => {
+    const prepared = await prepareStats({
+      provider: "no-cost-provider",
+      model: "uncosted-model",
+      config: COST_CONFIG,
+      usage: { input: 1_000_000, output: 500_000, total: 1_500_000 },
+    });
+    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  });
+
+  it("omits costUsd when the run reported no usage", async () => {
+    const prepared = await prepareStats({ config: COST_CONFIG });
+    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  });
+});

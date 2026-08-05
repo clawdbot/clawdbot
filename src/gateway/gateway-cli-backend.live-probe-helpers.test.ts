@@ -99,7 +99,7 @@ describe("gateway CLI backend live probe helpers", () => {
     activateLoopbackRuntime(port);
     try {
       await expect(verifyCliCronMcpLoopbackPreflight(preflightParams())).rejects.toThrow(
-        "mcp loopback tools/list did not expose cron",
+        "mcp loopback tools/list did not expose automations",
       );
       expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
     } finally {

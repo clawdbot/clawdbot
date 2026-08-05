@@ -4,7 +4,11 @@ import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
-import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
+import {
+  canonicalUiSessionKeyForPersistence,
+  isUiSelectedGlobalSessionKey,
+} from "../../lib/sessions/session-key.ts";
+import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -13,6 +17,7 @@ import {
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   handleChatDraftChange,
@@ -64,9 +69,18 @@ async function loadPageAssistantIdentity(
   const client = state.client;
   const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
   const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
+  const agentId = resolveAgentIdForSession({
+    sessionKey,
+    assistantAgentId: state.assistantAgentId,
+    agentsList: state.agentsList,
+    hello: state.hello,
+  });
+  if (!agentId) {
+    return;
+  }
   const requestVersion = ++state.assistantIdentityRequestVersion;
   try {
-    const identity = await fetchAssistantIdentity(client, sessionKey);
+    const identity = await fetchAssistantIdentity(client, agentId);
     if (
       state.client !== client ||
       !state.connected ||
@@ -75,6 +89,12 @@ async function loadPageAssistantIdentity(
       !identity
     ) {
       return;
+    }
+    if (
+      state.assistantAgentId !== (identity.agentId ?? null) &&
+      isUiSelectedGlobalSessionKey(state, state.sessionKey)
+    ) {
+      retireChatModelSelectionOwnership(state);
     }
     state.assistantName = identity.name;
     state.assistantAvatar = identity.avatar;
@@ -188,7 +208,6 @@ export function createPageState(
     chatSubmitGuards: new Map<string, Promise<void>>(),
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
-    chatQueueByScope: {},
     chatComposerFallbackByScope: {},
     chatSendingScopeKey: null,
     chatMessagesBySession,
@@ -222,6 +241,7 @@ export function createPageState(
     imageLightboxRequestVersion: 0,
     toolStreamById: new Map(),
     toolStreamOrder: [],
+    activityEventSeqById: new Map(),
     toolStreamSyncTimer: null,
     ...createInitialChatRealtimeState(),
     renderLifecycle,

@@ -430,6 +430,7 @@ export async function ensureClawHubSkillTrustAcknowledged(
     subject: {
       kind: "skill",
       packageName: params.slug,
+      workspaceDir: params.workspaceDir,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
     },
     version: params.version,
@@ -648,7 +649,7 @@ export async function performClawHubSkillInstall(
         markClawPackageIndependentlyOwned({
           kind: "skill",
           source: "clawhub",
-          ref: params.slug,
+          ref: formatClawHubSkillRef(params),
           version,
           workspace: params.workspaceDir,
         });

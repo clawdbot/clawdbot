@@ -452,20 +452,6 @@ jobs, followed by a report job that downloads both artifacts and runs
 first; inspect the report job when both lane summaries exist but the comparison
 fails.
 
-### QA Lab Matrix Profiles
-
-`pnpm openclaw qa matrix` defaults to `--profile all`. Do not assume the CLI
-default is the fast release path. Use explicit profiles:
-
-- `--profile fast|release`: focused release-critical scenarios
-- `--profile transport|all`: broad Matrix proof
-- repeated `--scenario <id>` flags: explicit scenario selection
-
-`QA-Lab - All Lanes` and `OpenClaw Release Checks` use the same QA Lab selector
-and standard artifacts. Manual dispatch keeps `matrix_profile=all` as the
-default and fans it across the transport, media, and E2EE profiles; focused
-dispatches select `fast`, `release`, or `transport`.
-
 ### Reusable Live/E2E Checks
 
 `OpenClaw Live And E2E Checks (Reusable)`

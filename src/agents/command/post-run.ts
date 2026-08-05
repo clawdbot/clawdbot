@@ -1,3 +1,4 @@
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -16,6 +17,7 @@ import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
+import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
@@ -23,7 +25,7 @@ import {
   loadDeliveryRuntime,
   loadSessionStoreRuntime,
 } from "./runtime-loaders.js";
-import { clearPendingFinalDeliveryFields, persistSessionEntry } from "./session-helpers.js";
+import { clearPendingFinalDelivery, persistSessionEntry } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -97,6 +99,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
   try {
     await fallbackTrajectoryRecorder?.flush();
+    const finalVisiblePayload = result.payloads
+      ?.toReversed()
+      .find((payload) => !payload.isError && !payload.isReasoning && payload.text?.trim());
+    const assistantTranscriptOwned =
+      finalVisiblePayload !== undefined &&
+      getReplyPayloadMetadata(finalVisiblePayload)?.assistantTranscriptOwned === true;
     if (params.opts.internalDeliveryMediaUrls !== undefined) {
       result = {
         ...result,
@@ -189,6 +197,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           sessionCwd: effectiveCwd,
           config: cfg,
           embeddedAssistantGapFill,
+          skipAssistantTurn: assistantTranscriptOwned,
           skipUserTurn:
             suppressUserTurnPersistence ||
             userTurnTranscriptRecorder.hasPersisted() ||
@@ -204,6 +213,28 @@ export async function finalizeEmbeddedAgentCommand(params: {
         log.warn(
           `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
+        if (
+          sessionStore &&
+          sessionKey &&
+          !params.suppressVisibleSessionEffects &&
+          !sessionReboundDuringRun &&
+          !assistantTranscriptOwned
+        ) {
+          await persistAssistantTranscriptRepairRecord({
+            context: {
+              sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,
+              sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+              sessionStore,
+              storePath: internalSessionTarget?.storePath ?? storePath,
+              sessionAgentId: internalSessionTarget?.agentId ?? sessionAgentId,
+              config: cfg,
+            },
+            replyText: attemptExecutionRuntime.resolveCliTranscriptReplyText(result),
+            provider: result.meta.agentMeta?.provider,
+            model: result.meta.agentMeta?.model,
+            runOwnedSessionId,
+          });
+        }
       }
     }
 
@@ -335,18 +366,18 @@ export async function finalizeEmbeddedAgentCommand(params: {
       if (!entry) {
         throw new Error("Cannot clear pending delivery without a session entry");
       }
-      const noPendingTextForThisRun =
+      // This command only creates replayable markers, so transport-only is stale from an earlier run.
+      const clearStaleTransportOnly =
         params.opts.deliver === true &&
-        pendingFinalDeliveryMarker.pendingFinalDeliveryTextForThisRun === undefined &&
-        entry.pendingFinalDelivery === true &&
-        !entry.pendingFinalDeliveryText;
-      if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
+        !pendingFinalDeliveryMarker.hasSendableFinalPayload &&
+        entry.pendingFinalDelivery?.kind === "transport-only";
+      if (deliveryResult?.deliverySucceeded === true || clearStaleTransportOnly) {
         sessionEntry = await persistSessionEntry({
           sessionStore,
           sessionKey,
           storePath,
           initialEntry: entry,
-          entry: clearPendingFinalDeliveryFields(entry, Date.now()),
+          entry: clearPendingFinalDelivery(entry, Date.now()),
           shouldPersist: (current) =>
             shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId),
         });

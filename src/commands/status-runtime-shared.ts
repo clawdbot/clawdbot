@@ -254,6 +254,7 @@ export async function resolveStatusServiceSummaries(timeoutMs?: number) {
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
+type StatusGatewayHealthResult = StatusGatewayHealth | { error: string };
 type StatusLastHeartbeat = Awaited<ReturnType<typeof resolveStatusLastHeartbeat>>;
 type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSummary>>;
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
@@ -282,24 +283,26 @@ async function resolveStatusRuntimeDetails(params: {
         config: params.config,
       })
     : undefined;
+  // JSON status remains nonthrowing, but requested probe failures must stay visible.
   const health = params.deep
     ? params.suppressHealthErrors
       ? await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
-        }).catch(() => undefined)
+        }).catch((error: unknown) => ({ error: String(error) }))
       : await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
         })
     : undefined;
   const readiness = params.includeReadiness
-    ? (health?.readiness ??
-      (await resolveStatusGatewayReadiness({
-        config: params.config,
-        timeoutMs: params.timeoutMs,
-        gatewayReachable: params.gatewayReachable,
-      })))
+    ? ("readiness" in (health ?? {})
+        ? (health as HealthSummary).readiness
+        : await resolveStatusGatewayReadiness({
+            config: params.config,
+            timeoutMs: params.timeoutMs,
+            gatewayReachable: params.gatewayReachable,
+          }))
     : undefined;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat = params.deep
@@ -321,7 +324,7 @@ async function resolveStatusRuntimeDetails(params: {
   return result satisfies {
     usage?: StatusUsageSummary;
     readiness?: CanonicalReadinessResult;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;
@@ -375,7 +378,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
     securityAudit?: StatusSecurityAudit;
     usage?: StatusUsageSummary;
     readiness?: CanonicalReadinessResult;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;

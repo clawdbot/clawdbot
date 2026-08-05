@@ -387,15 +387,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
     - Bake system deps into the image with `OPENCLAW_IMAGE_APT_PACKAGES`.
-    - Install Playwright browsers via the bundled CLI: `node /app/node_modules/playwright-core/cli.js install chromium`.
-    - Set `PLAYWRIGHT_BROWSERS_PATH` and persist that path.
+    - Bake Playwright Chromium and its system dependencies into the image with `OPENCLAW_INSTALL_BROWSER=1`.
 
     Docs: [Docker](/install/docker), [Browser](/tools/browser).
 
   </Accordion>
 
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
-    Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Docker is the default backend once sandboxing is enabled. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
+    Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Select `backend: "docker"` for Docker or `backend: "podman"` for Podman. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
 
     Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox).
 
@@ -593,7 +592,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Do I have to restart after changing config?">
-    The Gateway watches the config and supports hot-reload: `gateway.reload.mode: "hybrid"` (default) hot-applies safe changes and restarts for critical ones. `hot`, `restart`, and `off` are also supported. Most `tools.*`, `agents.*` policy, `session.*`, and `messages.*` changes apply immediately with no reload action at all; `gateway.*` binding/port changes require a restart.
+    The Gateway watches the config and supports hot-reload: `gateway.reload.mode: "hybrid"` (default) hot-applies safe changes and restarts for critical ones. `off` disables config reload; the earlier `hot` and `restart` modes are retired. Most `tools.*`, `agents.*` policy, `session.*`, and `messages.*` changes apply immediately with no reload action at all; `gateway.*` binding/port changes require a restart.
   </Accordion>
 
   <Accordion title="How do I enable web search (and web fetch)?">
@@ -1572,7 +1571,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 ---
 
-Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or open a [GitHub discussion](https://github.com/openclaw/openclaw/discussions).
+Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose).
 
 ## Related
 

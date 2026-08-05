@@ -117,7 +117,14 @@ export async function dispatchTelegramPluginInteractiveHandler(params: {
         },
         respond: params.respond,
         ...createInteractiveConversationBindingHelpers({
-          registration,
+          // Untrusted callbacks may reach their plugin, but never inherit conversation-binding authority.
+          registration:
+            handlerContext.auth?.isAuthorizedSender &&
+            handlerContext.senderId?.trim() &&
+            handlerContext.accountId?.trim() &&
+            handlerContext.conversationId?.trim()
+              ? registration
+              : { ...registration, pluginRoot: undefined },
           senderId: handlerContext.senderId,
           conversation: {
             channel: "telegram",

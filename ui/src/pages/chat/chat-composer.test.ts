@@ -858,6 +858,11 @@ describe("renderChatComposer status", () => {
     expect(container.querySelector(".compaction-indicator--fallback")?.textContent?.trim()).toBe(
       "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
     );
+    expect(
+      container.querySelector(".compaction-indicator--fallback")?.getAttribute("aria-label"),
+    ).toBe(
+      "Selected: fireworks/minimax-m2p5 • Active: deepinfra/moonshotai/Kimi-K2.5 • Attempts: fireworks/minimax-m2p5: rate limit",
+    );
   });
 
   it("renders an expandable live plan checklist and hides it when idle", () => {

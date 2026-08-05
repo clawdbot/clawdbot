@@ -8,6 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed: vi.fn((_client: unknown) => ({
+    found: false,
+    closed: false,
+  })),
+  retireSharedCodexAppServerClientIfCurrent: vi.fn(
+    (_client: unknown): { activeLeases: number; closed: boolean } | undefined => undefined,
+  ),
+  clearSharedCodexAppServerClientIfCurrent: vi.fn((_client: unknown) => false),
 }));
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
@@ -57,11 +65,17 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 vi.mock("./app-server/shared-client.js", () => ({
   ...sharedClientMocks,
+  isCodexAppServerStartSelectionChangedError: (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CODEX_APP_SERVER_START_SELECTION_CHANGED",
   getLeasedSharedCodexAppServerClient: async (...args: unknown[]) => {
     const client = (await sharedClientMocks.getSharedCodexAppServerClient(...args)) as {
       getInstanceId?: () => string;
+      addCloseHandler?: () => () => void;
     };
     client.getInstanceId ??= () => "test-client";
+    client.addCloseHandler ??= () => () => undefined;
     return client;
   },
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
@@ -84,6 +98,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import type { JsonValue } from "./app-server/protocol.js";
 import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
@@ -92,8 +107,11 @@ import {
   type CodexAppServerThreadBinding,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { createClientHarness } from "./app-server/test-support.js";
+import { getCodexAppServerTurnRouter } from "./app-server/turn-router.js";
 import { legacyCodexConversationBindingId } from "./conversation-binding-data.js";
 import { codexConversationBindingRuntime } from "./conversation-binding.js";
+import { readCodexConversationActiveTurn } from "./conversation-control.js";
 
 const handleCodexConversationBindingResolvedImpl =
   codexConversationBindingRuntime.handleBindingResolved;
@@ -119,6 +137,38 @@ async function writeTestConversationBinding(
 
 async function readTestConversationBinding(sessionFile: string) {
   return await testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
+}
+
+function boundConversationClaim(sessionFile: string, sessionKey?: string) {
+  return {
+    event: {
+      content: "continue",
+      bodyForAgent: "continue",
+      channel: "telegram",
+      isGroup: false,
+      commandAuthorized: true,
+      ...(sessionKey ? { sessionKey } : {}),
+    },
+    ctx: {
+      channelId: "telegram",
+      ...(sessionKey ? { sessionKey } : {}),
+      pluginBinding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: tempDir,
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "5185575566",
+        boundAt: Date.now(),
+        data: {
+          kind: "codex-app-server-session" as const,
+          version: 1 as const,
+          sessionFile,
+          workspaceDir: tempDir,
+        },
+      },
+    },
+  };
 }
 
 function handleCodexConversationInboundClaim(
@@ -192,7 +242,7 @@ function conversationThreadStartResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.125.0",
+      cliVersion: "0.146.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -219,6 +269,14 @@ describe("codex conversation binding", () => {
 
   afterEach(async () => {
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
+    sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed.mockReset();
+    sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed.mockReturnValue({
+      found: false,
+      closed: false,
+    });
+    sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReset();
+    sharedClientMocks.clearSharedCodexAppServerClientIfCurrent.mockReset();
+    sharedClientMocks.clearSharedCodexAppServerClientIfCurrent.mockReturnValue(false);
     execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
     execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
     agentRuntimeMocks.ensureAuthProfileStore.mockReset();
@@ -250,6 +308,91 @@ describe("codex conversation binding", () => {
       defaultAgentId: "main",
       sessionAgentId: "main",
     });
+  });
+
+  it("isolates concurrent turn requests and buffers early bound-turn completion", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestConversationBinding(sessionFile, { threadId: "bound-thread", cwd: tempDir });
+    const notificationHandlers = new Set<(notification: unknown) => unknown>();
+    const requestHandlers = new Set<(request: unknown) => unknown>();
+    const siblingRequestOwner = vi.fn(
+      (request: { method: string }): JsonValue =>
+        request.method === "item/tool/call"
+          ? { contentItems: [], success: true }
+          : { decision: "accept" },
+    );
+    const siblingResponses: unknown[] = [];
+    let releaseSiblingRoute: (() => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        const siblingRoute = getCodexAppServerTurnRouter(clientForRouter).reserveThread({
+          threadId: "sibling-thread",
+          onRequest: siblingRequestOwner,
+        });
+        releaseSiblingRoute = siblingRoute.release;
+        siblingRoute.armTurn();
+        await siblingRoute.bindTurn("sibling-turn");
+        for (const requestMethod of ["item/tool/call", "item/commandExecution/requestApproval"]) {
+          const request = {
+            id: requestMethod,
+            method: requestMethod,
+            params: { threadId: "sibling-thread", turnId: "sibling-turn" },
+          };
+          for (const handler of requestHandlers) {
+            const response = await handler(request);
+            if (response !== undefined) {
+              siblingResponses.push(response);
+              break;
+            }
+          }
+        }
+        for (const handler of notificationHandlers) {
+          handler({
+            method: "turn/completed",
+            params: {
+              threadId: "bound-thread",
+              turn: {
+                id: "bound-turn",
+                status: "completed",
+                items: [{ type: "agentMessage", id: "bound-answer", text: "Bound answer" }],
+              },
+            },
+          });
+        }
+        return { turn: { id: "bound-turn" } };
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => unknown) => {
+        notificationHandlers.add(handler);
+        return () => notificationHandlers.delete(handler);
+      }),
+      addRequestHandler: vi.fn((handler: (request: unknown) => unknown) => {
+        requestHandlers.add(handler);
+        return () => requestHandlers.delete(handler);
+      }),
+      addCloseHandler: vi.fn(() => () => undefined),
+    };
+    const clientForRouter = client as never;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    try {
+      await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+        handled: true,
+        reply: { text: "Bound answer" },
+      });
+      expect(siblingRequestOwner).toHaveBeenCalledTimes(2);
+      expect(siblingResponses).toEqual([
+        { contentItems: [], success: true },
+        { decision: "accept" },
+      ]);
+      expect(client.addNotificationHandler).toHaveBeenCalledOnce();
+      expect(client.addRequestHandler).toHaveBeenCalledOnce();
+    } finally {
+      releaseSiblingRoute?.();
+    }
   });
 
   it("uses the default Codex auth profile and omits the public OpenAI provider for new binds", async () => {
@@ -1912,6 +2055,580 @@ describe("codex conversation binding", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
+
+  it("gracefully retires an incognito client when failed turn cleanup cannot unsubscribe", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionKey = "agent:main:dashboard:incognito-unsubscribe-failure";
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "turn/start") {
+        throw new Error("original bound turn failure");
+      }
+      if (method === "thread/unsubscribe") {
+        throw new Error("thread unsubscribe failed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const closeAndWait = vi.fn(async () => true);
+    const client = {
+      request,
+      closeAndWait,
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    };
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+    sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed.mockReturnValue({
+      found: true,
+      closed: false,
+    });
+    sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReturnValue({
+      activeLeases: 2,
+      closed: false,
+    });
+    const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+
+    await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+      handled: true,
+      reply: { text: "Codex app-server turn failed: original bound turn failure" },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledWith(
+      client,
+    );
+    expect(closeAndWait).not.toHaveBeenCalled();
+    await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
+  it("preserves the original incognito failure if client retirement also rejects", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionKey = "agent:main:dashboard:incognito-retirement-failure";
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    const closeAndWait = vi.fn(async () => {
+      throw new Error("client retirement failed");
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      closeAndWait,
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          throw new Error("original bound turn failure");
+        }
+        if (method === "thread/unsubscribe") {
+          throw new Error("thread unsubscribe failed");
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+
+    await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+      handled: true,
+      reply: { text: "Codex app-server turn failed: original bound turn failure" },
+    });
+
+    expect(closeAndWait).toHaveBeenCalledOnce();
+    await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { label: "ordinary", sessionKey: undefined },
+    { label: "incognito", sessionKey: "agent:main:dashboard:incognito-resume-failure" },
+  ])(
+    "retires an indeterminate $label resume once without closing sibling leases",
+    async ({ sessionKey }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      await writeTestConversationBinding(sessionFile, {
+        threadId: "thread-1",
+        cwd: tempDir,
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "thread/resume") {
+          throw new Error("conversation resume response timed out");
+        }
+        if (method === "thread/unsubscribe") {
+          throw new Error("detached client must not receive another cleanup request");
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const closeAndWait = vi.fn(async () => true);
+      const client = {
+        request,
+        closeAndWait,
+        getInstanceId: () => "replacement-client",
+      };
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+      sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
+        .mockReturnValueOnce({ found: true, closed: false })
+        .mockReturnValue({ found: false, closed: false });
+      sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
+        .mockReturnValueOnce({ activeLeases: 2, closed: false })
+        .mockReturnValue(undefined);
+      const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+
+      await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+        handled: true,
+        reply: { text: "Codex app-server turn failed: conversation resume response timed out" },
+      });
+
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledOnce();
+      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledWith(
+        client,
+      );
+      expect(closeAndWait).not.toHaveBeenCalled();
+      if (sessionKey) {
+        await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+      } else {
+        await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "thread-1",
+          clientId: "test-client",
+        });
+      }
+    },
+  );
+
+  it("retains a pre-start final after a saturated commentary stream", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        for (let index = 0; index < 100; index += 1) {
+          notificationHandler?.({
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: {
+                type: "agentMessage",
+                id: `commentary-${index}`,
+                text: `progress ${index}`,
+                phase: "commentary",
+              },
+            },
+          });
+        }
+        notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { type: "agentMessage", id: "answer", text: "authoritative answer" },
+          },
+        });
+        notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "completed", error: null, items: [] },
+          },
+        });
+        return { turn: { id: "turn-1" } };
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+      handled: true,
+      reply: { text: "authoritative answer" },
+    });
+  });
+
+  it("reports an interrupted bound turn as cancellation instead of a partial reply", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        queueMicrotask(() => {
+          notificationHandler?.({
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "item-1",
+              delta: "unfinished answer",
+            },
+          });
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: { id: "turn-1", status: "interrupted", error: null, items: [] },
+            },
+          });
+        });
+        return { turn: { id: "turn-1" } };
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+      handled: true,
+      reply: { text: "Codex app-server turn failed: codex app-server turn interrupted" },
+    });
+  });
+
+  it("does not interrupt a provider failure that matches the local timeout message", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "turn/start") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      queueMicrotask(() => {
+        notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "failed",
+              error: { message: "codex app-server bound turn timed out" },
+              items: [],
+            },
+          },
+        });
+      });
+      return { turn: { id: "turn-1" } };
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request,
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+      handled: true,
+      reply: { text: "Codex app-server turn failed: codex app-server bound turn timed out" },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["turn/start"]);
+    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+    });
+  });
+
+  it.each([
+    { label: "ordinary", sessionKey: undefined, interruptFails: false },
+    {
+      label: "incognito",
+      sessionKey: "agent:main:dashboard:incognito-start-timeout",
+      interruptFails: false,
+    },
+    { label: "ordinary with a failed interrupt", sessionKey: undefined, interruptFails: true },
+    {
+      label: "incognito with a failed interrupt",
+      sessionKey: "agent:main:dashboard:incognito-start-interrupt-failure",
+      interruptFails: true,
+    },
+  ])(
+    "interrupts an indeterminate $label native turn before cleanup",
+    async ({ sessionKey, interruptFails }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const harness = createClientHarness();
+      await writeTestConversationBinding(sessionFile, {
+        threadId: "thread-1",
+        clientId: harness.client.getInstanceId(),
+        cwd: tempDir,
+      });
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      if (interruptFails) {
+        sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReturnValueOnce({
+          activeLeases: 2,
+          closed: false,
+        });
+      }
+      const waitForRequest = async (method: string) =>
+        await vi.waitFor(
+          () => {
+            const request = harness.writes
+              .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
+              .find((message) => message.method === method);
+            if (!request) {
+              throw new Error(`Codex conversation harness did not write ${method}`);
+            }
+            return request;
+          },
+          { interval: 1, timeout: 5_000 },
+        );
+      const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+      const result = handleCodexConversationInboundClaim(event, ctx, {
+        pluginConfig: { appServer: { requestTimeoutMs: 100 } },
+      });
+      const turnStart = await waitForRequest("turn/start");
+      const interrupt = await waitForRequest("turn/interrupt");
+      expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
+      harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
+      harness.send(
+        interruptFails
+          ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
+          : { id: interrupt.id, result: {} },
+      );
+      if (sessionKey && !interruptFails) {
+        const unsubscribe = await waitForRequest("thread/unsubscribe");
+        harness.send({ id: unsubscribe.id, result: {} });
+      }
+
+      await expect(result).resolves.toEqual({
+        handled: true,
+        reply: { text: "Codex app-server turn failed: turn/start timed out" },
+      });
+      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+        "turn/start",
+        "turn/interrupt",
+        ...(sessionKey && !interruptFails ? ["thread/unsubscribe"] : []),
+      ]);
+      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledTimes(
+        interruptFails ? 1 : 0,
+      );
+      expect(
+        readCodexConversationActiveTurn(testConversationIdentity(sessionFile)),
+      ).toBeUndefined();
+      if (sessionKey) {
+        await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+      }
+      harness.client.close();
+    },
+  );
+
+  it.each([
+    { label: "ordinary", sessionKey: undefined },
+    { label: "incognito", sessionKey: "agent:main:dashboard:incognito-turn-timeout" },
+  ])(
+    "interrupts a timed-out $label turn before removing active tracking and handlers",
+    async ({ sessionKey }) => {
+      vi.useFakeTimers();
+      try {
+        const sessionFile = path.join(tempDir, "session.jsonl");
+        await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+        const identity = testConversationIdentity(sessionFile);
+        const cleanupEvents: string[] = [];
+        const notificationHandlers = new Set<(notification: unknown) => void>();
+        const request = vi.fn(async (method: string) => {
+          if (method === "turn/start") {
+            return { turn: { id: "turn-1" } };
+          }
+          if (method === "thread/unsubscribe") {
+            cleanupEvents.push("unsubscribe");
+            return {};
+          }
+          if (method !== "turn/interrupt") {
+            throw new Error(`unexpected method: ${method}`);
+          }
+          cleanupEvents.push("interrupt");
+          expect(readCodexConversationActiveTurn(identity)).toMatchObject({
+            threadId: "thread-1",
+            turnId: "turn-1",
+          });
+          queueMicrotask(() => {
+            cleanupEvents.push("turn completed");
+            expect(readCodexConversationActiveTurn(identity)).toMatchObject({
+              threadId: "thread-1",
+              turnId: "turn-1",
+            });
+            for (const handler of notificationHandlers) {
+              handler({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-1",
+                  turn: { id: "turn-1", status: "interrupted", error: null, items: [] },
+                },
+              });
+            }
+          });
+          return {};
+        });
+        const client = {
+          request,
+          addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+            notificationHandlers.add(handler);
+            return () => {
+              notificationHandlers.delete(handler);
+              cleanupEvents.push("notification cleanup");
+            };
+          }),
+          addRequestHandler: vi.fn(() => () => cleanupEvents.push("request cleanup")),
+          addCloseHandler: vi.fn(() => () => undefined),
+        };
+        sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+        const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+        const result = handleCodexConversationInboundClaim(event, ctx, { timeoutMs: 100 });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
+        await vi.advanceTimersByTimeAsync(100);
+
+        await expect(result).resolves.toEqual({
+          handled: true,
+          reply: { text: "Codex app-server turn failed: codex app-server bound turn timed out" },
+        });
+        expect(request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          { threadId: "thread-1", turnId: "turn-1" },
+          { timeoutMs: 5_000 },
+        );
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "turn/start",
+          "turn/interrupt",
+          ...(sessionKey ? ["thread/unsubscribe"] : []),
+        ]);
+        expect(cleanupEvents).toEqual([
+          "interrupt",
+          "turn completed",
+          ...(sessionKey ? ["unsubscribe"] : []),
+        ]);
+        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+        expect(readCodexConversationActiveTurn(identity)).toBeUndefined();
+        if (sessionKey) {
+          await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+        } else {
+          await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+            threadId: "thread-1",
+          });
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { label: "a failed ordinary", sessionKey: undefined, acknowledged: false },
+    { label: "an unconfirmed ordinary", sessionKey: undefined, acknowledged: true },
+    {
+      label: "a failed incognito",
+      sessionKey: "agent:main:dashboard:incognito-interrupt-failure",
+      acknowledged: false,
+    },
+  ])(
+    "retires $label timeout interrupt once without closing sibling leases",
+    async ({ sessionKey, acknowledged }) => {
+      vi.useFakeTimers();
+      try {
+        const sessionFile = path.join(tempDir, "session.jsonl");
+        await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+        const identity = testConversationIdentity(sessionFile);
+        const closeAndWait = vi.fn(async () => true);
+        const request = vi.fn(async (method: string) => {
+          if (method === "turn/start") {
+            return { turn: { id: "turn-1" } };
+          }
+          if (method === "turn/interrupt") {
+            if (acknowledged) {
+              return {};
+            }
+            throw new Error("turn interrupt could not be confirmed");
+          }
+          if (method === "thread/unsubscribe") {
+            throw new Error("detached client must not receive another cleanup request");
+          }
+          throw new Error(`unexpected method: ${method}`);
+        });
+        const client = {
+          request,
+          closeAndWait,
+          addNotificationHandler: vi.fn(() => () => undefined),
+          addRequestHandler: vi.fn(() => () => undefined),
+          addCloseHandler: vi.fn(() => () => undefined),
+        };
+        sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+        sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
+          .mockReturnValueOnce({ found: true, closed: false })
+          .mockReturnValue({ found: false, closed: false });
+        sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
+          .mockReturnValueOnce({ activeLeases: 2, closed: false })
+          .mockReturnValue(undefined);
+        const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+        const result = handleCodexConversationInboundClaim(event, ctx, { timeoutMs: 100 });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
+        await vi.advanceTimersByTimeAsync(100);
+        expect(request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          { threadId: "thread-1", turnId: "turn-1" },
+          { timeoutMs: 5_000 },
+        );
+        if (acknowledged) {
+          expect(readCodexConversationActiveTurn(identity)).toMatchObject({
+            threadId: "thread-1",
+            turnId: "turn-1",
+          });
+          expect(
+            sharedClientMocks.retireSharedCodexAppServerClientIfCurrent,
+          ).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+
+        await expect(result).resolves.toEqual({
+          handled: true,
+          reply: { text: "Codex app-server turn failed: codex app-server bound turn timed out" },
+        });
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "turn/start",
+          "turn/interrupt",
+        ]);
+        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledOnce();
+        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledWith(
+          client,
+        );
+        expect(closeAndWait).not.toHaveBeenCalled();
+        expect(readCodexConversationActiveTurn(identity)).toBeUndefined();
+        if (sessionKey) {
+          await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+        } else {
+          await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+            threadId: "thread-1",
+          });
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("falls back to content when the channel body for agent is blank", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

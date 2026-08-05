@@ -52,6 +52,7 @@ SAFE_GIT_CONFIG_ARGS = (
 )
 SAFE_DIFF_FLAGS = ("--no-ext-diff", "--no-textconv", "--no-renames")
 DIFF_HUNK_CONTENT_BOUNDARY = "\0autoreview-diff-hunk-boundary\0"
+LOCAL_DIFF_VALIDATION_BOUNDARY = "\n[autoreview local diff validation boundary]\n"
 ENGINE_GIT_CONFIG_OVERRIDES = (
     ("core.fsmonitor", "false"),
     ("core.pager", "cat"),
@@ -328,6 +329,7 @@ MAX_BUNDLE_TEXT_BYTES = 180_000
 MAX_REVIEW_PROMPT_BYTES = 512_000
 MAX_REVIEW_CHUNK_CONTEXT_BYTES = 64_000
 MAX_REVIEW_PASSES = 8
+MAX_DELETION_SECRET_FRAGMENTS = 256
 
 
 class ReviewChunk(NamedTuple):
@@ -2276,6 +2278,99 @@ def safe_trufflehog_env(repo: Path) -> dict[str, str]:
             )
         env[key] = value
     return env
+
+
+def review_deletion_only_paths(
+    repo: Path,
+    target: str,
+    target_ref: str | None,
+    commit_ref: str,
+) -> set[str]:
+    if target == "local":
+        staged_paths = set(
+            git_path_list(
+                repo,
+                "diff",
+                *SAFE_DIFF_FLAGS,
+                "--name-only",
+                "--cached",
+                "-z",
+            )
+        )
+        unstaged_paths = set(
+            git_path_list(
+                repo,
+                "diff",
+                *SAFE_DIFF_FLAGS,
+                "--name-only",
+                "-z",
+            )
+        )
+        untracked_paths = set(
+            git_path_list(
+                repo,
+                *global_excludes_git_args(repo),
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            )
+        )
+        staged_deletions = set(
+            git_path_list(
+                repo,
+                "diff",
+                *SAFE_DIFF_FLAGS,
+                "--diff-filter=D",
+                "--name-only",
+                "--cached",
+                "-z",
+            )
+        )
+        unstaged_deletions = set(
+            git_path_list(
+                repo,
+                "diff",
+                *SAFE_DIFF_FLAGS,
+                "--diff-filter=D",
+                "--name-only",
+                "-z",
+            )
+        )
+        return (
+            staged_deletions - unstaged_paths - untracked_paths
+        ) | (unstaged_deletions - staged_paths)
+
+    if target == "branch":
+        assert target_ref
+        target_ref = validate_git_ref(repo, target_ref, "base")
+        return set(
+            git_path_list(
+                repo,
+                "diff",
+                *SAFE_DIFF_FLAGS,
+                "--diff-filter=D",
+                "--name-only",
+                "-z",
+                "--end-of-options",
+                f"{target_ref}...HEAD",
+            )
+        )
+
+    commit_ref = validate_git_ref(repo, commit_ref, "commit")
+    return set(
+        git_path_list(
+            repo,
+            "show",
+            *SAFE_DIFF_FLAGS,
+            "--diff-filter=D",
+            "--name-only",
+            "--format=",
+            "-z",
+            "--end-of-options",
+            commit_ref,
+        )
+    )
 
 
 def prepare_trufflehog_history(
@@ -6016,7 +6111,7 @@ def unsafe_multiline_self_reference_assignment(
     )
 
 
-def boolean_declaration_initializer_range(
+def declaration_initializer_range(
     text: str,
     match: re.Match[str],
     *,
@@ -6033,13 +6128,13 @@ def boolean_declaration_initializer_range(
     return start, start + len(expression)
 
 
-def boolean_declaration_initializer_risk(
+def declaration_initializer_risk(
     text: str,
     match: re.Match[str],
     *,
     javascript_dialect: str | None = None,
 ) -> bool:
-    initializer_range = boolean_declaration_initializer_range(
+    initializer_range = declaration_initializer_range(
         text,
         match,
         javascript_dialect=javascript_dialect,
@@ -6054,13 +6149,13 @@ def boolean_declaration_initializer_risk(
     )
 
 
-def boolean_declaration_initializer_spans(
+def declaration_initializer_spans(
     text: str,
     match: re.Match[str],
     *,
     javascript_dialect: str | None = None,
 ) -> list[tuple[int, int]]:
-    initializer_range = boolean_declaration_initializer_range(
+    initializer_range = declaration_initializer_range(
         text,
         match,
         javascript_dialect=javascript_dialect,
@@ -6075,6 +6170,72 @@ def boolean_declaration_initializer_spans(
     ):
         return []
     return top_level_fallback_value_spans(text, start, end)
+
+
+def typescript_declaration_type_annotation(
+    text: str,
+    match: re.Match[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
+    if javascript_dialect != "typescript":
+        return False
+    separator = re.search(r"[:=]", match.group(0))
+    if (
+        separator is None
+        or separator.group(0) != ":"
+        or (
+            match.group("reference_value") is None
+            and match.group("bare_value") is None
+        )
+    ):
+        return False
+    annotation_suffix = re.match(r"\s*(?:=|[,;)])", text[match.end() :])
+    if annotation_suffix is None:
+        return False
+
+    line_start = max(
+        text.rfind("\n", 0, match.start()),
+        text.rfind("\r", 0, match.start()),
+    )
+    declaration = mask_reference_declaration_evidence(text)[
+        line_start + 1 : match.start()
+    ]
+    if re.search(
+        r"(?:^|[;{}])\s*(?:(?:declare|export)\s+)*(?:const|let|var)\s+$",
+        declaration,
+    ):
+        return True
+
+    function_prefix = re.search(
+        r"\bfunction\b[^()\r\n]*\((?P<parameters>[^()]*)$",
+        declaration,
+    )
+    return bool(
+        function_prefix is not None
+        and re.fullmatch(
+            r"\s*(?:\.\.\.\s*)?",
+            split_top_level_call_arguments(
+                function_prefix.group("parameters")
+            )[-1],
+        )
+    )
+
+
+def typescript_secret_type_declarations(
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> tuple[re.Match[str], ...]:
+    return tuple(
+        match
+        for match in SECRET_ASSIGNMENT_PATTERN.finditer(text)
+        if typescript_declaration_type_annotation(
+            text,
+            match,
+            javascript_dialect=javascript_dialect,
+        )
+    )
 
 
 def secret_text_risk(
@@ -6096,13 +6257,18 @@ def secret_text_risk(
     boolean_declaration_positions = {
         match.start("boolean_key") for match in boolean_declarations
     }
+    typed_declarations = typescript_secret_type_declarations(
+        text,
+        javascript_dialect=javascript_dialect,
+    )
+    typed_declaration_positions = {match.start() for match in typed_declarations}
     if any(
-        boolean_declaration_initializer_risk(
+        declaration_initializer_risk(
             text,
             match,
             javascript_dialect=javascript_dialect,
         )
-        for match in boolean_declarations
+        for match in (*boolean_declarations, *typed_declarations)
     ):
         return True
     safe_uri_credentials = interpolated_empty_password_uri_ranges(
@@ -6126,7 +6292,10 @@ def secret_text_risk(
         else frozenset()
     )
     for prefix in assignment_prefixes:
-        if prefix.start() in boolean_declaration_positions:
+        if (
+            prefix.start() in boolean_declaration_positions
+            or prefix.start() in typed_declaration_positions
+        ):
             continue
         assignment = SECRET_ASSIGNMENT_PATTERN.match(text, prefix.start())
         if assignment is not None and safe_self_reference_assignment(
@@ -6159,7 +6328,10 @@ def secret_text_risk(
         assignment_scan_text,
         safe_uri_credentials,
     ):
-        if match.start() in boolean_declaration_positions:
+        if (
+            match.start() in boolean_declaration_positions
+            or match.start() in typed_declaration_positions
+        ):
             continue
         quoted = any(
             match.group(name) is not None
@@ -6683,17 +6855,25 @@ def review_repeatable_secret_spans(
     boolean_declaration_positions = {
         match.start("boolean_key") for match in boolean_declarations
     }
+    typed_declarations = typescript_secret_type_declarations(
+        text,
+        javascript_dialect=javascript_dialect,
+    )
+    typed_declaration_positions = {match.start() for match in typed_declarations}
     spans = [
         span
-        for match in boolean_declarations
-        for span in boolean_declaration_initializer_spans(
+        for match in (*boolean_declarations, *typed_declarations)
+        for span in declaration_initializer_spans(
             text,
             match,
             javascript_dialect=javascript_dialect,
         )
     ]
     for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
-        if match.start() in boolean_declaration_positions:
+        if (
+            match.start() in boolean_declaration_positions
+            or match.start() in typed_declaration_positions
+        ):
             continue
         selected_name = next(
             (
@@ -6775,17 +6955,25 @@ def review_secret_value_spans(
     boolean_declaration_positions = {
         match.start("boolean_key") for match in boolean_declarations
     }
+    typed_declarations = typescript_secret_type_declarations(
+        text,
+        javascript_dialect=javascript_dialect,
+    )
+    typed_declaration_positions = {match.start() for match in typed_declarations}
     spans = [
         span
-        for match in boolean_declarations
-        for span in boolean_declaration_initializer_spans(
+        for match in (*boolean_declarations, *typed_declarations)
+        for span in declaration_initializer_spans(
             text,
             match,
             javascript_dialect=javascript_dialect,
         )
     ]
     for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
-        if match.start() in boolean_declaration_positions:
+        if (
+            match.start() in boolean_declaration_positions
+            or match.start() in typed_declaration_positions
+        ):
             continue
         for name in (
             "double_value",
@@ -7250,6 +7438,258 @@ def unified_diff_contents(patch: str) -> tuple[str, str]:
     return "\n".join(old_content), "\n".join(new_content)
 
 
+def review_secret_fragments(
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> set[str]:
+    fragments: set[str] = set()
+    segments = (
+        text.split(DIFF_HUNK_CONTENT_BOUNDARY)
+        if DIFF_HUNK_CONTENT_BOUNDARY in text
+        else (text,)
+    )
+    try:
+        for segment in segments:
+            fragments.update(
+                segment[start:end]
+                for start, end in review_repeatable_secret_spans(
+                    segment,
+                    javascript_dialect=javascript_dialect,
+                )
+                if segment[start:end]
+                and segment[start:end].casefold() not in SECRET_PLACEHOLDER_VALUES
+            )
+            fragments.update(
+                fragment
+                for fragment in private_key_body_fragments(segment)
+                if fragment.casefold() not in SECRET_PLACEHOLDER_VALUES
+            )
+    except RecursionError:
+        raise SystemExit(
+            "refusing review bundle because secret scanning exceeded its safe "
+            "recursion limit; split the review target or simplify pathological syntax"
+        ) from None
+    return fragments
+
+
+def refuse_secret_like_review_patch(label: str) -> None:
+    raise SystemExit(
+        f"refusing to include a known secret-like value in {label}; "
+        "move or remove the ambiguous occurrence before running autoreview"
+    )
+
+
+def require_no_known_secret_fragments(
+    label: str,
+    text: str,
+    fragments: set[str],
+) -> None:
+    pattern = known_secret_fragment_pattern(
+        sorted(fragments, key=lambda fragment: (-len(fragment), fragment))
+    )
+    if pattern is not None and pattern.search(text):
+        refuse_secret_like_review_patch(label)
+
+
+def redact_deleted_file_secret_lines(
+    section: str,
+    fragments: set[str],
+    *,
+    javascript_dialect: str | None = None,
+) -> str:
+    fragment_pattern = known_secret_fragment_pattern(
+        sorted(fragments, key=lambda fragment: (-len(fragment), fragment))
+    )
+    redacted: list[str] = []
+    in_hunk = False
+    prefix_columns = 1
+    old_pem = False
+    for line in literal_lf_lines(section):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        hunk_header = re.match(r"^(@{2,}) ", body)
+        if hunk_header is not None:
+            in_hunk = True
+            prefix_columns = len(hunk_header.group(1)) - 1
+            redacted.append(line)
+            continue
+        if body.startswith("diff --"):
+            in_hunk = False
+        prefix = body[:prefix_columns]
+        if (
+            not in_hunk
+            or len(prefix) != prefix_columns
+            or set(prefix) != {"-"}
+        ):
+            redacted.append(line)
+            continue
+        content = body[prefix_columns:]
+        spans = review_secret_value_spans(
+            content,
+            javascript_dialect=javascript_dialect,
+        )
+        spans.extend(
+            known_secret_fragment_spans(content, fragment_pattern)
+        )
+        pem_spans, old_pem = pem_line_body_spans(content, old_pem)
+        spans.extend(pem_spans)
+        spans.extend(
+            match.span()
+            for pattern in (PRIVATE_KEY_BEGIN_PATTERN, PRIVATE_KEY_END_PATTERN)
+            for match in pattern.finditer(content)
+        )
+        redacted.append(
+            f"{prefix}{redact_review_spans(content, spans)}{ending}"
+        )
+    if old_pem:
+        raise SystemExit("refusing review bundle with an unterminated private-key block")
+    return "".join(redacted)
+
+
+def diff_section_without_deleted_line_contents(section: str) -> str:
+    retained: list[str] = []
+    in_hunk = False
+    prefix_columns = 1
+    for line in literal_lf_lines(section):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        hunk_header = re.match(r"^(@{2,}) ", body)
+        if hunk_header is not None:
+            in_hunk = True
+            prefix_columns = len(hunk_header.group(1)) - 1
+            retained.append(line)
+            continue
+        if body.startswith("diff --"):
+            in_hunk = False
+        prefix = body[:prefix_columns]
+        if in_hunk and len(prefix) == prefix_columns and set(prefix) == {"-"}:
+            retained.append(prefix + ending)
+        else:
+            retained.append(line)
+    return "".join(retained)
+
+
+def redact_deletion_only_secret_values(
+    label: str,
+    patch: str,
+    expected_paths: set[str],
+    deletion_only_paths: set[str],
+    mixed_deletion_paths: set[str],
+    additional_secret_context: str,
+    known_secret_fragments_out: set[str] | None,
+) -> str:
+    units = review_bundle_units(patch)
+    deletion_sections: dict[int, tuple[str | None, str, set[str]]] = {}
+    all_fragments: set[str] = set()
+
+    for index, unit in enumerate(units):
+        if not unit.startswith("diff --git "):
+            continue
+        old_path, new_path = diff_section_paths(unit)
+        old_content, new_content = unified_diff_contents(unit)
+        old_dialect = (
+            javascript_review_dialect(old_path)
+            if old_path is not None and old_path in expected_paths
+            else None
+        )
+        new_dialect = (
+            javascript_review_dialect(new_path)
+            if new_path is not None and new_path in expected_paths
+            else None
+        )
+        old_risk = secret_text_risk(old_content, javascript_dialect=old_dialect)
+        new_risk = secret_text_risk(
+            new_content,
+            javascript_dialect=new_dialect,
+        )
+        if old_path in mixed_deletion_paths and old_risk:
+            refuse_secret_like_review_patch(label)
+        deleted_section = old_path in expected_paths and new_path is None
+        deletion_only = deleted_section and old_path in deletion_only_paths
+        if not deletion_only:
+            if deleted_section and old_risk:
+                refuse_secret_like_review_patch(label)
+            continue
+        if new_risk:
+            refuse_secret_like_review_patch(label)
+        fragments: set[str] = set()
+        if old_risk:
+            try:
+                fragments = review_secret_fragments(
+                    old_content,
+                    javascript_dialect=old_dialect,
+                )
+            except SystemExit:
+                refuse_secret_like_review_patch(label)
+            if not fragments:
+                refuse_secret_like_review_patch(label)
+        deletion_sections[index] = (old_dialect, old_content, fragments)
+        all_fragments.update(fragments)
+
+    if len(all_fragments) > MAX_DELETION_SECRET_FRAGMENTS:
+        raise SystemExit(
+            "too many deletion-only secret fragments to redact safely; "
+            "split the review target"
+        )
+    fragment_bytes = sum(
+        len(fragment.encode("utf-8")) for fragment in all_fragments
+    )
+    if fragment_bytes > MAX_BUNDLE_TEXT_BYTES:
+        raise SystemExit(
+            "deletion-only secret fragments are too large to redact safely; "
+            "split the review target"
+        )
+    fragment_pattern = known_secret_fragment_pattern(
+        sorted(all_fragments, key=lambda fragment: (-len(fragment), fragment))
+    )
+    if fragment_pattern is not None:
+        for index, (dialect, old_content, fragments) in deletion_sections.items():
+            fragments.update(
+                match.group("fragment")
+                for match in fragment_pattern.finditer(old_content)
+            )
+            deletion_sections[index] = (dialect, old_content, fragments)
+
+    if fragment_pattern is not None:
+        if fragment_pattern.search(additional_secret_context):
+            refuse_secret_like_review_patch(label)
+        for index, unit in enumerate(units):
+            searchable = (
+                diff_section_without_deleted_line_contents(unit)
+                if index in deletion_sections
+                else unit
+            )
+            if fragment_pattern.search(searchable):
+                refuse_secret_like_review_patch(label)
+
+    for index, (dialect, _old_content, fragments) in deletion_sections.items():
+        if not fragments:
+            continue
+        try:
+            redacted = redact_deleted_file_secret_lines(
+                units[index],
+                fragments,
+                javascript_dialect=dialect,
+            )
+        except SystemExit:
+            refuse_secret_like_review_patch(label)
+        old_content, new_content = unified_diff_contents(redacted)
+        residual_pattern = known_secret_fragment_pattern(
+            sorted(fragments, key=lambda fragment: (-len(fragment), fragment))
+        )
+        if (
+            secret_text_risk(old_content, javascript_dialect=dialect)
+            or secret_text_risk(new_content)
+            or (residual_pattern is not None and residual_pattern.search(old_content))
+        ):
+            refuse_secret_like_review_patch(label)
+        units[index] = redacted
+    if known_secret_fragments_out is not None:
+        known_secret_fragments_out.update(all_fragments)
+    return "".join(units)
+
+
 REVIEW_SECURITY_REDACTION = (
     "[security-sensitive review material omitted before model review]"
 )
@@ -7581,6 +8021,11 @@ def validate_review_patch(
     paths: list[str],
     patch: str,
     limit: int | None = None,
+    *,
+    deletion_only_paths: set[str] | None = None,
+    mixed_deletion_paths: set[str] | None = None,
+    additional_secret_context: str = "",
+    known_secret_fragments_out: set[str] | None = None,
 ) -> str:
     patch_bytes = len(patch.encode("utf-8"))
     if limit is not None and patch_bytes > limit:
@@ -7590,6 +8035,15 @@ def validate_review_patch(
         )
     blocked_paths = tracked_sensitive_paths(paths)
     patch = omit_tracked_sensitive_diff_units(patch, paths, blocked_paths)
+    patch = redact_deletion_only_secret_values(
+        label,
+        patch,
+        set(paths) - blocked_paths,
+        (deletion_only_paths or set()) - blocked_paths,
+        (mixed_deletion_paths or set()) - blocked_paths,
+        additional_secret_context,
+        known_secret_fragments_out,
+    )
     patch = redact_review_patch_metadata(patch)
     patch_bytes = len(patch.encode("utf-8"))
     if limit is not None and patch_bytes > limit:
@@ -7771,7 +8225,10 @@ def redact_secret_like_review_metadata(text: str) -> str:
     return REVIEW_SECURITY_REDACTION if secret_text_risk(text) else text
 
 
-def local_bundle(repo: Path) -> tuple[str, bool]:
+def local_bundle(
+    repo: Path,
+    known_secret_fragments_out: set[str] | None = None,
+) -> tuple[str, bool]:
     staged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--patch")
     unstaged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--patch")
     require_no_binary_diff(
@@ -7817,8 +8274,76 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
         and not omitted_untracked
     ):
         raise SystemExit("no local changes to review")
-    staged_patch = validate_review_patch("local staged diff", staged_paths, staged_patch)
-    unstaged_patch = validate_review_patch("local unstaged diff", unstaged_paths, unstaged_patch)
+    deletion_only_paths = review_deletion_only_paths(
+        repo,
+        "local",
+        None,
+        "HEAD",
+    )
+    deleted_paths = set(
+        git_path_list(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--diff-filter=D",
+            "--name-only",
+            "--cached",
+            "-z",
+        )
+        + git_path_list(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--diff-filter=D",
+            "--name-only",
+            "-z",
+        )
+    )
+    mixed_deletion_paths = deleted_paths - deletion_only_paths
+    staged_blocked_paths = tracked_sensitive_paths(staged_paths)
+    unstaged_blocked_paths = tracked_sensitive_paths(unstaged_paths)
+    staged_patch = omit_tracked_sensitive_diff_units(
+        staged_patch,
+        staged_paths,
+        staged_blocked_paths,
+    )
+    unstaged_patch = omit_tracked_sensitive_diff_units(
+        unstaged_patch,
+        unstaged_paths,
+        unstaged_blocked_paths,
+    )
+    staged_validation_paths = [
+        path for path in staged_paths if path not in staged_blocked_paths
+    ]
+    unstaged_validation_paths = [
+        path for path in unstaged_paths if path not in unstaged_blocked_paths
+    ]
+    additional_secret_context = "\n".join(
+        [
+            local_status(repo, untracked),
+            git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--stat"),
+            git(repo, "diff", *SAFE_DIFF_FLAGS, "--stat"),
+            *(f"{rel}\n{content}" for rel, content, _truncated in untracked_snapshots),
+        ]
+    )
+    combined_patch = validate_review_patch(
+        "local diff",
+        staged_validation_paths + unstaged_validation_paths,
+        staged_patch + LOCAL_DIFF_VALIDATION_BOUNDARY + unstaged_patch,
+        deletion_only_paths=deletion_only_paths,
+        mixed_deletion_paths=mixed_deletion_paths,
+        additional_secret_context=additional_secret_context,
+        known_secret_fragments_out=known_secret_fragments_out,
+    )
+    try:
+        staged_patch, unstaged_patch = combined_patch.split(
+            LOCAL_DIFF_VALIDATION_BOUNDARY,
+            1,
+        )
+    except ValueError:
+        raise SystemExit(
+            "internal error: local diff validation boundary was not preserved"
+        ) from None
     parts = [
         "# Git Status",
         redact_secret_like_review_metadata(
@@ -8024,7 +8549,11 @@ def source_tree_snapshot(
     return head, index_entries, fingerprints
 
 
-def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
+def branch_bundle(
+    repo: Path,
+    base_ref: str,
+    known_secret_fragments_out: set[str] | None = None,
+) -> tuple[str, bool]:
     base_ref = validate_git_ref(repo, base_ref, "base")
     diff_range = f"{base_ref}...HEAD"
     branch_patch = git(
@@ -8069,7 +8598,19 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
         ),
     )
     omitted_tracked = bool(tracked_sensitive_paths(branch_paths))
-    branch_patch = validate_review_patch("branch diff", branch_paths, branch_patch)
+    deletion_only_paths = review_deletion_only_paths(
+        repo,
+        "branch",
+        base_ref,
+        "HEAD",
+    )
+    branch_patch = validate_review_patch(
+        "branch diff",
+        branch_paths,
+        branch_patch,
+        deletion_only_paths=deletion_only_paths,
+        known_secret_fragments_out=known_secret_fragments_out,
+    )
     return "\n\n".join(
         [
             "# Branch Diff",
@@ -8097,7 +8638,11 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
     ), False
 
 
-def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
+def commit_bundle(
+    repo: Path,
+    commit_ref: str,
+    known_secret_fragments_out: set[str] | None = None,
+) -> tuple[str, bool]:
     commit_ref = validate_git_ref(repo, commit_ref, "commit")
     parents = git(repo, "rev-list", "--parents", "-n", "1", commit_ref).split()
     if len(parents) > 2:
@@ -8151,7 +8696,6 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
         ),
     )
     omitted_tracked = bool(tracked_sensitive_paths(commit_paths))
-    commit_patch = validate_review_patch("commit diff", commit_paths, commit_patch)
     commit_summary = git(
         repo,
         "show",
@@ -8160,6 +8704,20 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
         "--format=fuller",
         "--end-of-options",
         commit_ref,
+    )
+    deletion_only_paths = review_deletion_only_paths(
+        repo,
+        "commit",
+        None,
+        commit_ref,
+    )
+    commit_patch = validate_review_patch(
+        "commit diff",
+        commit_paths,
+        commit_patch,
+        deletion_only_paths=deletion_only_paths,
+        additional_secret_context=commit_summary,
+        known_secret_fragments_out=known_secret_fragments_out,
     )
     if omitted_tracked or secret_text_risk(commit_summary):
         commit_summary = REVIEW_SECURITY_REDACTION
@@ -10980,6 +11538,34 @@ def validate_report(
         raise
 
 
+def filter_findings_by_priority(
+    report: dict[str, Any],
+    max_priority: str,
+) -> None:
+    order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    limit = order[max_priority]
+    original = report["findings"]
+    kept = [
+        finding
+        for finding in original
+        if order[finding["priority"]] <= limit
+    ]
+    removed = len(original) - len(kept)
+    if not removed:
+        return
+    report["findings"] = kept
+    if not kept and report["overall_correctness"] == "patch is incorrect":
+        report["overall_correctness"] = "patch is correct"
+    note = (
+        f"Omitted {removed} finding(s) below the requested "
+        f"{max_priority} priority threshold."
+    )
+    report["overall_explanation"] = bounded_field(
+        report["overall_explanation"].rstrip() + "\n\n" + note,
+        3000,
+    )
+
+
 def number_in_range(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
 
@@ -11168,6 +11754,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", action="append", help="Additional review instruction text.")
     parser.add_argument("--prompt-file", action="append", help="Additional review instruction file.")
     parser.add_argument("--dataset", action="append", help="Extra evidence file to include in the review bundle.")
+    parser.add_argument(
+        "--max-priority",
+        choices=["P0", "P1", "P2", "P3"],
+        default=os.environ.get("AUTOREVIEW_MAX_PRIORITY", "P0"),
+        help="Widest finding priority to report. Default: P0.",
+    )
     parser.add_argument("--output", help="Write human output to a file as well as stdout.")
     parser.add_argument("--json-output", help="Write validated structured review JSON.")
     parser.add_argument(
@@ -11403,6 +11995,7 @@ def run_reviewer(
         try:
             report = extract_json(raw)
             validate_report(report, repo, changed_paths, required)
+            filter_findings_by_priority(report, args.max_priority)
             return report
         except SystemExit as exc:
             if attempt >= attempts or not is_structured_output_failure(str(exc)):
@@ -11879,15 +12472,41 @@ def main() -> int:
 
     review_source_snapshot = source_tree_snapshot(repo)
     run_trufflehog_preflight(repo, target, target_ref, args.commit)
+    known_secret_fragments: set[str] = set()
     if target == "local":
-        bundle, bundle_truncated = local_bundle(repo)
+        bundle, bundle_truncated = local_bundle(
+            repo,
+            known_secret_fragments,
+        )
     elif target == "branch":
         assert target_ref
-        bundle, bundle_truncated = branch_bundle(repo, target_ref)
+        bundle, bundle_truncated = branch_bundle(
+            repo,
+            target_ref,
+            known_secret_fragments,
+        )
     else:
-        bundle, bundle_truncated = commit_bundle(repo, args.commit)
+        bundle, bundle_truncated = commit_bundle(
+            repo,
+            args.commit,
+            known_secret_fragments,
+        )
         target_ref = args.commit
     extra_prompt, prompt_truncated = load_extra_prompt(args, repo)
+    included_priorities = ", ".join(
+        priority
+        for priority in ("P0", "P1", "P2", "P3")
+        if int(priority[1]) <= int(args.max_priority[1])
+    )
+    threshold_prompt = (
+        f"Finding threshold: report only {included_priorities}. "
+        "Omit all lower-priority observations, polish, speculative risks, and "
+        "follow-up ideas outside that threshold. Do not mark the patch incorrect "
+        "solely for an omitted lower-priority issue."
+    )
+    extra_prompt = (
+        threshold_prompt + ("\n\n" + extra_prompt if extra_prompt.strip() else "")
+    )
     datasets, datasets_truncated = load_datasets(args, repo)
     input_truncated = bundle_truncated or prompt_truncated or datasets_truncated
     prompts = build_review_prompts(
@@ -11898,6 +12517,12 @@ def main() -> int:
         extra_prompt,
         datasets,
     )
+    for prompt in prompts:
+        require_no_known_secret_fragments(
+            "final review prompt",
+            prompt,
+            known_secret_fragments,
+        )
     changed_paths = review_paths(repo, target, target_ref, args.commit)
     print(f"bundle: {utf8_size(bundle)} bytes; review passes: {len(prompts)}")
     if source_tree_snapshot(repo) != review_source_snapshot:

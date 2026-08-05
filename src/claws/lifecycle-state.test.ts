@@ -456,7 +456,7 @@ describe("Claw status and remove", () => {
     });
   });
 
-  it("accepts the scheduler's default tool cap when removing a Claw cron job", async () => {
+  it("accepts scheduler defaults when removing a Claw cron job", async () => {
     const current = await addFixture({ withCron: true });
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
@@ -475,6 +475,7 @@ describe("Claw status and remove", () => {
         get: async () => ({
           ...live,
           payload: { ...live.payload, toolsAllow: ["*"] },
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
         }),
         remove,
       },

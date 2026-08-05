@@ -171,7 +171,7 @@ read_when:
           "groupPolicy": "allowlist",
           "guilds": {
             "YOUR_GUILD_ID": {
-              "channels": { "general": { "allow": true } },
+              "channels": { "general": { "enabled": true } },
               "requireMention": false
             }
           }

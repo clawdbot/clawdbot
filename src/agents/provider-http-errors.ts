@@ -71,7 +71,16 @@ export async function readResponseTextLimited(
   if (limitBytes <= 0) {
     return "";
   }
-  return (await readResponseTextPrefix(response, limitBytes, options)).text;
+  return (
+    await readResponseTextPrefix(response, limitBytes, {
+      chunkTimeoutMs: options?.chunkTimeoutMs ?? 10_000,
+      onIdleTimeout:
+        options?.onIdleTimeout ??
+        (({ chunkTimeoutMs }) => new Error(`error body read stalled for ${chunkTimeoutMs}ms`)),
+      timeoutMs: options?.timeoutMs,
+      onTimeout: options?.onTimeout,
+    })
+  ).text;
 }
 
 /** Reads a successful provider text response under a byte cap. */
@@ -82,7 +91,13 @@ export async function readProviderTextResponse(
 ): Promise<string> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
-    ...opts,
+    chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
+    onIdleTimeout:
+      opts?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) =>
+        new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
+    timeoutMs: opts?.timeoutMs,
+    onTimeout: opts?.onTimeout,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
   });
@@ -336,7 +351,13 @@ export async function readProviderJsonResponse<T>(
 ): Promise<T> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_JSON_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
-    ...opts,
+    chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
+    onIdleTimeout:
+      opts?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) =>
+        new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
+    timeoutMs: opts?.timeoutMs,
+    onTimeout: opts?.onTimeout,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
   });

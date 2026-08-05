@@ -14,7 +14,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import { applySelectedChatAgent } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -35,6 +36,55 @@ function createDeferred<T>() {
   return { promise, reject, resolve };
 }
 
+describe("chat pane composer prefill attention", () => {
+  function createComposerAttentionFixture() {
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const input = document.createElement("div");
+    input.className = "agent-chat__input";
+    const textarea = document.createElement("textarea");
+    input.append(textarea);
+    document.body.append(input);
+    vi.spyOn(pane, "querySelector").mockReturnValue(textarea);
+    const lifecycle = pane as TestChatPane & {
+      focusComposer: boolean;
+      updated: (changedProperties?: Map<PropertyKey, unknown>) => void;
+    };
+    lifecycle.focusComposer = true;
+    return { input, lifecycle, textarea };
+  }
+
+  it("focuses and clears the one-shot composer cue for an explicit route hint", () => {
+    vi.useFakeTimers();
+    const { input, lifecycle, textarea } = createComposerAttentionFixture();
+
+    lifecycle.updated(new Map([["focusComposer", false]]));
+
+    expect(document.activeElement).toBe(textarea);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(1_200);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
+    input.remove();
+  });
+
+  it("restarts the cue without letting the prior timer clear it", () => {
+    vi.useFakeTimers();
+    const { input, lifecycle } = createComposerAttentionFixture();
+
+    lifecycle.updated(new Map([["focusComposer", false]]));
+    vi.advanceTimersByTime(600);
+    lifecycle.updated(new Map([["focusComposer", false]]));
+    vi.advanceTimersByTime(600);
+
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(600);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
+    input.remove();
+  });
+});
+
 describe("chat pane first-turn attachment lifecycle", () => {
   it("claims the connected client's first message before attaching the pane", () => {
     const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
@@ -45,7 +95,11 @@ describe("chat pane first-turn attachment lifecycle", () => {
     } as unknown as GatewayBrowserClient;
     const context = {
       basePath: "",
-      gateway: { snapshot: { client, hello: null } },
+      gateway: {
+        snapshot: { client, hello: null },
+        subscribe: vi.fn(() => vi.fn()),
+        subscribeEvents: vi.fn(() => vi.fn()),
+      },
       config: {
         current: {
           assistantIdentity: {
@@ -648,10 +702,13 @@ function createConfirmationOwner() {
   document.body.appendChild(owner);
   confirmationOwners.add(owner);
   openChatRewindConfirmation(trigger, vi.fn());
-  return owner;
+  const popover = [...document.querySelectorAll<HTMLElement>(".chat-delete-confirm")].at(-1);
+  expect(popover).toBeInstanceOf(HTMLElement);
+  return { owner, popover: popover! };
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const owner of confirmationOwners) {
     dismissConfirmedActionPopovers(owner);
@@ -699,11 +756,11 @@ describe("chat pane presentation teardown", () => {
     expect(captureClickListeners).toHaveLength(2);
     expect(captureKeydownListeners).toHaveLength(2);
 
-    pane.appendChild(paneConfirmation);
+    pane.appendChild(paneConfirmation.owner);
     pane.disconnectedCallback();
 
-    expect(pane.querySelector(".chat-delete-confirm")).toBeNull();
-    expect(siblingConfirmation.querySelector(".chat-delete-confirm")).not.toBeNull();
+    expect(paneConfirmation.popover.isConnected).toBe(false);
+    expect(siblingConfirmation.popover.isConnected).toBe(true);
     expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListeners[0], true);
     expect(removeDocumentListener).not.toHaveBeenCalledWith(
       "click",
@@ -736,7 +793,7 @@ describe("chat pane presentation teardown", () => {
       sessions: {} as SessionCapability,
     });
     window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
-    const owner = createConfirmationOwner();
+    const confirmation = createConfirmationOwner();
 
     try {
       for (const callback of frameCallbacks.splice(0)) {
@@ -750,7 +807,7 @@ describe("chat pane presentation teardown", () => {
       )?.[1];
       expect(captureClickListener).toBeDefined();
       expect(captureKeydownListener).toBeDefined();
-      pane.appendChild(owner);
+      pane.appendChild(confirmation.owner);
 
       const stopAfterReset = new Error("stop after thread presentation reset");
       vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
@@ -758,20 +815,180 @@ describe("chat pane presentation teardown", () => {
       });
 
       expect(() => pane.switchPaneSession("agent:main:next")).toThrow(stopAfterReset);
-      expect(owner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(confirmation.popover.isConnected).toBe(false);
       expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListener, true);
       expect(removeWindowListener).toHaveBeenCalledWith("keydown", captureKeydownListener, true);
     } finally {
-      dismissConfirmedActionPopovers(owner);
-      owner.remove();
+      dismissConfirmedActionPopovers(confirmation.owner);
+      confirmation.owner.remove();
     }
   });
 });
 
 describe("chat pane connection lifecycle", () => {
-  it("rehydrates secondary session state after a same-client logical reconnect", () => {
+  it("fully tears down realtime Talk when the gateway disconnects", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const stop = vi.fn(() => {
+      expect(state.realtimeTalkSession).toBeNull();
+    });
+    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+    state.realtimeTalkActive = true;
+    state.realtimeTalkStatus = "listening";
+    state.realtimeTalkDetail = "live";
+    state.realtimeTalkInputLevel.set(0.7);
+    state.realtimeTalkConversation = [
+      { id: "utterance", role: "user", text: "stale", isStreaming: true },
+    ];
+    state.realtimeTalkVideoStream = {} as MediaStream;
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoCapable = true;
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
+  it("advances session ownership once per same-client connection transition", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const initialGeneration = pane.connectionGeneration;
+    const snapshot = { ...pane.context.gateway.snapshot, client };
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+    expect(state.connectionEpoch).toBe(initialGeneration + 1);
+    expect(state.chatLoading).toBe(false);
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+    expect(state.connectionEpoch).toBe(initialGeneration + 1);
+    expect(state.chatLoading).toBe(true);
+
+    pane.connectedClient = client;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+    expect(state.connectionEpoch).toBe(initialGeneration + 2);
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+    expect(state.connectionEpoch).toBe(initialGeneration + 2);
+    expect(state.chatLoading).toBe(true);
+  });
+
+  it("cancels scroll work owned by the prior Gateway connection", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const cancelCommit = vi.fn();
+    const initialScrollGeneration = state.chatScrollGeneration;
+    state.chatScrollCommitCleanup = cancelCommit;
+    state.chatIsProgrammaticScroll = true;
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(cancelCommit).toHaveBeenCalledOnce();
+    expect(state.chatScrollCommitCleanup).toBeNull();
+    expect(state.chatScrollGeneration).toBe(initialScrollGeneration + 1);
+    expect(state.chatIsProgrammaticScroll).toBe(false);
+  });
+
+  it("retires pending model selection state when the Gateway owner changes", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const retireModelOverride = vi.fn();
+    const sessions = { retireModelOverride } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.sessionKey = "global";
+    state.chatModelSwitchPromises = {
+      global: new Promise<boolean>(() => {}),
+    };
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(state.chatModelSwitchPromises).toEqual({});
+    expect(retireModelOverride).toHaveBeenCalledWith("global");
+  });
+
+  it("releases sending state when the Gateway owner changes", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatSending = true;
+    state.chatSendingScopeKey = "agent:main";
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(state.chatSending).toBe(false);
+    expect(state.chatSendingScopeKey).toBeNull();
+  });
+
+  it.each([
+    { sessionKey: "agent:work:main", mainKey: "main" },
+    { sessionKey: "agent:work:home", mainKey: "home" },
+  ])(
+    "retires pending global model selection state when the selected agent changes for $sessionKey",
+    ({ sessionKey, mainKey }) => {
+      const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+      const retireModelOverride = vi.fn();
+      const sessions = { retireModelOverride } as unknown as SessionCapability;
+      const { state } = createTestChatPane({ client, sessions });
+      state.sessionKey = sessionKey;
+      state.agentsList = { defaultId: "main", mainKey, scope: "global", agents: [] };
+      state.assistantAgentId = "work";
+      state.chatModelSwitchPromises = {
+        global: new Promise<boolean>(() => {}),
+      };
+
+      applySelectedChatAgent(state, "main");
+
+      expect(state.chatModelSwitchPromises).toEqual({});
+      expect(state.assistantAgentId).toBe("main");
+      expect(retireModelOverride).toHaveBeenCalledWith(sessionKey);
+      expect(retireModelOverride).toHaveBeenCalledWith("global");
+    },
+  );
+
+  it("refreshes the transcript before secondary hydration after a same-client reconnect", () => {
+    const request = vi.fn(() => new Promise<never>(() => {}));
     const client = {
-      request: vi.fn(() => new Promise<never>(() => {})),
+      request,
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
@@ -784,6 +1001,10 @@ describe("chat pane connection lifecycle", () => {
       phase: "connected",
     });
 
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ limit: 100, sessionKey: state.sessionKey }),
+    );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
   });
 
@@ -820,6 +1041,12 @@ describe("chat pane connection lifecycle", () => {
     pane.applyGatewaySnapshot({
       ...snapshot,
       phase: "connected",
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.write"] },
+        features: { methods: ["chat.abort"] },
+      },
     });
 
     await vi.waitFor(() =>

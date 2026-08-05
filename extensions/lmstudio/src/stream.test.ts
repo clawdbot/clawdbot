@@ -490,6 +490,67 @@ describe("lmstudio stream wrapper", () => {
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start model preload for an already-aborted inference", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const controller = new AbortController();
+    const abortReason = new Error("inference already cancelled");
+    controller.abort(abortReason);
+    const options = { signal: controller.signal };
+    const stream = Promise.resolve().then(() =>
+      runWrappedLmstudioStream(wrapped, { contextWindow: 32_768 }, options),
+    );
+
+    await expect(stream).rejects.toBe(abortReason);
+    expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+    expect(baseStream).not.toHaveBeenCalled();
+  });
+
+  it("cancels one shared preload waiter without cancelling another inference", async () => {
+    let resolvePreload: (() => void) | undefined;
+    ensureLmstudioModelLoadedMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePreload = resolve;
+        }),
+    );
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const controller = new AbortController();
+    const first = collectEvents(
+      runWrappedLmstudioStream(wrapped, { contextWindow: 32_768 }, { signal: controller.signal }),
+    );
+    let firstOutcome: string | undefined;
+    void first.then(
+      () => {
+        firstOutcome = "completed";
+      },
+      (error: unknown) => {
+        firstOutcome = error instanceof Error ? error.name : "unknown";
+      },
+    );
+    const second = collectEvents(runWrappedLmstudioStream(wrapped, { contextWindow: 32_768 }));
+
+    try {
+      await vi.waitFor(() => expect(resolvePreload).toBeDefined());
+      controller.abort(new DOMException("inference cancelled", "AbortError"));
+
+      await vi.waitFor(() => expect(firstOutcome).toBe("AbortError"), {
+        timeout: 250,
+      });
+      expect(baseStream).not.toHaveBeenCalled();
+      expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+
+      resolvePreload?.();
+
+      expectSingleDoneEvent(await second);
+      expect(baseStream).toHaveBeenCalledTimes(1);
+    } finally {
+      resolvePreload?.();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
   it("skips preload on the second attempt while the failure backoff is active", async () => {
     ensureLmstudioModelLoadedMock.mockRejectedValue(new Error("out of memory"));
     const baseStream = buildDoneStreamFn();

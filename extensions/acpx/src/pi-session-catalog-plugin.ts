@@ -382,7 +382,7 @@ async function listPiHosts(
   }
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
-    nodes = (await runtime.nodes.list()).nodes;
+    nodes = (await (query.listNodes?.() ?? runtime.nodes.list())).nodes;
   } catch {
     return hosts;
   }

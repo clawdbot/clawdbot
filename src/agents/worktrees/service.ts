@@ -36,7 +36,6 @@ import {
   findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedLedger,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
@@ -77,6 +76,8 @@ export class WorktreeSnapshotError extends Error {
     this.snapshotError = snapshotError;
   }
 }
+
+export class WorktreeRepositoryError extends Error {}
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -182,9 +183,13 @@ async function resolveRepositoryFromRealPath(
 ): Promise<ResolvedRepository> {
   const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
   if (rootResult.code !== 0) {
-    throw new Error(`not a git checkout: ${requestedLabel}`);
+    throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
   const sourceRoot = await fs.realpath(rootResult.stdout.trim());
+  const headResult = await runGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  if (headResult.code !== 0) {
+    throw new WorktreeRepositoryError(`git checkout has no commits: ${requestedLabel}`);
+  }
   const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
   const commonDir = await fs.realpath(
     path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
@@ -963,21 +968,12 @@ export class ManagedWorktreeService {
       branchCreated = true;
       await requireGit(record.path, ["symbolic-ref", "HEAD", `refs/heads/${record.branch}`]);
       await requireGit(record.path, ["reset"]);
-      const provisionedLedger = getRegistryWorktreeProvisionedLedger(this.env, record.id);
-      if (provisionedLedger.status === "legacy") {
-        // Explicitly removed pre-ledger worktrees retain their historical restore behavior.
-        restoredProvisionedPaths = await provisionIncludedFiles(record.repoRoot, record.path);
-      } else {
-        if (provisionedLedger.status === "invalid") {
-          throw new Error(`worktree ${record.id} has invalid provisioned file metadata`);
-        }
-        const provisionedState = getRegistryWorktreeProvisionedState(this.env, record.id);
-        if (provisionedState === undefined) {
-          throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
-        }
-        await restoreProvisionedFiles(this.env, record.id, record.path, provisionedState);
-        restoredProvisionedPaths = provisionedState.map((state) => state.path);
+      const provisionedState = getRegistryWorktreeProvisionedState(this.env, record.id);
+      if (provisionedState === undefined) {
+        throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
       }
+      await restoreProvisionedFiles(this.env, record.id, record.path, provisionedState);
+      restoredProvisionedPaths = provisionedState.map((state) => state.path);
     } catch (error) {
       const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);
       const branchDeleted = branchCreated

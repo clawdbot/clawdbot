@@ -19,7 +19,7 @@ import { resolveGatewayAuth } from "./auth.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
-import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
+import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -294,8 +294,8 @@ export async function prepareGatewayRuntimeState(params: {
     createGatewayAuthRateLimiters(rateLimitConfig);
   const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig);
 
-  const controlUiRootState = await startupTrace.measure("control-ui.root", () =>
-    resolveGatewayControlUiRootState({
+  const controlUiRootLifecycle = await startupTrace.measure("control-ui.root", () =>
+    createGatewayControlUiRootLifecycle({
       controlUiRootOverride,
       controlUiEnabled,
       gatewayRuntime,
@@ -354,6 +354,9 @@ export async function prepareGatewayRuntimeState(params: {
     deferStartupAccountStartsUntil: startupAccountStartsReady,
     getNativeApprovalRuntime: () => gatewayInstanceRuntimeRef.current?.nativeApprovals,
     ambientAutostartSuppressedChannelIds,
+    ...(opts.tryRecoverChannelAutostartSuppression
+      ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
+      : {}),
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
@@ -408,7 +411,6 @@ export async function prepareGatewayRuntimeState(params: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
   const {
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,
@@ -441,7 +443,7 @@ export async function prepareGatewayRuntimeState(params: {
       port,
       controlUiEnabled,
       controlUiBasePath,
-      controlUiRoot: controlUiRootState,
+      controlUiRoot: controlUiRootLifecycle.state,
       openAiChatCompletionsEnabled,
       openAiChatCompletionsConfig,
       openResponsesEnabled,
@@ -457,8 +459,8 @@ export async function prepareGatewayRuntimeState(params: {
         runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry: pluginRuntime.registry,
       getPluginRouteRegistry: () => pluginRuntime.registry,
+      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
       getGatewayRequestContext: () => pluginGatewayContext.current,
-      pinChannelRegistry: !minimalTestGateway,
       deps,
       log,
       logHooks,
@@ -486,6 +488,7 @@ export async function prepareGatewayRuntimeState(params: {
     listActiveGatewayMethods,
     bindHost,
     controlUiEnabled,
+    controlUiRootLifecycle,
     openAiChatCompletionsEnabled,
     openAiChatCompletionsConfig,
     openResponsesEnabled,
@@ -526,7 +529,6 @@ export async function prepareGatewayRuntimeState(params: {
     getReadiness,
     pluginGatewayContext,
     watchNodeRequestHandler,
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,

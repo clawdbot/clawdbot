@@ -16,7 +16,7 @@ use std::fmt;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
@@ -721,8 +721,7 @@ impl GatewayClient {
         let mut socket = tokio::time::timeout(CONNECT_TIMEOUT, connect_gateway_socket(config))
             .await
             .map_err(|_| RequestFailure::transport("Gateway connection timed out."))??;
-        let nonce = wait_for_connect_challenge(&mut socket).await?;
-        let signed_at_ms = unix_time_ms().map_err(RequestFailure::transport)?;
+        let challenge = wait_for_connect_challenge(&mut socket).await?;
         // Native child WebViews use platform HTTP trust and cannot bind the optional
         // WebSocket leaf pin, so pinned Gateway connections remain capability-free.
         let inline_widgets_available = config
@@ -732,8 +731,8 @@ impl GatewayClient {
         let params = connect_params(
             &identity,
             &auth,
-            &nonce,
-            signed_at_ms,
+            &challenge.nonce,
+            challenge.issued_at_ms,
             inline_widgets_available,
         )
         .map_err(RequestFailure::transport)?;
@@ -1127,22 +1126,42 @@ fn request_frame(id: &str, method: &str, params: Value) -> Value {
     })
 }
 
-async fn wait_for_connect_challenge(socket: &mut GatewaySocket) -> Result<String, RequestFailure> {
+#[derive(Debug, PartialEq, Eq)]
+struct ConnectChallenge {
+    nonce: String,
+    issued_at_ms: u64,
+}
+
+fn parse_connect_challenge(value: &Value) -> Result<ConnectChallenge, RequestFailure> {
+    let nonce = value
+        .get("payload")
+        .and_then(|payload| payload.get("nonce"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|nonce| !nonce.is_empty());
+    let issued_at_ms = value
+        .get("payload")
+        .and_then(|payload| payload.get("ts"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| RequestFailure::transport("Gateway challenge timestamp was invalid."))?;
+    nonce
+        .map(|nonce| ConnectChallenge {
+            nonce: nonce.to_owned(),
+            issued_at_ms,
+        })
+        .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."))
+}
+
+async fn wait_for_connect_challenge(
+    socket: &mut GatewaySocket,
+) -> Result<ConnectChallenge, RequestFailure> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
             let value = next_json(socket).await?;
             if value.get("type").and_then(Value::as_str) == Some("event")
                 && value.get("event").and_then(Value::as_str) == Some("connect.challenge")
             {
-                let nonce = value
-                    .get("payload")
-                    .and_then(|payload| payload.get("nonce"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|nonce| !nonce.is_empty());
-                return nonce
-                    .map(ToOwned::to_owned)
-                    .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."));
+                return parse_connect_challenge(&value);
             }
         }
     })
@@ -1470,13 +1489,6 @@ fn dispatch_chat_event(app: &AppHandle, frame: &Value) {
     }
 }
 
-fn unix_time_ms() -> Result<u64, String> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .map_err(|error| format!("Could not read system time: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1663,6 +1675,34 @@ mod tests {
         // Pinning only withdraws inline widgets; agent-kind is unconditional.
         assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
+    }
+
+    #[test]
+    fn connect_challenge_uses_gateway_timestamp() {
+        let Ok(challenge) = parse_connect_challenge(&json!({
+            "payload": {
+                "nonce": " fixture-nonce ",
+                "ts": 1_700_000_000_123_u64
+            }
+        })) else {
+            panic!("expected valid challenge");
+        };
+
+        assert_eq!(
+            challenge,
+            ConnectChallenge {
+                nonce: "fixture-nonce".to_string(),
+                issued_at_ms: 1_700_000_000_123,
+            }
+        );
+        assert!(parse_connect_challenge(&json!({
+            "payload": { "nonce": "missing-time" }
+        }))
+        .is_err());
+        assert!(parse_connect_challenge(&json!({
+            "payload": { "nonce": "fixture-nonce", "ts": "1700000000123" }
+        }))
+        .is_err());
     }
 
     #[test]

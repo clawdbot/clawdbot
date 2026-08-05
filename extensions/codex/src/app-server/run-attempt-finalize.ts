@@ -17,6 +17,7 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -121,7 +122,6 @@ export async function finalizeCodexAttempt(
   const recoveredTurnWatchTimeout =
     state.turnCompletionIdleTimedOut &&
     !terminalState.explicitCancellationObserved &&
-    !state.terminalTurnNotificationQueued &&
     hasRecoverableCompletedAssistant &&
     activeProjector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout();
   if (recoveredTurnWatchTimeout) {
@@ -244,15 +244,18 @@ export async function finalizeCodexAttempt(
     turnWatchTimeoutKind: state.turnWatchTimeoutKind,
   });
   const failureDiagnostics =
-    codexAppServerFailureKind === "turn_completion_idle_timeout" &&
-    state.turnWatchTimeoutKind === "completion"
-      ? buildCodexAppServerTimeoutDiagnostics({
-          idleMs: state.turnWatchTimeoutIdleMs,
-          timeoutMs: state.turnWatchTimeoutMs,
-          lastActivityReason: state.turnWatchTimeoutLastActivityReason,
-          details: state.turnWatchTimeoutDetails,
-        })
-      : undefined;
+    codexAppServerFailureKind === "client_closed_before_turn_completed" &&
+    state.clientClosedDiagnostic
+      ? { transportError: state.clientClosedDiagnostic }
+      : codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+          state.turnWatchTimeoutKind === "completion"
+        ? buildCodexAppServerTimeoutDiagnostics({
+            idleMs: state.turnWatchTimeoutIdleMs,
+            timeoutMs: state.turnWatchTimeoutMs,
+            lastActivityReason: state.turnWatchTimeoutLastActivityReason,
+            details: state.turnWatchTimeoutDetails,
+          })
+        : undefined;
   const codexAppServerFailure = codexAppServerFailureKind
     ? ({
         kind: codexAppServerFailureKind,
@@ -270,18 +273,16 @@ export async function finalizeCodexAttempt(
     : undefined;
   const finalAborted = isFinalAborted();
   const completedTurnStatus = activeProjector.getCompletedTurnStatus();
-  const completedWithoutTerminalNotification =
+  const locallyCompletedTurn =
     state.completed &&
-    !state.terminalTurnNotificationQueued &&
+    (state.localCompletionRequested || !state.terminalTurnNotificationQueued) &&
     !state.timedOut &&
     clientClosedPromptErrorForFinal === undefined;
   const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
-    (completedTurnStatus === "completed" ||
-      recoveredTurnWatchTimeout ||
-      completedWithoutTerminalNotification);
+    (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
   // buildResult retains the bridge's delivery records. Resolve omitted final
   // intent only after the authoritative turn outcome is known, before any
   // terminal observer consumes the result.
@@ -433,7 +434,31 @@ export async function finalizeCodexAttempt(
       ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
       durationMs: Date.now() - attemptStartedAt,
     },
-    ctx: hookContext,
+    ctx: {
+      ...hookContext,
+      modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
+      modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
+      authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
+      modelIterations: result.modelIterations ?? 0,
+      skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
+        attemptTools.toolBridge.availableSpecs,
+      ).some((tool) => tool.name === "skill_workshop"),
+      compacted: (result.compactionCount ?? 0) > 0,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      chatType: params.chatType,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId ?? undefined,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+    },
     hookRunner,
   });
   state.shouldDelayNativeHookRelayUnregister =

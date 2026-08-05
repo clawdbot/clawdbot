@@ -42,10 +42,18 @@ export interface ResolvedSmsAccount {
 export interface SmsInboundMessage {
   messageSid: string;
   accountSid: string;
+  messagingServiceSid?: string;
   from: string;
   to: string;
   body: string;
+  media: SmsInboundMedia[];
+  unavailableMediaCount?: number;
 }
+
+type SmsInboundMedia = {
+  url: string;
+  contentType?: string;
+};
 
 export type SmsSendResult = {
   sid: string;

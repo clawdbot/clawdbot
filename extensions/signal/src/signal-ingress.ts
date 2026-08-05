@@ -1,18 +1,17 @@
 // Signal plugin module owns raw-envelope durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as normalizeRawString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
-const SIGNAL_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES = 1000;
-const SIGNAL_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_FAILED_MAX_ENTRIES = 1000;
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 
 type SignalIngressEnvelope = {
@@ -28,6 +27,7 @@ type SignalIngressEnvelope = {
 type SignalIngressEventFacts = {
   eventId: string;
   laneKey: string;
+  numberAliasEventId?: string;
 };
 
 type SignalIngressPayload = {
@@ -47,24 +47,9 @@ type SignalIngressDispatch = (
   lifecycle: SignalIngressLifecycle,
 ) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
 
-class SignalIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SignalIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeRawString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const SignalIngressPermanentError = createChannelIngressError<
+  "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event"
+>("SignalIngressPermanentError", { withReason: true });
 
 function normalizeTimestamp(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -141,6 +126,9 @@ function inspectSignalIngressEvent(event: SignalSseEvent): SignalIngressEventFac
   return {
     eventId: JSON.stringify([senderKey, timestamp]),
     laneKey: groupId ? `group:${groupId}` : `direct:${senderKey}`,
+    ...(senderUuid && senderNumber
+      ? { numberAliasEventId: JSON.stringify([`number:${senderNumber}`, timestamp]) }
+      : {}),
   };
 }
 
@@ -173,12 +161,13 @@ export async function startSignalIngressMonitor(params: {
       accountId: params.accountId,
     });
   }
+  const ingressQueue = queue;
   const monitor = createChannelIngressMonitor<
     SignalSseEvent,
     SignalIngressBody,
     SignalIngressPayload
   >({
-    queue,
+    queue: ingressQueue,
     inspect: (event) => inspectSignalIngressEvent(event),
     payload: {
       version: 1,
@@ -193,14 +182,24 @@ export async function startSignalIngressMonitor(params: {
         ),
     },
     deliver: (event, lifecycle) => params.dispatch(event, lifecycle),
+    onDurableAdmission: async (_event, { facts }) => {
+      const { numberAliasEventId } = facts as SignalIngressEventFacts;
+      if (!numberAliasEventId) {
+        return;
+      }
+      // signal-cli can learn or forget a UUID between redeliveries; bridge both
+      // shipped sender IDs before the monitor releases its admission/claim lock.
+      if (!(await ingressQueue.complete(numberAliasEventId))) {
+        await ingressQueue.complete(facts.eventId);
+      }
+    },
     pollIntervalMs: SIGNAL_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       // Signal previously pruned before every enqueue rather than on a timed cadence.
       pruneIntervalMs: 0,
-      completedTtlMs: SIGNAL_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SIGNAL_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SIGNAL_INGRESS_FAILED_MAX_ENTRIES,
+      // At most two tombstones per message preserve the prior 1,000-message window.
+      completedMaxEntries: 2_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
     drain: {

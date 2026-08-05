@@ -15,7 +15,6 @@ import {
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
@@ -126,8 +125,9 @@ async function runGatewayHealthCheck(params: {
     value: params.cfg.gateway?.auth?.password,
     path: "gateway.auth.password",
   });
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN ?? configuredToken;
-  const password = process.env.OPENCLAW_GATEWAY_PASSWORD ?? configuredPassword;
+  const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? configuredToken;
+  const password =
+    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -332,9 +332,10 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await runSearchSetupFlow(workingConfig, runtime, prompter, {
+        const searchSetup = await runSearchSetupFlow(workingConfig, runtime, prompter, {
           preserveDisabledSearchState: false,
         });
+        workingConfig = searchSetup.config;
         const selectedSearch = workingConfig.tools?.web?.search;
         nextSearch = {
           ...selectedSearch,
@@ -461,8 +462,10 @@ export async function runConfigureWizard(
         ]);
         return probeGatewayReachable({
           url: localUrl,
-          token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
-          password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
+          token: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? baseLocalProbeToken,
+          password:
+            normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
+            baseLocalProbePassword,
           timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
         });
       })();
@@ -810,11 +813,6 @@ export async function runConfigureWizard(
       return;
     }
 
-    const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
-    if (!controlUiAssets.ok && controlUiAssets.message) {
-      runtime.error(controlUiAssets.message);
-    }
-
     const bind = nextConfig.gateway?.bind ?? "loopback";
     const displayLinks = await resolveAdvertisedControlUiLinks({
       bind,
@@ -831,21 +829,21 @@ export async function runConfigureWizard(
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     const newPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
       }));
     const oldPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
       (await resolveGatewaySecretInputForWizard({
         cfg: baseConfig,
         value: baseConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
       }));
     const token =
-      process.env.OPENCLAW_GATEWAY_TOKEN ??
+      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.token,

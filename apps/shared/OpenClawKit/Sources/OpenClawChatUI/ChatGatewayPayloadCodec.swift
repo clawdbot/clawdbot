@@ -138,6 +138,22 @@ public enum OpenClawChatGatewayPayloadCodec {
                       payload,
                       as: OpenClawSessionMessageEventPayload.self)
             else { return nil }
+            if var canonicalMessage = message.message,
+               canonicalMessage.transcriptMessageID?
+                   .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                   let messageID = message.messageId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !messageID.isEmpty
+            {
+                // Live events carry durable transcript identity on their envelope.
+                // Preserve it on the row so history cannot replay the same message.
+                canonicalMessage.transcriptMessageID = messageID
+                return .sessionMessage(OpenClawSessionMessageEventPayload(
+                    sessionKey: message.sessionKey,
+                    agentId: message.agentId,
+                    message: canonicalMessage,
+                    messageId: message.messageId,
+                    messageSeq: message.messageSeq))
+            }
             return .sessionMessage(message)
         case "agent":
             guard let payload = frame.payload,

@@ -33,6 +33,7 @@ export class BoardAvailabilityController implements ReactiveController {
   private readonly lookupGeneration = new Map<string, number>();
   private lookupSequence = 0;
   private readonly lookedUpSessions = new Set<string>();
+  private readonly knownRevisions = new Map<string, number>();
   private readonly retryDelay = new Map<string, number>();
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private visibleSessionKeys = new Set<string>();
@@ -103,6 +104,7 @@ export class BoardAvailabilityController implements ReactiveController {
       if (!keys.has(previous)) {
         this.lookedUpSessions.delete(previous);
         this.lookupGeneration.delete(previous);
+        this.knownRevisions.delete(previous);
         this.clearRetry(previous);
       }
     }
@@ -153,6 +155,20 @@ export class BoardAvailabilityController implements ReactiveController {
           ? boardProviderCacheKey(payload.sessionKey)
           : undefined;
       if (sessionKey && this.visibleSessionKeys.has(sessionKey)) {
+        const revision =
+          typeof payload?.revision === "number" &&
+          Number.isInteger(payload.revision) &&
+          payload.revision >= 0
+            ? payload.revision
+            : undefined;
+        if (revision !== undefined && this.knownRevisions.get(sessionKey) === revision) {
+          return;
+        }
+        if (revision !== undefined) {
+          // Commit before the read to coalesce duplicate events. Failures keep
+          // their retry timer; session and source resets clear this cache.
+          this.knownRevisions.set(sessionKey, revision);
+        }
         this.clearRetry(sessionKey);
         this.lookup(sessionKey, client);
       }
@@ -167,6 +183,7 @@ export class BoardAvailabilityController implements ReactiveController {
     this.available = false;
     this.lookedUpSessions.clear();
     this.lookupGeneration.clear();
+    this.knownRevisions.clear();
     for (const sessionKey of this.retryTimers.keys()) {
       this.clearRetry(sessionKey);
     }
@@ -187,6 +204,7 @@ export class BoardAvailabilityController implements ReactiveController {
         ) {
           return;
         }
+        this.knownRevisions.set(sessionKey, snapshot.revision);
         if (recordSessionBoardAvailability(sessionKey, boardExists(snapshot))) {
           this.host.requestUpdate();
         }

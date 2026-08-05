@@ -27,6 +27,9 @@ openclaw backup sqlite verify ~/Backups/openclaw-sqlite/<snapshot-id> --scratch 
 openclaw backup sqlite restore ~/Backups/openclaw-sqlite/<snapshot-id> --target ./restored/openclaw.sqlite
 ```
 
+Archive `create` and `verify`, plus SQLite `create`, `list`, `verify`, and
+`restore`, accept `--json` for one machine-readable result on stdout.
+
 ## Notes
 
 - The archive embeds a `manifest.json` with the resolved source paths and archive layout.

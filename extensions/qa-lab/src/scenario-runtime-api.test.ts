@@ -20,8 +20,6 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     randomUUID,
     runScenario: fn,
     waitForOutboundMessage: fn,
-    waitForTransportOutboundMessage: fn,
-    waitForChannelOutboundMessage: fn,
     waitForNoOutbound: fn,
     waitForNoTransportOutbound: fn,
     recentOutboundSummary: fn,
@@ -31,7 +29,6 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     fetchJson: fn,
     waitForGatewayHealthy: fn,
     waitForTransportReady: fn,
-    waitForQaChannelReady: fn,
     browserRequest: fn,
     waitForBrowserReady: fn,
     browserOpenTab: fn,
@@ -190,6 +187,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
+    expect(api.waitForQaChannelReady).toBe(api.waitForTransportReady);
     expect(api.waitForAgentHistoryReply).toBe(deps.waitForAgentHistoryReply);
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);

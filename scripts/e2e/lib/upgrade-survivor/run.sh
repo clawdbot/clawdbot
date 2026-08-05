@@ -690,6 +690,7 @@ install_baseline() {
 }
 
 seed_state() {
+  local account_home=""
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
   if [ "$ROOT_MANAGED_VPS" = "1" ]; then
     if [ "$(id -u)" -ne 0 ]; then
@@ -700,6 +701,18 @@ seed_state() {
     openclaw_test_state_create /root minimal
   else
     openclaw_test_state_create "$STATE_HOME_ROOT" minimal
+  fi
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+    if [ -z "$account_home" ]; then
+      echo "Could not resolve the current account home" >&2
+      return 1
+    fi
+    export HOME="$account_home"
+    export USERPROFILE="$account_home"
+    unset OPENCLAW_HOME
+    export OPENCLAW_STATE_DIR="$account_home/.openclaw"
+    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
@@ -732,13 +745,22 @@ daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
+system_scope=1
+property=""
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"
   case "$arg" in
-    --user | --quiet | --no-page | --now)
+    --user)
+      system_scope=0
+      ;;
+    --quiet | --no-page | --now | --value)
       ;;
     --property)
       i=$((i + 1))
+      property="${!i}"
+      ;;
+    --property=*)
+      property="${arg#--property=}"
       ;;
     *)
       filtered+=("$arg")
@@ -841,6 +863,21 @@ case "$command" in
     exit 3
     ;;
   show)
+    if [ "$system_scope" = "1" ]; then
+      case "$property" in
+        LoadState)
+          printf 'not-found\n'
+          ;;
+        UnitPath)
+          printf '/etc/systemd/system /usr/lib/systemd/system\n'
+          ;;
+        *)
+          echo "systemctl shim unsupported system-scope show: $*" >&2
+          exit 1
+          ;;
+      esac
+      exit 0
+    fi
     if is_running; then
       printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
     else

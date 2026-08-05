@@ -227,7 +227,9 @@ describe("plugins Docker assertions", () => {
 
     expect(script).toContain("run(controller.signal, timeoutPromise)");
     expect(
-      script.match(/readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+timeoutPromise,/gu),
+      script.match(
+        /readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+\{ createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise \},/gu,
+      ),
     ).toHaveLength(2);
   });
 
@@ -773,6 +775,10 @@ ${command}
       ],
       {
         cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.3",
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -785,6 +791,10 @@ ${command}
       const metadata = JSON.parse(response.body);
 
       expect(response.statusCode).toBe(200);
+      expect(metadata["dist-tags"]).toEqual({
+        latest: "0.0.0",
+        beta: "2026.7.1-beta.3",
+      });
       expect(metadata.versions["2026.7.1-beta.3"].dependencies).toEqual({
         "@openclaw/ai": "2026.7.1-beta.3",
         zod: "4.3.6",

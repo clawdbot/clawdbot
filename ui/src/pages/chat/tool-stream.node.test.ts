@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import {
   agentEvent,
   createHost,
@@ -290,6 +291,101 @@ describe("app-tool-stream approval lifecycle", () => {
   });
 });
 
+describe("app-tool-stream throttled projections", () => {
+  it.each(["start", "update"] as const)(
+    "renders a deferred tool %s when its projection flushes",
+    (phase) => {
+      useToolStreamFakeTimers();
+      try {
+        const requestUpdate = vi.fn();
+        const host = createHost({ requestUpdate });
+        const toolCallId = "call-deferred";
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 1, "tool", {
+            phase: "start",
+            name: "read",
+            toolCallId,
+            args: { path: "notes.txt" },
+          }),
+        );
+        if (phase === "update") {
+          vi.advanceTimersByTime(80);
+          requestUpdate.mockClear();
+          handleAgentEvent(
+            host,
+            agentEvent("run-1", 2, "tool", {
+              phase,
+              name: "read",
+              toolCallId,
+              partialResult: "still reading",
+            }),
+          );
+        }
+
+        expect(requestUpdate).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(79);
+        expect(requestUpdate).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+
+        expect(host.chatToolMessages).toHaveLength(1);
+        expect(requestUpdate).toHaveBeenCalledOnce();
+        if (phase === "update") {
+          expect(host.chatToolMessages[0]?.content).toEqual([
+            { type: "toolcall", name: "read", arguments: { path: "notes.txt" } },
+            { type: "toolresult", name: "read", text: "still reading" },
+          ]);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("does not let an older replay replace newer live tool progress", () => {
+    useToolStreamFakeTimers();
+    try {
+      const host = createHost();
+      const toolCallId = "call-sequenced";
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "read",
+          toolCallId,
+          args: { path: "README.md" },
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 3, "tool", {
+          phase: "update",
+          name: "read",
+          toolCallId,
+          partialResult: "newer live progress",
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "tool", {
+          phase: "update",
+          name: "read",
+          toolCallId,
+          partialResult: "older replayed progress",
+        }),
+      );
+      vi.advanceTimersByTime(80);
+
+      expect(host.chatToolMessages[0]?.content).toEqual([
+        { type: "toolcall", name: "read", arguments: { path: "README.md" } },
+        { type: "toolresult", name: "read", text: "newer live progress" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("app-tool-stream result blocks", () => {
   it("emits a result block for completed tools with empty output", () => {
     useToolStreamFakeTimers();
@@ -312,7 +408,9 @@ describe("app-tool-stream result blocks", () => {
       data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
     });
 
-    const entry = host.toolStreamById.get("call-1") as ToolStreamEntry;
+    const entry = host.toolStreamById.get(
+      buildToolStreamIdentity("run-1", "call-1"),
+    ) as ToolStreamEntry;
     expect(entry.resultReceived).toBe(true);
     expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
     expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
@@ -320,5 +418,208 @@ describe("app-tool-stream result blocks", () => {
     // The empty-output result block marks the call as finished so the UI does
     // not keep it in a running state for the rest of the run.
     expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
+  });
+
+  it.each([
+    ["omitted name", undefined],
+    ["empty name", ""],
+    ["blank name", "   "],
+    ["generic placeholder", "tool"],
+    ["conflicting name", "write"],
+  ])("preserves an established tool identity when the result has an %s", (_label, name) => {
+    const host = createHost();
+    const toolCallId = "call-preserve-name";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId,
+        args: { path: "/workspace/report.txt" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "result",
+        ...(name === undefined ? {} : { name }),
+        toolCallId,
+        result: "file contents",
+      }),
+    );
+
+    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId));
+    expect(entry?.name).toBe("read");
+    expect(entry?.message.content).toEqual([
+      { type: "toolcall", name: "read", arguments: { path: "/workspace/report.txt" } },
+      { type: "toolresult", name: "read", text: "file contents" },
+    ]);
+  });
+
+  it.each([undefined, "tool"])(
+    "applies session-status result effects when its known tool name is reported as %j",
+    (name) => {
+      const host = createHost();
+      const toolCallId = "status-preserve-name";
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "session_status",
+          toolCallId,
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "tool", {
+          phase: "result",
+          ...(name === undefined ? {} : { name }),
+          toolCallId,
+          result: {
+            details: {
+              changedModel: true,
+              sessionKey: "main",
+              modelOverride: "openai/gpt-5.6-luna",
+            },
+          },
+        }),
+      );
+
+      expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5.6-luna");
+    },
+  );
+
+  it("upgrades a placeholder start name when a later event supplies the concrete name", () => {
+    const host = createHost();
+    const toolCallId = "call-upgrade-name";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId,
+        args: { path: "/workspace/report.txt" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "result",
+        name: "read",
+        toolCallId,
+        result: "file contents",
+      }),
+    );
+
+    expect(host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId))?.name).toBe(
+      "read",
+    );
+  });
+
+  it("keeps interleaved sibling-run calls and results under independent identities", () => {
+    const host = createHost({ chatRunId: "run-foreground" });
+    const toolCallId = "call-shared";
+    const foregroundIdentity = buildToolStreamIdentity("run-foreground", toolCallId);
+    const backgroundIdentity = buildToolStreamIdentity("run-background", toolCallId);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-foreground", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId,
+        args: { path: "foreground.txt" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-background", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "background command" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-foreground", 2, "tool", {
+        phase: "update",
+        name: "read",
+        toolCallId,
+        partialResult: "foreground partial",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-background", 2, "tool", {
+        phase: "update",
+        name: "exec",
+        toolCallId,
+        partialResult: "background partial",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-background", 3, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId,
+        isError: true,
+        result: "background failed",
+      }),
+    );
+
+    expect(host.toolStreamOrder).toEqual([foregroundIdentity, backgroundIdentity]);
+    expect(host.toolStreamById.get(foregroundIdentity)).toMatchObject({
+      runId: "run-foreground",
+      toolCallId,
+      name: "read",
+      args: { path: "foreground.txt" },
+      output: "foreground partial",
+      message: {
+        runId: "run-foreground",
+        toolCallId,
+        __openclawToolStreamResultReceived: false,
+      },
+    });
+    expect(host.toolStreamById.get(backgroundIdentity)).toMatchObject({
+      runId: "run-background",
+      toolCallId,
+      name: "exec",
+      args: { command: "background command" },
+      output: "background failed",
+      isError: true,
+      resultReceived: true,
+      message: {
+        runId: "run-background",
+        toolCallId,
+        __openclawToolStreamResultReceived: true,
+      },
+    });
+    expect(host.chatToolMessages.map((message) => message.runId)).toEqual([
+      "run-foreground",
+      "run-background",
+    ]);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-foreground", 3, "tool", {
+        phase: "result",
+        name: "read",
+        toolCallId,
+        isError: false,
+        result: "foreground completed",
+      }),
+    );
+
+    expect(host.toolStreamById.get(foregroundIdentity)).toMatchObject({
+      output: "foreground completed",
+      isError: false,
+      resultReceived: true,
+    });
+    expect(host.toolStreamById.get(backgroundIdentity)).toMatchObject({
+      output: "background failed",
+      isError: true,
+      resultReceived: true,
+    });
   });
 });

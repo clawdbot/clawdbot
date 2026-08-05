@@ -1,5 +1,6 @@
 // Gateway RPC handlers for cron job CRUD, run logs, wake, and delivery previews.
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -318,7 +319,8 @@ function assertCronDoesNotTargetAgentHarness(input: {
 }
 
 function resolveCronJobId(params: CronJobIdParams): string | undefined {
-  return params.id ?? params.jobId;
+  // Exact store lookups; clipboard/UI padding must not fake "id not found".
+  return normalizeOptionalString(params.id ?? params.jobId);
 }
 
 function respondInvalidCronParams(respond: RespondFn, method: string, reason: string): void {
@@ -335,7 +337,7 @@ function respondMissingCronJobId(respond: RespondFn, method: string): void {
 
 /** Gateway request handlers for cron jobs and cron run-log access. */
 export const cronHandlers: GatewayRequestHandlers = {
-  wake: ({ params, respond, context, client }) => {
+  wake: async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateWakeParams, "wake", respond)) {
       return;
     }
@@ -412,6 +414,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Gateway becomes request-ready before scheduled services start; load the
+    // wake owner first so an early operator event cannot disappear on cold start.
+    await context.cron.prepareWake?.();
     const result = context.cron.wake({
       mode: p.mode,
       text: p.text,
@@ -436,6 +441,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir?: "asc" | "desc";
       agentId?: string;
       compact?: boolean;
+      includeDeliveryPreviews?: boolean;
     };
     const callerScope = readCronCallerScope(client);
     const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
@@ -466,12 +472,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(true, { ...page, jobs: page.jobs.map(compactCronListJob) }, undefined);
       return;
     }
+    const jobs = page.jobs.map(cronJobReadView);
+    if (p.includeDeliveryPreviews === false) {
+      // Full job rows are the default because editors need their payloads. Delivery
+      // previews are independently suppressible so list-only callers avoid per-job I/O
+      // without weakening the shipped full-response default.
+      respond(true, { ...page, jobs }, undefined);
+      return;
+    }
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),
       jobs: page.jobs,
     });
-    respond(true, { ...page, jobs: page.jobs.map(cronJobReadView), deliveryPreviews }, undefined);
+    respond(true, { ...page, jobs, deliveryPreviews }, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateCronStatusParams, "cron.status", respond)) {
@@ -503,6 +517,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
+        // Wire contract: shipped CLI matchers parse this exact wording for the
+        // name-lookup fallback (isMissingCronGetError). Rename is CLI-display only.
         errorShape(ErrorCodes.INVALID_REQUEST, `cron job not found: ${jobId}`),
       );
       return;
@@ -783,7 +799,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
-    const jobId = p.id ?? p.jobId;
+    const jobId = resolveCronJobId(p);
     if (!jobId) {
       respond(
         false,
@@ -1026,8 +1042,9 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as CronRunsRequestParams;
     const callerScope = readCronCallerScope(client);
     const explicitScope = p.scope;
+    const hasJobSelector = p.id !== undefined || p.jobId !== undefined;
     const jobId = resolveCronJobId(p);
-    const scope: "job" | "all" = explicitScope ?? (jobId ? "job" : "all");
+    const scope: "job" | "all" = explicitScope ?? (hasJobSelector ? "job" : "all");
     if (scope === "job" && !jobId) {
       respondMissingCronJobId(respond, "cron.runs");
       return;
@@ -1057,21 +1074,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const jobs = filterCronRunLogJobsByAgent(
-        await context.cron.list({ includeDisabled: true }),
-        p.agentId,
-        context.cron.getDefaultAgentId(),
-      );
-      const matchedJob = jobs.find(
-        (job) =>
-          job.id === jobId &&
-          cronJobMatchesCallerScope({
-            job,
-            callerScope,
-            defaultAgentId: context.cron.getDefaultAgentId(),
-            allowCurrentJob: true,
-          }),
-      );
+      const job = await context.cron.readJob(jobId as string);
+      const defaultAgentId = context.cron.getDefaultAgentId();
+      const matchedJob =
+        job &&
+        filterCronRunLogJobsByAgent([job], p.agentId, defaultAgentId).length > 0 &&
+        cronJobMatchesCallerScope({
+          job,
+          callerScope,
+          defaultAgentId,
+          allowCurrentJob: true,
+        })
+          ? job
+          : undefined;
+      // Operator history survives job deletion; scoped reads still need a live, matching owner.
       if ((callerScope || p.agentId) && !matchedJob) {
         respondInvalidCronParams(respond, "cron.runs", "id not found");
         return;

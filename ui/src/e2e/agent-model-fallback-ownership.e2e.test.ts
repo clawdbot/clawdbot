@@ -67,11 +67,13 @@ describeControlUiE2e("Control UI agent model fallback ownership", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const writer = { id: "writer", ...(model === undefined ? {} : { model }) };
     const config = {
       agents: {
         defaults: { model: { primary: primaryModel, fallbacks: [inheritedFallback] } },
-        list: [{ id: "main" }, writer],
+        entries: {
+          main: { default: true },
+          writer: model === undefined ? {} : { model },
+        },
       },
     };
     const gateway = await installMockGateway(page, {
@@ -97,12 +99,13 @@ describeControlUiE2e("Control UI agent model fallback ownership", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/agents?agent=writer`);
+      const response = await page.goto(`${server.baseUrl}settings/agents/main/tools`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("agents.list");
       await gateway.waitForRequest("config.get");
       const agentPicker = page.locator("openclaw-agents-page openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
+      // Switching agents is the user action under test; the Tools panel must survive it.
       await agentPicker
         .locator("wa-dropdown-item[data-agent-option]")
         .filter({ hasText: "Writer" })
@@ -112,7 +115,11 @@ describeControlUiE2e("Control UI agent model fallback ownership", () => {
           agentPicker.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
         )
         .toBe("writer");
-      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/writer/tools");
+      await page.getByRole("tab", { name: "Overview", exact: true }).click();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe("/settings/agents/writer/overview");
 
       const fallbackInput = page.locator(".agent-chip-input");
       await fallbackInput.waitFor({ timeout: 10_000 });

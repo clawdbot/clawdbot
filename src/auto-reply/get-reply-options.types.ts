@@ -79,7 +79,13 @@ export type TurnAdoptionLifecycle = {
 };
 
 /** Partial assistant payload emitted during streaming or replacement updates. */
-export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
+export type PartialReplyPayload = {
+  /**
+   * Sanitized text, which may be an enumerable memoized getter. Content materializes on first
+   * read: direct-delivery consumers pay per partial, while throttled consumers pay per flush.
+   */
+  text?: ReplyPayload["text"];
+  mediaUrls?: ReplyPayload["mediaUrls"];
   delta?: string;
   replace?: true;
 };
@@ -209,6 +215,7 @@ export type GetReplyOptions = {
     meta?: string;
     approvalId?: string;
     approvalSlug?: string;
+    suppressDurableProgress?: true;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.
@@ -309,6 +316,8 @@ export type GetReplyOptions = {
   queuedDeliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Called after a queued followup owns the reply lane, before its model run starts. */
   onQueuedFollowupAdmitted?: () => Promise<void> | void;
+  /** Called after an admitted queued followup finishes, including failed attempts. */
+  onQueuedFollowupSettled?: () => Promise<void> | void;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   /** Called when a suppressed source reply mode observes visible delivery through another path. */

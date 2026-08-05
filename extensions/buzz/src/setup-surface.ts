@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
+  patchTopLevelChannelConfigSection,
   runSingleChannelSecretStep,
   type ChannelSetupWizardAdapter,
   type SecretInput,
@@ -27,16 +28,7 @@ type BuzzSetupDependencies = {
 };
 
 function patchBuzzConfig(cfg: OpenClawConfig, patch: Record<string, unknown>): OpenClawConfig {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      buzz: {
-        ...cfg.channels?.buzz,
-        ...patch,
-      },
-    },
-  } as OpenClawConfig;
+  return patchTopLevelChannelConfigSection({ cfg, channel, patch });
 }
 
 function validateRelayUrl(value: string): string | undefined {

@@ -6,6 +6,7 @@ import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const APP_ROOT = "/app";
 
@@ -353,9 +354,15 @@ function createInstalledPackageDir(params: {
   version: string;
   peerDependencies?: Record<string, string>;
   runnable?: boolean;
+  installPath?: string;
 }): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
-  tempDirs.push(dir);
+  const dir =
+    params.installPath ?? fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
+  if (params.installPath) {
+    fs.mkdirSync(dir, { recursive: true });
+  } else {
+    tempDirs.push(dir);
+  }
   fs.writeFileSync(
     path.join(dir, "package.json"),
     JSON.stringify(
@@ -376,8 +383,8 @@ function createInstalledPackageDir(params: {
 }
 
 function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packageName: string }>) {
-  const peerTarget = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-peer-target-"));
-  tempDirs.push(peerTarget);
+  const stateDir = makeTrackedTempDir("openclaw-plugin-update-owner", tempDirs);
+  const peerTarget = fs.realpathSync(process.cwd());
   const installPaths = Object.fromEntries(
     plugins.map(({ pluginId, packageName }) => [
       pluginId,
@@ -385,6 +392,7 @@ function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packa
         name: packageName,
         version: "2026.5.4",
         peerDependencies: { openclaw: ">=2026.5.4" },
+        installPath: path.join(stateDir, "extensions", pluginId),
       }),
     ]),
   );
@@ -398,7 +406,36 @@ function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packa
     fs.mkdirSync(path.dirname(peerLinkPath(pluginId)), { recursive: true });
     fs.symlinkSync(peerTarget, peerLinkPath(pluginId), "junction");
   };
-  return { installPaths, peerLinkPath, linkPeer };
+  return { stateDir, installPaths, peerLinkPath, linkPeer };
+}
+
+function createPeerLinkInstallConfig(params: {
+  plugins: Array<{ pluginId: string; packageName: string }>;
+  installPaths: Record<string, string>;
+  extraInstalls?: Record<string, PluginInstallRecord>;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        ...params.extraInstalls,
+        ...Object.fromEntries(
+          params.plugins.map(({ pluginId, packageName }) => [
+            pluginId,
+            {
+              source: "npm",
+              spec: packageName,
+              installPath: params.installPaths[pluginId],
+              resolvedName: packageName,
+              resolvedVersion: "2026.5.4",
+              resolvedSpec: `${packageName}@2026.5.4`,
+              integrity: "sha512-same",
+              shasum: "same",
+            },
+          ]),
+        ),
+      },
+    },
+  };
 }
 
 function mockNpmViewMetadata(params: {
@@ -704,35 +741,15 @@ describe("updateNpmInstalledPlugins", () => {
       .mockImplementation(
         async (_artifact: unknown, operation: () => Promise<unknown>) => await operation(),
       );
-    const installPath = createInstalledPackageDir({
-      name: "@martian-engineering/lossless-claw",
-      version: "0.9.0",
+    const { config } = createNpmUpdateFixture({
+      pluginId: "lossless-claw",
+      packageName: "@martian-engineering/lossless-claw",
+      installedVersion: "0.9.0",
+      registryVersion: "0.10.0",
+      registryIntegrity: "sha512-next",
+      installerVersion: "0.10.0",
     });
-    mockNpmViewMetadata({
-      name: "@martian-engineering/lossless-claw",
-      version: "0.10.0",
-      integrity: "sha512-next",
-    });
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createSuccessfulNpmUpdateResult({
-        pluginId: "lossless-claw",
-        targetDir: installPath,
-        version: "0.10.0",
-      }),
-    );
-
-    await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "lossless-claw",
-        spec: "@martian-engineering/lossless-claw",
-        installPath,
-        resolvedName: "@martian-engineering/lossless-claw",
-        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
-        resolvedVersion: "0.9.0",
-      }),
-      pluginIds: ["lossless-claw"],
-      timeoutMs: 1_800_000,
-    });
+    await updatePlugin(config, "lossless-claw", { timeoutMs: 1_800_000 });
 
     timeoutBudgetCase = {
       installCall: npmInstallCall(),
@@ -749,6 +766,104 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
     validatePackageExtensionEntriesForInstallMock.mockReset();
+  });
+
+  it("moves only the replaced npm plugin's exact explicit load path", async () => {
+    const previousInstallPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.0.0",
+    });
+    const nextInstallPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "2.0.0",
+    });
+    const adjacentInstallPath = createInstalledPackageDir({
+      name: "@acme/adjacent",
+      version: "1.0.0",
+    });
+    const customPath = path.join(previousInstallPath, "custom-child");
+    mockNpmViewMetadata({ name: "@acme/demo", version: "2.0.0" });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "demo",
+        targetDir: nextInstallPath,
+        version: "2.0.0",
+        npmResolution: {
+          name: "@acme/demo",
+          version: "2.0.0",
+          resolvedSpec: "@acme/demo@2.0.0",
+        },
+      }),
+    );
+    const adjacentRecord = {
+      source: "npm" as const,
+      spec: "@acme/adjacent@1.0.0",
+      installPath: adjacentInstallPath,
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          load: {
+            paths: [customPath, previousInstallPath, adjacentInstallPath],
+          },
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@acme/demo@1.0.0",
+              installPath: previousInstallPath,
+              resolvedName: "@acme/demo",
+              resolvedSpec: "@acme/demo@1.0.0",
+              resolvedVersion: "1.0.0",
+            },
+            adjacent: adjacentRecord,
+          },
+        },
+      },
+      pluginIds: ["demo"],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.load?.paths).toEqual([
+      customPath,
+      nextInstallPath,
+      adjacentInstallPath,
+    ]);
+    expect(result.config.plugins?.installs?.adjacent).toEqual(adjacentRecord);
+  });
+
+  it("preserves explicit load paths when the npm replacement fails", async () => {
+    const previousInstallPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.0.0",
+    });
+    const customPath = "/tmp/custom-demo";
+    mockNpmViewMetadata({ name: "@acme/demo", version: "2.0.0" });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "npm install failed",
+    });
+    const config = {
+      plugins: {
+        load: { paths: [previousInstallPath, customPath] },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo@1.0.0",
+            installPath: previousInstallPath,
+            resolvedName: "@acme/demo",
+            resolvedSpec: "@acme/demo@1.0.0",
+            resolvedVersion: "1.0.0",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({ config, pluginIds: ["demo"] });
+
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.config.plugins?.load?.paths).toEqual([previousInstallPath, customPath]);
   });
 
   afterEach(() => {
@@ -1224,33 +1339,24 @@ describe("updateNpmInstalledPlugins", () => {
   ])(
     "reports newer $name releases for exact-pinned installed records instead of claiming up to date",
     async ({ updateChannel, registrySpec, registryVersion, overrideSpec }) => {
-      const installPath = createInstalledPackageDir({
-        name: "@acme/demo",
-        version: "1.2.3",
-      });
-      mockNpmViewMetadata({
-        name: "@acme/demo",
-        version: "1.2.3",
+      const { config } = createNpmUpdateFixture({
+        pluginId: "demo",
+        packageName: "@acme/demo",
+        installedVersion: "1.2.3",
+        registryVersion: "1.2.3",
+        registryIntegrity: "sha512-same",
+        registryShasum: "same",
+        spec: "@acme/demo@1.2.3",
         integrity: "sha512-same",
         shasum: "same",
+        installedAt: "2026-07-01T00:00:00.000Z",
+        resolvedAt: "2026-07-01T00:00:01.000Z",
       });
       mockNpmViewMetadata({
         name: "@acme/demo",
         version: registryVersion,
       });
       installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
-      const config = createNpmInstallConfig({
-        pluginId: "demo",
-        spec: "@acme/demo@1.2.3",
-        installPath,
-        resolvedName: "@acme/demo",
-        resolvedSpec: "@acme/demo@1.2.3",
-        resolvedVersion: "1.2.3",
-        integrity: "sha512-same",
-        shasum: "same",
-        installedAt: "2026-07-01T00:00:00.000Z",
-        resolvedAt: "2026-07-01T00:00:01.000Z",
-      });
 
       const result = await updatePlugin(config, "demo", updateChannel ? { updateChannel } : {});
 
@@ -1285,13 +1391,14 @@ describe("updateNpmInstalledPlugins", () => {
   );
 
   it("reports a newer latest release when the beta line for an exact pin is unavailable", async () => {
-    const installPath = createInstalledPackageDir({
-      name: "@acme/demo",
-      version: "1.2.3",
-    });
-    mockNpmViewMetadata({
-      name: "@acme/demo",
-      version: "1.2.3",
+    const { config } = createNpmUpdateFixture({
+      pluginId: "demo",
+      packageName: "@acme/demo",
+      installedVersion: "1.2.3",
+      registryVersion: "1.2.3",
+      registryIntegrity: "sha512-same",
+      registryShasum: "same",
+      spec: "@acme/demo@1.2.3",
       integrity: "sha512-same",
       shasum: "same",
     });
@@ -1306,20 +1413,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
 
-    const result = await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "demo",
-        spec: "@acme/demo@1.2.3",
-        installPath,
-        resolvedName: "@acme/demo",
-        resolvedSpec: "@acme/demo@1.2.3",
-        resolvedVersion: "1.2.3",
-        integrity: "sha512-same",
-        shasum: "same",
-      }),
-      pluginIds: ["demo"],
-      updateChannel: "beta",
-    });
+    const result = await updatePlugin(config, "demo", { updateChannel: "beta" });
 
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(3);
@@ -1466,7 +1560,12 @@ describe("updateNpmInstalledPlugins", () => {
       version: "2026.5.3",
       peerDependencies: { openclaw: ">=2026.5.3" },
     });
-    fs.mkdirSync(path.join(installPath, "node_modules", "openclaw"), { recursive: true });
+    fs.mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+    fs.symlinkSync(
+      fs.realpathSync(process.cwd()),
+      path.join(installPath, "node_modules", "openclaw"),
+      "junction",
+    );
     mockNpmViewMetadata({
       name: "@openclaw/codex",
       version: "2026.5.3",
@@ -1508,17 +1607,86 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it.each(["peerDependencies", "dependencies"] as const)(
+    "repairs every copied stale %s host for unchanged npm plugins without reinstalling them",
+    async (dependencyField) => {
+      const stateDir = makeTrackedTempDir("openclaw-plugin-update-legacy", tempDirs);
+      const plugins = ["email", "calendar"].map((pluginId) => {
+        const packageName = `@clawemail/${pluginId}`;
+        const installPath = path.join(stateDir, "extensions", pluginId);
+        const staleHostDir = path.join(installPath, "node_modules", "openclaw");
+        fs.mkdirSync(staleHostDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(installPath, "package.json"),
+          JSON.stringify({
+            name: packageName,
+            version: "2026.7.1",
+            [dependencyField]: { openclaw: ">=2026.7.1" },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(staleHostDir, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+        );
+        mockNpmViewMetadata({
+          name: packageName,
+          version: "2026.7.1",
+          integrity: "sha512-same",
+          shasum: "same",
+        });
+        return { pluginId, packageName, installPath, staleHostDir };
+      });
+      installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+      const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () =>
+        updateNpmInstalledPlugins({
+          config: {
+            plugins: {
+              installs: Object.fromEntries(
+                plugins.map(({ pluginId, packageName, installPath }) => [
+                  pluginId,
+                  {
+                    source: "npm" as const,
+                    spec: packageName,
+                    installPath,
+                    resolvedName: packageName,
+                    resolvedVersion: "2026.7.1",
+                    resolvedSpec: `${packageName}@2026.7.1`,
+                    integrity: "sha512-same",
+                    shasum: "same",
+                  },
+                ]),
+              ),
+            },
+          },
+          pluginIds: plugins.map(({ pluginId }) => pluginId),
+        }),
+      );
+
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      for (const { staleHostDir } of plugins) {
+        expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
+      }
+      expect(result.changed).toBe(true);
+      expect(result.outcomes.map(({ pluginId, status }) => ({ pluginId, status }))).toEqual(
+        plugins.map(({ pluginId }) => ({ pluginId, status: "unchanged" })),
+      );
+    },
+  );
+
   it("repairs openclaw peer links after batch npm updates prune earlier plugin links", async () => {
     const plugins = [
       { pluginId: "brave", packageName: "@openclaw/brave-plugin" },
       { pluginId: "codex", packageName: "@openclaw/codex" },
       { pluginId: "discord", packageName: "@openclaw/discord" },
     ];
-    const { installPaths, peerLinkPath, linkPeer } = createOpenClawPeerLinkFixtures(plugins);
+    const { stateDir, installPaths, peerLinkPath, linkPeer } =
+      createOpenClawPeerLinkFixtures(plugins);
     for (const { packageName } of plugins) {
       mockNpmViewMetadata({
         name: packageName,
-        version: "2026.5.4",
+        version: "2026.5.5",
         integrity: "sha512-same",
         shasum: "same",
       });
@@ -1535,39 +1703,23 @@ describe("updateNpmInstalledPlugins", () => {
           createSuccessfulNpmUpdateResult({
             pluginId,
             targetDir: installPaths[pluginId],
-            version: "2026.5.4",
+            version: "2026.5.5",
             npmResolution: {
               name: packageName,
-              version: "2026.5.4",
-              resolvedSpec: `${packageName}@2026.5.4`,
+              version: "2026.5.5",
+              resolvedSpec: `${packageName}@2026.5.5`,
             },
           }),
         );
       },
     );
 
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: Object.fromEntries(
-            plugins.map(({ pluginId, packageName }) => [
-              pluginId,
-              {
-                source: "npm",
-                spec: packageName,
-                installPath: installPaths[pluginId],
-                resolvedName: packageName,
-                resolvedVersion: "2026.5.4",
-                resolvedSpec: `${packageName}@2026.5.4`,
-                integrity: "sha512-same",
-                shasum: "same",
-              },
-            ]),
-          ),
-        },
-      },
-      pluginIds: plugins.map((plugin) => plugin.pluginId),
-    });
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () =>
+      updateNpmInstalledPlugins({
+        config: createPeerLinkInstallConfig({ plugins, installPaths }),
+        pluginIds: plugins.map((plugin) => plugin.pluginId),
+      }),
+    );
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(3);
     for (const { pluginId } of plugins) {
@@ -1576,10 +1728,10 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.outcomes).toEqual(
       plugins.map(({ pluginId }) => ({
         pluginId,
-        status: "unchanged",
+        status: "updated",
         currentVersion: "2026.5.4",
-        nextVersion: "2026.5.4",
-        message: `${pluginId} already at 2026.5.4.`,
+        nextVersion: "2026.5.5",
+        message: `Updated ${pluginId}: 2026.5.4 -> 2026.5.5.`,
       })),
     );
   });
@@ -1590,12 +1742,13 @@ describe("updateNpmInstalledPlugins", () => {
       { pluginId: "codex", packageName: "@openclaw/codex" },
       { pluginId: "discord", packageName: "@openclaw/discord" },
     ];
-    const { installPaths, peerLinkPath, linkPeer } = createOpenClawPeerLinkFixtures(plugins);
+    const { stateDir, installPaths, peerLinkPath, linkPeer } =
+      createOpenClawPeerLinkFixtures(plugins);
     linkPeer("brave");
     linkPeer("discord");
     mockNpmViewMetadata({
       name: "@openclaw/codex",
-      version: "2026.5.4",
+      version: "2026.5.5",
       integrity: "sha512-same",
       shasum: "same",
     });
@@ -1608,38 +1761,22 @@ describe("updateNpmInstalledPlugins", () => {
         createSuccessfulNpmUpdateResult({
           pluginId: "codex",
           targetDir: installPaths.codex,
-          version: "2026.5.4",
+          version: "2026.5.5",
           npmResolution: {
             name: "@openclaw/codex",
-            version: "2026.5.4",
-            resolvedSpec: "@openclaw/codex@2026.5.4",
+            version: "2026.5.5",
+            resolvedSpec: "@openclaw/codex@2026.5.5",
           },
         }),
       );
     });
 
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: Object.fromEntries(
-            plugins.map(({ pluginId, packageName }) => [
-              pluginId,
-              {
-                source: "npm",
-                spec: packageName,
-                installPath: installPaths[pluginId],
-                resolvedName: packageName,
-                resolvedVersion: "2026.5.4",
-                resolvedSpec: `${packageName}@2026.5.4`,
-                integrity: "sha512-same",
-                shasum: "same",
-              },
-            ]),
-          ),
-        },
-      },
-      pluginIds: ["codex"],
-    });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () =>
+      updateNpmInstalledPlugins({
+        config: createPeerLinkInstallConfig({ plugins, installPaths }),
+        pluginIds: ["codex"],
+      }),
+    );
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     for (const { pluginId } of plugins) {
@@ -1647,22 +1784,134 @@ describe("updateNpmInstalledPlugins", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "never repairs external, developer-owned, or aliased host packages after an npm update",
+    async () => {
+      const plugins = [
+        { pluginId: "sibling", packageName: "@acme/sibling" },
+        { pluginId: "updated", packageName: "@acme/updated" },
+      ];
+      const { stateDir, installPaths, peerLinkPath, linkPeer } =
+        createOpenClawPeerLinkFixtures(plugins);
+      linkPeer("sibling");
+
+      const outsideInstallPath = createInstalledPackageDir({
+        name: "@acme/outside",
+        version: "2026.5.4",
+        peerDependencies: { openclaw: ">=2026.5.4" },
+      });
+      const developerInstallPath = createInstalledPackageDir({
+        name: "@acme/developer",
+        version: "2026.5.4",
+        peerDependencies: { openclaw: ">=2026.5.4" },
+        installPath: path.join(stateDir, "extensions", "developer"),
+      });
+      const marketplaceInstallPath = createInstalledPackageDir({
+        name: "@acme/marketplace",
+        version: "2026.5.4",
+        peerDependencies: { openclaw: ">=2026.5.4" },
+        installPath: path.join(stateDir, "extensions", "marketplace"),
+      });
+      const clawhubInstallPath = createInstalledPackageDir({
+        name: "@acme/clawhub",
+        version: "2026.5.4",
+        peerDependencies: { openclaw: ">=2026.5.4" },
+        installPath: path.join(stateDir, "extensions", "clawhub"),
+      });
+      const copiedHosts = [
+        outsideInstallPath,
+        developerInstallPath,
+        marketplaceInstallPath,
+        clawhubInstallPath,
+      ].map((installPath) => {
+        const copiedHostDir = path.join(installPath, "node_modules", "openclaw");
+        fs.mkdirSync(copiedHostDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(copiedHostDir, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.4.1" }),
+        );
+        return copiedHostDir;
+      });
+      const outsideAliasPath = path.join(stateDir, "extensions", "outside-alias");
+      const developerAliasPath = path.join(stateDir, "extensions", "developer-alias");
+      fs.symlinkSync(outsideInstallPath, outsideAliasPath, "dir");
+      fs.symlinkSync(developerInstallPath, developerAliasPath, "dir");
+
+      mockNpmViewMetadata({
+        name: "@acme/updated",
+        version: "2026.5.5",
+        integrity: "sha512-same",
+        shasum: "same",
+      });
+      installPluginFromNpmSpecMock.mockImplementation(() => {
+        fs.rmSync(peerLinkPath("sibling"), { recursive: true, force: true });
+        fs.rmSync(peerLinkPath("updated"), { recursive: true, force: true });
+        linkPeer("updated");
+        return Promise.resolve(
+          createSuccessfulNpmUpdateResult({
+            pluginId: "updated",
+            targetDir: installPaths.updated,
+            version: "2026.5.5",
+            npmResolution: {
+              name: "@acme/updated",
+              version: "2026.5.5",
+              resolvedSpec: "@acme/updated@2026.5.5",
+            },
+          }),
+        );
+      });
+
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () =>
+        updateNpmInstalledPlugins({
+          config: createPeerLinkInstallConfig({
+            plugins,
+            installPaths,
+            extraInstalls: {
+              outside: { source: "npm", installPath: outsideInstallPath },
+              "outside-alias": { source: "npm", installPath: outsideAliasPath },
+              developer: { source: "path", installPath: developerInstallPath },
+              "developer-alias": { source: "npm", installPath: developerAliasPath },
+              marketplace: { source: "marketplace", installPath: marketplaceInstallPath },
+              clawhub: { source: "clawhub", installPath: clawhubInstallPath },
+            },
+          }),
+          pluginIds: ["updated"],
+        }),
+      );
+
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+      expect(fs.lstatSync(peerLinkPath("sibling")).isSymbolicLink()).toBe(true);
+      expect(fs.lstatSync(peerLinkPath("updated")).isSymbolicLink()).toBe(true);
+      for (const copiedHostDir of copiedHosts) {
+        expect(fs.lstatSync(copiedHostDir).isDirectory()).toBe(true);
+        expect(
+          JSON.parse(fs.readFileSync(path.join(copiedHostDir, "package.json"), "utf8")),
+        ).toEqual({ name: "openclaw", version: "2026.4.1" });
+      }
+    },
+  );
+
   it("continues repairing sibling openclaw peer links after one recorded npm install cannot be relinked", async () => {
     const plugins = [
       { pluginId: "brave", packageName: "@openclaw/brave-plugin" },
       { pluginId: "codex", packageName: "@openclaw/codex" },
     ];
-    const { installPaths, peerLinkPath, linkPeer } = createOpenClawPeerLinkFixtures(plugins);
+    const { stateDir, installPaths, peerLinkPath, linkPeer } =
+      createOpenClawPeerLinkFixtures(plugins);
+    const malformedInstallPath = path.join(stateDir, "extensions", "aardvark");
+    fs.mkdirSync(malformedInstallPath, { recursive: true });
+    fs.writeFileSync(path.join(malformedInstallPath, "package.json"), "{ malformed");
     const brokenInstallPath = createInstalledPackageDir({
       name: "@openclaw/broken-plugin",
       version: "2026.5.4",
       peerDependencies: { openclaw: ">=2026.5.4" },
+      installPath: path.join(stateDir, "extensions", "broken"),
     });
     fs.writeFileSync(path.join(brokenInstallPath, "node_modules"), "not a directory");
     linkPeer("brave");
     mockNpmViewMetadata({
       name: "@openclaw/codex",
-      version: "2026.5.4",
+      version: "2026.5.5",
       integrity: "sha512-same",
       shasum: "same",
     });
@@ -1675,21 +1924,24 @@ describe("updateNpmInstalledPlugins", () => {
         createSuccessfulNpmUpdateResult({
           pluginId: "codex",
           targetDir: installPaths.codex,
-          version: "2026.5.4",
+          version: "2026.5.5",
           npmResolution: {
             name: "@openclaw/codex",
-            version: "2026.5.4",
-            resolvedSpec: "@openclaw/codex@2026.5.4",
+            version: "2026.5.5",
+            resolvedSpec: "@openclaw/codex@2026.5.5",
           },
         }),
       );
     });
     const warnMessages: string[] = [];
 
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () =>
+      updateNpmInstalledPlugins({
+        config: createPeerLinkInstallConfig({
+          plugins,
+          installPaths,
+          extraInstalls: {
+            aardvark: { source: "npm", installPath: malformedInstallPath },
             broken: {
               source: "npm",
               spec: "@openclaw/broken-plugin",
@@ -1698,33 +1950,21 @@ describe("updateNpmInstalledPlugins", () => {
               resolvedVersion: "2026.5.4",
               resolvedSpec: "@openclaw/broken-plugin@2026.5.4",
             },
-            ...Object.fromEntries(
-              plugins.map(({ pluginId, packageName }) => [
-                pluginId,
-                {
-                  source: "npm",
-                  spec: packageName,
-                  installPath: installPaths[pluginId],
-                  resolvedName: packageName,
-                  resolvedVersion: "2026.5.4",
-                  resolvedSpec: `${packageName}@2026.5.4`,
-                  integrity: "sha512-same",
-                  shasum: "same",
-                },
-              ]),
-            ),
           },
-        },
-      },
-      pluginIds: ["codex"],
-      logger: { warn: (message) => warnMessages.push(message) },
-    });
+        }),
+        pluginIds: ["codex"],
+        logger: { warn: (message) => warnMessages.push(message) },
+      }),
+    );
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(peerLinkPath("brave"))).toBe(true);
     expect(fs.existsSync(peerLinkPath("codex"))).toBe(true);
     expect(warnMessages).toEqual([
-      `Could not repair openclaw peer link for "broken" at ${brokenInstallPath}: Skipping openclaw peerDependency link because ${path.join(brokenInstallPath, "node_modules")} is not a real directory.`,
+      expect.stringContaining(
+        `Could not repair openclaw peer link at ${malformedInstallPath}: SyntaxError:`,
+      ),
+      `Skipping openclaw peerDependency link because ${path.join(brokenInstallPath, "node_modules")} is not a real directory.`,
     ]);
   });
 
@@ -1822,46 +2062,17 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it("falls through to npm reinstall when the recorded integrity differs", async () => {
-    const installPath = createInstalledPackageDir({
-      name: "@martian-engineering/lossless-claw",
-      version: "0.9.0",
+    const { config } = createNpmUpdateFixture({
+      pluginId: "lossless-claw",
+      packageName: "@martian-engineering/lossless-claw",
+      installedVersion: "0.9.0",
+      registryVersion: "0.9.0",
+      registryIntegrity: "sha512-new",
+      integrity: "sha512-old",
+      installerVersion: "0.9.0",
+      installerResolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
     });
-    mockNpmViewMetadata({
-      name: "@martian-engineering/lossless-claw",
-      version: "0.9.0",
-      integrity: "sha512-new",
-    });
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createSuccessfulNpmUpdateResult({
-        pluginId: "lossless-claw",
-        targetDir: installPath,
-        version: "0.9.0",
-        npmResolution: {
-          name: "@martian-engineering/lossless-claw",
-          version: "0.9.0",
-          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
-        },
-      }),
-    );
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "lossless-claw": {
-              source: "npm",
-              spec: "@martian-engineering/lossless-claw",
-              installPath,
-              resolvedName: "@martian-engineering/lossless-claw",
-              resolvedVersion: "0.9.0",
-              resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
-              integrity: "sha512-old",
-            },
-          },
-        },
-      },
-      pluginIds: ["lossless-claw"],
-    });
+    const result = await updatePlugin(config, "lossless-claw");
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
@@ -3068,40 +3279,16 @@ describe("updateNpmInstalledPlugins", () => {
   );
 
   it("preserves explicit official npm tag overrides during manual updates", async () => {
-    const installPath = createInstalledPackageDir({
-      name: "@openclaw/acpx",
-      version: "2026.5.2",
+    const { config } = createNpmUpdateFixture({
+      pluginId: "acpx",
+      packageName: "@openclaw/acpx",
+      installedVersion: "2026.5.2",
+      registryVersion: "2026.5.3-beta.1",
+      installerVersion: "2026.5.3-beta.1",
+      installerResolvedSpec: "@openclaw/acpx@2026.5.3-beta.1",
     });
-    mockNpmViewMetadata({
-      name: "@openclaw/acpx",
-      version: "2026.5.3-beta.1",
-    });
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createSuccessfulNpmUpdateResult({
-        pluginId: "acpx",
-        targetDir: installPath,
-        version: "2026.5.3-beta.1",
-        npmResolution: {
-          name: "@openclaw/acpx",
-          version: "2026.5.3-beta.1",
-          resolvedSpec: "@openclaw/acpx@2026.5.3-beta.1",
-        },
-      }),
-    );
-
-    const result = await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "acpx",
-        spec: "@openclaw/acpx",
-        installPath,
-        resolvedName: "@openclaw/acpx",
-        resolvedSpec: "@openclaw/acpx@2026.5.2",
-        resolvedVersion: "2026.5.2",
-      }),
-      pluginIds: ["acpx"],
-      specOverrides: {
-        acpx: "@openclaw/acpx@beta",
-      },
+    const result = await updatePlugin(config, "acpx", {
+      specOverrides: { acpx: "@openclaw/acpx@beta" },
     });
 
     expectNpmUpdateCall({
@@ -3150,37 +3337,15 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it("targets the exact core version for official extended-stable updates and preserves intent", async () => {
-    const installPath = createInstalledPackageDir({
-      name: "@openclaw/acpx",
-      version: "2026.7.21",
+    const { config } = createNpmUpdateFixture({
+      pluginId: "acpx",
+      packageName: "@openclaw/acpx",
+      installedVersion: "2026.7.21",
+      registryVersion: "2026.7.33",
+      installerVersion: "2026.7.33",
+      installerResolvedSpec: "@openclaw/acpx@2026.7.33",
     });
-    mockNpmViewMetadata({
-      name: "@openclaw/acpx",
-      version: "2026.7.33",
-    });
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createSuccessfulNpmUpdateResult({
-        pluginId: "acpx",
-        targetDir: installPath,
-        version: "2026.7.33",
-        npmResolution: {
-          name: "@openclaw/acpx",
-          version: "2026.7.33",
-          resolvedSpec: "@openclaw/acpx@2026.7.33",
-        },
-      }),
-    );
-
-    const result = await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "acpx",
-        spec: "@openclaw/acpx",
-        installPath,
-        resolvedName: "@openclaw/acpx",
-        resolvedSpec: "@openclaw/acpx@2026.7.21",
-        resolvedVersion: "2026.7.21",
-      }),
-      pluginIds: ["acpx"],
+    const result = await updatePlugin(config, "acpx", {
       syncOfficialPluginInstalls: true,
       officialPluginUpdateChannel: "extended-stable",
       coreVersion: "2026.7.33",
@@ -3198,28 +3363,14 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it("preserves an explicit official pin during extended-stable updates", async () => {
-    const installPath = createInstalledPackageDir({
-      name: "@openclaw/acpx",
-      version: "2026.6.33",
+    const { config } = createNpmUpdateFixture({
+      pluginId: "acpx",
+      packageName: "@openclaw/acpx",
+      installedVersion: "2026.6.33",
+      spec: "@openclaw/acpx@2026.6.33",
+      installerVersion: "2026.6.33",
     });
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createSuccessfulNpmUpdateResult({
-        pluginId: "acpx",
-        targetDir: installPath,
-        version: "2026.6.33",
-      }),
-    );
-
-    await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "acpx",
-        spec: "@openclaw/acpx@2026.6.33",
-        installPath,
-        resolvedName: "@openclaw/acpx",
-        resolvedSpec: "@openclaw/acpx@2026.6.33",
-        resolvedVersion: "2026.6.33",
-      }),
-      pluginIds: ["acpx"],
+    await updatePlugin(config, "acpx", {
       syncOfficialPluginInstalls: true,
       officialPluginUpdateChannel: "extended-stable",
       coreVersion: "2026.7.33",
@@ -3233,37 +3384,16 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it("lets an explicit bare official spec opt a legacy pin into exact-core tracking", async () => {
-    const installPath = createInstalledPackageDir({
-      name: "@openclaw/acpx",
-      version: "2026.6.21",
+    const { config } = createNpmUpdateFixture({
+      pluginId: "acpx",
+      packageName: "@openclaw/acpx",
+      installedVersion: "2026.6.21",
+      registryVersion: "2026.7.33",
+      spec: "@openclaw/acpx@2026.6.21",
+      installerVersion: "2026.7.33",
+      installerResolvedSpec: "@openclaw/acpx@2026.7.33",
     });
-    mockNpmViewMetadata({
-      name: "@openclaw/acpx",
-      version: "2026.7.33",
-    });
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createSuccessfulNpmUpdateResult({
-        pluginId: "acpx",
-        targetDir: installPath,
-        version: "2026.7.33",
-        npmResolution: {
-          name: "@openclaw/acpx",
-          version: "2026.7.33",
-          resolvedSpec: "@openclaw/acpx@2026.7.33",
-        },
-      }),
-    );
-
-    const result = await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "acpx",
-        spec: "@openclaw/acpx@2026.6.21",
-        installPath,
-        resolvedName: "@openclaw/acpx",
-        resolvedSpec: "@openclaw/acpx@2026.6.21",
-        resolvedVersion: "2026.6.21",
-      }),
-      pluginIds: ["acpx"],
+    const result = await updatePlugin(config, "acpx", {
       specOverrides: { acpx: "@openclaw/acpx" },
       syncOfficialPluginInstalls: true,
       officialPluginUpdateChannel: "extended-stable",

@@ -36,7 +36,6 @@ vi.mock("../plugins/plugin-registry.js", () => ({
             startup: {
               sidecar: false,
               memory: false,
-              deferConfiguredChannelFullLoadUntilAfterListen: false,
               agentHarnesses: [],
             },
             compat: [],
@@ -82,12 +81,8 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProvider: () => undefined,
 }));
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-runtime.js", () => {
   return {
-    ...actual,
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
@@ -718,38 +713,6 @@ describe("resolveUsableCustomProviderApiKey", () => {
     }
   });
 
-  it("resolves legacy __env__ markers from process env for custom providers", () => {
-    const previous = process.env.BAILIAN_API_KEY;
-    process.env.BAILIAN_API_KEY = "sk-bailian-env"; // pragma: allowlist secret
-    try {
-      const resolved = resolveUsableCustomProviderApiKey({
-        cfg: {
-          models: {
-            providers: {
-              bailian: {
-                baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-                api: "openai-completions",
-                apiKey: "__env__:BAILIAN_API_KEY", // pragma: allowlist secret
-                models: [],
-              },
-            },
-          },
-        },
-        provider: "bailian",
-        secretSentinels: true,
-      });
-      expect(looksLikeSecretSentinel(resolved?.apiKey ?? "")).toBe(true);
-      expect(resolveSecretSentinel(resolved?.apiKey ?? "")).toBe("sk-bailian-env");
-      expect(resolved?.source).toContain("BAILIAN_API_KEY");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.BAILIAN_API_KEY;
-      } else {
-        process.env.BAILIAN_API_KEY = previous;
-      }
-    }
-  });
-
   it("does not resolve env SecretRefs when provider allowlist excludes the env id", () => {
     const previous = process.env.MY_CUSTOM_KEY;
     process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
@@ -1375,6 +1338,66 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
+  // Regression: a 402 cooldown recorded under inline-api-key:<provider> must be
+  // enforced for managed (file/exec) SecretRef provider keys too, not just
+  // literal/env keys — otherwise the cooldown is written but never honored and
+  // the exhausted provider keeps resolving and reporting available. Covers both
+  // resolution paths: the synthetic-runtime path and the explicit api-key
+  // override path.
+  it.each([
+    { name: "no auth override (synthetic-runtime path)", auth: undefined },
+    { name: "explicit api-key override path", auth: "api-key" as const },
+  ])(
+    "blocks a managed file SecretRef apiKey while its inline provider cooldown is active — $name",
+    async ({ auth }) => {
+      const cliproxyConfig = {
+        api: "openai-responses" as const,
+        apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
+        baseUrl: "https://cliproxy.example/v1",
+        models: [],
+        ...(auth ? { auth } : {}),
+      };
+      const sourceConfig = { models: { providers: { cliproxyapi: cliproxyConfig } } };
+      const runtimeConfig = {
+        models: {
+          providers: {
+            cliproxyapi: {
+              ...cliproxyConfig,
+              apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+      const store = {
+        version: 1 as const,
+        profiles: {},
+        usageStats: {
+          "inline-api-key:cliproxyapi": {
+            disabledUntil: Date.now() + 60_000,
+            disabledReason: "billing" as const,
+          },
+        },
+      };
+
+      await expect(
+        resolveApiKeyForProvider({ provider: "cliproxyapi", cfg: sourceConfig, store }),
+      ).rejects.toThrow(/Inline API key for provider "cliproxyapi" is temporarily disabled/);
+      await expect(
+        hasAvailableAuthForProvider({ provider: "cliproxyapi", cfg: sourceConfig, store }),
+      ).resolves.toBe(false);
+      expect(
+        hasRuntimeAvailableProviderAuth({
+          provider: "cliproxyapi",
+          cfg: sourceConfig,
+          allowPluginSyntheticAuth: false,
+          store,
+        }),
+      ).toBe(false);
+    },
+  );
+
   it("does not treat a custom provider managed SecretRef marker as auth without a runtime snapshot", async () => {
     const sourceConfig = {
       models: {
@@ -1782,10 +1805,15 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
   it("recognizes local baseUrl variants for synthetic auth config", () => {
     const localBaseUrls = [
       "http://127.0.0.1:8080/v1",
+      "http://127.0.0.2:8080/v1",
+      "http://127.255.255.254:8080/v1",
+      "http://10.0.0.1:11434/v1",
+      "http://172.16.0.1:11434/v1",
       "http://192.168.0.222:11434/v1",
       "http://localhost:11434/v1",
       "http://[::1]:8080/v1",
       "http://0.0.0.0:11434/v1",
+      "http://[::ffff:7f00:1]:8080/v1",
       "http://[::ffff:127.0.0.1]:8080/v1",
     ];
 
@@ -1804,6 +1832,21 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
         baseUrl,
       ).toBe(true);
     }
+  });
+
+  it("does not recognize addresses outside the IPv4 loopback range as local", () => {
+    expect(
+      hasSyntheticLocalProviderAuthConfig({
+        provider: "custom-remote",
+        cfg: {
+          models: {
+            providers: {
+              "custom-remote": createCustomProviderConfig("http://128.0.0.1:8080/v1"),
+            },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("synthesizes a local auth marker for custom providers with a local baseUrl and no apiKey", async () => {

@@ -1,5 +1,6 @@
-import type { GatewayHelloOk } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
 
 export type ApplicationStatusBanner = {
   tone: "danger" | "warn" | "info";
@@ -8,16 +9,33 @@ export type ApplicationStatusBanner = {
 
 export const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
-export const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
-export const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
-export const UPDATE_HANDOFF_POLL_MS = 1_000;
-export const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
+const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
+const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_POLL_MS = 1_000;
+const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
 const PENDING_UPDATE_HANDOFF_REASONS = new Set([
   UPDATE_HANDOFF_STARTED_REASON,
   UPDATE_RESTART_HEALTH_PENDING_REASON,
 ]);
+const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
+  dirty: "updates.failureReasons.dirty",
+  "no-upstream": "updates.failureReasons.noUpstream",
+  "not-git-install": "updates.failureReasons.notGitInstall",
+  "not-openclaw-root": "updates.failureReasons.notOpenclawRoot",
+  "deps-install-failed": "updates.failureReasons.depsInstallFailed",
+  "build-failed": "updates.failureReasons.buildFailed",
+  "build-dirty": "updates.failureReasons.buildDirty",
+  "ui-build-failed": "updates.failureReasons.uiBuildFailed",
+  "global-install-failed": "updates.failureReasons.globalInstallFailed",
+  "restart-disabled": "updates.failureReasons.restartDisabled",
+  "restart-unavailable": "updates.failureReasons.restartUnavailable",
+  "restart-unhealthy": "updates.failureReasons.restartUnhealthy",
+  "managed-service-handoff-already-running":
+    "updates.failureReasons.managedServiceHandoffAlreadyRunning",
+  "doctor-failed": "updates.failureReasons.doctorFailed",
+};
 
-export type UpdateRestartStatusResponse = {
+type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
@@ -38,6 +56,29 @@ export type UpdateRunResponse = {
   handoff?: { status?: string };
   restart?: { coalesced?: boolean } | null;
 };
+
+export async function requestUpdateRestartStatus(
+  client: Pick<GatewayBrowserClient, "request">,
+  timeoutMs: number,
+): Promise<UpdateRestartStatusResponse | null> {
+  try {
+    return await client.request<UpdateRestartStatusResponse>("update.status", {}, { timeoutMs });
+  } catch {
+    return null;
+  }
+}
+
+export function resolveUpdateVerificationWindow(
+  kind: "handoff" | "restart",
+  nowMs = Date.now(),
+): { deadline: number; pollMs: number } {
+  const handoff = kind === "handoff";
+  return {
+    deadline:
+      nowMs + (handoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS),
+    pollMs: handoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS,
+  };
+}
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
@@ -60,40 +101,23 @@ export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailab
     : null;
 }
 
+export function resolveControlUiRefreshRequiredBanner(): ApplicationStatusBanner {
+  return {
+    tone: "info",
+    text: t("updates.refreshRequired"),
+  };
+}
+
 export function resolveUpdateStatusBanner(params: {
   status?: string;
   reason?: string;
 }): ApplicationStatusBanner {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const guidance =
-    {
-      dirty: "Commit or stash changes, then retry.",
-      "no-upstream": "Set an upstream branch, then retry.",
-      "not-git-install":
-        "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
-      "not-openclaw-root":
-        "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
-      "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
-      "build-failed": "Build failed. Fix the build error and retry.",
-      "build-dirty":
-        "The selected revision's build changed checkout files. Retry with a revision that includes its generated artifacts.",
-      "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
-      "global-install-failed":
-        "The global package install did not verify on disk. Retry or reinstall from the CLI.",
-      "restart-disabled":
-        "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry.",
-      "restart-unavailable":
-        "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
-      "restart-unhealthy":
-        "The replacement process never became healthy. The previous process stayed up so you can recover.",
-      "managed-service-handoff-already-running":
-        "Another managed update is already running. Wait for it to complete, then refresh update status.",
-      "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
-    }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
+  const guidance = t(UPDATE_FAILURE_REASON_KEYS[reason] ?? "updates.failureReasons.default");
   return {
     tone: status === "skipped" ? "warn" : "danger",
-    text: `Update ${status}: ${reason}. ${guidance}`,
+    text: t("updates.status", { status, reason, guidance }),
   };
 }
 
@@ -101,12 +125,14 @@ export function resolveUpdateVerificationBanner(params: {
   expectedVersion: string;
   actualVersion: string | null;
 }): ApplicationStatusBanner {
-  const actualSuffix = params.actualVersion
-    ? ` Expected v${params.expectedVersion}, running v${params.actualVersion}.`
-    : "";
   return {
     tone: "danger",
-    text: `Update installed but running version did not change — restart may have been blocked.${actualSuffix}`,
+    text: params.actualVersion
+      ? t("updates.verificationFailedWithVersions", {
+          expectedVersion: params.expectedVersion,
+          actualVersion: params.actualVersion,
+        })
+      : t("updates.verificationFailed"),
   };
 }
 
@@ -114,21 +140,42 @@ export function resolvePostRestartUpdateBanner(
   reason: string | null | undefined,
 ): ApplicationStatusBanner {
   const normalizedReason = reason?.trim() || "restart-unhealthy";
-  const guidance =
+  const guidanceKey =
     normalizedReason === "restart-unhealthy"
-      ? "The replacement process never became healthy and the previous process stayed up."
-      : "Check the gateway logs for the replacement failure.";
+      ? "updates.postRestart.restartUnhealthy"
+      : "updates.postRestart.default";
   return {
     tone: "danger",
-    text: `Update error: ${normalizedReason}. ${guidance}`,
+    text: t("updates.status", {
+      status: "error",
+      reason: normalizedReason,
+      guidance: t(guidanceKey),
+    }),
   };
 }
 
 export function resolvePendingUpdateHandoffTimeoutBanner(): ApplicationStatusBanner {
   return {
     tone: "danger",
-    text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+    text: t("updates.handoffTimeout"),
   };
+}
+
+export function resolveUnknownUpdateOutcomeBanner(): ApplicationStatusBanner {
+  return {
+    tone: "danger",
+    text: t("updates.outcomeUnknown"),
+  };
+}
+
+export function resolveAmbiguousUpdateOutcomeBanner(
+  expectedVersion: string | null,
+  hello: GatewayHelloOk | null,
+): ApplicationStatusBanner | null {
+  const currentVersion = hello?.server?.version?.trim() || null;
+  return expectedVersion && currentVersion === expectedVersion
+    ? null
+    : resolveUnknownUpdateOutcomeBanner();
 }
 
 export function isPendingUpdateHandoffSentinel(

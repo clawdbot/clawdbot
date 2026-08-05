@@ -1,5 +1,6 @@
 import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
@@ -38,7 +39,6 @@ export function prepareEmbeddedRunTerminal(input: {
   outerContextTokenMeta: { contextTokens?: number };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
-  lastTurnTotal?: number;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
@@ -71,7 +71,6 @@ export function prepareEmbeddedRunTerminal(input: {
     usageAccumulator: input.usageAccumulator,
     lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
-    lastTurnTotal: input.lastTurnTotal,
   });
   const reportedModelRef = resolveReportedModelRef({
     provider: input.provider,
@@ -81,6 +80,18 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
+  const costUsd = estimateUsageCost({
+    usage: usageMeta.usage,
+    cost: resolveModelCostConfig({
+      provider: reportedModelRef.provider,
+      model: reportedModelRef.model,
+      config: runParams.config,
+      agentDir: runParams.agentDir,
+    }),
+  });
+  // Attempt normalization already folded every attempt (terminal included)
+  // into the accumulator, so read it directly instead of re-adding the attempt.
+  const runAssistantTurns = input.usageAccumulator.assistantTurns;
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -99,6 +110,14 @@ export function prepareEmbeddedRunTerminal(input: {
         ? input.contextRecoveryState.autoCompactionCount
         : undefined,
     compactionTokensAfter: input.contextRecoveryState.lastCompactionTokensAfter,
+    // Absent attempt engagement (plugin harness routes) intentionally reads as
+    // false so config-enabled-but-unengaged code mode is visible to consumers.
+    codeModeEngaged: attempt.codeModeEngaged === true,
+    ...(runAssistantTurns > 0 ? { assistantTurns: runAssistantTurns } : {}),
+    ...(input.usageAccumulator.bridgeCalls
+      ? { bridgeCalls: { ...input.usageAccumulator.bridgeCalls } }
+      : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
   };
   const attemptFinalText = attempt.assistantTexts
     .toReversed()

@@ -1,5 +1,6 @@
 // Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
+import { evaluateChannelHealth } from "../gateway/channel-health-policy.js";
 import {
   createAsyncComputedAccountStatusAdapter,
   buildBaseAccountStatusSnapshot,
@@ -302,7 +303,12 @@ describe("buildComputedAccountStatusSnapshot", () => {
         enabled: true,
         configured: false,
       }),
-    ).toEqual(expectedAccountSnapshot({ enabled: true }));
+    ).toEqual(
+      expectedAccountSnapshot({
+        enabled: true,
+        stateReason: "not configured",
+      }),
+    );
   });
 
   it("merges computed extras after the shared fields", () => {
@@ -349,6 +355,28 @@ describe("computed account status adapters", () => {
       ).resolves.toEqual(expectedAdapterAccountSnapshot());
     },
   );
+
+  it("preserves ingress failure for channel health evaluation", async () => {
+    const status = createComputedStatusAdapter();
+    const snapshot = await status.buildAccountSnapshot!({
+      account: adapterAccount,
+      cfg: {} as never,
+      runtime: {
+        ...adapterRuntime,
+        ingressUnavailable: true,
+      },
+      probe: adapterProbe,
+    });
+
+    expect(
+      evaluateChannelHealth(snapshot, {
+        channelId: "discord",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      }),
+    ).toEqual({ healthy: false, reason: "ingress-unavailable" });
+  });
 });
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
@@ -383,7 +411,13 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
           lastDisconnect: { at: 12, error: "boom" },
           lastEventAt: 13,
           lastTransportActivityAt: 14,
-          healthState: "healthy",
+          healthState: "reconnecting",
+          lifecycle: "recovering" as const,
+          ingressUnavailable: true as const,
+          busy: true,
+          activeRuns: 2,
+          lastRunActivityAt: 15,
+          activeRunStartedAt: 16,
           running: true,
         },
       },
@@ -398,7 +432,13 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         lastDisconnect: { at: 12, error: "boom" },
         lastEventAt: 13,
         lastTransportActivityAt: 14,
-        healthState: "healthy",
+        healthState: "reconnecting",
+        lifecycle: "recovering",
+        ingressUnavailable: true,
+        busy: true,
+        activeRuns: 2,
+        lastRunActivityAt: 15,
+        activeRunStartedAt: 16,
         probe: undefined,
       },
     },
@@ -407,7 +447,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
       input: {
         runtime: {
           running: false,
-          healthState: "logged-out",
+          lifecycle: "blocked" as const,
           terminalDisconnect: true,
         },
       },
@@ -415,13 +455,19 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
       expected: {
         ...defaultRuntimeState,
         running: false,
-        healthState: "logged-out",
+        lifecycle: "blocked",
         terminalDisconnect: true,
         probe: undefined,
       },
     },
   ])("$name", ({ input, extra, expected }) => {
     expect(buildRuntimeAccountStatusSnapshot(input, extra)).toEqual(expected);
+  });
+
+  it("omits ingress availability when no failure was recorded", () => {
+    expect(buildRuntimeAccountStatusSnapshot({ runtime: { running: true } })).not.toHaveProperty(
+      "ingressUnavailable",
+    );
   });
 });
 

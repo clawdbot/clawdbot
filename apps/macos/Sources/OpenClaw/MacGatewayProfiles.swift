@@ -55,9 +55,25 @@ actor MacGatewayProfileStore {
         var password: String?
     }
 
+    // Dev builds carry a different code signature; creating the release item
+    // would poison its Keychain ACL and make the shipped app demand the login
+    // keychain password on every read. DEBUG is a config heuristic, not a
+    // signing check: it covers swift build/Xcode dev runs, the observed
+    // poisoning path. Release-config ad-hoc builds stay out of scope; running
+    // those against saved Keychain items is already unsupported.
+    #if DEBUG
+    private static let service = "ai.openclaw.gateway-profiles.debug"
+    #else
     private static let service = "ai.openclaw.gateway-profiles"
+    #endif
     private static let registryAccount = "registry-v1"
     private static let currentLegacyPrimaryMigrationVersion = 1
+
+    /// Registry reads are prompt-bearing: when this binary is missing from the
+    /// item's ACL, every SecItemCopyMatching raises a login-keychain dialog, and
+    /// catalog refreshes fire per control-channel state change. Cache the one
+    /// registry for the process lifetime; saves keep it coherent.
+    private var cachedRegistry: Registry?
 
     static func migratingLegacyPrimaryConnection(
         root: [String: Any],
@@ -152,8 +168,14 @@ actor MacGatewayProfileStore {
     }
 
     private func loadRegistry() throws -> Registry {
-        guard let data = try Self.load(account: Self.registryAccount) else { return Registry() }
-        return try Self.decodeRegistry(data)
+        if let cachedRegistry { return cachedRegistry }
+        let registry: Registry = if let data = try Self.load(account: Self.registryAccount) {
+            try Self.decodeRegistry(data)
+        } else {
+            Registry()
+        }
+        self.cachedRegistry = registry
+        return registry
     }
 
     private func loadRegistryMigratingLegacyPrimary() throws -> Registry {
@@ -173,6 +195,7 @@ actor MacGatewayProfileStore {
 
     private func saveRegistry(_ registry: Registry) throws {
         try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+        self.cachedRegistry = registry
     }
 
     private static func decodeRegistry(_ data: Data) throws -> Registry {

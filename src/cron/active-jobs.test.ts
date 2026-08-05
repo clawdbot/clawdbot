@@ -5,7 +5,9 @@ import {
   hasActiveCronJobs,
   hasActiveCronJobsExceptMarker,
   markCronJobActive,
+  noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
+  noteActiveCronJobTriggerMutation,
   resetCronActiveJobs,
 } from "./active-jobs.js";
 
@@ -48,12 +50,61 @@ describe("hasActiveCronJobsExceptMarker", () => {
 });
 
 describe("active cron schedule ownership", () => {
+  it("records durable job removal without releasing the active run marker", () => {
+    const marker = markCronJobActive("removed-job");
+
+    noteActiveCronJobRemoval("removed-job");
+
+    expect(marker?.scheduleMutated).toBe(true);
+    expect(marker?.jobRemoved).toBe(true);
+    expect(hasActiveCronJobs()).toBe(true);
+  });
+
+  it("does not mistake an ordinary schedule edit for job removal", () => {
+    const marker = markCronJobActive("updated-job");
+
+    noteActiveCronJobScheduleMutation("updated-job");
+
+    expect(marker?.scheduleMutated).toBe(true);
+    expect(marker?.jobRemoved).toBeUndefined();
+  });
+
+  it("does not create active markers when removing an idle job", () => {
+    noteActiveCronJobRemoval("idle-removed-job");
+
+    expect(hasActiveCronJobs()).toBe(false);
+  });
+
   it("records durable schedule mutations on the admitted active run", () => {
     const marker = markCronJobActive("rescheduled-job");
 
     noteActiveCronJobScheduleMutation("rescheduled-job");
 
     expect(marker?.scheduleMutated).toBe(true);
+  });
+
+  it("records trigger mutations without retiring schedule ownership", () => {
+    const marker = markCronJobActive("trigger-edited-job");
+
+    noteActiveCronJobTriggerMutation("trigger-edited-job");
+
+    expect(marker?.triggerMutated).toBe(true);
+    expect(marker?.scheduleMutated).toBeUndefined();
+  });
+
+  it("keeps trigger mutation ownership after the script is edited back", () => {
+    const marker = markCronJobActive("trigger-restored-job");
+
+    noteActiveCronJobTriggerMutation("trigger-restored-job");
+    noteActiveCronJobTriggerMutation("trigger-restored-job");
+
+    expect(marker?.triggerMutated).toBe(true);
+  });
+
+  it("does not create trigger markers for an idle job", () => {
+    noteActiveCronJobTriggerMutation("idle-trigger-job");
+
+    expect(hasActiveCronJobs()).toBe(false);
   });
 
   it("keeps a mutation after the schedule is edited back to its original value", () => {

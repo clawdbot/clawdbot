@@ -22,6 +22,13 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
   return {
     ...actual,
+    publishFileExclusive: async (...args: Parameters<typeof actual.publishFileExclusive>) => {
+      const result = await actual.publishFileExclusive(...args);
+      return {
+        ...result,
+        directorySync: durabilityTestState.syncOutcome ?? result.directorySync,
+      };
+    },
     syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
       durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
   };

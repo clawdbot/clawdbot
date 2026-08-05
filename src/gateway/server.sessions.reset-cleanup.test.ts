@@ -6,11 +6,8 @@ import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
-import {
-  listRegisteredAgentHarnesses,
-  registerAgentHarness,
-  restoreRegisteredAgentHarnesses,
-} from "../agents/harness/registry.js";
+import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
@@ -22,7 +19,7 @@ import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admi
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   bootstrapCacheMocks,
   subagentLifecycleHookMocks,
   subagentLifecycleHookState,
@@ -40,7 +37,7 @@ import {
   sessionHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
 type ResetAcpState = {
   backend?: string;
@@ -348,7 +345,7 @@ test("sessions.reset forwards the retired generation to registered agent harness
       agentId: "main",
       sessionId: "sess-main",
       sessionKey: "agent:main:main",
-      sessionFile: expect.stringMatching(/^sqlite:main:sess-main:/),
+      sessionFile: "agent:main:main",
       reason: "reset",
     });
   } finally {

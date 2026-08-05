@@ -11,6 +11,11 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "../app/co
 import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import {
+  scopedSessionPullRequestKey,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionPullRequestsForGateway,
+} from "../lib/session-pull-requests.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -43,7 +48,7 @@ interface SidebarMenusControllerState {
   sessionMenuWork: SessionMenuWork | null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null;
   sessionSortMenuPosition: { x: number; y: number } | null;
-  catalogViewMenuPosition: { x: number; y: number } | null;
+  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null;
   agentMenuPosition: { x: number; top: number } | null;
   agentMenuFilter: string;
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
@@ -94,6 +99,7 @@ export interface SidebarMenusControllerHost
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
+  hideSessionCatalog(catalogId: string): void;
   sessionSortMode: SidebarSessionSortMode;
   readonly terminalAvailable: boolean;
   readonly themeMode: ThemeMode;
@@ -127,7 +133,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   sessionSortMenuPosition: { x: number; y: number } | null = null;
-  catalogViewMenuPosition: { x: number; y: number } | null = null;
+  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null = null;
   agentMenuPosition: { x: number; top: number } | null = null;
   agentMenuFilter = "";
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
@@ -321,6 +327,10 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   closeSessionMenu() {
+    const gateway = this.host.sessionDataContext?.gateway;
+    if (gateway) {
+      sessionPullRequestsForGateway(gateway).unwatch(this);
+    }
     this.sessionMenuTrigger = null;
     this.sessionMenuWorkVersion += 1;
     this.updateState("sessionMenu", null);
@@ -349,13 +359,21 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       return;
     }
     const { selectedAgentId } = this.host.getSessionNavigationState();
+    const store = sessionPullRequestsForGateway(context.gateway);
+    const pullRequestKey = scopedSessionPullRequestKey(
+      session.key,
+      parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+    );
     void fetchSessionMenuWork({
       client,
       pullRequestsAvailable:
-        isGatewayMethodAdvertised(context.gateway.snapshot, "controlUi.sessionPullRequests") ===
-        true,
+        isGatewayMethodAdvertised(
+          context.gateway.snapshot,
+          SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        ) === true,
       sessionKey: session.key,
       agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+      loadPullRequests: () => store.load(this, pullRequestKey),
       worktreeId: session.worktreeId,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
@@ -403,20 +421,25 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     });
   }
 
-  toggleCatalogViewMenu(trigger: HTMLElement) {
-    if (this.catalogViewMenuPosition) {
+  toggleCatalogViewMenu(catalogId: string, trigger: HTMLElement) {
+    if (this.catalogViewMenuPosition?.catalogId === catalogId) {
       this.closeCatalogViewMenu();
       return;
     }
+    const rect = trigger.getBoundingClientRect();
+    this.openCatalogViewMenu(catalogId, rect.right, rect.bottom + 4, trigger);
+  }
+
+  openCatalogViewMenu(catalogId: string, x: number, y: number, trigger: HTMLElement | null = null) {
     this.loadMenuRenderer();
     const menuWidth = 200;
-    const menuMaxHeight = 120;
-    const rect = trigger.getBoundingClientRect();
+    const menuMaxHeight = 360;
     this.dismissTransientMenus();
     this.catalogViewMenuTrigger = trigger;
     this.updateState("catalogViewMenuPosition", {
-      x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
+      catalogId,
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
     });
   }
 

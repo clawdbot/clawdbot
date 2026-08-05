@@ -1,4 +1,11 @@
 // Alibaba tests cover video generation provider plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -9,9 +16,14 @@ import {
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { beforeAll, describe, expect, it } from "vitest";
+import {
+  DASHSCOPE_WAN_VIDEO_MODELS,
+  DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
+} from "openclaw/plugin-sdk/video-generation";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
+  resolveApiKeyForProviderMock,
   postJsonRequestMock,
   fetchWithTimeoutMock,
   fetchWithTimeoutGuardedMock,
@@ -19,13 +31,24 @@ const {
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
 
-let buildAlibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").buildAlibabaVideoGenerationProvider;
+let alibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").alibabaVideoGenerationProvider;
 
 beforeAll(async () => {
-  ({ buildAlibabaVideoGenerationProvider } = await import("./video-generation-provider.js"));
+  ({ alibabaVideoGenerationProvider } = await import("./video-generation-provider.js"));
 });
 
 installProviderHttpMockCleanup();
+
+afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  vi.unstubAllEnvs();
+});
+
+function clearAlibabaAuthEnvironment(): void {
+  for (const name of ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY"]) {
+    vi.stubEnv(name, "");
+  }
+}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -44,13 +67,201 @@ function requireFirstPostJsonRequest(label: string): Record<string, unknown> {
 
 describe("alibaba video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildAlibabaVideoGenerationProvider());
+    expectExplicitVideoGenerationCapabilities(alibabaVideoGenerationProvider);
+    expect(alibabaVideoGenerationProvider).toMatchObject({
+      id: "alibaba",
+      label: "Alibaba Model Studio",
+      defaultModel: DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
+      models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+    });
+  });
+
+  it.each(["sk-ws-alibaba-standard-key", "sk-alibaba-legacy-standard-key"])(
+    "advertises Wan video generation with config-only Standard API key %s",
+    (apiKey) => {
+      clearAlibabaAuthEnvironment();
+
+      expect(
+        alibabaVideoGenerationProvider.isConfigured?.({
+          cfg: {
+            models: {
+              providers: {
+                alibaba: {
+                  apiKey,
+                  baseUrl: "https://dashscope-intl.aliyuncs.com",
+                  models: [],
+                },
+              },
+            },
+          },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("does not use Qwen Coding Plan credentials for Alibaba video discovery", () => {
+    clearAlibabaAuthEnvironment();
+
+    expect(
+      alibabaVideoGenerationProvider.isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              qwen: {
+                apiKey: "qwen-coding-plan-key",
+                baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["", "oauth:alibaba", "custom-local", "secretref-managed"])(
+    "does not advertise a non-secret Alibaba credential marker %j",
+    (apiKey) => {
+      clearAlibabaAuthEnvironment();
+
+      expect(
+        alibabaVideoGenerationProvider.isConfigured?.({
+          cfg: {
+            models: {
+              providers: {
+                alibaba: {
+                  apiKey,
+                  baseUrl: "https://dashscope-intl.aliyuncs.com",
+                  models: [],
+                },
+              },
+            },
+          },
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("tracks whether an allowed Alibaba API-key SecretRef resolves", () => {
+    clearAlibabaAuthEnvironment();
+    vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "resolved-alibaba-config-key");
+
+    const cfg = {
+      models: {
+        providers: {
+          alibaba: {
+            apiKey: {
+              source: "env" as const,
+              provider: "alibaba-test-env",
+              id: "ALIBABA_QA_CONFIG_KEY",
+            },
+            baseUrl: "https://dashscope-intl.aliyuncs.com",
+            models: [],
+          },
+        },
+      },
+      secrets: {
+        defaults: { env: "alibaba-test-env" },
+        providers: {
+          "alibaba-test-env": {
+            source: "env" as const,
+            allowlist: ["ALIBABA_QA_CONFIG_KEY"],
+          },
+        },
+      },
+    };
+
+    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg })).toBe(true);
+    vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "");
+    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg })).toBe(false);
+  });
+
+  it("preserves Alibaba environment API-key discovery", () => {
+    clearAlibabaAuthEnvironment();
+    vi.stubEnv("MODELSTUDIO_API_KEY", "alibaba-environment-key");
+
+    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {} })).toBe(true);
+  });
+
+  it("does not advertise an inherited Qwen Coding Plan API key", () => {
+    clearAlibabaAuthEnvironment();
+    vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
+
+    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {} })).toBe(false);
+  });
+
+  it("keeps explicit Standard config above an inherited Coding Plan environment key", () => {
+    clearAlibabaAuthEnvironment();
+    vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
+
+    expect(
+      alibabaVideoGenerationProvider.isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              alibaba: {
+                auth: "api-key",
+                apiKey: "sk-ws-alibaba-standard-key",
+                baseUrl: "https://dashscope-intl.aliyuncs.com",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["sk-ws-alibaba-profile", "sk-sp-qwen-environment", true],
+    ["sk-sp-alibaba-profile", "sk-ws-qwen-environment", false],
+  ])("preserves actual profile precedence for %s", async (profileKey, envKey, expected) => {
+    clearAlibabaAuthEnvironment();
+    vi.stubEnv("QWEN_API_KEY", envKey);
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alibaba-wan-auth-"));
+
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "alibaba:standard": {
+              type: "api_key",
+              provider: "alibaba",
+              key: profileKey,
+            },
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      );
+
+      expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {}, agentDir })).toBe(expected);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      await fs.rm(agentDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a resolved Coding Plan API key before submitting a Wan request", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "sk-sp-qwen-coding-plan-key" });
+
+    await expect(
+      alibabaVideoGenerationProvider.generateVideo({
+        provider: "alibaba",
+        model: "wan2.6-t2v",
+        prompt: "animate this shot",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/Standard DashScope endpoint.*same-region Standard API key/i);
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const provider = buildAlibabaVideoGenerationProvider();
+    const provider = alibabaVideoGenerationProvider;
     const result = await provider.generateVideo({
       provider: "alibaba",
       model: "wan2.6-r2v-flash",
@@ -100,7 +311,7 @@ describe("alibaba video generation provider", () => {
     });
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const provider = buildAlibabaVideoGenerationProvider();
+    const provider = alibabaVideoGenerationProvider;
     await provider.generateVideo({
       provider: "alibaba",
       model: "wan2.6-t2v",
@@ -139,7 +350,7 @@ describe("alibaba video generation provider", () => {
         method: "GET",
         headers: expect.any(Headers),
       }),
-      120_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },
@@ -150,7 +361,7 @@ describe("alibaba video generation provider", () => {
       2,
       "https://example.com/out.mp4",
       { method: "GET" },
-      120_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },
@@ -160,7 +371,7 @@ describe("alibaba video generation provider", () => {
   });
 
   it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
-    const provider = buildAlibabaVideoGenerationProvider();
+    const provider = alibabaVideoGenerationProvider;
 
     await expect(
       provider.generateVideo({

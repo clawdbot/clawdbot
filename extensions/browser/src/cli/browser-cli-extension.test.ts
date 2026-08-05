@@ -58,4 +58,50 @@ describe("browser extension pairing Gateway URL", () => {
     });
     expect(logSpy).not.toHaveBeenCalled();
   });
+
+  it("pairs with the allocated extension relay when another profile pins the default port", async () => {
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({
+      browser: {
+        profiles: {
+          pinned: { cdpPort: 18799, color: "#00AA00" },
+        },
+      },
+    });
+    const writeJsonSpy = vi
+      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .mockImplementation(runtime.writeJson);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const program = new Command();
+    const browser = program.command("browser");
+    registerBrowserExtensionCommands(browser, () => ({}));
+
+    await program.parseAsync(["browser", "extension", "pair", "--json"], { from: "user" });
+
+    expect(writeJsonSpy).toHaveBeenCalledWith({
+      pairingString: expect.stringContaining("127.0.0.1:18798/extension"),
+      relayPort: 18798,
+      remote: false,
+    });
+  });
+
+  it("prints the relay CDP endpoint for external clients via cdp --json", async () => {
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
+    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+    const writeJsonSpy = vi
+      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .mockImplementation(runtime.writeJson);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const program = new Command();
+    const browser = program.command("browser");
+    registerBrowserExtensionCommands(browser, () => ({}));
+
+    await program.parseAsync(["browser", "extension", "cdp", "--json"], { from: "user" });
+
+    expect(writeJsonSpy).toHaveBeenCalledWith({
+      browserUrl: "http://127.0.0.1:18799",
+      wsEndpoint: "ws://127.0.0.1:18799/cdp",
+      headers: { Authorization: "Bearer pair-token" },
+    });
+    expect(logSpy).not.toHaveBeenCalled();
+  });
 });

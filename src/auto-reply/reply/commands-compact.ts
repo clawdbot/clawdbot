@@ -4,7 +4,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   classifyCompactionReason,
@@ -16,7 +20,13 @@ import {
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
-import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
+import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
+import {
+  resolvePersistedSessionRuntimeId,
+  resolveSessionRuntimeOverrideForProvider,
+} from "../../agents/session-runtime-compat.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -71,8 +81,8 @@ function formatCompactionReason(reason?: string): string | undefined {
       return lower.includes("already under target")
         ? "context is already under the compaction target"
         : "context is below the compaction threshold";
-    case "already_compacted_recently":
-      return "session was already compacted recently";
+    case "already_compacted":
+      return "session is already compacted";
     default:
       return text;
   }
@@ -87,12 +97,15 @@ function resolveManualCompactContextTokenBudget(params: {
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
-  const liveContextTokens =
+  const inheritedContextTokens =
     typeof params.liveContextTokens === "number" &&
     Number.isFinite(params.liveContextTokens) &&
     params.liveContextTokens > 0
       ? Math.floor(params.liveContextTokens)
       : undefined;
+  const liveContextTokens =
+    resolvePersistedContextTokens(resolveAgentConfig(params.cfg, params.agentId)?.contextTokens) ??
+    inheritedContextTokens;
 
   const model = normalizeOptionalString(params.model);
   const provider = normalizeOptionalString(params.provider);
@@ -234,10 +247,26 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
+  const selectedRuntime = resolveSessionRuntimeOverrideForProvider({
+    provider: params.provider,
+    entry: targetSessionEntry,
+  });
+  const compactionStorePath = resolveSessionStorePathForScope({
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    storePath:
+      params.storePath ?? resolveStorePath(params.cfg.session?.store, { agentId: sessionAgentId }),
+  });
   const result = await runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
     sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: {
+      agentId: sessionAgentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: compactionStorePath,
+    },
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     clientCaps: params.ctx.GatewayClientCaps,
@@ -250,14 +279,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
     inputProvenance: params.ctx.InputProvenance,
-    sessionFile: runtime.resolveSessionFilePath(
-      sessionId,
-      targetSessionEntry,
-      runtime.resolveSessionFilePathOptions({
-        agentId: sessionAgentId,
-        storePath: params.storePath,
-      }),
-    ),
+    sessionFile: params.sessionKey,
     workspaceDir: params.workspaceDir,
     agentDir: sessionAgentDir,
     config: params.cfg,
@@ -276,7 +298,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentHarnessId:
       targetSessionEntry.modelSelectionLocked === true
         ? resolvePersistedSessionRuntimeId(targetSessionEntry)
-        : targetSessionEntry.agentHarnessId,
+        : (selectedRuntime ??
+          (targetSessionEntry.agentRuntimeOverride
+            ? undefined
+            : targetSessionEntry.agentHarnessId)),
     modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
@@ -286,38 +311,42 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     },
     customInstructions,
     trigger: "manual",
-    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+    ownerNumbers: resolveOwnerPromptNumbers({
+      ownerNumbers: params.command.ownerList,
+      senderId: params.command.senderId,
+      senderIsOwner: params.command.senderIsOwner,
+    }),
   });
 
+  const tokensAfterCompaction = result.result?.tokensAfter;
+  const didCompact = result.ok && result.compacted;
   const compactLabel =
     result.ok || isBenignCompactionSkipResult(result)
-      ? result.compacted
-        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
-          : result.result?.tokensBefore
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
+      ? didCompact
+        ? typeof tokensAfterCompaction !== "number"
+          ? "Compaction finished (resulting context unknown)"
+          : result.result?.tokensBefore != null
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
             : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
-  if (result.ok && result.compacted) {
+  if (didCompact) {
     await runtime.incrementCompactionCount({
+      agentId: sessionAgentId,
       cfg: params.cfg,
       sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      storePath: compactionStorePath,
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
-      newSessionFile: result.result?.sessionFile,
     });
   }
   // Use the post-compaction token count for context summary if available
-  const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens =
-    result.ok && result.compacted
-      ? tokensAfterCompaction
-      : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+  const totalTokens = didCompact
+    ? tokensAfterCompaction
+    : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     contextTokenBudget ?? null,

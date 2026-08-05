@@ -6,7 +6,10 @@ import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
 } from "../../lib/board/provider.ts";
-import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_NAVIGATION_KEY_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -447,8 +450,11 @@ describe("AppSidebar agent chip", () => {
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
-    expect(setSessionKey).toHaveBeenCalledWith(taskKey);
-    expect(onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/00000002" });
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/00000002",
+      search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
+    });
   });
 
   it("keeps agent ids distinct from utility command values", async () => {
@@ -491,7 +497,7 @@ describe("AppSidebar agent chip", () => {
       pathname: "/chat/settings",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
-    expect(onNavigate).not.toHaveBeenCalledWith("config");
+    expect(onNavigate).not.toHaveBeenCalledWith("appearance");
   });
 
   it("keeps the identity card available offline with reconnect and retry actions", async () => {

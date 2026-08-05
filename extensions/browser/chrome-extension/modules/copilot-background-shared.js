@@ -1,3 +1,5 @@
+import { deriveCopilotSessionLabel } from "./panel-core.js";
+
 const PANEL_PATH = "sidepanel.html";
 
 function parsePanelBindingUrl(chromeApi, raw) {
@@ -54,7 +56,7 @@ export async function archiveCopilotSession(gateway, entry) {
     // sending it. sessions.create adopts the same key, making cleanup idempotent.
     await gateway.request("sessions.create", {
       key: entry.sessionKey,
-      label: "Browser copilot",
+      label: deriveCopilotSessionLabel(entry.sessionKey),
     });
   }
   try {

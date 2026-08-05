@@ -2,7 +2,7 @@
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
 /** Closed purpose codes carried by specialized bootstrap tokens. */
-export type DeviceBootstrapPurpose = "control-ui" | "mobile-full";
+export type DeviceBootstrapPurpose = "control-ui" | "mobile-full" | "voice-node";
 
 /** Normalized roles/scopes carried by a bootstrap token during device handoff. */
 export type DeviceBootstrapProfile = {
@@ -36,6 +36,7 @@ const MOBILE_FULL_ACCESS_OPERATOR_SCOPES = [
 ] as const;
 
 const MOBILE_FULL_ACCESS_OPERATOR_SCOPE_SET = new Set<string>(MOBILE_FULL_ACCESS_OPERATOR_SCOPES);
+const VOICE_NODE_OPERATOR_SCOPE_SET = new Set<string>(["operator.read", "operator.talk"]);
 
 /** Existing least-privilege setup-code/QR profile. */
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
@@ -57,6 +58,13 @@ export const FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile
 export const NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node"],
   scopes: [],
+};
+
+/** Room/embedded voice profile: node capabilities plus least-privilege Talk RPCs. */
+export const VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  roles: ["node", "operator"],
+  scopes: ["operator.read", "operator.talk"],
+  purpose: "voice-node",
 };
 
 /** Compare normalized bootstrap profiles, including their closed purpose. */
@@ -104,6 +112,13 @@ export function isNodePairingSetupBootstrapProfile(
   return matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
 }
 
+/** Return whether an input exactly matches the embedded voice-node setup profile. */
+export function isVoiceNodePairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
+  return matchesBootstrapProfile(input, VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
+}
+
 /** Resolve the subset of requested scopes a bootstrap profile may carry for one role. */
 export function resolveBootstrapProfileScopesForRole(
   role: string,
@@ -116,7 +131,9 @@ export function resolveBootstrapProfileScopesForRole(
     const allowedScopes =
       purpose === "mobile-full"
         ? MOBILE_FULL_ACCESS_OPERATOR_SCOPE_SET
-        : BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET;
+        : purpose === "voice-node"
+          ? VOICE_NODE_OPERATOR_SCOPE_SET
+          : BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET;
     return normalizedScopes.filter((scope) => allowedScopes.has(scope));
   }
   return [];
@@ -183,7 +200,11 @@ export function normalizeDeviceBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): DeviceBootstrapProfile {
   const purpose =
-    input?.purpose === "control-ui" || input?.purpose === "mobile-full" ? input.purpose : undefined;
+    input?.purpose === "control-ui" ||
+    input?.purpose === "mobile-full" ||
+    input?.purpose === "voice-node"
+      ? input.purpose
+      : undefined;
   return {
     roles: normalizeBootstrapRoles(input?.roles),
     scopes: normalizeDeviceAuthScopes(input?.scopes ? [...input.scopes] : []),

@@ -73,7 +73,7 @@ export const qqbotConfigAdapter = {
   describeAccount: describeQQBotAccount,
 };
 
-export const qqbotSetupAdapterShared = {
+const qqbotSetupAdapterShared = {
   resolveAccountId: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
     normalizeLowercaseStringOrEmpty(accountId) || resolveDefaultQQBotAccountId(cfg),
   applyAccountName: ({

@@ -1,7 +1,7 @@
 // OpenClaw operation tests cover rescue operation planning and execution.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,12 +9,15 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
-  createSystemAgentTestRuntime,
   expectSystemAgentAuditRecord as expectAuditRecord,
   expectTestRecordFields as expectRecordFields,
+  installSystemAgentClaudeCliBackendTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
   requireTestRecord as requireRecord,
+  type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
@@ -28,8 +31,10 @@ const mockConfig = vi.hoisted(() => {
     hash: "mock-hash-0" as string | undefined,
   };
   const cloneConfig = () => structuredClone(state.config);
+  let bindPluginMetadata = (_config: TestConfig) => {};
   const snapshot = () => {
     const config = cloneConfig();
+    bindPluginMetadata(config);
     return {
       path: state.path,
       exists: state.exists,
@@ -52,18 +57,24 @@ const mockConfig = vi.hoisted(() => {
       state.exists = true;
       state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = "mock-hash-0";
+      bindPluginMetadata(state.config);
     },
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
       state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = undefined;
+      bindPluginMetadata(state.config);
     },
     currentConfig() {
       return cloneConfig();
     },
     setConfig(config: TestConfig) {
       state.config = structuredClone(config);
+      bindPluginMetadata(state.config);
+    },
+    setPluginMetadataBinder(binder: (config: TestConfig) => void) {
+      bindPluginMetadata = binder;
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
@@ -79,10 +90,12 @@ const mockConfig = vi.hoisted(() => {
         const before = snapshot();
         const draft = cloneConfig();
         await params.mutate(draft, { snapshot: before });
+        bindPluginMetadata(draft);
         await params.writeOptions?.preCommitRuntimePreflight?.(structuredClone(draft));
         state.exists = true;
         state.config = draft;
         state.hash = "mock-hash-1";
+        bindPluginMetadata(state.config);
         return {
           path: state.path,
           previousHash: before.hash ?? null,
@@ -138,7 +151,31 @@ vi.mock("../config/config.js", () => ({
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
+
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingState: () => undefined,
+  readLocalOnboardingStateForConfig: () => undefined,
+  completeLocalOnboarding: () => false,
+}));
+
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let restoreCliBackendFixture: (() => void) | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+beforeAll(() => {
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+  mockConfig.setPluginMetadataBinder((config) => {
+    pluginMetadataSnapshot?.bindForConfig(config as OpenClawConfig);
+  });
+  mockConfig.reset();
+});
+
+afterAll(() => {
+  mockConfig.setPluginMetadataBinder(() => {});
+  pluginMetadataSnapshot?.restore();
+  restoreCliBackendFixture?.();
+});
 
 describe("parseSystemAgentOperation", () => {
   let stateDirSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -170,6 +207,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: true,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -339,6 +378,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: [],
     }));
 
@@ -390,7 +431,7 @@ describe("parseSystemAgentOperation", () => {
           },
         },
       ),
-    ).rejects.toThrow("Exit OpenClaw and run `openclaw onboard`");
+    ).rejects.toThrow("`openclaw onboard` on the machine running OpenClaw");
 
     expect(applySetup).not.toHaveBeenCalled();
   });
@@ -410,6 +451,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
 

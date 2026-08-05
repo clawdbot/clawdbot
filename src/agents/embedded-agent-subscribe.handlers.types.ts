@@ -6,6 +6,7 @@
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { HookRunner } from "../plugins/hooks.js";
@@ -23,6 +24,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
+import type { ThinkingTagStreamState } from "./embedded-agent-utils.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -85,6 +87,11 @@ export type EmbeddedAgentSubscribeState = {
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
+  /**
+   * Completed assistant round trips in this attempt. Survives compaction-retry
+   * presentation resets, matching how usage totals keep counting model calls.
+   */
+  assistantTurnCount: number;
   lastToolError?: ToolErrorSummary;
   latestMcpAppChannelView?: McpAppChannelView;
 
@@ -95,6 +102,8 @@ export type EmbeddedAgentSubscribeState = {
   streamReasoning: boolean;
 
   deltaBuffer: string;
+  /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
+  thinkingTagStream: ThinkingTagStreamState;
   blockBuffer: string;
   blockState: {
     thinking: boolean;
@@ -164,6 +173,8 @@ export type EmbeddedAgentSubscribeState = {
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
+  currentSourceMessagingToolSentTextsNormalized: string[];
+  currentSourceMessagingToolHeldPartial?: string;
   messagingToolSentTargets: MessagingToolSend[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
@@ -174,8 +185,10 @@ export type EmbeddedAgentSubscribeState = {
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
   pendingToolMediaUrls: string[];
+  pendingToolMediaAttachments?: ReplyMediaAttachment[];
+  /** Per-URL local-media trust; keys are normalized pending media URLs. */
+  pendingToolMediaTrustByUrl: Map<string, boolean>;
   pendingToolAudioAsVoice: boolean;
-  pendingToolTrustedLocalMedia: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
@@ -323,13 +336,14 @@ type ToolHandlerState = Pick<
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingToolMediaTrustByUrl"
   | "pendingToolAudioAsVoice"
-  | "pendingToolTrustedLocalMedia"
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"
   | "replayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
+  | "currentSourceMessagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
   | "messageToolOnlySourceReplyDelivered"

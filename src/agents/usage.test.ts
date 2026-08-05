@@ -153,6 +153,25 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it.each([
+    { provider: "Anthropic", details: { thinking_tokens: 17 }, expected: 17 },
+    { provider: "Anthropic zero", details: { thinking_tokens: 0 }, expected: 0 },
+    { provider: "OpenAI", details: { reasoning_tokens: 17 }, expected: 17 },
+    {
+      provider: "OpenAI precedence",
+      details: { reasoning_tokens: 17, thinking_tokens: 22 },
+      expected: 17,
+    },
+  ])("normalizes $provider output reasoning token details", ({ details, expected }) => {
+    expect(
+      normalizeUsage({
+        input_tokens: 30,
+        output_tokens: 40,
+        output_tokens_details: details,
+      }),
+    ).toMatchObject({ input: 30, output: 40, reasoningTokens: expected });
+  });
+
   it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
     // shared model runtime OpenAI-format providers subtract cached_tokens from prompt_tokens
     // upstream.  When cached_tokens exceeds prompt_tokens the result is negative.

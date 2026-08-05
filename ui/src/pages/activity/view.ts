@@ -32,7 +32,7 @@ type ActivityProps = {
   onScroll: (event: Event) => void;
 };
 
-function formatTime(value: number): string {
+function formatActivityTime(value: number): string {
   return formatTimeMs(
     value,
     {
@@ -166,7 +166,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
           <span class="activity-entry__text">${buildEntrySummary(entry)}</span>
         </span>
         <span class="activity-entry__meta">
-          <span>${formatTime(entry.updatedAt)}</span>
+          <span>${formatActivityTime(entry.updatedAt)}</span>
           <span>${formatDuration(entry.durationMs)}</span>
         </span>
       </summary>

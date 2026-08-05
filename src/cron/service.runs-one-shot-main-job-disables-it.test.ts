@@ -463,6 +463,38 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("removes a queued main-session event when an immediate heartbeat fails", async () => {
+    const runHeartbeatOnce = vi.fn(async () => {
+      throw new Error("heartbeat failed");
+    });
+    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
+      runHeartbeatOnce,
+      useRemovableSystemEventQueue: true,
+      withEvents: false,
+    });
+
+    try {
+      const job = await addWakeModeNowMainSystemEventJob(cron, {
+        name: "failed immediate heartbeat",
+      });
+
+      await cron.run(job.id, "force");
+
+      expect(runHeartbeatOnce).toHaveBeenCalledOnce();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+      const sessionKeys = getPostedSystemEventSessionKeys(enqueueSystemEvent);
+      expect(sessionKeys).toHaveLength(1);
+      expectNoQueuedEvents(sessionKeys);
+      const updated = (await cron.list({ includeDisabled: true })).find(
+        (candidate) => candidate.id === job.id,
+      );
+      expect(updated?.state.lastRunStatus).toBe("error");
+      expect(updated?.state.lastError).toContain("heartbeat failed");
+    } finally {
+      await stopCronAndCleanup(cron, store);
+    }
+  });
+
   it("rejects sessionTarget main for non-default agents at creation time", async () => {
     const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
 

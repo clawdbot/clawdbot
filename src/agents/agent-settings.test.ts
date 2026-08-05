@@ -11,6 +11,79 @@ import { shouldCompact } from "./sessions/compaction/compaction.js";
 import { SettingsManager } from "./sessions/settings-manager.js";
 
 describe("applyAgentCompactionSettingsFromConfig", () => {
+  it.each([false, true])(
+    "applies and preserves compaction.enabled=%s across a settings reload",
+    async (configuredEnabled) => {
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: !configuredEnabled, reserveTokens: 20_000 },
+      });
+      const cfg = {
+        agents: { defaults: { compaction: { enabled: configuredEnabled } } },
+      };
+
+      const first = applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
+      await settingsManager.reload();
+      expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
+      const afterReload = applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
+
+      expect(first.didOverride).toBe(true);
+      expect(afterReload.didOverride).toBe(false);
+      expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
+    },
+  );
+
+  const forcedDisableCases: Array<
+    [string, Omit<Parameters<typeof applyAgentAutoCompactionGuard>[0], "settingsManager">]
+  > = [
+    ["safeguard mode", { compactionMode: "safeguard" }],
+    [
+      "context-engine ownership",
+      {
+        contextEngineInfo: {
+          id: "third-party",
+          name: "Third-party Context Engine",
+          version: "0.1.0",
+          ownsCompaction: true,
+        },
+      },
+    ],
+    ["silent-overflow protection", { silentOverflowProneProvider: true }],
+  ];
+
+  it.each(forcedDisableCases)(
+    "keeps the %s safety guard authoritative over explicit enabled=true",
+    (_label, guardParams) => {
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: false, reserveTokens: 20_000 },
+      });
+
+      applyAgentCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: { agents: { defaults: { compaction: { enabled: true } } } },
+      });
+      const result = applyAgentAutoCompactionGuard({ settingsManager, ...guardParams });
+
+      expect(result).toEqual({ supported: true, disabled: true });
+      expect(settingsManager.getCompactionEnabled()).toBe(false);
+    },
+  );
+
+  it("preserves the embedded project setting when compaction.enabled is omitted", () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false, reserveTokens: 20_000 },
+    });
+    const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
+
+    const result = applyAgentCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: { agents: { defaults: { compaction: {} } } },
+    });
+
+    expect(result.didOverride).toBe(false);
+    expect(settingsManager.getCompactionEnabled()).toBe(false);
+    expect(setCompactionEnabled).not.toHaveBeenCalled();
+  });
+
   it("bumps reserveTokens when below floor", () => {
     const settingsManager = SettingsManager.inMemory();
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");

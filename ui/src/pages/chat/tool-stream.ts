@@ -7,6 +7,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -63,12 +64,14 @@ type ToolStreamHost = {
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
+  activityEventSeqById?: Map<string, number>;
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
+  requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
 
@@ -311,10 +314,11 @@ function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
   if (host.toolStreamSyncTimer != null) {
     return;
   }
-  host.toolStreamSyncTimer = window.setTimeout(
-    () => flushToolStreamSync(host),
-    TOOL_STREAM_THROTTLE_MS,
-  );
+  host.toolStreamSyncTimer = window.setTimeout(() => {
+    flushToolStreamSync(host);
+    // The initial event rendered before this deferred projection existed.
+    host.requestUpdate?.();
+  }, TOOL_STREAM_THROTTLE_MS);
 }
 
 export function resetToolStream(host: ToolStreamHost) {
@@ -324,6 +328,7 @@ export function resetToolStream(host: ToolStreamHost) {
   }
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
+  host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
   host.planStatus = null;
@@ -331,6 +336,34 @@ export function resetToolStream(host: ToolStreamHost) {
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
   // until snapshot reconciliation observes the approval leaving the queue.
+}
+
+function activityEventIdentity(payload: AgentEventPayload): string | null {
+  if (payload.stream === "tool") {
+    const toolCallId = toTrimmedString(payload.data?.toolCallId);
+    return toolCallId ? `tool:${payload.runId}:${toolCallId}` : null;
+  }
+  if (payload.stream === "item" && payload.data?.kind === "preamble") {
+    const itemId =
+      toTrimmedString(payload.data?.itemId) ?? toTrimmedString(payload.data?.id) ?? "latest";
+    return `preamble:${payload.runId}:${itemId}`;
+  }
+  return null;
+}
+
+function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const identity = activityEventIdentity(payload);
+  if (!identity) {
+    return true;
+  }
+  const seq = Number.isSafeInteger(payload.seq) ? payload.seq : 0;
+  const previous = host.activityEventSeqById?.get(identity);
+  if (previous !== undefined && seq <= previous) {
+    return false;
+  }
+  const sequences = (host.activityEventSeqById ??= new Map());
+  sequences.set(identity, seq);
+  return true;
 }
 
 export type CompactionStatus = {
@@ -463,17 +496,11 @@ export function reconcileWaitingApprovalsFromSnapshot(
   return changed;
 }
 
-type PlanHost = ToolStreamHost & {
-  planStatus?: PlanStatus | null;
-  requestUpdate?: () => void;
-};
-
 type CompactionHost = ToolStreamHost & {
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
-  requestUpdate?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -745,6 +772,7 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   host.fallbackClearTimer = window.setTimeout(() => {
     host.fallbackStatus = null;
     host.fallbackClearTimer = null;
+    host.requestUpdate?.();
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
@@ -813,6 +841,11 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   const progress = readPreambleProgressEvent(payload);
   if (!progress) {
     return false;
+  }
+  // Preambles belong to the visible run; a sibling run must never replace,
+  // clear, or persist its commentary into this transcript.
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return true;
   }
   if (progress.itemId && !progress.text.trim()) {
     host.chatStreamSegments = host.chatStreamSegments.filter(
@@ -895,7 +928,7 @@ export function normalizePlanSnapshot(
   };
 }
 
-function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
+function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload) {
   // Plan snapshots are run-owned: a stale or spawned-run event in the same
   // session must not overwrite (or clear) the active run's checklist. Mirrors
   // the compaction/fallback acceptance policy (session-scoped when idle).
@@ -920,6 +953,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   // active chat run; individual run-owned projections apply their own match.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+    return;
+  }
+  // History can replay an older active-run snapshot after newer live activity.
+  // Fence each tool/preamble identity by Gateway sequence so restore fills gaps
+  // without regressing a result or newer progress already rendered by this pane.
+  if (!acceptActivityEvent(host, payload)) {
     return;
   }
   if (payload.stream === "lifecycle" || payload.stream === "tool") {
@@ -967,7 +1006,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "plan") {
-    handlePlanEvent(host as PlanHost, payload);
+    handlePlanEvent(host, payload);
     return;
   }
 
@@ -980,8 +1019,15 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!toolCallId) {
     return;
   }
-  const name = typeof data.name === "string" ? data.name : "tool";
+  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  let entry = host.toolStreamById.get(toolStreamIdentity);
   const phase = typeof data.phase === "string" ? data.phase : "";
+  // A started call owns its concrete identity even when later events omit or
+  // contradict it; an unnamed placeholder can still adopt its first real name.
+  const name =
+    phase !== "start" && entry?.name && entry.name !== "tool"
+      ? entry.name
+      : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (phase === "start" && payload.runId === host.chatRunId) {
     host.chatRunStartup = { state: "activity", runId: payload.runId };
   }
@@ -1000,7 +1046,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   const now = Date.now();
-  let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
@@ -1031,8 +1076,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       receivedAt: now,
       message: {},
     };
-    host.toolStreamById.set(toolCallId, entry);
-    host.toolStreamOrder.push(toolCallId);
+    host.toolStreamById.set(toolStreamIdentity, entry);
+    host.toolStreamOrder.push(toolStreamIdentity);
   } else {
     entry.name = name;
     if (args !== undefined) {

@@ -21,6 +21,7 @@ import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+import { createClientHarness } from "./test-support.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -69,6 +70,7 @@ vi.mock("./shared-client.js", () => ({
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;
   }),
+  retireSharedCodexAppServerClientIfCurrent: vi.fn(),
   withLeasedCodexAppServerClientStartSelectionRetry: (params: SelectionRetryParams) =>
     withLeasedCodexAppServerClientStartSelectionRetryMock(params),
 }));
@@ -286,7 +288,7 @@ function threadResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/workspace",
-      cliVersion: "0.125.0",
+      cliVersion: "0.146.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -3076,6 +3078,104 @@ describe("runCodexAppServerSideQuestion", () => {
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
     );
   });
+
+  it.each([
+    { label: "after its request is written", written: true, interruptFails: false },
+    { label: "before its request is written", written: false, interruptFails: false },
+    {
+      label: "when Codex proves its native turn already ended",
+      written: true,
+      interruptFails: false,
+      alreadyTerminal: true,
+    },
+    {
+      label: "when its native thread cannot unsubscribe",
+      written: true,
+      interruptFails: false,
+      unsubscribeFails: true,
+    },
+    { label: "when its startup interrupt fails", written: true, interruptFails: true },
+    {
+      label: "when its startup interrupt and client retirement fail",
+      written: true,
+      interruptFails: true,
+      retirementFails: true,
+    },
+  ])(
+    "scopes side-turn abort cleanup $label",
+    async ({ written, interruptFails, retirementFails, alreadyTerminal, unsubscribeFails }) => {
+      const controller = new AbortController();
+      const harness = createClientHarness();
+      if (retirementFails) {
+        vi.spyOn(harness.client, "closeAndWait").mockRejectedValueOnce(
+          new Error("side client retirement failed"),
+        );
+      }
+      getSharedCodexAppServerClientMock.mockResolvedValue(harness.client);
+      const waitForRequest = async (method: string) =>
+        await vi.waitFor(
+          () => {
+            const request = harness.writes
+              .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
+              .find((message) => message.method === method);
+            if (!request) {
+              throw new Error(`Codex side harness did not write ${method}`);
+            }
+            return request;
+          },
+          { interval: 1, timeout: 5_000 },
+        );
+      const run = runCodexAppServerSideQuestion(
+        sideParams({ opts: { abortSignal: controller.signal } }),
+      );
+      const failure = run.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const fork = await waitForRequest("thread/fork");
+      harness.send({ id: fork.id, result: threadResult("side-thread") });
+      const inject = await waitForRequest("thread/inject_items");
+      harness.send({ id: inject.id, result: {} });
+
+      if (written) {
+        const turnStart = await waitForRequest("turn/start");
+        controller.abort("side-start-cancelled");
+        const interrupt = await waitForRequest("turn/interrupt");
+        expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
+        harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
+        harness.send(
+          alreadyTerminal
+            ? {
+                id: interrupt.id,
+                error: { code: -32_600, message: "no active turn to interrupt" },
+              }
+            : interruptFails
+              ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
+              : { id: interrupt.id, result: {} },
+        );
+      } else {
+        controller.abort("side-start-cancelled");
+      }
+
+      if (!interruptFails) {
+        const unsubscribe = await waitForRequest("thread/unsubscribe");
+        harness.send(
+          unsubscribeFails
+            ? { id: unsubscribe.id, error: { code: -32_000, message: "side unsubscribe failed" } }
+            : { id: unsubscribe.id, result: {} },
+        );
+      }
+      await expect(failure).resolves.toMatchObject({ message: "turn/start aborted" });
+      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+        "thread/fork",
+        "thread/inject_items",
+        ...(written ? ["turn/start", "turn/interrupt"] : []),
+        ...(!interruptFails ? ["thread/unsubscribe"] : []),
+      ]);
+      expect(harness.stdinDestroyed).toBe(interruptFails || unsubscribeFails === true);
+      harness.client.close();
+    },
+  );
 
   it("interrupts and unsubscribes the ephemeral thread on abort", async () => {
     const controller = new AbortController();

@@ -421,6 +421,7 @@ export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   type: "diagnostic.liveness.warning";
   reasons: DiagnosticLivenessWarningReason[];
   intervalMs: number;
+  degradedSinceMs?: number;
   eventLoopDelayP99Ms?: number;
   eventLoopDelayMaxMs?: number;
   eventLoopUtilization?: number;
@@ -452,6 +453,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   action: "warn" | "block";
   detector:
     | "generic_repeat"
+    | "argument_churn"
     | "unknown_tool_repeat"
     | "known_poll_no_progress"
     | "global_circuit_breaker"

@@ -34,6 +34,13 @@ shared `message` tool. Your plugin owns:
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
+Core also owns model-picker product actions. A channel that renders a
+`ModelPickerAction` declares its `ModelPickerCapabilityProfile`, then encodes
+the typed action in a transport-private authenticated callback envelope. Keep
+approval, command, URL, web-app, question, callback, and model-picker actions
+distinguishable until that encoding boundary; never infer picker intent from a
+raw callback string. Actor and source-message checks remain channel-owned.
+
 ## Message adapter
 
 Expose a `message` adapter with `defineChannelMessageAdapter` from
@@ -206,6 +213,13 @@ resolved config unchanged, stopping one account settles only that account's
 monitor and drain, and a fresh monitor recovers that account's rows exactly
 once. If any guarantee cannot be proved, omit the flag.
 
+### Runtime lifecycle status
+
+For channel-authored runtime state, `ChannelAccountSnapshot.lifecycle` is the
+successor to `healthState`. Existing plugins may keep publishing `healthState`
+during adoption, and core-derived policy writes remain supported. There is no
+removal date; removal waits for external channel-plugin adoption.
+
 ### Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose
@@ -231,6 +245,14 @@ fetch can use `createHostedOutboundMediaStore(...)` from
 `openclaw/plugin-sdk/outbound-media` with plugin state stores. Keep platform
 route parsing and token enforcement in the channel plugin; the shared helper
 only owns media loading, expiry metadata, chunk rows, and cleanup.
+
+`prepareUrl({ mediaAccess })` forwards host-authorized local media access to
+the shared outbound loader. Hosted media capacity defaults to
+`overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
+issued URLs must remain valid until expiry, and configure both backing keyed
+stores with `"reject-new"` so independent writers cannot evict live rows.
+Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
+so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
 
 Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
 channel records with `toInboundMediaFacts(...)` from
@@ -526,6 +548,10 @@ surfaces:
 - `openclaw/plugin-sdk/inbound-envelope` and
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
+- `createInboundEventDeliveryCorrelation(...)` from
+  `openclaw/plugin-sdk/inbound-event-delivery` when successful outbound sends must
+  retire an active inbound-event marker; create one tracker per channel and
+  keep target matching in the channel plugin
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
 - `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
   and typed payload planning

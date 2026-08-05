@@ -1,10 +1,13 @@
 // Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { QuestionResolveResult } from "@openclaw/gateway-protocol";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { SessionsListResult } from "../api/types.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -18,6 +21,8 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "question-flow");
+const mainSessionKey = "agent:main:main";
+const questionSessionKey = "agent:main:question-proof";
 
 let browser: Browser;
 let context: BrowserContext | undefined;
@@ -39,7 +44,7 @@ function questionRecord(
     id,
     questions,
     agentId: "main",
-    sessionKey: "main",
+    sessionKey: questionSessionKey,
     createdAtMs,
     expiresAtMs: createdAtMs + 15 * 60_000,
     status: "pending" as const,
@@ -82,19 +87,69 @@ async function openQuestionPage() {
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
+    featureMethods: [
+      "chat.abort",
+      "chat.metadata",
+      "chat.startup",
+      "question.get",
+      "question.list",
+      "question.resolve",
+      "sessions.create",
+      "sessions.patch",
+    ],
     historyMessages: historyMessages(),
     methodResponses: {
       "question.list": { questions: [] },
+      "sessions.list": {
+        ts: Date.now(),
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: null },
+        sessions: [
+          {
+            key: mainSessionKey,
+            kind: "direct",
+            label: "Home",
+            updatedAt: Date.now() - 1_000,
+          },
+          {
+            key: questionSessionKey,
+            kind: "direct",
+            label: "Question proof",
+            updatedAt: Date.now(),
+          },
+        ],
+      } satisfies SessionsListResult,
     },
-    sessionKey: "main",
+    // The handshake must advertise the genuine canonical main; the question
+    // lives in its own existing thread so the real sidebar can render its row.
+    sessionKey: mainSessionKey,
   });
-  await page.goto(`${server.baseUrl}chat`);
-  await gateway.waitForRequest("question.list");
+  await page.goto(controlUiSessionUrl(server.baseUrl, questionSessionKey));
+  // Chat and sidebar each own a projection; both must bind to the advertised
+  // real client before a lost-broadcast test can prove cross-surface delivery.
+  await expect
+    .poll(async () => (await gateway.getRequests("question.list")).length)
+    .toBeGreaterThanOrEqual(2);
+  const startup = await gateway.waitForRequest("chat.startup");
+  expect(startup.params).toEqual(expect.objectContaining({ sessionKey: questionSessionKey }));
+  await page.locator(`[data-session-key="${questionSessionKey}"]`).first().waitFor();
   return { gateway, page };
 }
 
 function panelFor(page: Page, prompt: string) {
   return page.locator("openclaw-chat-question-panel").filter({ hasText: prompt });
+}
+
+async function expectQuestionAttention(page: Page, present: boolean): Promise<void> {
+  const session = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
+  const expectedCount = present ? 1 : 0;
+  await expect
+    .poll(() => session.locator('[data-session-attention="question"]').count())
+    .toBe(expectedCount);
+  await expect
+    .poll(() => session.getByText("Waiting for your answer", { exact: true }).count())
+    .toBe(expectedCount);
 }
 
 async function emitRequested(
@@ -123,7 +178,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await server?.close();
   });
 
-  it("replaces the composer, restores it on collapse, and preserves its draft through resolution", async () => {
+  it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     await composer.fill("Keep this release note draft");
@@ -149,6 +204,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await emitRequested(gateway, request);
     const panel = panelFor(page, "Where should I deploy?");
     await panel.waitFor();
+    await expectQuestionAttention(page, true);
     await expect
       .poll(() => page.locator(".chat-thread openclaw-chat-question-panel").count())
       .toBe(0);
@@ -204,28 +260,18 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       )
       .toBe(true);
 
+    const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
+    await gateway.setMethodResponse("question.resolve", {
+      status: "answered",
+      answers,
+    } satisfies QuestionResolveResult);
     await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({
-      id: request.id,
-      answers: {
-        answers: {
-          deploy_target: ["Staging (Recommended)"],
-        },
-      },
-    });
+    expect(resolveRequest.params).toEqual({ id: request.id, answers });
 
-    await gateway.emitGatewayEvent("question.resolved", {
-      id: request.id,
-      status: "answered",
-      answers: {
-        answers: {
-          deploy_target: ["Staging (Recommended)"],
-        },
-      },
-    });
     await expect.poll(() => panel.count()).toBe(0);
+    await expectQuestionAttention(page, false);
     const summary = page.locator(".chat-question-summary").filter({ hasText: "Deploy:" });
     await summary.waitFor();
     await expect
@@ -269,16 +315,163 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       .toBe("true");
     await screenshot(page, "03-question-multiselect.png");
 
+    const answers = { answers: { release_checks: ["Tests", "Metrics"] } };
+    await gateway.setMethodResponse("question.resolve", {
+      status: "answered",
+      answers,
+    } satisfies QuestionResolveResult);
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({
-      id: request.id,
-      answers: {
-        answers: {
-          release_checks: ["Tests", "Metrics"],
-        },
+    expect(resolveRequest.params).toEqual({ id: request.id, answers });
+    await expect.poll(() => panel.count()).toBe(0);
+  });
+
+  it("restores the composer from an authoritative cancellation without a resolution event", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const request = questionRecord("question-skip-without-broadcast", [
+      {
+        questionId: "deploy_target",
+        header: "Deploy",
+        question: "Should I continue the deployment?",
+        options: [{ label: "Staging" }, { label: "Production" }],
       },
-    });
+    ]);
+    await emitRequested(gateway, request);
+    const panel = panelFor(page, "Should I continue the deployment?");
+    await panel.waitFor();
+    await expectQuestionAttention(page, true);
+    await gateway.setMethodResponse("question.resolve", {
+      status: "cancelled",
+    } satisfies QuestionResolveResult);
+
+    await panel.getByRole("button", { name: "Skip", exact: true }).click();
+    const resolveRequest = await gateway.waitForRequest("question.resolve");
+    expect(resolveRequest.params).toEqual({ id: request.id, cancel: true });
+    await expect.poll(() => panel.count()).toBe(0);
+    await expectQuestionAttention(page, false);
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await expect
+      .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).count())
+      .toBe(1);
+  });
+
+  it.each([
+    { action: "answer", status: "answered" as const, closeSubmittingPane: false },
+    { action: "cancellation", status: "cancelled" as const, closeSubmittingPane: false },
+    {
+      action: "answer after its submitting pane closes",
+      status: "answered" as const,
+      closeSubmittingPane: true,
+    },
+    {
+      action: "cancellation after its submitting pane closes",
+      status: "cancelled" as const,
+      closeSubmittingPane: true,
+    },
+  ])(
+    "updates current panes and sidebar from an authoritative $action without a resolution event",
+    async ({ status, closeSubmittingPane }) => {
+      const { gateway, page } = await openQuestionPage();
+      await page.getByRole("button", { name: "Open split view" }).click();
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      await expect.poll(() => panes.count()).toBe(2);
+      await expect
+        .poll(async () => (await gateway.getRequests("question.list")).length)
+        .toBeGreaterThanOrEqual(3);
+
+      const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`, [
+        {
+          questionId: "deploy_target",
+          header: "Deploy",
+          question: "Where should both panes deploy?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ]);
+      await emitRequested(gateway, request);
+      const panels = panelFor(page, "Where should both panes deploy?");
+      await expect.poll(() => panels.count()).toBe(2);
+      await expectQuestionAttention(page, true);
+
+      const answers = { answers: { deploy_target: ["Staging"] } };
+      const result: QuestionResolveResult =
+        status === "answered" ? { status, answers } : { status };
+      if (closeSubmittingPane) {
+        await gateway.deferNext("question.resolve");
+      } else {
+        await gateway.setMethodResponse("question.resolve", result);
+      }
+      const submittingIndex = closeSubmittingPane ? 1 : 0;
+      const submittingPane = panes.nth(submittingIndex);
+      const submittingPanel = panels.nth(submittingIndex);
+      if (status === "answered") {
+        await submittingPanel.getByRole("radio", { name: /Staging/ }).click();
+      }
+      await submittingPanel
+        .getByRole("button", { name: status === "answered" ? "Submit" : "Skip", exact: true })
+        .click();
+      const resolveRequest = await gateway.waitForRequest("question.resolve");
+      expect(resolveRequest.params).toEqual(
+        status === "answered" ? { id: request.id, answers } : { id: request.id, cancel: true },
+      );
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+      const remainingPanes = page.locator("openclaw-chat-pane");
+      if (closeSubmittingPane) {
+        await submittingPane.getByRole("button", { name: "Close pane", exact: true }).click();
+        await expect.poll(() => remainingPanes.count()).toBe(1);
+        await expectQuestionAttention(page, true);
+        await gateway.resolveDeferred("question.resolve", result);
+      }
+      const remainingCount = closeSubmittingPane ? 1 : 2;
+
+      await expect.poll(() => panels.count()).toBe(0);
+      await expect
+        .poll(() => remainingPanes.locator(".agent-chat__composer-combobox textarea").count())
+        .toBe(remainingCount);
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-question-summary")
+            .filter({ hasText: status === "answered" ? "Staging" : "Skipped" })
+            .count(),
+        )
+        .toBe(remainingCount);
+      await expectQuestionAttention(page, false);
+    },
+  );
+
+  it("restores the composer when reconnect recovery cannot find an old question", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const request = questionRecord("question-expired-during-disconnect", [
+      {
+        questionId: "deploy_target",
+        header: "Deploy",
+        question: "Where should I deploy after reconnecting?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+      },
+    ]);
+    await emitRequested(gateway, request);
+    const panel = panelFor(page, "Where should I deploy after reconnecting?");
+    await panel.waitFor();
+    await expectQuestionAttention(page, true);
+
+    await gateway.deferNext("question.get");
+    await gateway.deferNext("question.get");
+    await gateway.closeLatest();
+    const recovery = await gateway.waitForRequest("question.get");
+    expect(recovery.params).toEqual({ id: request.id });
+    await expect.poll(async () => (await gateway.getRequests("question.get")).length).toBe(2);
+    const notFound = {
+      code: "INVALID_REQUEST",
+      message: "question was not found",
+      details: { reason: "QUESTION_NOT_FOUND" },
+    };
+    await gateway.rejectDeferred("question.get", notFound);
+    await gateway.rejectDeferred("question.get", notFound);
+
+    await expect.poll(() => panel.count()).toBe(0);
+    await expectQuestionAttention(page, false);
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    expect(await gateway.getRequests("question.get")).toHaveLength(2);
   });
 
   it("shows a 1/2 stepper with answered and expired summaries", async () => {

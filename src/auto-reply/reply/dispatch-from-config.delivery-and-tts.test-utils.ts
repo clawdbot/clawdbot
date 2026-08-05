@@ -35,6 +35,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { usesFullReplyRuntime, usesPublishedReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -892,16 +893,36 @@ describe("dispatchReplyFromConfig", () => {
     expect(JSON.stringify(failedAuditEvent)).not.toContain("dispatch failed");
   });
 
-  it("poisons inbound dedupe when dispatch fails after a block reply", async () => {
+  it.each([
+    {
+      name: "poisons inbound dedupe when dispatch fails after a block reply",
+      phone: "+15555550125",
+      messageSid: "msg-dup-block-error",
+      kind: "block",
+      text: "partial answer",
+      error: "provider failed after block",
+    },
+    {
+      name: "poisons inbound dedupe when dispatch fails after a suppressed tool result",
+      phone: "+15555550126",
+      messageSid: "msg-dup-tool-error",
+      kind: "tool",
+      text: "tool touched external state",
+      error: "provider failed after tool",
+    },
+  ] as const)("$name", async ({ phone, messageSid, kind, text, error }) => {
     setNoAbort();
+    if (kind === "tool") {
+      sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "deny" };
+    }
     const ctx = buildTestCtx({
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
-      OriginatingTo: "whatsapp:+15555550125",
-      To: "whatsapp:+15555550125",
+      OriginatingTo: `whatsapp:${phone}`,
+      To: `whatsapp:${phone}`,
       AccountId: "default",
-      MessageSid: "msg-dup-block-error",
-      SessionKey: "agent:main:whatsapp:direct:+15555550125",
+      MessageSid: messageSid,
+      SessionKey: `agent:main:whatsapp:direct:${phone}`,
       CommandBody: "hello",
       RawBody: "hello",
       Body: "hello",
@@ -909,8 +930,12 @@ describe("dispatchReplyFromConfig", () => {
     const firstDispatcher = createDispatcher();
     const replyResolver = vi.fn(
       async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
-        await opts?.onBlockReply?.({ text: "partial answer" });
-        throw new Error("provider failed after block");
+        if (kind === "block") {
+          await opts?.onBlockReply?.({ text });
+        } else {
+          await opts?.onToolResult?.({ text });
+        }
+        throw new Error(error);
       },
     );
 
@@ -921,8 +946,7 @@ describe("dispatchReplyFromConfig", () => {
         dispatcher: firstDispatcher,
         replyResolver,
       }),
-    ).rejects.toThrow("provider failed after block");
-
+    ).rejects.toThrow(error);
     await dispatchReplyFromConfig({
       ctx,
       cfg: emptyConfig,
@@ -930,54 +954,11 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(firstDispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "partial answer" });
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-  });
-
-  it("poisons inbound dedupe when dispatch fails after a suppressed tool result", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
-    const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "whatsapp:+15555550126",
-      To: "whatsapp:+15555550126",
-      AccountId: "default",
-      MessageSid: "msg-dup-tool-error",
-      SessionKey: "agent:main:whatsapp:direct:+15555550126",
-      CommandBody: "hello",
-      RawBody: "hello",
-      Body: "hello",
-    });
-    const firstDispatcher = createDispatcher();
-    const replyResolver = vi.fn(
-      async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
-        await opts?.onToolResult?.({ text: "tool touched external state" });
-        throw new Error("provider failed after tool");
-      },
-    );
-
-    await expect(
-      dispatchReplyFromConfig({
-        ctx,
-        cfg: emptyConfig,
-        dispatcher: firstDispatcher,
-        replyResolver,
-      }),
-    ).rejects.toThrow("provider failed after tool");
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-
-    expect(firstDispatcher.sendToolResult).not.toHaveBeenCalled();
+    if (kind === "block") {
+      expect(firstDispatcher.sendBlockReply).toHaveBeenCalledWith({ text });
+    } else {
+      expect(firstDispatcher.sendToolResult).not.toHaveBeenCalled();
+    }
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
@@ -1019,6 +1000,72 @@ describe("dispatchReplyFromConfig", () => {
       agents: { defaults: { userTimezone: "America/New_York" } },
       messages: { suppressToolErrors: true },
     });
+  });
+
+  it("keeps the caller config exact before a runtime snapshot is published", async () => {
+    setNoAbort();
+    const cfg = {
+      agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+    } as OpenClawConfig;
+    let receivedCfg: OpenClawConfig | undefined;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "discord", Surface: "discord" }),
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, _opts, cfgArg) => {
+        receivedCfg = cfgArg;
+        return { text: "hi" };
+      },
+    });
+
+    expect(receivedCfg).toBe(cfg);
+    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
+    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(false);
+  });
+
+  it("marks the committed runtime snapshot for published-owner reply resolution", async () => {
+    setNoAbort();
+    const runtimeCfg = {
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg);
+    let receivedCfg: OpenClawConfig | undefined;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "discord", Surface: "discord" }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, _opts, cfgArg) => {
+        receivedCfg = cfgArg;
+        return { text: "hi" };
+      },
+    });
+
+    expect(receivedCfg).toBe(runtimeCfg);
+    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
+  });
+
+  it("marks a channel-captured config for published-owner resolution before a snapshot exists", async () => {
+    setNoAbort();
+    const cfg = {
+      agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+    } as OpenClawConfig;
+    let receivedCfg: OpenClawConfig | undefined;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
+      cfg,
+      dispatcher: createDispatcher(),
+      usePublishedModelRuntime: true,
+      replyResolver: async (_ctx, _opts, cfgArg) => {
+        receivedCfg = cfgArg;
+        return { text: "hi" };
+      },
+    });
+
+    expect(receivedCfg).toBe(cfg);
+    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
   });
 
   it("drops a removed Firecrawl SecretRef from Discord replies after config reload", async () => {
@@ -1067,156 +1114,125 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hi" });
   });
 
-  it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
+  it.each([
+    [
+      "suppresses isReasoning payloads from final replies (WhatsApp channel)",
+      "whatsapp",
+      "reasoning",
+      "final",
+      false,
+    ],
+    [
+      "delivers isReasoning final replies when the channel opts in",
+      "telegram",
+      "reasoning",
+      "final",
+      true,
+    ],
+    [
+      "suppresses isCommentary payloads from final replies by default",
+      "whatsapp",
+      "commentary",
+      "final",
+      false,
+    ],
+    [
+      "delivers isCommentary final replies when the channel opts in",
+      "discord",
+      "commentary",
+      "final",
+      true,
+    ],
+    [
+      "does not synthesize opted-in final reasoning payloads into TTS media",
+      "telegram",
+      "reasoning",
+      "final-tts",
+      true,
+    ],
+    [
+      "does not synthesize opted-in final commentary payloads into TTS media",
+      "discord",
+      "commentary",
+      "final-tts",
+      true,
+    ],
+    [
+      "suppresses isReasoning payloads from block replies (generic dispatch path)",
+      "whatsapp",
+      "reasoning",
+      "block",
+      false,
+    ],
+    [
+      "delivers opted-in block reasoning payloads without applying TTS",
+      "telegram",
+      "reasoning",
+      "block",
+      true,
+    ],
+    [
+      "suppresses isCommentary payloads from block replies by default",
+      "whatsapp",
+      "commentary",
+      "block",
+      false,
+    ],
+    [
+      "delivers opted-in block commentary payloads without applying TTS",
+      "discord",
+      "commentary",
+      "block",
+      true,
+    ],
+  ] as const)("%s", async (_name, provider, kind, delivery, enabled) => {
     setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = delivery === "final-tts";
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const replyResolver = async () =>
-      [
-        { text: "thinking...", isReasoning: true },
-        { text: "The answer is 42" },
-      ] satisfies ReplyPayload[];
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls).toHaveLength(1);
-    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
-  });
-
-  it("delivers isReasoning final replies when the channel opts in", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
-    const replyResolver = async () =>
-      [
-        { text: "thinking...", isReasoning: true },
-        { text: "The answer is 42" },
-      ] satisfies ReplyPayload[];
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { reasoningPayloadsEnabled: true },
-      replyResolver,
-    });
-
-    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.map((call) => (call[0] as ReplyPayload).text)).toEqual([
-      "thinking...",
-      "The answer is 42",
-    ]);
-  });
-
-  it("suppresses isCommentary payloads from final replies by default", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const replyResolver = async () =>
-      [
-        { text: "commentary...", isCommentary: true },
-        { text: "The answer is 42" },
-      ] satisfies ReplyPayload[];
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls).toHaveLength(1);
-    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
-  });
-
-  it("delivers isCommentary final replies when the channel opts in", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
-    const replyResolver = async () =>
-      [
-        { text: "commentary...", isCommentary: true },
-        { text: "The answer is 42" },
-      ] satisfies ReplyPayload[];
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { commentaryPayloadsEnabled: true },
-      replyResolver,
-    });
-
-    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.map((call) => (call[0] as ReplyPayload).text)).toEqual([
-      "commentary...",
-      "The answer is 42",
-    ]);
-  });
-
-  it("does not synthesize opted-in final reasoning payloads into TTS media", async () => {
-    setNoAbort();
-    ttsMocks.state.synthesizeFinalAudio = true;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
-    const reasoningPayload = {
-      text: "thinking...",
-      isReasoning: true,
-    } satisfies ReplyPayload;
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { reasoningPayloadsEnabled: true },
-      replyResolver: async () => reasoningPayload,
-    });
-
-    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reasoningPayload);
-  });
-
-  it("does not synthesize opted-in final commentary payloads into TTS media", async () => {
-    setNoAbort();
-    ttsMocks.state.synthesizeFinalAudio = true;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
-    const commentaryPayload = {
-      text: "commentary...",
-      isCommentary: true,
-    } satisfies ReplyPayload;
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { commentaryPayloadsEnabled: true },
-      replyResolver: async () => commentaryPayload,
-    });
-
-    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commentaryPayload);
-  });
-
-  it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const blockReplySentTexts: string[] = [];
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-    ): Promise<ReplyPayload> => {
-      // Simulate block reply with reasoning payload
-      await opts?.onBlockReply?.({ text: "thinking...", isReasoning: true });
-      await opts?.onBlockReply?.({ text: "The answer is 42" });
-      return { text: "The answer is 42" };
+    const progressPayload =
+      kind === "reasoning"
+        ? ({ text: "thinking...", isReasoning: true } satisfies ReplyPayload)
+        : ({ text: "commentary...", isCommentary: true } satisfies ReplyPayload);
+    const answer = { text: "The answer is 42" } satisfies ReplyPayload;
+    const replyOptions =
+      kind === "reasoning"
+        ? { reasoningPayloadsEnabled: true }
+        : { commentaryPayloadsEnabled: true };
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      if (delivery === "block") {
+        await opts?.onBlockReply?.(progressPayload);
+        await opts?.onBlockReply?.(answer);
+        return enabled ? undefined : answer;
+      }
+      return delivery === "final-tts" ? progressPayload : [progressPayload, answer];
     };
-    // Capture what actually gets dispatched as block replies
-    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
-      (payload: ReplyPayload) => {
-        if (payload.text) {
-          blockReplySentTexts.push(payload.text);
-        }
-        return true;
-      },
-    );
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-    expect(blockReplySentTexts).not.toContain("thinking...");
-    expect(blockReplySentTexts).toContain("The answer is 42");
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: provider, Surface: provider }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: enabled ? replyOptions : undefined,
+      replyResolver,
+    });
+
+    if (delivery === "block") {
+      const blockCalls = vi.mocked(dispatcher.sendBlockReply).mock.calls;
+      const delivered = blockCalls.map(([payload]) => payload.text);
+      expect(delivered).toEqual(enabled ? [progressPayload.text, answer.text] : [answer.text]);
+      if (enabled) {
+        const blockTts = ttsMocks.maybeApplyTtsToPayload.mock.calls
+          .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
+          .filter((call) => call.kind === "block");
+        expect(blockTts.map((call) => call.payload?.text)).toEqual([answer.text]);
+      }
+    } else if (delivery === "final-tts") {
+      expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(progressPayload);
+    } else {
+      const finalCalls = vi.mocked(dispatcher.sendFinalReply).mock.calls;
+      const delivered = finalCalls.map(([payload]) => payload.text);
+      expect(delivered).toEqual(enabled ? [progressPayload.text, answer.text] : [answer.text]);
+    }
   });
 
   it("does not redeliver a final that already settled as an identical block", async () => {
@@ -1367,106 +1383,6 @@ describe("dispatchReplyFromConfig", () => {
       },
     ]);
     expect(result.counts).toEqual({ tool: 0, block: 1, final: 1 });
-  });
-
-  it("delivers opted-in block reasoning payloads without applying TTS", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
-    const blockReplySentTexts: string[] = [];
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-    ): Promise<ReplyPayload | undefined> => {
-      await opts?.onBlockReply?.({ text: "thinking...", isReasoning: true });
-      await opts?.onBlockReply?.({ text: "The answer is 42" });
-      return undefined;
-    };
-    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
-      (payload: ReplyPayload) => {
-        if (payload.text) {
-          blockReplySentTexts.push(payload.text);
-        }
-        return true;
-      },
-    );
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { reasoningPayloadsEnabled: true },
-      replyResolver,
-    });
-
-    expect(blockReplySentTexts).toEqual(["thinking...", "The answer is 42"]);
-    const blockTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
-      .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
-      .filter((call) => call.kind === "block");
-    expect(blockTtsCalls.map((call) => call.payload?.text)).toEqual(["The answer is 42"]);
-  });
-
-  it("suppresses isCommentary payloads from block replies by default", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const blockReplySentTexts: string[] = [];
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-    ): Promise<ReplyPayload> => {
-      await opts?.onBlockReply?.({ text: "commentary...", isCommentary: true });
-      await opts?.onBlockReply?.({ text: "The answer is 42" });
-      return { text: "The answer is 42" };
-    };
-    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
-      (payload: ReplyPayload) => {
-        if (payload.text) {
-          blockReplySentTexts.push(payload.text);
-        }
-        return true;
-      },
-    );
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-    expect(blockReplySentTexts).not.toContain("commentary...");
-    expect(blockReplySentTexts).toContain("The answer is 42");
-  });
-
-  it("delivers opted-in block commentary payloads without applying TTS", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
-    const blockReplySentTexts: string[] = [];
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-    ): Promise<ReplyPayload | undefined> => {
-      await opts?.onBlockReply?.({ text: "commentary...", isCommentary: true });
-      await opts?.onBlockReply?.({ text: "The answer is 42" });
-      return undefined;
-    };
-    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
-      (payload: ReplyPayload) => {
-        if (payload.text) {
-          blockReplySentTexts.push(payload.text);
-        }
-        return true;
-      },
-    );
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { commentaryPayloadsEnabled: true },
-      replyResolver,
-    });
-
-    expect(blockReplySentTexts).toEqual(["commentary...", "The answer is 42"]);
-    const blockTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
-      .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
-      .filter((call) => call.kind === "block");
-    expect(blockTtsCalls.map((call) => call.payload?.text)).toEqual(["The answer is 42"]);
   });
 
   it("strips split TTS directives from streamed block text before delivery", async () => {

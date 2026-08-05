@@ -221,6 +221,23 @@ openclaw-chat-pane {
   min-width: 0;
 }
 
+.chat-pane__gateway-menu::part(menu) {
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.chat-pane__gateway-menu-item {
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
 .chat-pane__gateway-chip {
   display: inline-flex;
   max-width: 170px;

@@ -6,7 +6,7 @@ scenario:
   category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
-      - channels.channel-native-commands
+      - telegram.built-in-commands
   objective: Verify Telegram renders the compact model-tool inventory.
   successCriteria:
     - The compact tools command reaches native command dispatch.
@@ -15,13 +15,6 @@ scenario:
     - src/auto-reply/reply/commands-info.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
-    profiles:
-      {
-        "telegram:adapter": 5,
-        "telegram:all": 4,
-        "telegram:mock-release": 4,
-        "telegram:release": 4,
-      }
     kind: flow
     channel: telegram
     summary: Request compact tools through Telegram and verify inventory text.
@@ -40,13 +33,13 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/tools@openclaw compact' : '/tools compact'"
+            text: /tools compact
+            nativeCommand: { name: tools }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }
-            textIncludes: exec
-            timeoutMs: 60000
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
         - call: sleep
           args: [1000]
         - set: joinedReply

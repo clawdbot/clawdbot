@@ -41,7 +41,7 @@ export function registerMaintenanceCommands(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.openclaw.ai/cli/doctor")}\n`,
     )
-    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", false)
+    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)

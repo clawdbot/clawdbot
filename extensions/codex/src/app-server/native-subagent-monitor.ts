@@ -810,8 +810,8 @@ class Monitor {
             ? "other"
             : "unavailable";
     if (threadStatus === "systemerror") {
-      // The 0.142 protocol floor guarantees the paged history API, whose live
-      // snapshot distinguishes the failed current turn from older persisted results.
+      // The pinned protocol's paged history distinguishes the failed current
+      // turn from earlier persisted results.
       const turnsResponse = await this.requestLatestThreadTurn(childThreadId).catch(
         () => undefined,
       );

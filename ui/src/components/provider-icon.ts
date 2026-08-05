@@ -37,7 +37,9 @@ const PROVIDER_ICON_NAMES = new Set([
   "kimi",
   "kiro",
   "litellm",
+  "llamacpp",
   "llmproxy",
+  "lmstudio",
   "manus",
   "mimo",
   "minimax",
@@ -71,10 +73,13 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   google: "gemini",
   "google-gemini-cli": "gemini",
   "github-copilot": "copilot",
+  "llama-cpp": "llamacpp",
   // CodexBar names its bundled OpenAI knot asset "codex".
   openai: "codex",
+  moonshot: "kimi",
   "opencode-go": "opencodego",
   "opencode-zen": "opencode",
+  qwen: "alibaba",
   xai: "grok",
   "vertex-ai": "vertexai",
   "z-ai": "zai",
@@ -85,9 +90,14 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
   google: "Google",
   "github-copilot": "GitHub",
+  "llama-cpp": "llama.cpp",
+  lmstudio: "LM Studio",
   openai: "OpenAI",
+  moonshot: "Moonshot AI",
   opencode: "OpenCode",
   openrouter: "OpenRouter",
+  qwen: "Qwen Cloud",
+  zai: "Z.AI",
 };
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */
@@ -102,6 +112,13 @@ export function formatRawProviderLabel(provider: string): string {
 /** Brand display name for a (normalized, lowercase) provider id. */
 export function providerDisplayLabel(provider: string): string {
   return PROVIDER_DISPLAY_LABELS[provider] ?? formatRawProviderLabel(provider);
+}
+
+/** Provider id from a canonical `provider/model` reference, or null when absent. */
+export function providerIdFromModelRef(modelRef: string): string | null {
+  const separator = modelRef.indexOf("/");
+  const provider = separator > 0 ? modelRef.slice(0, separator).trim().toLowerCase() : "";
+  return provider || null;
 }
 
 /** Icon asset name for a (normalized, lowercase) provider id, or null when no brand mark ships. */

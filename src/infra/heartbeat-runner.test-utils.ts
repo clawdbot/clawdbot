@@ -6,7 +6,7 @@ import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { CronService } from "../cron/service.js";
@@ -20,7 +20,7 @@ import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
 // while keeping plugin registry and environment state isolated per test.
-type HeartbeatSessionSeed = Partial<SessionEntry> & {
+type HeartbeatSessionSeed = Partial<InternalSessionEntry> & {
   lastChannel: string;
   lastProvider: string;
   lastTo: string;

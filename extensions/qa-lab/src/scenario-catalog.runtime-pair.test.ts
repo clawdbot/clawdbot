@@ -76,5 +76,10 @@ describe("QA runtime-pair scenario catalog", () => {
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
     });
+    const longContextScenario = readQaScenarioById("long-context-progress-watchdog");
+    expect(longContextScenario.execution).toMatchObject({ kind: "flow", runtime: "codex" });
+    const longContextFlow = JSON.stringify(longContextScenario.execution.flow);
+    expect(longContextFlow).toContain("env.runtimeId");
+    expect(longContextFlow).not.toContain("patchConfig");
   });
 });

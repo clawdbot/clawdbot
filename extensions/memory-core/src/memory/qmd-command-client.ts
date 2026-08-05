@@ -30,57 +30,31 @@ type BuiltinQmdMcpTool = "query" | "search" | "vector_search" | "deep_search";
 
 export type QmdCommandPhaseReporter = (action: MemorySearchDeadlineAction) => void;
 
-type QmdMcporterSearchParams =
-  | {
-      mcporter: ResolvedQmdMcporterConfig;
-      tool: string;
-      searchCommand?: string;
-      explicitToolOverride: true;
-      query: string;
-      limit: number;
-      minScore: number;
-      collection?: string;
-      timeoutMs: number;
-      signal?: AbortSignal;
-      reportCommandPhase?: QmdCommandPhaseReporter;
-    }
-  | {
-      mcporter: ResolvedQmdMcporterConfig;
-      tool: BuiltinQmdMcpTool;
-      searchCommand?: string;
-      explicitToolOverride: false;
-      query: string;
-      limit: number;
-      minScore: number;
-      collection?: string;
-      timeoutMs: number;
-      signal?: AbortSignal;
-      reportCommandPhase?: QmdCommandPhaseReporter;
-    };
+type QmdMcporterToolSelection =
+  | { tool: string; explicitToolOverride: true }
+  | { tool: BuiltinQmdMcpTool; explicitToolOverride: false };
 
-type QmdMcporterAcrossCollectionsParams =
-  | {
-      tool: string;
-      searchCommand?: string;
-      explicitToolOverride: true;
-      query: string;
-      limit: number;
-      minScore: number;
-      collectionNames: string[];
-      signal?: AbortSignal;
-      reportCommandPhase?: QmdCommandPhaseReporter;
-    }
-  | {
-      tool: BuiltinQmdMcpTool;
-      searchCommand?: string;
-      explicitToolOverride: false;
-      query: string;
-      limit: number;
-      minScore: number;
-      collectionNames: string[];
-      signal?: AbortSignal;
-      reportCommandPhase?: QmdCommandPhaseReporter;
-    };
+type QmdMcporterSearchParams = QmdMcporterToolSelection & {
+  mcporter: ResolvedQmdMcporterConfig;
+  searchCommand?: string;
+  query: string;
+  limit: number;
+  minScore: number;
+  collection?: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  reportCommandPhase?: QmdCommandPhaseReporter;
+};
+
+type QmdMcporterAcrossCollectionsParams = QmdMcporterToolSelection & {
+  searchCommand?: string;
+  query: string;
+  limit: number;
+  minScore: number;
+  collectionNames: string[];
+  signal?: AbortSignal;
+  reportCommandPhase?: QmdCommandPhaseReporter;
+};
 
 export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): number {
   return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);

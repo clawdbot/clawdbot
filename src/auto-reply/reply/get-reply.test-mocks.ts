@@ -31,7 +31,9 @@ vi.mock("../../agents/timeout.js", () => ({
 
 vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
-  ensureAgentWorkspace: vi.fn(async () => ({ dir: "/tmp/workspace" })),
+  ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
+    dir: params?.dir ?? "/tmp/workspace",
+  })),
 }));
 
 vi.mock("../../channels/model-overrides.js", () => ({

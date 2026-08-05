@@ -114,7 +114,8 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
   it("auto-clears fallback status after toast duration", () => {
     useToolStreamFakeTimers();
-    const host = createHost();
+    const requestUpdate = vi.fn();
+    const host = createHost({ requestUpdate });
 
     handleAgentEvent(host, {
       runId: "run-1",
@@ -140,8 +141,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(fallbackStatus.phase).toBe("active");
     expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
     expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(requestUpdate).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(host.fallbackStatus).toBeNull();
+    expect(requestUpdate).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 
@@ -303,6 +306,91 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     ]);
     expect(host.chatStream).toBeNull();
     vi.useRealTimers();
+  });
+
+  it.each([
+    { progressText: "Another run's commentary", name: "replace" },
+    { progressText: "", name: "clear" },
+  ])("does not let another run $name the active preamble", ({ progressText }) => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "The active run's commentary",
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-2",
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { kind: "preamble", itemId: "msg-preamble-1", progressText },
+    });
+
+    expect(host.chatStreamSegments).toEqual([
+      {
+        text: "The active run's commentary",
+        ts: TOOL_STREAM_TEST_NOW,
+        runId: "run-1",
+        itemId: "msg-preamble-1",
+      },
+    ]);
+  });
+
+  it("does not insert another run's preamble into the active transcript", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-2",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-2",
+        progressText: "Another run's commentary",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([]);
+  });
+
+  it("accepts a session-scoped preamble while no run is active", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "An already active session's commentary",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([
+      {
+        text: "An already active session's commentary",
+        ts: TOOL_STREAM_TEST_NOW,
+        runId: "run-1",
+        itemId: "msg-preamble-1",
+      },
+    ]);
   });
 
   it("clears keyed preamble item progress on empty updates", () => {

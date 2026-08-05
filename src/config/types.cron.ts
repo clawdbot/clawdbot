@@ -1,5 +1,6 @@
 // Defines cron scheduling configuration types.
 import type { SecretInput } from "./types.secrets.js";
+import type { SsrFPolicyConfig } from "./types.ssrf.js";
 
 export type CronFailureAlertConfig = {
   enabled?: boolean;
@@ -26,6 +27,8 @@ export type CronConfig = {
   };
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
+  /** SSRF policy for all outbound cron webhook deliveries. */
+  webhookSsrfPolicy?: SsrFPolicyConfig;
   /**
    * How long to retain completed cron run sessions before automatic pruning.
    * Accepts a duration string (e.g. "24h", "7d", "1h30m") or `false` to disable pruning.

@@ -120,6 +120,7 @@ export type ConfigSnapshotReadOptions = {
   observe?: boolean;
   isolateEnv?: boolean;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
+  allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,

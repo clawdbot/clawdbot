@@ -10,8 +10,8 @@ type BoardPinPlacement = {
   after?: string;
 };
 
-type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
-type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
+export type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
+export type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
 
 export type BoardProvider = {
   readonly sessionKey: string;

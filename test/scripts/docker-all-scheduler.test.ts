@@ -168,6 +168,7 @@ describe("scripts/test-docker-all scheduler", () => {
     const scriptsDir = path.join(root, "scripts");
     const libDir = path.join(scriptsDir, "lib");
     mkdirSync(libDir, { recursive: true });
+    copyFileSync("package.json", path.join(root, "package.json"));
     copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
     for (const fileName of ["docker-e2e-plan.mjs", "docker-e2e-scenarios.mjs", "sleep.mjs"]) {
       copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
@@ -206,6 +207,28 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("selects the CLI installer distribution lane through the scheduler catalog", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_BUILD: "0",
+        OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+        OPENCLAW_DOCKER_ALL_LANES: "cli-installer-distribution",
+        OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+        OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Selected lanes: cli-installer-distribution");
+    expect(result.stdout).toContain(
+      "cli-installer-distribution(w=3 r=docker,npm timeout=1800s image=bare state=empty)",
+    );
+    expect(result.stdout).toContain("Dry run complete");
   });
 
   it("reuses only registry-backed images in generated workflow reruns", () => {
@@ -378,7 +401,7 @@ describe("scripts/test-docker-all scheduler", () => {
     }
   });
 
-  it("writes a passing summary when a frozen target cannot run selected survivor lanes", () => {
+  it("fails with truthful artifacts when a frozen target cannot run selected survivor lanes", () => {
     const root = tempDirs.make("openclaw-docker-all-filtered-");
     const logDir = path.join(root, "logs");
     try {
@@ -398,16 +421,61 @@ describe("scripts/test-docker-all scheduler", () => {
         },
       });
 
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status).toBe(1);
       expect(result.stdout).toContain("Docker lanes omitted");
+      expect(result.stderr).toContain("resolved zero runnable Docker lanes");
+      expect(result.stderr).toContain("published-upgrade-survivor");
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
-      expect(summary.status).toBe("passed");
+      expect(summary.status).toBe("failed");
       expect(summary.lanes).toEqual([]);
       expect(summary.omittedUnsupportedLanes).toHaveLength(12);
       expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
       expect(summary.omittedUnsupportedLanes).toContain(
         "published-upgrade-survivor-versioned-runtime-deps",
       );
+      const failures = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
+      expect(failures.status).toBe("failed");
+      expect(failures.lanes).toEqual([]);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { args: ["--plan-json"], dryRun: false, label: "JSON planning" },
+    { args: [], dryRun: true, label: "dry runs" },
+  ])("preserves $label when frozen survivor lanes are omitted", ({ args, dryRun }) => {
+    const root = tempDirs.make("openclaw-docker-all-filtered-plan-");
+    const logDir = path.join(root, "logs");
+    try {
+      writeFrozenScenarioContract(root, ["unrelated"]);
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", ...args], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_DOCKER_ALL_BUILD: "0",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: dryRun ? "1" : "0",
+          OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "reported-issues",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: root,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      if (dryRun) {
+        expect(result.stdout).toContain("Docker lanes omitted");
+        expect(result.stdout).toContain("Dry run complete");
+      } else {
+        const plan = JSON.parse(result.stdout);
+        expect(plan.lanes).toEqual([]);
+        expect(plan.omittedUnsupportedLanes).toHaveLength(12);
+      }
+      expect(existsSync(path.join(logDir, "summary.json"))).toBe(false);
+      expect(existsSync(path.join(logDir, "failures.json"))).toBe(false);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

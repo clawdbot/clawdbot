@@ -317,13 +317,6 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     abortedLastRun: false,
     endedAt,
     pendingFinalDelivery: undefined,
-    pendingFinalDeliveryText: undefined,
-    pendingFinalDeliveryCreatedAt: undefined,
-    pendingFinalDeliveryLastAttemptAt: undefined,
-    pendingFinalDeliveryAttemptCount: undefined,
-    pendingFinalDeliveryLastError: undefined,
-    pendingFinalDeliveryContext: undefined,
-    pendingFinalDeliveryIntentId: undefined,
     restartRecoveryForceSafeTools: undefined,
     restartRecoveryRuns: undefined,
     runtimeMs:

@@ -26,20 +26,12 @@ const qaChannelSetupMeta = qaChannelRuntimeMeta;
 
 type QaChannelPluginBase = Pick<
   ChannelPlugin<ResolvedQaChannelAccount>,
-  "id" | "meta" | "capabilities" | "reload" | "configSchema" | "setup" | "setupContract" | "config"
+  "id" | "meta" | "capabilities" | "reload" | "configSchema" | "setupContract" | "config"
 >;
 
 export function createQaChannelPluginBase(
   meta: ChannelPlugin<ResolvedQaChannelAccount>["meta"] = qaChannelSetupMeta,
 ): QaChannelPluginBase {
-  const setup = {
-    applyAccountConfig: ({ cfg, accountId, input }) =>
-      applyQaSetup({
-        cfg,
-        accountId,
-        input: input as QaChannelSetupInput,
-      }),
-  } satisfies NonNullable<ChannelPlugin["setup"]>;
   return {
     id: QA_CHANNEL_ID,
     meta,
@@ -48,7 +40,6 @@ export function createQaChannelPluginBase(
     },
     reload: { configPrefixes: ["channels.qa-channel"] },
     configSchema: qaChannelPluginConfigSchema,
-    setup,
     setupContract: defineChannelSetupContract({
       fields: {
         baseUrl: {
@@ -64,7 +55,10 @@ export function createQaChannelPluginBase(
           cli: { flags: "--bot-display-name <name>", description: "QA channel bot display name" },
         },
       },
-      legacyAdapter: setup,
+      adapter: {
+        applyAccountConfig: ({ cfg, accountId, input }) =>
+          applyQaSetup({ cfg, accountId, input: input as QaChannelSetupInput }),
+      },
     }),
     config: {
       listAccountIds: (cfg) => listQaChannelAccountIds(cfg as CoreConfig),

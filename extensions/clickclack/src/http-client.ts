@@ -229,6 +229,7 @@ export function createClickClackClient(options: ClientOptions) {
         external_ref: string;
         external_url?: string;
         sidebar_section: string;
+        display_title?: string;
       },
     ): Promise<ClickClackChannel> => {
       const data = await request<{ channel: ClickClackChannel }>(
@@ -246,6 +247,7 @@ export function createClickClackClient(options: ClientOptions) {
         external_ref?: string;
         external_url?: string;
         sidebar_section?: string;
+        display_title?: string;
       },
     ): Promise<ClickClackChannel> => {
       const data = await request<{ channel: ClickClackChannel }>(

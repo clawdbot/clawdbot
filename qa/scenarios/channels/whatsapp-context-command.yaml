@@ -15,7 +15,6 @@ scenario:
     - src/auto-reply/reply/commands-context.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
-    profiles: { "whatsapp:mock-default": 36 }
     kind: flow
     channel: whatsapp
     config:

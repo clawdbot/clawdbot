@@ -165,6 +165,8 @@ describe("qa suite", () => {
       config: { expected: "value" },
       gateway: env.gateway,
       outputDir: "/tmp/qa-output",
+      scenarioId: "matrix-preparation-failure",
+      scenarioTitle: "matrix-preparation-failure",
       timeoutMs: 45_000,
       waitForConfigRestartSettle: expect.any(Function),
     });
@@ -803,36 +805,6 @@ describe("qa suite", () => {
     });
   });
 
-  it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "mock-openai",
-        forcedRuntime: "codex",
-        mockBaseUrl: "http://127.0.0.1:44080",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
-      OPENAI_API_KEY: "qa-mock-openai-key",
-      CODEX_API_KEY: "qa-mock-openai-key",
-    });
-  });
-
-  it("omits mock OpenAI rewiring for non-codex runtime overrides", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "mock-openai",
-        forcedRuntime: "openclaw",
-        mockBaseUrl: "http://127.0.0.1:44080",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "openclaw",
-    });
-  });
-
   it("forwards run options into isolated scenario worker params", () => {
     const startLab = vi.fn();
     const adapterFactory = {
@@ -897,6 +869,33 @@ describe("qa suite", () => {
     });
   });
 
+  it.each([
+    { surface: "channel", explicit: undefined, expected: false },
+    { surface: "channel", explicit: true, expected: true },
+    { surface: "control-ui", explicit: undefined, expected: true },
+    { surface: "control-ui", explicit: false, expected: false },
+  ])(
+    "preserves an explicit Control UI override for isolated $surface scenarios",
+    ({ surface, explicit, expected }) => {
+      const scenario = makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface });
+
+      expect(
+        qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
+          repoRoot: "/repo",
+          outputDir: "/repo/.artifacts/qa-e2e/scenarios/isolated-control-ui-ownership",
+          providerMode: "mock-openai",
+          transportId: "qa-channel",
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          alternateModel: "mock-openai/gpt-5.6-luna-alt",
+          fastMode: true,
+          scenario,
+          startLab: vi.fn(),
+          ...(explicit === undefined ? {} : { input: { controlUiEnabled: explicit } }),
+        }).controlUiEnabled,
+      ).toBe(expected);
+    },
+  );
+
   it("enables Control UI only for Control UI scenarios unless explicitly overridden", () => {
     const channelScenario = makeQaSuiteTestScenario("channel-baseline", { surface: "channel" });
     const controlUiScenario = makeQaSuiteTestScenario("control-ui-roundtrip", {
@@ -919,6 +918,12 @@ describe("qa suite", () => {
         scenarios: [channelScenario],
       }),
     ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        explicit: false,
+        scenarios: [controlUiScenario],
+      }),
+    ).toBe(false);
   });
 
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {
