@@ -15,15 +15,14 @@ overrides:
   hono: 4.12.32
   '@hono/node-server': 2.0.12
   axios: 1.18.1
-  fast-uri: 4.1.2
-  undici@7: 7.29.0
+  fast-uri: 4.1.1
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.10.1
   request: npm:@cypress/request@4.0.1
   request-promise: npm:@cypress/request-promise@5.0.0
   basic-ftp: 6.0.2
-  brace-expansion: 5.0.9
+  brace-expansion: 5.0.8
   file-type: 22.0.1
   form-data: 4.0.6
   werift-ice@0.2.2>ip: npm:neoip@3.1.0
@@ -1765,10 +1764,10 @@ importers:
     dependencies:
       '@slack/bolt':
         specifier: 5.0.0
-        version: 5.0.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@7.29.0)
+        version: 5.0.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@7.28.0)
       '@slack/socket-mode':
         specifier: 3.0.0
-        version: 3.0.0(undici@7.29.0)
+        version: 3.0.0(undici@7.28.0)
       '@slack/types':
         specifier: 3.0.0
         version: 3.0.0
@@ -1785,8 +1784,8 @@ importers:
         specifier: 1.3.6
         version: 1.3.6
       undici:
-        specifier: 7.29.0
-        version: 7.29.0
+        specifier: 7.28.0
+        version: 7.28.0
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -5898,8 +5897,8 @@ packages:
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
 
-  brace-expansion@5.0.9:
-    resolution: {integrity: sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==}
+  brace-expansion@5.0.8:
+    resolution: {integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==}
     engines: {node: 20 || >=22}
 
   braces@3.0.3:
@@ -6518,8 +6517,8 @@ packages:
   fast-string-width@3.0.2:
     resolution: {integrity: sha512-gX8LrtNEI5hq8DVUfRQMbr5lpaS4nMIWV+7XEbXk2b8kiQIizgnlr12B4dA3ZEx3308ze0O4Q1R+cHts8kyUJg==}
 
-  fast-uri@4.1.2:
-    resolution: {integrity: sha512-TyGmBcbDTZXcb2cj5MV89DrF42DKvb3y5DDUNh95iO+IMeAzMkVSxK1PZRrRIpc9yg8U2GhGdbofNa0LS/a4Bw==}
+  fast-uri@4.1.1:
+    resolution: {integrity: sha512-YPOs1zD5TG2+EZt+r88LwF6mclA7TPkpwMP7ZN3TO2HiHS8TXvq7QA/17iJsV9dubcLo/f8eEYqMBruyQV21hQ==}
 
   fast-wrap-ansi@0.2.2:
     resolution: {integrity: sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q==}
@@ -8935,8 +8934,8 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@7.29.0:
-    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
+  undici@7.28.0:
+    resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
     engines: {node: '>=20.18.1'}
 
   undici@8.9.0:
@@ -12024,11 +12023,11 @@ snapshots:
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
-  '@slack/bolt@5.0.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@7.29.0)':
+  '@slack/bolt@5.0.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@7.28.0)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/oauth': 4.0.0
-      '@slack/socket-mode': 3.0.0(undici@7.29.0)
+      '@slack/socket-mode': 3.0.0(undici@7.28.0)
       '@slack/types': 3.0.0
       '@slack/web-api': 8.0.0
       '@types/express': 5.0.6
@@ -12052,13 +12051,13 @@ snapshots:
       '@types/node': 26.1.1
       jsonwebtoken: 9.0.3
 
-  '@slack/socket-mode@3.0.0(undici@7.29.0)':
+  '@slack/socket-mode@3.0.0(undici@7.28.0)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.0.0
       '@types/node': 26.1.1
       eventemitter3: 5.0.4
-      undici: 7.29.0
+      undici: 7.28.0
 
   '@slack/types@3.0.0': {}
 
@@ -12767,7 +12766,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 4.1.2
+      fast-uri: 4.1.1
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -12975,7 +12974,7 @@ snapshots:
 
   bowser@2.14.1: {}
 
-  brace-expansion@5.0.9:
+  brace-expansion@5.0.8:
     dependencies:
       balanced-match: 4.0.4
 
@@ -13621,7 +13620,7 @@ snapshots:
     dependencies:
       fast-string-truncated-width: 3.0.3
 
-  fast-uri@4.1.2: {}
+  fast-uri@4.1.1: {}
 
   fast-wrap-ansi@0.2.2:
     dependencies:
@@ -14276,7 +14275,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 5.1.2
-      undici: 7.29.0
+      undici: 7.28.0
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -15047,7 +15046,7 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.9
+      brace-expansion: 5.0.8
 
   minimist@1.2.8: {}
 
@@ -16557,7 +16556,7 @@ snapshots:
 
   undici-types@8.3.0: {}
 
-  undici@7.29.0: {}
+  undici@7.28.0: {}
 
   undici@8.9.0: {}
 
