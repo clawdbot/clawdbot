@@ -29,7 +29,6 @@ import {
 } from "./qa-transport.js";
 import type {
   QaTransportActionName,
-  QaTransportGatewayClient,
   QaTransportGatewayConfig,
   QaTransportNativeCommandInput,
   QaTransportOutboundEvent,
@@ -383,11 +382,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     } as QaTransportGatewayConfig;
   };
 
-  waitReady = (params: {
-    gateway: QaTransportGatewayClient;
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-  }) =>
+  waitReady = (params: Parameters<QaStateBackedTransportAdapter["waitReady"]>[0]) =>
     waitForQaTransportAccountReady({
       ...params,
       accountId: this.#adapter.accountId,

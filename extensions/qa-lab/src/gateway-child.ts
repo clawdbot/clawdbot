@@ -15,7 +15,7 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -44,7 +44,7 @@ import {
 } from "./child-output.js";
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
-import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
   createQaGatewayProcessBoundaryController,
@@ -217,7 +217,7 @@ async function readQaGatewayCliCommand(child: ChildProcess): Promise<string> {
   const exitCode = await new Promise<number>((resolve, reject) => {
     monitorQaChildFailure(child, (failure) => {
       if (failure.source === "process") {
-        reject(toQaErrorObject(failure.error, "OpenClaw CLI process failed"));
+        reject(toErrorObject(failure.error, "OpenClaw CLI process failed"));
         return;
       }
       if (!hasChildExited(child) && !child.killed) {
@@ -1565,7 +1565,7 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw toQaErrorObject(
+            throw toErrorObject(
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );
@@ -1673,7 +1673,7 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw toQaErrorObject(
+            throw toErrorObject(
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );

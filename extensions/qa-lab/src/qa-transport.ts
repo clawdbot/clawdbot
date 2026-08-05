@@ -19,7 +19,7 @@ import type {
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
-export type QaTransportGatewayClient = {
+type QaTransportGatewayClient = {
   call: (
     method: string,
     params?: unknown,
