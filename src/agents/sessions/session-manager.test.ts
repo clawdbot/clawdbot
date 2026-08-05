@@ -306,6 +306,36 @@ describe("SessionManager.open", () => {
     expect(() => SessionManager.open(scope, dir)).not.toThrow();
   });
 
+  it("persists a fresh SQLite session header and first message", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-fresh-session",
+      sessionKey: "agent:main:sqlite-fresh-session",
+      storePath: path.join(dir, "sessions.json"),
+    };
+
+    const manager = SessionManager.open(scope, dir);
+    const messageId = manager.appendMessage({
+      role: "user",
+      content: "first message",
+      timestamp: 1,
+    });
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({
+        id: scope.sessionId,
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+      }),
+      expect.objectContaining({
+        id: messageId,
+        message: expect.objectContaining({ content: "first message", role: "user" }),
+        type: "message",
+      }),
+    ]);
+  });
+
   it("rejects invalid entries before mutating in-memory state", () => {
     const manager = SessionManager.inMemory("/tmp");
     const entriesBefore = manager.getEntries();

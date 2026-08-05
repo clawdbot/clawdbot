@@ -1,8 +1,11 @@
 import {
+  loadSessionEntry,
   loadTranscriptEventsSync,
+  replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -79,6 +82,29 @@ export class SessionManagerCore {
     if (partitioned.fileEntries.length === 0 && partitioned.opaqueEntries.length === 0) {
       this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
+      if (target) {
+        const updatedAt = Date.now();
+        const previousEntry = loadSessionEntry({
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        });
+        const canonicalPreviousEntry = previousEntry
+          ? projectCanonicalSessionEntryShape(previousEntry as unknown as Record<string, unknown>)
+          : { updatedAt };
+        replaceSessionEntrySync(
+          {
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+          },
+          {
+            ...canonicalPreviousEntry,
+            sessionId: target.sessionId,
+            updatedAt,
+          },
+        );
+      }
       this.persistenceHeaderPending = target !== undefined;
       return;
     }
