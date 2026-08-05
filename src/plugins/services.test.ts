@@ -625,6 +625,41 @@ describe("startPluginServices", () => {
     expect(rollback).toHaveBeenCalledOnce();
   });
 
+  it("keeps diagnostics rollback detail visible beside the host startup failure", async () => {
+    const startupError = new Error("SDK startup failed");
+    const rollbackError = new Error("SDK rollback failed");
+
+    await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start: (ctx) => {
+              ctx.logger.error(
+                "diagnostics-otel: SDK startup rollback cleanup failed: Error: SDK rollback failed",
+              );
+              throw new AggregateError(
+                [startupError, rollbackError],
+                "diagnostics-otel startup failed and rollback cleanup failed",
+                { cause: startupError },
+              );
+            },
+          },
+        ],
+        "diagnostics-otel",
+        "bundled",
+      ),
+      config: createServiceConfig(),
+    });
+
+    expect(mockedLogger.error.mock.calls).toEqual([
+      ["diagnostics-otel: SDK startup rollback cleanup failed: Error: SDK rollback failed"],
+      [
+        "plugin service failed (diagnostics-otel, plugin=diagnostics-otel, root=/plugins/test-plugin): diagnostics-otel startup failed and rollback cleanup failed",
+      ],
+    ]);
+  });
+
   it("emits per-service startup trace spans and summary", async () => {
     const measured: string[] = [];
     const details: Array<{

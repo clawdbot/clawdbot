@@ -68,11 +68,13 @@ section. For root or array includes, nested include chains, sibling overrides,
 external include targets, or another ambiguous source, Doctor leaves the files
 unchanged and lists the candidate source file or files to edit manually.
 
-`OTEL_EXPORTER_OTLP_PROTOCOL` is a process-environment fallback used only when
-`diagnostics.otel.protocol` is unset. Doctor does not rewrite process
-environment variables. An unsupported fallback is rejected at runtime when an
-OTLP signal is enabled; set it to `http/protobuf` or unset it. A stdout-only log
-configuration does not use the OTLP transport and continues to work.
+When `diagnostics.otel.protocol` is unset, each plugin-owned OTLP signal first
+checks its nonblank `OTEL_EXPORTER_OTLP_*_PROTOCOL` value, then
+`OTEL_EXPORTER_OTLP_PROTOCOL`, then defaults to `http/protobuf`. Doctor does not
+rewrite process environment variables. An unsupported value disables only that
+plugin-owned OTLP signal; supported sibling signals continue, as does the stdout
+branch of `logsExporter: "both"`. Preloaded trace and metric SDKs own their own
+transport selection and are not rejected by this plugin.
 </Note>
 
 ## Signals exported
@@ -170,7 +172,8 @@ dashboards, alerts, and recording rules that query the old names.
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                         |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                         |
 | `OTEL_SERVICE_NAME`                                                                                               | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                  |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Process-environment fallback used only when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables OTLP export; unsupported values are rejected when an OTLP signal is enabled and are not rewritten by Doctor.                                                                                    |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Shared process-environment fallback used when `diagnostics.otel.protocol` and the signal-specific protocol variable are unset. Only `http/protobuf` enables a plugin-owned OTLP exporter.                                                                                                                      |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` / `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` / `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Signal-specific protocol fallbacks used when `diagnostics.otel.protocol` is unset. A nonblank signal-specific value wins over the shared protocol value. Unsupported values disable only that plugin-owned OTLP signal.                                                                                        |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless. |
 | `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                    |
 
