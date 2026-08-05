@@ -8,6 +8,7 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { DiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
 
@@ -285,6 +286,7 @@ export type OpenClawPluginServiceContext = {
         privateData: DiagnosticEventPrivateData,
       ) => void,
     ) => () => void;
+    registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
   };
 };
 

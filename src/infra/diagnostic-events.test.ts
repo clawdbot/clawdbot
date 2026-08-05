@@ -24,8 +24,13 @@ import {
 } from "./diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
+  formatDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
+import {
+  formatPropagatedDiagnosticTraceparent,
+  registerDiagnosticTracePropagationBridge,
+} from "./diagnostic-trace-propagation.js";
 
 describe("diagnostic-events", () => {
   beforeEach(() => {
@@ -268,6 +273,60 @@ describe("diagnostic-events", () => {
         { trusted: false, trustedTraceContext: true },
       ),
     ).toBeUndefined();
+  });
+
+  it("prepares trusted events synchronously and formats the resolved propagation context", async () => {
+    const diagnosticTrace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    });
+    const exportedTrace = createDiagnosticTraceContext({
+      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      spanId: "bbbbbbbbbbbbbbbb",
+      traceFlags: "00",
+    });
+    const prepared: string[] = [];
+    registerDiagnosticTracePropagationBridge({
+      prepareEvent(event) {
+        prepared.push(event.type);
+      },
+      resolveTraceContext(traceContext) {
+        expect(traceContext).toBe(diagnosticTrace);
+        return exportedTrace;
+      },
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      trace: diagnosticTrace,
+    });
+
+    expect(prepared).toEqual(["model.call.started"]);
+    expect(formatDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${diagnosticTrace.traceId}-${diagnosticTrace.spanId}-01`,
+    );
+    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${exportedTrace.traceId}-${exportedTrace.spanId}-00`,
+    );
+    await waitForDiagnosticEventsDrained();
+  });
+
+  it("does not fall back to diagnostic ids when an active propagation bridge misses", () => {
+    const diagnosticTrace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    });
+    registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+    });
+
+    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBeUndefined();
   });
 
   it("shares diagnostic state across duplicate module instances", async () => {

@@ -90,6 +90,7 @@ vi.mock("@opentelemetry/api", () => ({
   metrics: {
     getMeter: () => telemetryState.meter,
   },
+  isSpanContextValid: () => true,
   trace: {
     getTracer: () => telemetryState.tracer,
     setSpanContext: telemetryState.tracer.setSpanContext,
@@ -182,6 +183,7 @@ import {
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
+  formatDiagnosticTraceparent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -4039,6 +4041,53 @@ describe("diagnostics-otel service", () => {
     expect(parentBySpanName["openclaw.model.call"]?.spanId).toBe(runSpanContext.spanId);
   });
 
+  test("prepares model and tool spans synchronously for propagation without duplicate spans", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    const runTrace = createTestTrace(CHILD_SPAN_ID, SPAN_ID);
+    const modelTrace = createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID);
+    const toolTrace = createTestTrace(TOOL_SPAN_ID, MODEL_CALL_SPAN_ID);
+    emitRunStarted({ trace: runTrace });
+    expect(formatDiagnosticTraceparent(modelTrace)).toBeUndefined();
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      ...MODEL_CALL_FIXTURE,
+      trace: modelTrace,
+    });
+
+    const modelSpanContext = spanByName("openclaw.model.call").spanContext();
+    const runSpanContext = spanByName("openclaw.run").spanContext();
+    expect(startedSpanParentContexts("openclaw.model.call")).toEqual([runSpanContext]);
+    expect(formatDiagnosticTraceparent(modelTrace)).toBe(
+      `00-${modelSpanContext.traceId}-${modelSpanContext.spanId}-01`,
+    );
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: "run-1",
+      toolName: "read",
+      trace: toolTrace,
+    });
+    const toolSpanContext = spanByName("openclaw.tool.execution").spanContext();
+    expect(startedSpanParentContexts("openclaw.tool.execution")).toEqual([modelSpanContext]);
+    expect(formatDiagnosticTraceparent(toolTrace)).toBe(
+      `00-${toolSpanContext.traceId}-${toolSpanContext.spanId}-01`,
+    );
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      telemetryState.tracer.startSpan.mock.calls.filter(
+        (call) => call[0] === "openclaw.model.call",
+      ),
+    ).toHaveLength(1);
+    expect(
+      telemetryState.tracer.startSpan.mock.calls.filter(
+        (call) => call[0] === "openclaw.tool.execution",
+      ),
+    ).toHaveLength(1);
+  });
+
   test("uses production message lifecycle helpers as the message span anchor", async () => {
     await startOtelService({ traces: true, metrics: true });
 
@@ -4527,6 +4576,42 @@ describe("diagnostics-otel service", () => {
     );
     expect(parentBySpanName["openclaw.run"]).toBeUndefined();
     expect(parentBySpanName["openclaw.model.call"]).toBeUndefined();
+  });
+
+  test.each([
+    {
+      label: "completed",
+      event: {
+        type: "harness.run.completed",
+        runId: "run-completed-only",
+        provider: "openai",
+        model: "gpt-5.4",
+        harnessId: "openclaw",
+        outcome: "completed",
+        durationMs: 90,
+        trace: createTestTrace(GRANDCHILD_SPAN_ID, CHILD_SPAN_ID),
+      } satisfies TrustedEventOf<"harness.run.completed">,
+    },
+    {
+      label: "error",
+      event: {
+        type: "harness.run.error",
+        runId: "run-error-only",
+        provider: "openai",
+        model: "gpt-5.4",
+        harnessId: "openclaw",
+        phase: "send",
+        errorCategory: "aborted",
+        durationMs: 90,
+        trace: createTestTrace(GRANDCHILD_SPAN_ID, CHILD_SPAN_ID),
+      } satisfies TrustedEventOf<"harness.run.error">,
+    },
+  ])("keeps $label-only harness fallback spans parentless", async ({ event }) => {
+    await startOtelService({ traces: true, metrics: true });
+
+    await emitTrustedAndFlush(event);
+
+    expect(startedSpanParentContexts("openclaw.harness.run")[0]).toBeUndefined();
   });
 
   test("does not parent untrusted diagnostic lifecycle spans from injected trace ids", async () => {

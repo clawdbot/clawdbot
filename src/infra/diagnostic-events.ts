@@ -5,10 +5,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
 import {
-  formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
+import {
+  formatPropagatedDiagnosticTraceparent,
+  prepareDiagnosticTracePropagation,
+  resetDiagnosticTracePropagationForTest,
+} from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
@@ -1296,10 +1300,24 @@ function emitDiagnosticEventWithTrust(
       }
     }
     state.asyncQueue.push({ event: enriched, metadata, privateData });
+    if (trusted) {
+      prepareDiagnosticTracePropagation(
+        cloneDiagnosticEventForListener(enriched),
+        createDiagnosticMetadataForListener(metadata),
+        cloneDiagnosticPrivateDataForListener(privateData),
+      );
+    }
     scheduleAsyncDiagnosticDrain(state);
     return;
   }
 
+  if (trusted) {
+    prepareDiagnosticTracePropagation(
+      cloneDiagnosticEventForListener(enriched),
+      createDiagnosticMetadataForListener(metadata),
+      cloneDiagnosticPrivateDataForListener(privateData),
+    );
+  }
   dispatchDiagnosticEvent(state, enriched, metadata, privateData);
 }
 
@@ -1491,7 +1509,7 @@ export function formatDiagnosticTraceparentForPropagation(
   if (!metadata.trusted || !dispatchedTrustedDiagnosticMetadata.has(metadata)) {
     return undefined;
   }
-  return formatDiagnosticTraceparent(event.trace);
+  return formatPropagatedDiagnosticTraceparent(event.trace);
 }
 
 /** Returns whether listener metadata marks dispatcher-internal provenance. */
@@ -1516,5 +1534,6 @@ export function resetDiagnosticEventsForTest(): void {
   state.asyncDroppedTrustedEvents = 0;
   state.asyncDroppedUntrustedEvents = 0;
   state.asyncDroppedPriorityEvents = 0;
+  resetDiagnosticTracePropagationForTest();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
