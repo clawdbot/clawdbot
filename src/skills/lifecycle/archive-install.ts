@@ -143,6 +143,7 @@ export async function installExtractedSkillRoot(params: {
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
   rootMarkers?: readonly string[];
+  onBeforeReplace?: () => Promise<string | undefined>;
 }): Promise<SkillArchiveInstallResult> {
   try {
     if (
@@ -202,6 +203,13 @@ export async function installExtractedSkillRoot(params: {
           scanResult.blocked.reason,
           scanBlockedFailureKind(scanResult.blocked),
         );
+      }
+    }
+
+    if (params.onBeforeReplace) {
+      const blocked = await params.onBeforeReplace();
+      if (blocked) {
+        return installFailure(blocked, "invalid-request");
       }
     }
 

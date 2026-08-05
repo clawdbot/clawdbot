@@ -396,21 +396,24 @@ export async function updateSkillsFromClawHub(params: {
     const install = await withClawPackageLifecycleLease(
       { kind: "skill", source: "clawhub", ref: tracked.slug, workspace: params.workspaceDir },
       async () => {
-        if (!params.force) {
+        let replaceBlocked: string | undefined;
+        const guardLocalState = async () => {
           const blocked = await guardTrackedSkillLocalState({
             workspaceDir: params.workspaceDir,
             slug: tracked.slug,
             previousVersion: tracked.previousVersion,
           });
+          return blocked
+            ? `${blocked} Updating replaces the installed skill directory.`
+            : undefined;
+        };
+        if (!params.force) {
+          const blocked = await guardLocalState();
           if (blocked) {
-            return {
-              ok: false as const,
-              code: "force_required" as const,
-              error: `${blocked} Updating replaces the installed skill directory.`,
-            };
+            return { ok: false as const, code: "force_required" as const, error: blocked };
           }
         }
-        return await installTrackedSkillFromClawHub({
+        const installed = await installTrackedSkillFromClawHub({
           workspaceDir: params.workspaceDir,
           slug: tracked.slug,
           ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
@@ -423,7 +426,19 @@ export async function updateSkillsFromClawHub(params: {
           onClawHubRisk: params.onClawHubRisk,
           logger: params.logger,
           config: params.config,
+          ...(params.force
+            ? {}
+            : {
+                onBeforeReplace: async () => {
+                  replaceBlocked = await guardLocalState();
+                  return replaceBlocked;
+                },
+              }),
         });
+        if (!installed.ok && replaceBlocked) {
+          return { ok: false as const, code: "force_required" as const, error: replaceBlocked };
+        }
+        return installed;
       },
       { required: true },
     );

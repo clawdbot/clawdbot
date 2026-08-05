@@ -70,6 +70,7 @@ export type ClawHubInstallParams = {
   logger?: Logger;
   config?: OpenClawConfig;
   clawManaged?: boolean;
+  onBeforeReplace?: () => Promise<string | undefined>;
 };
 
 export type InstallClawHubSkillResult =
@@ -308,6 +309,7 @@ async function installArchiveResolution(params: {
   force?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
+  onBeforeReplace?: () => Promise<string | undefined>;
 }) {
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -321,6 +323,7 @@ async function installArchiveResolution(params: {
         extractedRoot: rootDir,
         mode: params.force ? "update" : "install",
         logger: params.logger,
+        onBeforeReplace: params.onBeforeReplace,
         policy: {
           config: params.config,
           installId: "clawhub",
@@ -354,6 +357,7 @@ async function installGitHubResolution(params: {
   force?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
+  onBeforeReplace?: () => Promise<string | undefined>;
 }) {
   // Preserve the repository root for sourcePath selection. Root markers validate
   // the selected skill directory afterward, so nested paths are not applied twice.
@@ -368,6 +372,7 @@ async function installGitHubResolution(params: {
         extractedRoot: resolveGitHubSkillSourceDir(repoRoot, params.sourcePath),
         mode: params.force ? "update" : "install",
         logger: params.logger,
+        onBeforeReplace: params.onBeforeReplace,
         policy: {
           config: params.config,
           installId: "clawhub",
@@ -579,6 +584,7 @@ export async function performClawHubSkillInstall(
               force: params.force,
               logger: params.logger,
               config: params.config,
+              onBeforeReplace: params.onBeforeReplace,
             })
           : await installArchiveResolution({
               workspaceDir: params.workspaceDir,
@@ -595,6 +601,7 @@ export async function performClawHubSkillInstall(
               force: params.force,
               logger: params.logger,
               config: params.config,
+              onBeforeReplace: params.onBeforeReplace,
             });
       if (!install.ok) {
         return { ok: false, error: install.error };

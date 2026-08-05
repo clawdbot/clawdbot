@@ -2223,6 +2223,61 @@ describe("skills-clawhub", () => {
     );
   });
 
+  it("refuses to replace a ClawHub skill edited while the update was downloading", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-concurrent-edit-update-");
+    const skillDir = await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+      skillMd: "# Weather\n",
+    });
+    pathExistsMock.mockImplementation(
+      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
+    );
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      installKind: "archive",
+      archive: {
+        version: "1.0.0",
+        downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
+      },
+    });
+    downloadClawHubSkillArchiveUrlMock.mockImplementationOnce(async () => {
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "# Weather edited during download\n",
+        "utf8",
+      );
+      return {
+        archivePath: "/tmp/weather.zip",
+        integrity: "sha256-test",
+        sha256Hex: "a".repeat(64),
+        artifact: "archive",
+        cleanup: archiveCleanupMock,
+      };
+    });
+
+    const results = await updateSkillsFromClawHub({
+      workspaceDir,
+      slug: "weather",
+    });
+
+    expect(results).toEqual([
+      {
+        ok: false,
+        code: "force_required",
+        error:
+          'Skill "weather" has local SKILL.md changes. Updating replaces the installed skill directory.',
+      },
+    ]);
+    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledTimes(1);
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(
+      "# Weather edited during download\n",
+    );
+  });
+
   it("updates a ClawHub skill with local changes when forced", async () => {
     const workspaceDir = await tempDirs.make("openclaw-local-changes-forced-update-");
     const skillDir = await writeClawHubOriginFixture({
