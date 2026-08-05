@@ -12,6 +12,11 @@ import {
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  legacyInteractiveReplyToPresentation,
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -21,6 +26,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
@@ -28,6 +34,11 @@ import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import {
+  buildFeishuPresentationCard,
+  buildFeishuPresentationCardElements,
+  isFeishuCardWithinEnvelope,
+} from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -46,7 +57,12 @@ import {
 } from "./reply-dispatcher-runtime-api.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
+import {
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  sendCardFeishu,
+  type CardHeaderConfig,
+} from "./send.js";
 import {
   FeishuStreamingFinalizationError,
   FeishuStreamingSession,
@@ -54,6 +70,19 @@ import {
 } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+
+function buildFeishuFallbackCardText(text: string, payload: ReplyPayload): string {
+  const interactive = legacyInteractiveReplyToPresentation(payload.interactive);
+  const presentation =
+    normalizeMessagePresentation(payload.presentation) ??
+    (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
+  if (presentation) {
+    return renderMessagePresentationFallbackText({ text, presentation });
+  }
+  return text;
+}
+
+const FEISHU_CARD_MAX_BYTES = 30 * 1024;
 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
@@ -1406,27 +1435,55 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (useCard) {
           const cardHeader = resolveCardHeader(agentId, identity);
           const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-          deliveredResults.push(
-            await sendChunkedTextReply({
-              text,
-              useCard: true,
-              infoKind: info?.kind,
-              chunkMentions: requiredMentionTargets,
-              sendChunk: async ({ chunk, mentions }) =>
-                await sendStructuredCardFeishu({
-                  cfg,
-                  to: sendTarget,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  allowTopLevelReplyFallback,
-                  accountId,
-                  header: cardHeader,
-                  note: cardNote,
-                  ...(mentions ? { mentions } : {}),
-                }),
-            }),
-          );
+          const interactive =
+            payload.interactive && normalizeLegacyInteractiveReply
+              ? normalizeLegacyInteractiveReply(payload.interactive)
+              : undefined;
+          const presentation =
+            normalizeMessagePresentation(payload.presentation) ??
+            (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
+          const nativeCard =
+            presentation && !hasVoiceMedia && !hasMedia
+              ? buildFeishuPresentationCard({
+                  presentation,
+                  fallbackText: buildFeishuFallbackCardText(text, payload),
+                })
+              : undefined;
+          if (nativeCard) {
+            deliveredResults.push(
+              await sendCardFeishu({
+                cfg,
+                to: sendTarget,
+                card: nativeCard,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
+                accountId,
+              }),
+            );
+          } else {
+            deliveredResults.push(
+              await sendChunkedTextReply({
+                text,
+                useCard: true,
+                infoKind: info?.kind,
+                chunkMentions: requiredMentionTargets,
+                sendChunk: async ({ chunk, mentions }) =>
+                  await sendStructuredCardFeishu({
+                    cfg,
+                    to: sendTarget,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    allowTopLevelReplyFallback,
+                    accountId,
+                    header: cardHeader,
+                    note: cardNote,
+                    ...(mentions ? { mentions } : {}),
+                  }),
+              }),
+            );
+          }
         } else {
           const firstChunkMentions =
             info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
