@@ -1,5 +1,10 @@
 // Diagnostic flag/event helpers for plugins that want narrow runtime gating.
 
+import {
+  emitDiagnosticEvent as emitDiagnosticEventInternal,
+  emitTrustedDiagnosticEvent as emitTrustedDiagnosticEventInternal,
+  emitTrustedDiagnosticEventWithPrivateData as emitTrustedDiagnosticEventWithPrivateDataInternal,
+} from "../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../logging/redact.js";
 
 const LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -34,22 +39,13 @@ export function normalizeDiagnosticLane(value: string | undefined, fallback = "u
 export { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 export type {
   DiagnosticEventMetadata,
-  DiagnosticEventPayload as AllDiagnosticEventPayload,
   DiagnosticEventPrivateData,
   DiagnosticModelCallContent,
 } from "../infra/diagnostic-events.js";
 
-type InternalDiagnosticEvent = Extract<
-  AllDiagnosticEventPayload,
-  { type: "session.maintenance.pruned" }
->;
-
-export type DiagnosticEventPayload = Exclude<AllDiagnosticEventPayload, InternalDiagnosticEvent>;
+export type { DiagnosticEventInput, DiagnosticEventPayload } from "./diagnostic-events-runtime.js";
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
-  emitDiagnosticEvent,
-  emitTrustedDiagnosticEvent,
-  emitTrustedDiagnosticEventWithPrivateData,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -58,6 +54,23 @@ export {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+
+import type { DiagnosticEventInput } from "./diagnostic-events-runtime.js";
+
+export function emitDiagnosticEvent(event: DiagnosticEventInput): void {
+  emitDiagnosticEventInternal(event);
+}
+
+export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput): void {
+  emitTrustedDiagnosticEventInternal(event);
+}
+
+export function emitTrustedDiagnosticEventWithPrivateData(
+  event: DiagnosticEventInput,
+  privateData?: DiagnosticEventPrivateData,
+): void {
+  emitTrustedDiagnosticEventWithPrivateDataInternal(event, privateData);
+}
 export { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export {

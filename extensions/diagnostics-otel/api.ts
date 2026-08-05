@@ -1,15 +1,7 @@
 // Diagnostics Otel API module exposes the plugin public contract.
 import type { DiagnosticEventPayload as PublicDiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 
-type InternalDiagnosticEvent = {
-  seq: number;
-  ts: number;
-  type: "session.maintenance.pruned";
-  pruned: number;
-  retentionMs: number;
-};
-
-export type DiagnosticEventPayload = PublicDiagnosticEventPayload | InternalDiagnosticEvent;
+export type DiagnosticEventPayload = PublicDiagnosticEventPayload;
 
 export {
   createChildDiagnosticTraceContext,

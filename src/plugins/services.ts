@@ -39,6 +39,23 @@ function createServiceContext(params: {
   const grantsInternalDiagnostics =
     isDiagnosticsExporter &&
     (params.service?.origin === "bundled" || params.service?.trustedOfficialInstall === true);
+  const trustedInternalDiagnostics: OpenClawPluginServiceContext["internalDiagnostics"] =
+    grantsInternalDiagnostics
+      ? {
+          emit: emitInternalDiagnosticEventWithPrivateData,
+          onEvent: (listener) =>
+            onTrustedInternalDiagnosticEvent((event, metadata, privateData) =>
+              event.type === "session.maintenance.pruned"
+                ? undefined
+                : listener(event, metadata, privateData),
+            ),
+          // This opaque stream is granted only to the bundled/verified diagnostics exporters.
+          onTrustedInternalEvent: (listener) =>
+            onTrustedInternalDiagnosticEvent((event, metadata, privateData) =>
+              listener(event, metadata, privateData),
+            ),
+        }
+      : undefined;
 
   return {
     config: params.config,
@@ -54,14 +71,7 @@ function createServiceContext(params: {
           ),
         }
       : {}),
-    ...(grantsInternalDiagnostics
-      ? {
-          internalDiagnostics: {
-            emit: emitInternalDiagnosticEventWithPrivateData,
-            onEvent: onTrustedInternalDiagnosticEvent,
-          },
-        }
-      : {}),
+    ...(trustedInternalDiagnostics ? { internalDiagnostics: trustedInternalDiagnostics } : {}),
   };
 }
 

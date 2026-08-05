@@ -80,6 +80,7 @@ export function createOtelContext(
     internalDiagnostics: {
       emit: emitTrustedDiagnosticEventWithPrivateData,
       onEvent: onTrustedInternalDiagnosticEvent,
+      onTrustedInternalEvent: onTrustedInternalDiagnosticEvent,
     },
   };
 }

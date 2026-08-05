@@ -9,7 +9,7 @@ export * from "./delivery-queue-runtime.js";
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";
-export type * from "../infra/diagnostic-events.js";
+export type * from "./diagnostic-events-runtime.js";
 export {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,

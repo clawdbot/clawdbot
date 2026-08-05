@@ -190,8 +190,6 @@ import {
 import {
   emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEventForTest,
-  emitInternalDiagnosticEventWithPrivateData,
-  emitInternalSessionMaintenancePrunedEvent,
   emitTrustedSecurityEvent,
   logMessageDispatchStarted,
   logMessageProcessed,
@@ -4535,7 +4533,7 @@ describe("diagnostics-otel service", () => {
       status: "released",
       action: "abort-active-run",
     });
-    emitInternalSessionMaintenancePrunedEvent({
+    emitInternalDiagnosticEventForTest({
       type: "session.maintenance.pruned",
       pruned: 3,
       retentionMs: 86_400_000,

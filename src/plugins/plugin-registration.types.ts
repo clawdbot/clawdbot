@@ -6,8 +6,16 @@ import type {
   DiagnosticEventPrivateData,
   DiagnosticEventInput,
   DiagnosticEventMetadata,
-  DiagnosticEventPayload,
+  DiagnosticEventPayload as AllDiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+
+type InternalDiagnosticEvent = Extract<
+  AllDiagnosticEventPayload,
+  { type: "session.maintenance.pruned" }
+>;
+type InternalDiagnosticEventInput = Omit<InternalDiagnosticEvent, "seq" | "ts">;
+type PublicDiagnosticEventPayload = Exclude<AllDiagnosticEventPayload, InternalDiagnosticEvent>;
+type PublicDiagnosticEventInput = Exclude<DiagnosticEventInput, InternalDiagnosticEventInput>;
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
 
@@ -277,10 +285,17 @@ export type OpenClawPluginServiceContext = {
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
-    emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
+    emit: (event: PublicDiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
       listener: (
-        event: DiagnosticEventPayload,
+        event: PublicDiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
+      ) => void,
+    ) => () => void;
+    onTrustedInternalEvent?: (
+      listener: (
+        event: object,
         metadata: DiagnosticEventMetadata,
         privateData: DiagnosticEventPrivateData,
       ) => void,

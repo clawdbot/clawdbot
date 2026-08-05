@@ -1,8 +1,5 @@
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
-} from "../api.js";
+import type { DiagnosticEventMetadata, DiagnosticEventPrivateData } from "../api.js";
+import type { InternalDiagnosticEvent } from "./internal-diagnostic-event.js";
 import { formatError } from "./service-exporter.js";
 import type { createDiagnosticsLogExporter } from "./service-logs.js";
 import type { createHarnessRecorders } from "./service-recorders-harness.js";
@@ -75,7 +72,7 @@ export function createDiagnosticsEventHandler(params: {
     recordModelFailover,
   } = recorders;
   return (
-    evt: DiagnosticEventPayload,
+    evt: InternalDiagnosticEvent,
     metadata: DiagnosticEventMetadata,
     privateData: DiagnosticEventPrivateData,
   ) => {

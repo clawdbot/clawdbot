@@ -12,6 +12,7 @@ import type {
   OpenClawPluginService,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
+import type { InternalDiagnosticEvent } from "./internal-diagnostic-event.js";
 
 type LabelSet = Record<string, string>;
 
@@ -540,7 +541,7 @@ function recordModelUsage(
 
 function recordDiagnosticEvent(
   store: PrometheusMetricStore,
-  evt: DiagnosticEventPayload,
+  evt: InternalDiagnosticEvent,
   metadata: DiagnosticEventMetadata,
 ): void {
   if (!shouldRecordDiagnosticEvent(metadata)) {
@@ -1016,17 +1017,17 @@ export function createDiagnosticsPrometheusExporter() {
   const service = {
     id: "diagnostics-prometheus",
     start(ctx) {
-      const subscribe = ctx.internalDiagnostics?.onEvent;
+      const subscribe = ctx.internalDiagnostics?.onTrustedInternalEvent;
       if (!subscribe) {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
       }
       unsubscribe = subscribe((event, metadata) => {
         try {
-          recordDiagnosticEvent(store, event, metadata);
+          recordDiagnosticEvent(store, event as InternalDiagnosticEvent, metadata);
         } catch (err) {
           ctx.logger.error(
-            `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
+            `diagnostics-prometheus: event handler failed (${String((event as { type?: unknown }).type ?? "unknown")}): ${safeErrorMessage(err)}`,
           );
         }
       });

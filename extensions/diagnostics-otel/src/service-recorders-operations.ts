@@ -10,6 +10,7 @@ import type {
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
 } from "../api.js";
+import type { InternalDiagnosticEvent } from "./internal-diagnostic-event.js";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
@@ -140,7 +141,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   const recordSessionMaintenancePruned = (
-    evt: Extract<DiagnosticEventPayload, { type: "session.maintenance.pruned" }>,
+    evt: Extract<InternalDiagnosticEvent, { type: "session.maintenance.pruned" }>,
     metadata: DiagnosticEventMetadata,
   ) => {
     if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {

@@ -39,6 +39,12 @@ function createMetricsHarness() {
           listener = undefined;
         };
       },
+      onTrustedInternalEvent(nextListener) {
+        listener = nextListener;
+        return () => {
+          listener = undefined;
+        };
+      },
     },
   });
   return {
@@ -755,6 +761,10 @@ describe("diagnostics-prometheus service", () => {
       internalDiagnostics: {
         emit: (event) => emitted.push(event),
         onEvent: (listener) => {
+          listeners.push(listener);
+          return unsubscribe;
+        },
+        onTrustedInternalEvent: (listener) => {
           listeners.push(listener);
           return unsubscribe;
         },
