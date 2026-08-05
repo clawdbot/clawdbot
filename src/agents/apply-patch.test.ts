@@ -895,6 +895,28 @@ describe("applyPatch", () => {
     });
   });
 
+  it("updates files through contained directory aliases", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const realDir = path.join(dir, "real");
+      await fs.mkdir(realDir, { recursive: true });
+      await fs.writeFile(path.join(realDir, "note.txt"), "initial\n", "utf8");
+      await fs.symlink(realDir, path.join(dir, "alias"), "dir");
+
+      const patch = `*** Begin Patch
+*** Update File: alias/note.txt
+@@
+-initial
++updated
+*** End Patch`;
+
+      await applyPatch(patch, { cwd: dir });
+      await expect(fs.readFile(path.join(realDir, "note.txt"), "utf8")).resolves.toBe("updated\n");
+    });
+  });
+
   it("rejects delete path traversal via symlink directories by default", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = path.join(path.dirname(dir), `outside-dir-${process.pid}-${Date.now()}`);
