@@ -28,16 +28,15 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./type
 
 type PersistGatewaySessionLifecycleEvent = typeof persistGatewaySessionLifecycleEvent;
 
-export async function persistNonDeliveredAgentRunTerminalSession(params: {
+export async function persistAgentRunTerminalSession(params: {
   agentId?: string;
-  deliver?: boolean;
   persist?: PersistGatewaySessionLifecycleEvent;
   runId: string;
   sessionId?: string;
   sessionKey?: string;
   terminalOutcome: AgentRunTerminalOutcome;
 }): Promise<void> {
-  if (params.deliver === true || !params.sessionKey || !params.sessionId) {
+  if (!params.sessionKey || !params.sessionId) {
     return;
   }
   const endedAt = params.terminalOutcome.endedAt ?? Date.now();
@@ -239,9 +238,8 @@ export function dispatchAgentRunFromGateway(params: {
           ? resultAgentMeta.sessionId
           : params.ingressOpts.sessionId;
       try {
-        await persistNonDeliveredAgentRunTerminalSession({
+        await persistAgentRunTerminalSession({
           agentId: params.ingressOpts.agentId,
-          deliver: params.ingressOpts.deliver,
           runId: params.runId,
           sessionId: terminalSessionId,
           sessionKey: params.ingressOpts.sessionKey,
@@ -249,7 +247,7 @@ export function dispatchAgentRunFromGateway(params: {
         });
       } catch (error) {
         params.context.logGateway.warn(
-          `failed to persist non-delivered agent session terminal state ${params.runId}: ${formatForLog(error)}`,
+          `failed to persist agent session terminal state ${params.runId}: ${formatForLog(error)}`,
         );
       }
       const responseStatus =

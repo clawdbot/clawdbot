@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { persistNonDeliveredAgentRunTerminalSession } from "./agent-run-dispatch.js";
+import { persistAgentRunTerminalSession } from "./agent-run-dispatch.js";
 
-describe("persistNonDeliveredAgentRunTerminalSession", () => {
+describe("persistAgentRunTerminalSession", () => {
   it("projects a successful suppressed agent RPC into its owned session", async () => {
     const persist = vi.fn(async () => undefined);
 
-    await persistNonDeliveredAgentRunTerminalSession({
+    await persistAgentRunTerminalSession({
       agentId: "main",
-      deliver: false,
       persist,
       runId: "run-1",
       sessionId: "session-1",
@@ -27,11 +26,10 @@ describe("persistNonDeliveredAgentRunTerminalSession", () => {
     });
   });
 
-  it("leaves delivered runs to transport settlement", async () => {
+  it("projects a delivered run after transport settlement returns", async () => {
     const persist = vi.fn(async () => undefined);
 
-    await persistNonDeliveredAgentRunTerminalSession({
-      deliver: true,
+    await persistAgentRunTerminalSession({
       persist,
       runId: "run-1",
       sessionId: "session-1",
@@ -39,6 +37,6 @@ describe("persistNonDeliveredAgentRunTerminalSession", () => {
       terminalOutcome: { reason: "completed", status: "ok" },
     });
 
-    expect(persist).not.toHaveBeenCalled();
+    expect(persist).toHaveBeenCalledTimes(1);
   });
 });
