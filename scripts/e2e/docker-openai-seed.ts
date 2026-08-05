@@ -52,7 +52,7 @@ export function applyDockerOpenAiProviderConfig(
   return seededConfig;
 }
 
-export async function writeDockerOpenAiProviderConfigFile(): Promise<string> {
+async function writeDockerOpenAiProviderConfigFile(): Promise<string> {
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
   const configPath =
     process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "openclaw.json");
