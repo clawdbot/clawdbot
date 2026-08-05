@@ -864,19 +864,34 @@ describe("diagnostic-events", () => {
     ).toBe(true);
   });
 
-  it("preserves trusted terminal tool diagnostics when the async queue is full", async () => {
+  it("preserves trusted lifecycle terminals when the async queue is full", async () => {
     const events: DiagnosticEventPayload[] = [];
     onInternalDiagnosticEvent((event) => {
       events.push(event);
     });
+    const model = {
+      runId: "run-model",
+      callId: "call-model",
+      provider: "openai",
+      model: "gpt-5.4",
+    };
+    const harness = { runId: "run-harness", harnessId: "harness" };
+    const terminalEvents: Array<Parameters<typeof emitTrustedDiagnosticEvent>[0]> = [
+      { type: "tool.execution.completed", toolName: "exec", durationMs: 1 },
+      { type: "tool.execution.error", toolName: "exec", durationMs: 1, errorCategory: "test" },
+      { type: "model.call.completed", ...model, durationMs: 1 },
+      { type: "model.call.error", ...model, durationMs: 1, errorCategory: "test" },
+      { type: "harness.run.completed", ...harness, durationMs: 1, outcome: "completed" },
+      {
+        type: "harness.run.error",
+        ...harness,
+        durationMs: 1,
+        phase: "resolve",
+        errorCategory: "test",
+      },
+    ];
 
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-saturation-first",
-      toolName: "exec",
-      toolCallId: "call-saturation-first",
-      durationMs: 1,
-    });
+    emitTrustedDiagnosticEvent(terminalEvents[0]!);
 
     for (let index = 0; index < 9_999; index += 1) {
       emitDiagnosticEvent({
@@ -887,52 +902,26 @@ describe("diagnostic-events", () => {
         model: "gpt-5.4",
       });
     }
-
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.error",
-      runId: "run-saturation-second",
-      toolName: "exec",
-      toolCallId: "call-saturation-second",
-      durationMs: 1,
-      errorCategory: "test",
-    });
+    for (const terminalEvent of terminalEvents.slice(1)) {
+      emitTrustedDiagnosticEvent(terminalEvent);
+    }
 
     expect(
       hasPendingInternalDiagnosticEvent(
-        (event, metadata) =>
-          metadata.trusted &&
-          event.type === "tool.execution.error" &&
-          event.toolCallId === "call-saturation-second",
+        (event, metadata) => metadata.trusted && event.type === "harness.run.error",
       ),
     ).toBe(true);
 
     await waitForDiagnosticEventsDrained();
 
+    for (const terminalEvent of terminalEvents) {
+      expect(events).toContainEqual(expect.objectContaining(terminalEvent));
+    }
     expect(
-      events
-        .filter(
-          (
-            event,
-          ): event is Extract<
-            DiagnosticEventPayload,
-            { type: "tool.execution.completed" | "tool.execution.error" }
-          > => event.type === "tool.execution.completed" || event.type === "tool.execution.error",
-        )
-        .map((event) => ({
-          type: event.type,
-          toolCallId: event.toolCallId,
-        })),
-    ).toEqual([
-      {
-        type: "tool.execution.completed",
-        toolCallId: "call-saturation-first",
-      },
-      {
-        type: "tool.execution.error",
-        toolCallId: "call-saturation-second",
-      },
-    ]);
-    expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(9_998);
+      events.filter(
+        (event) => event.type === "model.call.started" && event.runId.startsWith("saturation-run-"),
+      ),
+    ).toHaveLength(9_994);
   });
 
   it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {

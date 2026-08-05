@@ -3525,6 +3525,71 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
   });
 
+  test("closes a tracked blocked tool span once without creating a duplicate", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: "run-blocked",
+      toolName: "exec",
+      toolCallId: "call-blocked",
+      sourceTimestampMs: 1_000,
+      trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
+    });
+    await emitTrustedAndFlush({
+      type: "tool.execution.blocked",
+      runId: "run-blocked",
+      toolName: "exec",
+      toolCallId: "call-blocked",
+      deniedReason: "tools.deny",
+      reason: "policy denied",
+      sourceTimestampMs: 1_250,
+      trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
+    });
+
+    const toolSpans = telemetryState.spans.filter(
+      (span) => span.name === "openclaw.tool.execution",
+    );
+    expect(toolSpans).toHaveLength(1);
+    expect(startedSpanOptions("openclaw.tool.execution")?.startTime).toBe(1_000);
+    expect(toolSpans[0]?.end).toHaveBeenCalledTimes(1);
+    expect(toolSpans[0]?.end).toHaveBeenCalledWith(1_250);
+  });
+
+  test("uses authoritative source timestamps for terminal-only tool spans", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.completed",
+      runId: "run-completed",
+      toolName: "read",
+      toolCallId: "call-completed",
+      durationMs: 250,
+      sourceTimestampMs: 5_000,
+    });
+    await emitTrustedAndFlush({
+      type: "tool.execution.error",
+      runId: "run-error",
+      toolName: "write",
+      toolCallId: "call-error",
+      durationMs: 500,
+      errorCategory: "test",
+      sourceTimestampMs: 7_000,
+    });
+
+    const toolSpanCalls = telemetryState.tracer.startSpan.mock.calls.filter(
+      (call) => call[0] === "openclaw.tool.execution",
+    );
+    const toolSpans = telemetryState.spans.filter(
+      (span) => span.name === "openclaw.tool.execution",
+    );
+    expect(toolSpanCalls).toHaveLength(2);
+    expect((toolSpanCalls[0]?.[1] as { startTime?: number } | undefined)?.startTime).toBe(4_750);
+    expect((toolSpanCalls[1]?.[1] as { startTime?: number } | undefined)?.startTime).toBe(6_500);
+    expect(toolSpans[0]?.end).toHaveBeenCalledWith(5_000);
+    expect(toolSpans[1]?.end).toHaveBeenCalledWith(7_000);
+  });
+
   test("exports model failover spans", async () => {
     await startOtelService({ traces: true });
 

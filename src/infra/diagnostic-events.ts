@@ -958,9 +958,15 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "log.record",
 ]);
 const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  // Trusted lifecycle terminals must displace best-effort diagnostics; dropping one
+  // can strand the recorder's active span after its producer already finished.
   "tool.execution.completed",
   "tool.execution.error",
   "tool.execution.blocked",
+  "model.call.completed",
+  "model.call.error",
+  "harness.run.completed",
+  "harness.run.error",
 ]);
 
 function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
