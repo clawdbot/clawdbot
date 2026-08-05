@@ -45,6 +45,11 @@ flow:
                 expr: config.initialPrompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 30000)
+        - call: readSessionTranscriptSummary
+          saveAs: beforeSwitchTranscript
+          args:
+            - ref: env
+            - agent:qa:model-switch-tools
         - set: alternate
           value:
             expr: splitModelRef(env.alternateModel)
@@ -66,6 +71,17 @@ flow:
                 expr: alternate?.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
+        - call: readSessionTranscriptSummary
+          saveAs: afterSwitchTranscript
+          args:
+            - ref: env
+            - agent:qa:model-switch-tools
+            - afterEventCursor:
+                expr: beforeSwitchTranscript.eventCursor
+        - assert:
+            expr: "(afterSwitchTranscript.successfulToolCallCounts.read ?? 0) >= 1"
+            message:
+              expr: "`expected a successful read after the model switch; successfulTools=${JSON.stringify(afterSwitchTranscript.successfulToolCallCounts ?? {})}`"
         - call: waitForCondition
           saveAs: outbound
           args:
@@ -85,10 +101,6 @@ flow:
               - set: switchRequest
                 value:
                   expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
-              - assert:
-                  expr: "switchRequest?.plannedToolName === 'read'"
-                  message:
-                    expr: "`expected read after switch, got ${String(switchRequest?.plannedToolName ?? '')}`"
               - assert:
                   expr: "String(switchRequest?.model ?? '') === String(alternate?.model ?? '')"
                   message:
