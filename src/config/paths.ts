@@ -409,7 +409,6 @@ export const DEFAULT_GATEWAY_PORT = 18789;
  * Layout: <stateDir>/tmp/openclaw-<uid> (uid suffix when available).
  */
 export function resolveGatewayLockDir(
-  tmpdir: () => string = os.tmpdir,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {

@@ -57,7 +57,7 @@ function ensurePrivateCoordinatorDirectory(lockDir: string): void {
       throw error;
     }
     try {
-      fs.mkdirSync(lockDir, { mode: 0o700 });
+      fs.mkdirSync(lockDir, { mode: 0o700, recursive: true });
     } catch (mkdirError) {
       if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
         throw mkdirError;
