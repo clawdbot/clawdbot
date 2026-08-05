@@ -33,6 +33,11 @@ const HTML_VOID_TAGS = new Set([
   "wbr",
 ]);
 
+// Mirrors htmlparser2's raw-text tokenization (linkedom's parser): these
+// bodies become flat text nodes, so tag literals inside them are not DOM
+// nesting. noscript is excluded on purpose; htmlparser2 parses its children.
+const HTML_RAW_TEXT_TAGS = new Set(["script", "style", "title", "textarea", "xmp"]);
+
 const READABILITY_MODULE = "@mozilla/readability";
 const LINKEDOM_MODULE = "linkedom";
 
@@ -45,6 +50,7 @@ const loadReadabilityDeps = createLazyRuntimeModule(() =>
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
+  let lowerHtml: string | undefined;
   const len = html.length;
   for (let i = 0; i < len; i++) {
     if (html.charCodeAt(i) !== 60) {
@@ -111,6 +117,19 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
     depth += 1;
     if (depth > maxDepth) {
       return true;
+    }
+
+    if (HTML_RAW_TEXT_TAGS.has(tagName)) {
+      lowerHtml ??= html.toLowerCase();
+      const bodyStart = lowerHtml.indexOf(">", j);
+      if (bodyStart < 0) {
+        return false;
+      }
+      const closeStart = lowerHtml.indexOf(`</${tagName}`, bodyStart + 1);
+      if (closeStart < 0) {
+        return false;
+      }
+      i = closeStart - 1;
     }
   }
   return false;

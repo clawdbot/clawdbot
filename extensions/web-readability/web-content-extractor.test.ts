@@ -78,6 +78,30 @@ describe("web readability extractor", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
+  it("does not count tag literals inside raw text elements", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const script = `<script>${'render("<div>");'.repeat(900)}</script>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${script}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
+  it("still counts nesting inside noscript", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `<noscript>${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}</noscript>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
   it("does not count void tags toward the nesting limit", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const html = SAMPLE_HTML.replace("<article>", `<article>${"<BR>".repeat(3100)}`);
