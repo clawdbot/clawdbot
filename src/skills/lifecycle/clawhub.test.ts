@@ -141,6 +141,7 @@ async function writeClawHubOriginFixture(params: {
   installedVersion?: string;
   installedAt?: number;
   writeLock?: boolean;
+  skillMd?: string;
   skillFile?: { path: string; sha256: string };
   fileTreeSha256?: string;
 }) {
@@ -148,11 +149,25 @@ async function writeClawHubOriginFixture(params: {
   const registry = params.registry ?? "https://private.example.com/clawhub";
   const installedVersion = params.installedVersion ?? "1.2.3";
   const installedAt = params.installedAt ?? 123;
+  const skillFile =
+    params.skillFile ??
+    (params.skillMd !== undefined
+      ? {
+          path: "SKILL.md",
+          sha256: createHash("sha256").update(params.skillMd).digest("hex"),
+        }
+      : undefined);
+  const fileTreeSha256 =
+    params.fileTreeSha256 ??
+    (params.skillMd !== undefined ? `sha256:${"a".repeat(64)}` : undefined);
   const digests = {
-    ...(params.skillFile ? { skillFile: params.skillFile } : {}),
-    ...(params.fileTreeSha256 ? { fileTreeSha256: params.fileTreeSha256 } : {}),
+    ...(skillFile ? { skillFile } : {}),
+    ...(fileTreeSha256 ? { fileTreeSha256 } : {}),
   };
   await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+  if (params.skillMd !== undefined) {
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), params.skillMd, "utf8");
+  }
   await fs.writeFile(
     path.join(skillDir, ".clawhub", "origin.json"),
     `${JSON.stringify(
@@ -1828,6 +1843,7 @@ describe("skills-clawhub", () => {
       trustState: "not-scanned-by-clawhub",
       registry: "https://private.example.com/clawhub",
       installedVersion: "0.9.0",
+      skillMd: "# Fixture\n",
     });
     fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
       ok: true,
@@ -1895,6 +1911,7 @@ describe("skills-clawhub", () => {
       ownerHandle: "nvidia",
       registry: "https://clawhub.ai",
       installedVersion: "0.9.0",
+      skillMd: "# Fixture\n",
     });
     fetchClawHubSkillDetailMock.mockResolvedValueOnce({
       skill: {
@@ -2018,6 +2035,7 @@ describe("skills-clawhub", () => {
         slug,
         ownerHandle,
         installedVersion: "0.9.0",
+        skillMd: "# Fixture\n",
       });
       fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
         schema: "clawhub.skill.security-verdicts.v1",
@@ -2094,6 +2112,7 @@ describe("skills-clawhub", () => {
       slug: "weather",
       ownerHandle: "demo-owner",
       installedVersion: "0.9.0",
+      skillMd: "# Fixture\n",
     });
     fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
       ok: true,
@@ -2156,8 +2175,9 @@ describe("skills-clawhub", () => {
     expect(results).toEqual([
       {
         ok: false,
+        code: "force_required",
         error:
-          'Skill "weather" has local SKILL.md changes. Updating replaces the installed skill directory; re-run with --force to update it anyway.',
+          'Skill "weather" has local SKILL.md changes. Updating replaces the installed skill directory.',
       },
     ]);
     expect(installPackageDirMock).not.toHaveBeenCalled();
@@ -2165,6 +2185,41 @@ describe("skills-clawhub", () => {
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
     expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(
       "# Weather with local edits\n",
+    );
+  });
+
+  it("refuses to update a ClawHub skill whose SKILL.md is unreadable unless forced", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-unreadable-update-");
+    const skillDir = await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+      skillFile: {
+        path: "SKILL.md",
+        sha256: createHash("sha256").update("# Weather\n").digest("hex"),
+      },
+      fileTreeSha256: `sha256:${"a".repeat(64)}`,
+    });
+    await fs.mkdir(path.join(skillDir, "SKILL.md"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md", "notes.txt"), "local content\n", "utf8");
+
+    const results = await updateSkillsFromClawHub({
+      workspaceDir,
+      slug: "weather",
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        ok: false,
+        code: "force_required",
+        error: expect.stringContaining("EISDIR"),
+      }),
+    ]);
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(skillDir, "SKILL.md", "notes.txt"), "utf8")).toBe(
+      "local content\n",
     );
   });
 
@@ -2246,8 +2301,9 @@ describe("skills-clawhub", () => {
     expect(refused).toEqual([
       {
         ok: false,
+        code: "force_required",
         error:
-          'Skill "weather" has no complete installed-file digest. Updating replaces the installed skill directory; re-run with --force to update it anyway.',
+          'Skill "weather" has no complete installed-file digest. Updating replaces the installed skill directory.',
       },
     ]);
 
@@ -2406,6 +2462,7 @@ describe("skills-clawhub", () => {
       try {
         const results = await updateSkillsFromClawHub({
           workspaceDir,
+          force: true,
         });
 
         expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
@@ -2442,6 +2499,7 @@ describe("skills-clawhub", () => {
       try {
         const results = await updateSkillsFromClawHub({
           workspaceDir,
+          force: true,
           forceInstall: true,
         });
 
@@ -2504,6 +2562,7 @@ describe("skills-clawhub", () => {
         const results = await updateSkillsFromClawHub({
           workspaceDir,
           slug,
+          force: true,
         });
 
         expectLegacyUpdateSuccess(results, workspaceDir, slug);

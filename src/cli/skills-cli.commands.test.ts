@@ -873,6 +873,24 @@ describe("skills cli commands", () => {
     );
   });
 
+  it("prints --force retry guidance for blocked ClawHub skill updates", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        code: "force_required",
+        error:
+          'Skill "calendar" has local file changes. Updating replaces the installed skill directory.',
+      },
+    ]);
+
+    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Skill "calendar" has local file changes. Updating replaces the installed skill directory. Re-run with --force to update it anyway.',
+    );
+  });
+
   it("prints acknowledgement guidance for unacknowledged ClawHub skill updates", async () => {
     readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
     updateSkillsFromClawHubMock.mockResolvedValue([

@@ -1,4 +1,5 @@
 // ClawHub lifecycle facade: public API plus install/update coordination.
+import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ClawHubRiskAcknowledgementRequest,
@@ -34,7 +35,7 @@ import {
   type ClawHubSkillRef,
   type ClawHubSkillsLockfile,
 } from "./clawhub-store.js";
-import { planClawHubSkillUninstall } from "./clawhub-uninstall.js";
+import { planTrackedClawHubSkillState } from "./clawhub-uninstall.js";
 
 export { readVerifiedClawHubSkillSourceUrl } from "./clawhub-install-core.js";
 export {
@@ -63,7 +64,13 @@ type UpdateClawHubSkillResult =
       targetDir: string;
       warning?: string;
     }
-  | { ok: false; error: string; code?: ClawHubTrustErrorCode; version?: string; warning?: string };
+  | {
+      ok: false;
+      error: string;
+      code?: ClawHubTrustErrorCode | "force_required";
+      version?: string;
+      warning?: string;
+    };
 
 type TrackedUpdateTarget =
   | {
@@ -334,18 +341,23 @@ async function guardTrackedSkillLocalState(params: {
   previousVersion: string | null;
 }): Promise<string | undefined> {
   const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
-  if (!(await pathExists(targetDir))) {
-    return undefined;
+  try {
+    await fs.lstat(targetDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    return String(error);
   }
-  const local = await planClawHubSkillUninstall({
+  const local = await planTrackedClawHubSkillState({
     workspaceDir: params.workspaceDir,
-    slug: params.slug,
+    requestedRef: { slug: params.slug },
     expectedVersion: params.previousVersion ?? "",
   });
-  if (local.ok || local.code === "missing") {
+  if (local.ok) {
     return undefined;
   }
-  return `${local.error} Updating replaces the installed skill directory; re-run with --force to update it anyway.`;
+  return local.error;
 }
 
 export async function updateSkillsFromClawHub(params: {
@@ -391,7 +403,11 @@ export async function updateSkillsFromClawHub(params: {
             previousVersion: tracked.previousVersion,
           });
           if (blocked) {
-            return { ok: false as const, error: blocked };
+            return {
+              ok: false as const,
+              code: "force_required" as const,
+              error: `${blocked} Updating replaces the installed skill directory.`,
+            };
           }
         }
         return await installTrackedSkillFromClawHub({

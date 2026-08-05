@@ -48,6 +48,19 @@ export async function planClawHubSkillUninstall(params: {
   } catch (error) {
     return { ok: false, code: "ambiguous", error: String(error) };
   }
+  return await planTrackedClawHubSkillState({
+    workspaceDir: params.workspaceDir,
+    requestedRef,
+    expectedVersion: params.expectedVersion,
+  });
+}
+
+export async function planTrackedClawHubSkillState(params: {
+  workspaceDir: string;
+  requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
+  expectedVersion: string;
+}): Promise<ClawHubSkillUninstallPlanResult> {
+  const requestedRef = params.requestedRef;
   const slug = requestedRef.slug;
   const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, slug);
   const link = resolveClawHubSkillStatusLinkSync({

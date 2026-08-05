@@ -811,7 +811,9 @@ export function registerSkillsCli(program: Command) {
           for (const result of results) {
             if (!result.ok) {
               failed = true;
-              if (!isClawHubSkillBlockedCliFailure(result)) {
+              if (result.code === "force_required") {
+                defaultRuntime.error(`${result.error} Re-run with --force to update it anyway.`);
+              } else if (!isClawHubSkillBlockedCliFailure(result)) {
                 defaultRuntime.error(result.error);
               }
               continue;
