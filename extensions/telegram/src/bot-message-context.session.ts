@@ -121,6 +121,33 @@ export async function resolveTelegramMessageContextStorePath(params: {
   });
 }
 
+/** Updates a persisted topic session label without creating or touching a session. */
+export async function updateTelegramSessionLabel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  label: string;
+  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
+}): Promise<void> {
+  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
+  const patchSessionEntry =
+    typeof sessionRuntime.patchSessionEntry === "function"
+      ? sessionRuntime.patchSessionEntry
+      : (await import("./bot-message-context.session.runtime.js")).patchSessionEntry;
+  const storePath = await resolveTelegramMessageContextStorePath({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionRuntime: params.sessionRuntime,
+  });
+  await patchSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath,
+    preserveActivity: true,
+    update: () => ({ label: params.label }),
+  });
+}
+
 function replyTargetToChainEntry(replyTarget: TelegramReplyTarget): TelegramReplyChainEntry {
   return {
     ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
@@ -678,6 +705,10 @@ export async function buildTelegramInboundContextPayload(params: {
             senderAllowed: true,
           }
         : undefined,
+      thread:
+        !isGroup && dmThreadId != null && topicName
+          ? { label: topicName, senderAllowed: true }
+          : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
       channelStructuredContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
     },
@@ -724,7 +755,7 @@ export async function buildTelegramInboundContextPayload(params: {
       SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
       IsForum: isForum,
-      TopicName: isForum && topicName ? topicName : undefined,
+      TopicName: topicName,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
   if (isGroup && historyKey) {

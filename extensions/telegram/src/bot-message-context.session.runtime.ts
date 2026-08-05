@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot message context.session behavior.
 export { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 export {
+  patchSessionEntry,
   readAmbientTranscriptWatermark,
   readSessionUpdatedAt,
   resolveAmbientTranscriptWatermarkKey,
