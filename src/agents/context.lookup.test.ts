@@ -429,9 +429,9 @@ describe("lookupContextTokens", () => {
     ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("cooperatively projects large configured and discovered catalogs when request-time loading starts first", async () => {
+  it("cooperatively projects a large catalog when request-time loading starts first", async () => {
     const modelCount = 1_025;
-    const config = createLargeContextOverrideConfig("request-configured", modelCount);
+    const config = createContextOverrideConfig("synthetic", "configured", 128_000);
     contextTestState.discoveredModels = Array.from({ length: modelCount }, (_, index) => ({
       id: `request-discovered-${index}`,
       provider: "synthetic",
@@ -439,24 +439,10 @@ describe("lookupContextTokens", () => {
     }));
     const immediateSpy = vi.spyOn(globalThis, "setImmediate");
     try {
-      const loadPromise = contextModule.ensureContextWindowCacheLoaded(config);
-
-      expect(
-        contextModule.lookupContextTokens("request-configured-1024", {
-          allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
-        }),
-      ).toBeUndefined();
-      await loadPromise;
+      await contextModule.ensureContextWindowCacheLoaded(config);
 
       expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
       expect(immediateSpy).toHaveBeenCalled();
-      expect(
-        contextModule.lookupContextTokens("request-configured-1024", {
-          allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
-        }),
-      ).toBe(128_000);
       expect(
         contextModule.lookupContextTokens("request-discovered-1024", {
           allowAsyncLoad: false,
