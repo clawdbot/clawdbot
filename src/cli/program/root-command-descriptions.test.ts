@@ -17,6 +17,7 @@ const RESERVED_CATALOG_ROOTS = {
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
+  memory: "registered and covered by the memory-core plugin",
   "memory search": "registered and covered by the memory-core plugin",
   "memory status": "registered and covered by the memory-core plugin",
 } as const;

@@ -69,6 +69,17 @@ describe("doctor channel capabilities", () => {
     });
   });
 
+  it("returns Discord route semantics without loading its channel plugin", () => {
+    expect(getDoctorChannelCapabilities("discord")).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    });
+    expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
+  });
+
   it("returns capability overrides from matrix plugin metadata", () => {
     expect(getDoctorChannelCapabilities("matrix")).toEqual({
       dmAllowFromMode: "nestedOnly",

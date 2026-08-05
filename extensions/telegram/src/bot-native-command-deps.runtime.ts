@@ -23,6 +23,7 @@ export type TelegramNativeCommandDeps = Pick<
   dispatchChannelInboundTurn?: typeof dispatchChannelInboundTurn;
   getPluginCommandSpecs?: typeof getPluginCommandSpecs;
   runModelsAuthLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
+  sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 };
 
 export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps & {
@@ -54,5 +55,9 @@ export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps & {
   async editMessageTelegram(...args) {
     const { editMessageTelegram } = await loadTelegramSendModule();
     return await editMessageTelegram(...args);
+  },
+  async sendMessageTelegram(...args) {
+    const { sendMessageTelegram } = await loadTelegramSendModule();
+    return await sendMessageTelegram(...args);
   },
 };

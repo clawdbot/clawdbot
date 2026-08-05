@@ -1117,12 +1117,37 @@ describe("handleTelegramAction", () => {
     endUserRequest();
   });
 
-  it("marks topic room-event delivery when send uses a separate thread id", async () => {
+  it.each([
+    {
+      label: "a separate forum topic",
+      to: "-100123",
+      threadId: 77,
+      expectedTarget: "-100123:topic:77",
+    },
+    {
+      label: "an explicit forum topic instead of a stale embedded topic",
+      to: "-100123:topic:271",
+      threadId: 404,
+      expectedTarget: "-100123:topic:404",
+    },
+    {
+      label: "an explicit private-chat topic instead of a stale embedded topic",
+      to: "123:topic:7",
+      threadId: 11,
+      expectedTarget: "123:topic:11",
+    },
+    {
+      label: "an explicitly selected General forum topic",
+      to: "-100123:topic:271",
+      threadId: 1,
+      expectedTarget: "-100123:topic:1",
+    },
+  ])("marks topic room-event delivery for $label", async ({ to, threadId, expectedTarget }) => {
     let count = 0;
     const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
-        outboundTo: "-100123:topic:77",
+        outboundTo: expectedTarget,
         markInboundEventDelivered: () => {
           count += 1;
         },
@@ -1133,14 +1158,16 @@ describe("handleTelegramAction", () => {
     await handleTelegramAction(
       {
         action: "sendMessage",
-        to: "-100123",
-        threadId: 77,
+        to,
+        threadId,
         content: "Hello from a room event topic",
       },
       telegramConfig(),
       { sessionKey: "telegram-session", inboundEventKind: "room_event" },
     );
 
+    const sent = mockCall(sendMessageTelegram, 0, "room event topic send");
+    expect(requireRecord(sent[2], "room event topic options").messageThreadId).toBe(threadId);
     expect(count).toBe(1);
     end();
   });
@@ -1177,7 +1204,8 @@ describe("handleTelegramAction", () => {
       name: "poll",
       params: {
         action: "poll",
-        to: "@testchannel",
+        to: "-100123:topic:271",
+        threadId: 404,
         question: "Ready?",
         answers: ["Yes", "No"],
       },
@@ -1187,17 +1215,18 @@ describe("handleTelegramAction", () => {
       name: "sticker",
       params: {
         action: "sendSticker",
-        to: "@testchannel",
+        to: "-100123:topic:271",
+        threadId: 404,
         fileId: "sticker-1",
       },
       cfg: telegramConfig({ actions: { sticker: true } }),
     },
-  ])("marks room-event delivery after successful $name actions", async ({ params, cfg }) => {
+  ])("marks room-event delivery after successful $name actions", async ({ name, params, cfg }) => {
     let count = 0;
     const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
-        outboundTo: "@testchannel",
+        outboundTo: "-100123:topic:404",
         markInboundEventDelivered: () => {
           count += 1;
         },
@@ -1210,6 +1239,11 @@ describe("handleTelegramAction", () => {
       inboundEventKind: "room_event",
     });
 
+    const sent =
+      name === "poll"
+        ? mockCall(sendPollTelegram, 0, "room event topic poll")
+        : mockCall(sendStickerTelegram, 0, "room event topic sticker");
+    expect(requireRecord(sent[2], "room event topic options").messageThreadId).toBe(404);
     expect(count).toBe(1);
     end();
   });
@@ -1761,6 +1795,22 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/cannot be combined/i);
   });
 
+  it("rejects location sends mixed with presentation text", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123456",
+          location: { latitude: 1, longitude: 2 },
+          presentation: {
+            blocks: [{ type: "text", text: "caption" }],
+          },
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/cannot be combined/i);
+  });
+
   it("renders presentation text when message content is omitted", async () => {
     await handleTelegramAction(
       {
@@ -1872,6 +1922,95 @@ describe("handleTelegramAction", () => {
     ]);
   });
 
+  it("reports dropped controls and delivers their readable fallback", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Choose",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Retry", value: "retry" },
+                { label: "Copy manually", value: "x".repeat(65) },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "degraded controls");
+    expect(call[1]).toBe("Choose\n\n- Copy manually");
+    expect(requireRecord(call[2], "degraded controls options").buttons).toEqual([
+      [{ text: "Retry", callback_data: "retry" }],
+    ]);
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      warning: "Telegram delivered 1 unencodable control as readable text.",
+      degradedDelivery: {
+        droppedControls: 1,
+        fallback: "text",
+        reasons: ["callback_data_too_long"],
+        callbackDataLimitBytes: 64,
+      },
+    });
+  });
+
+  it("keeps a 64-byte Unicode callback native without a degradation warning", async () => {
+    const callbackData = "😀".repeat(16);
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Choose",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Exact", value: callbackData }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "64-byte callback");
+    expect(requireRecord(call[2], "64-byte callback options").buttons).toEqual([
+      [{ text: "Exact", callback_data: callbackData }],
+    ]);
+    expect(resultDetails(result)).not.toHaveProperty("degradedDelivery");
+  });
+
+  it("delivers control fallback text before a standalone location", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        location: { latitude: 48.858844, longitude: 2.294351 },
+        presentation: {
+          blocks: [
+            { type: "buttons", buttons: [{ label: "Copy manually", value: "x".repeat(65) }] },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "degraded location");
+    expect(requireRecord(durableCall[0], "degraded location params")).toMatchObject({
+      payloads: [
+        {
+          text: "- Copy manually",
+          location: { latitude: 48.858844, longitude: 2.294351 },
+        },
+      ],
+    });
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      degradedDelivery: { droppedControls: 1, fallback: "text" },
+    });
+  });
+
   it("edits reply markup when editMessage only changes buttons", async () => {
     await handleTelegramAction(
       {
@@ -1896,6 +2035,60 @@ describe("handleTelegramAction", () => {
     expect(call[1]).toBe(321);
     expect(call[2]).toEqual([[{ text: "Open", url: "https://example.com" }]]);
     expect(requireRecord(call[3], "reply markup edit options").token).toBe("tok");
+  });
+
+  it("reports controls dropped from a reply-markup edit", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Open", value: "open" },
+                { label: "Copy manually", value: "x".repeat(65) },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(editMessageReplyMarkupTelegram, 0, "degraded reply markup edit");
+    expect(call[2]).toEqual([[{ text: "Open", callback_data: "open" }]]);
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      warning: "Telegram could not deliver 1 control.",
+      degradedDelivery: { droppedControls: 1, fallback: "not_delivered" },
+    });
+  });
+
+  it("returns a recoverable result when every edited control is unencodable", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        presentation: {
+          blocks: [
+            { type: "buttons", buttons: [{ label: "Copy manually", value: "x".repeat(65) }] },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupTelegram).not.toHaveBeenCalled();
+    expect(resultDetails(result)).toMatchObject({
+      ok: false,
+      warning: "Telegram could not deliver 1 control.",
+      degradedDelivery: { droppedControls: 1, fallback: "not_delivered" },
+    });
   });
 
   it.each([

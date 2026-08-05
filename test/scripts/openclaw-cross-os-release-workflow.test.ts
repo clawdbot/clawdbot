@@ -62,6 +62,22 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain("TSX_VERSION");
   });
 
+  it("retries only an interrupted Windows dashboard probe", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const consumer = job(workflow, "cross_os_release_checks");
+    const run = step(consumer, "Run cross-OS release checks").run;
+
+    expect(run).toContain("run_cross_os_release_checks() {");
+    expect(run).toContain("if run_cross_os_release_checks; then");
+    expect(run).toContain('"${OPENCLAW_RELEASE_CHECK_OS}" != "windows"');
+    expect(run).toContain('"$status" -ne 127');
+    expect(run).toContain('dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"');
+    expect(run).toContain('-f "${OUTPUT_DIR}/summary.json"');
+    expect(run).toContain("attempt=.*url=http://127.0.0.1:");
+    expect(run).toContain("retrying Windows release checks after the outer process exited 127");
+    expect(run).toContain("run_cross_os_release_checks\n");
+  });
+
   it("bounds npm baseline packing during prepare", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const baselineMetadata = step(job(workflow, "prepare"), "Capture baseline metadata");

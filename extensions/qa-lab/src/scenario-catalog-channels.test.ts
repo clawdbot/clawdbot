@@ -67,6 +67,7 @@ describe("qa scenario catalog channel contracts", () => {
 
     expect(scenario.coverage?.primary).toEqual(["media.inbound-media-store"]);
     expect(scenario.coverage?.secondary).toEqual(["channels.inbound-media-normalization"]);
+    expect(scenario.plugins).toContain("openai");
     expect(scenario.execution.channel).toBe("qa-channel");
     expect(scenario.execution.providerMode).toBe("mock-openai");
     expect(flow).toContain('"sendInbound"');
