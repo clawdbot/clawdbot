@@ -207,7 +207,7 @@ flow:
             expr: durableCompletionLifecycle.message
         - set: allBusEvents
           value:
-            expr: "state.getSnapshot().events.filter((event) => event.cursor > busCursorBefore && 'message' in event && event.message.direction === 'outbound' && event.message.conversation.id === config.conversationId)"
+            expr: "state.getSnapshot().events.filter((event) => event.cursor > busCursorBefore && 'message' in event && event.message.accountId === transport.accountId && event.message.direction === 'outbound' && event.message.conversation.id === config.conversationId)"
         - set: busEvents
           value:
             expr: "allBusEvents.filter((event) => event.kind === 'outbound-message' || event.kind === 'message-edited')"
@@ -216,7 +216,7 @@ flow:
             expr: "busEvents.filter((event) => event.message.text.includes(config.completionText))"
         - set: completionMessages
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.text.includes(config.completionText) && !message.deleted)"
+            expr: "state.getSnapshot().messages.filter((message) => message.accountId === transport.accountId && message.direction === 'outbound' && message.conversation.id === config.conversationId && message.text.includes(config.completionText) && !message.deleted)"
         - assert:
             # Tool-backed finals replace their streamed preview; prove sent -> deleted -> final ordering first.
             expr: "completionMessages.length === 1 && completionMessages[0].id === durableCompletion.id"

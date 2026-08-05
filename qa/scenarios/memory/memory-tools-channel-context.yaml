@@ -150,7 +150,7 @@ flow:
             expr: durableChannelLifecycle.message
         - set: visibleChannelOutbounds
           value:
-            expr: "state.getSnapshot().messages.slice(outboundStartIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.channelId && message.conversation.kind === 'channel')"
+            expr: "state.getSnapshot().messages.slice(outboundStartIndex).filter((message) => message.accountId === transport.accountId && message.direction === 'outbound' && !message.deleted && message.conversation.id === config.channelId && message.conversation.kind === 'channel')"
         - assert:
             # Tool-backed finals replace their streamed preview; prove sent -> deleted -> final ordering first.
             expr: "visibleChannelOutbounds.length === 1 && visibleChannelOutbounds[0].id === durableChannelOutbound.id"

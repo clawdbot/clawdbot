@@ -267,15 +267,24 @@ describe("qa scenario catalog causality", () => {
   ] as const)("isolates $scenarioId durable lifecycle evidence by account", async (fixture) => {
     const scenario = requireFlowScenario(readQaScenarioById(fixture.scenarioId));
     const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-    const durableWait = actions.find(
+    const durableWaitIndex = actions.findIndex(
       (action) =>
         (action as { call?: string }).call === "waitForCondition" &&
         (action as { saveAs?: string }).saveAs === fixture.saveAs,
     );
-    expect(durableWait, fixture.scenarioId).toBeDefined();
-    if (!durableWait) {
-      throw new Error(`missing durable lifecycle wait for ${fixture.scenarioId}`);
+    const cardinalityAssertIndex = actions.findIndex((action) =>
+      readFlowAssertExpression(action).includes(
+        fixture.scenarioId === "memory-tools-channel-context"
+          ? "visibleChannelOutbounds.length === 1"
+          : "completionMessages.length === 1",
+      ),
+    );
+    expect(durableWaitIndex, fixture.scenarioId).toBeGreaterThanOrEqual(0);
+    expect(cardinalityAssertIndex, fixture.scenarioId).toBeGreaterThan(durableWaitIndex);
+    if (durableWaitIndex < 0 || cardinalityAssertIndex <= durableWaitIndex) {
+      throw new Error(`missing durable lifecycle assertion path for ${fixture.scenarioId}`);
     }
+    const postWaitAssertionPath = actions.slice(durableWaitIndex, cardinalityAssertIndex + 1);
 
     const config = scenario.execution.config ?? {};
     const conversationId = String(config[fixture.conversationKey]);
@@ -298,7 +307,7 @@ describe("qa scenario catalog causality", () => {
               actions: [
                 { set: "outboundStartIndex", value: { expr: "0" } },
                 { set: fixture.cursorName, value: { expr: "0" } },
-                durableWait,
+                ...postWaitAssertionPath,
                 {
                   assert: {
                     expr: `${fixture.saveAs}.message.accountId === transport.accountId`,
