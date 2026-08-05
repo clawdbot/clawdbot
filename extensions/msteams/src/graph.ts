@@ -287,7 +287,7 @@ export async function deleteGraphRequest(params: { token: string; path: string }
     method: "DELETE",
     errorPrefix: "Graph DELETE",
   });
-  await response.body?.cancel().catch(() => undefined);
+  void response.body?.cancel().catch(() => undefined); // Awaiting capture tees can deadlock.
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {

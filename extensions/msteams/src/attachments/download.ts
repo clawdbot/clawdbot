@@ -199,7 +199,7 @@ async function fetchWithAuthFallback(params: {
         resolveFn: params.resolveFn,
         timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
       });
-      await fallbackAttempt.body?.cancel().catch(() => undefined);
+      void fallbackAttempt.body?.cancel().catch(() => undefined); // Awaiting capture tees can deadlock.
       if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
         // Redirects in guarded fetch mode must propagate to the outer guard.
         return authAttempt;

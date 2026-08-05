@@ -421,7 +421,12 @@ describe("msteams graph helpers", () => {
     });
 
     expect(upstreamCancel).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledTimes(1);
+    // The body cancel is fire-and-forget (awaiting a tee branch's cancel can
+    // deadlock under debug capture), so the dispatcher release lands on a
+    // later microtask rather than before deleteGraphRequest settles.
+    await vi.waitFor(() => {
+      expect(release).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("resolves Graph tokens through the SDK auth provider", async () => {
