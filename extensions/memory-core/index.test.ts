@@ -195,108 +195,14 @@ describe("memory-core plugin runtime registration", () => {
     expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
   });
 
-  it("warms each configured memory manager at gateway start and logs failures at debug", async () => {
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const syncMain = vi.fn(async () => {});
-    const syncWork = vi.fn(async () => {
-      throw new Error("warmup failed");
-    });
-    const debug = vi.fn();
-    getMemorySearchManagerMock
-      .mockResolvedValueOnce({ manager: { sync: syncMain } } as never)
-      .mockResolvedValueOnce({ manager: { sync: syncWork } } as never);
-    const config = {
-      agents: { entries: { main: { default: true }, work: {} } },
-    } as OpenClawConfig;
-    const testApi = createTestPluginApi({
-      config,
-      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      runtime: hostRuntime,
-      on(hookName, handler) {
-        if (hookName === "gateway_start") {
-          gatewayStartHandlers.push(
-            handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-          );
-        }
-      },
-    });
-
-    plugin.register(testApi);
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-    warmup({}, { config });
-
-    await vi.waitFor(() => {
-      expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
-      expect(syncMain).toHaveBeenCalledWith({ reason: "startup-warmup" });
-      expect(syncWork).toHaveBeenCalledWith({ reason: "startup-warmup" });
-      expect(debug).toHaveBeenCalledWith(
-        "memory-core: startup index warmup failed for work: warmup failed",
-      );
-    });
-  });
-
-  it("leaves QMD startup synchronization to the backend boot policy", async () => {
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const sync = vi.fn(async () => {});
-    getMemorySearchManagerMock.mockResolvedValueOnce({ manager: { sync } } as never);
-    const config = {
-      memory: { backend: "qmd", qmd: { update: { onBoot: false } } },
-    } as OpenClawConfig;
+  it("keeps memory manager initialization demand-driven", () => {
     plugin.register(
       createTestPluginApi({
-        config,
         runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
       }),
     );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
 
-    warmup({}, { config });
-
-    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
-    expect(sync).not.toHaveBeenCalled();
-  });
-
-  it("does not warm memory-core when another plugin owns the memory slot", async () => {
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const config = {
-      plugins: { slots: { memory: "memory-lancedb" } },
-    } as OpenClawConfig;
-    plugin.register(
-      createTestPluginApi({
-        config,
-        runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
-      }),
-    );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-
-    warmup({}, { config });
-
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 

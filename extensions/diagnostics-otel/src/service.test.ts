@@ -1027,6 +1027,27 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
   });
 
+  test("attempts every provider shutdown and reports every failure", async () => {
+    const logError = new Error("log provider failed");
+    const sdkError = new Error("SDK providers failed");
+    logShutdown.mockRejectedValueOnce(logError);
+    sdkShutdown.mockRejectedValueOnce(sdkError);
+    const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
+
+    const stopError = await Promise.resolve(service.stop?.(ctx)).catch((error: unknown) => error);
+
+    expect(logShutdown).toHaveBeenCalledTimes(1);
+    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+    expect(stopError).toBeInstanceOf(AggregateError);
+    expect(stopError).toMatchObject({
+      errors: [logError, sdkError],
+      message: expect.stringContaining("log provider failed"),
+    });
+    expect(stopError).toMatchObject({
+      message: expect.stringContaining("SDK providers failed"),
+    });
+  });
+
   test("registers and removes an OTLP exporter unhandled rejection handler", async () => {
     const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
 
@@ -1056,6 +1077,38 @@ describe("diagnostics-otel service", () => {
 
     await service.stop?.(ctx);
     expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
+  });
+
+  test("cleans up existing providers and does not reinitialize without capability", async () => {
+    const service = createDiagnosticsOtelService();
+    const enabledCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(enabledCtx);
+
+    sdkCtor.mockClear();
+    sdkStart.mockClear();
+    logExporterCtor.mockClear();
+    const deniedCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    delete deniedCtx.internalDiagnostics;
+
+    await service.start(deniedCtx);
+    await service.stop?.(deniedCtx);
+
+    expect(deniedCtx.logger.error).toHaveBeenCalledWith(
+      "diagnostics-otel: internal diagnostics capability unavailable",
+    );
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(sdkStart).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(sdkShutdown).toHaveBeenCalledOnce();
+    expect(logShutdown).toHaveBeenCalledOnce();
   });
 
   test("does not retain an OTLP exporter handler when startup setup fails", async () => {
@@ -1797,6 +1850,25 @@ describe("diagnostics-otel service", () => {
     expect(firstExporterOptions(traceExporterCtor).url).toBe(expected);
   });
 
+  test("routes every signal from a shared signal-qualified endpoint", async () => {
+    await startOtelService({
+      endpoint: "https://collector.example.com/api/public/otel/v1/traces?tenant=red",
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+
+    expect(firstExporterOptions(traceExporterCtor).url).toBe(
+      "https://collector.example.com/api/public/otel/v1/traces?tenant=red",
+    );
+    expect(firstExporterOptions(metricExporterCtor).url).toBe(
+      "https://collector.example.com/api/public/otel/v1/metrics?tenant=red",
+    );
+    expect(firstExporterOptions(logExporterCtor).url).toBe(
+      "https://collector.example.com/api/public/otel/v1/logs?tenant=red",
+    );
+  });
+
   test("applies flush interval to trace batching", async () => {
     await startOtelService({
       traces: true,
@@ -1829,24 +1901,26 @@ describe("diagnostics-otel service", () => {
       metrics: true,
       logs: true,
       configure: (ctx) => {
-        ctx.config.diagnostics!.otel!.tracesEndpoint = "https://trace.example.com/otlp";
-        ctx.config.diagnostics!.otel!.metricsEndpoint = "https://metric.example.com/v1/metrics";
-        ctx.config.diagnostics!.otel!.logsEndpoint = "https://log.example.com/otlp";
+        ctx.config.diagnostics!.otel!.tracesEndpoint = "https://trace.example.com/custom";
+        ctx.config.diagnostics!.otel!.metricsEndpoint =
+          "https://metric.example.com/v1/traces?tenant=red";
+        ctx.config.diagnostics!.otel!.logsEndpoint = "https://log.example.com/otlp/";
       },
     });
 
     const traceOptions = firstExporterOptions(traceExporterCtor);
     const metricOptions = firstExporterOptions(metricExporterCtor);
     const logOptions = firstExporterOptions(logExporterCtor);
-    expect(traceOptions.url).toBe("https://trace.example.com/otlp/v1/traces");
-    expect(metricOptions.url).toBe("https://metric.example.com/v1/metrics");
-    expect(logOptions.url).toBe("https://log.example.com/otlp/v1/logs");
+    expect(traceOptions.url).toBe("https://trace.example.com/custom");
+    expect(metricOptions.url).toBe("https://metric.example.com/v1/traces?tenant=red");
+    expect(logOptions.url).toBe("https://log.example.com/otlp/");
   });
 
   test("uses signal-specific OTLP env endpoints when config is unset", async () => {
-    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://trace-env.example.com/v1/traces";
-    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "https://metric-env.example.com/otlp";
-    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://log-env.example.com/otlp";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://trace-env.example.com/custom";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
+      "https://metric-env.example.com/v1/traces?tenant=red";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://log-env.example.com/otlp/";
 
     await startOtelService({
       traces: true,
@@ -1857,9 +1931,9 @@ describe("diagnostics-otel service", () => {
     const traceOptions = firstExporterOptions(traceExporterCtor);
     const metricOptions = firstExporterOptions(metricExporterCtor);
     const logOptions = firstExporterOptions(logExporterCtor);
-    expect(traceOptions.url).toBe("https://trace-env.example.com/v1/traces");
-    expect(metricOptions.url).toBe("https://metric-env.example.com/otlp/v1/metrics");
-    expect(logOptions.url).toBe("https://log-env.example.com/otlp/v1/logs");
+    expect(traceOptions.url).toBe("https://trace-env.example.com/custom");
+    expect(metricOptions.url).toBe("https://metric-env.example.com/v1/traces?tenant=red");
+    expect(logOptions.url).toBe("https://log-env.example.com/otlp/");
   });
 
   test("ignores malformed shared OTLP env when valid signal endpoints shadow it", async () => {

@@ -630,6 +630,46 @@ describe("diagnostic-events", () => {
     expect(events).toHaveLength(250);
   });
 
+  it("does not extend a drain barrier for events queued after it starts", async () => {
+    const callIds: string[] = [];
+    onDiagnosticEvent((event) => {
+      if (event.type === "model.call.started") {
+        callIds.push(event.callId);
+      }
+    });
+
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-before-barrier",
+      callId: "before-barrier",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    const drained = waitForDiagnosticEventsDrained();
+    for (let index = 0; index < 250; index += 1) {
+      emitDiagnosticEvent({
+        type: "model.call.started",
+        runId: `run-after-${index}`,
+        callId: `after-${index}`,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    }
+
+    await drained;
+
+    expect(callIds).toHaveLength(100);
+    expect(callIds[0]).toBe("before-barrier");
+    expect(
+      hasPendingInternalDiagnosticEvent(
+        (event) => event.type === "model.call.started" && event.callId === "after-249",
+      ),
+    ).toBe(true);
+
+    await waitForDiagnosticEventsDrained();
+    expect(callIds).toHaveLength(251);
+  });
+
   it("reports pending async diagnostic events before they drain", async () => {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.error",

@@ -67,14 +67,28 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     stopActiveTrustedSpans = null;
     unregisterUnhandledRejectionHandler = null;
 
-    currentUnregisterUnhandledRejectionHandler?.();
-    currentUnsubscribe?.();
-    currentStopActiveTrustedSpans?.();
-    if (currentLogProvider) {
-      await currentLogProvider.shutdown().catch(() => undefined);
+    const settle = async (...stops: Array<(() => void | Promise<void>) | null>) =>
+      (
+        await Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.())))
+      ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+    // Preserve cleanup -> provider flush -> handler removal while attempting every step per phase.
+    const failures = await settle(currentUnsubscribe, currentStopActiveTrustedSpans);
+    failures.push(
+      ...(await settle(
+        currentLogProvider ? () => currentLogProvider.shutdown() : null,
+        currentSdk ? () => currentSdk.shutdown() : null,
+      )),
+      ...(await settle(currentUnregisterUnhandledRejectionHandler)),
+    );
+
+    if (failures.length === 1) {
+      throw failures[0];
     }
-    if (currentSdk) {
-      await currentSdk.shutdown().catch(() => undefined);
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `diagnostics-otel shutdown failed: ${failures.join("; ")}`,
+      );
     }
   };
 
@@ -126,6 +140,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...(logsEnabled ? (["logs"] as const) : []),
       ];
       if (enabledSignals.length === 0) {
+        return;
+      }
+      // This capability is the admission gate; no exporter may outlive a denied start.
+      const subscribe = ctx.internalDiagnostics?.onEvent;
+      if (!subscribe) {
+        ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
         return;
       }
 
@@ -308,11 +328,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createModelRecorders(recorderRuntime),
         ...createToolAndSystemRecorders(recorderRuntime),
       };
-      const subscribe = ctx.internalDiagnostics?.onEvent;
-      if (!subscribe) {
-        ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
-        return;
-      }
 
       unsubscribe = subscribe(
         createDiagnosticsEventHandler({

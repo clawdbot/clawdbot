@@ -1216,10 +1216,15 @@ function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState):
   dispatchDiagnosticEvent(state, event, createInternalDiagnosticMetadata(false));
 }
 
-/** Waits until queued async diagnostic events have been delivered to listeners. */
+/** Waits until async diagnostic events queued when called are no longer pending. */
 export async function waitForDiagnosticEventsDrained(): Promise<void> {
   const state = getDiagnosticEventsState();
-  while (state.asyncDrainScheduled || state.asyncQueue.length > 0) {
+  const targetSeq = state.asyncQueue.at(-1)?.event.seq;
+  if (targetSeq === undefined) {
+    return;
+  }
+  // The queue is append-ordered by seq, so a newer head means this snapshot drained or dropped.
+  while ((state.asyncQueue[0]?.event.seq ?? Number.POSITIVE_INFINITY) <= targetSeq) {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
