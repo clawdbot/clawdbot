@@ -14,6 +14,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
+import {
+  createPreflightRequest,
+  createResponseHarness,
+} from "./realtime-quicksilver.test-helpers.js";
 
 const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
 const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
@@ -183,6 +187,52 @@ describe("openai plugin", () => {
         cleanup: expect.any(Function),
       }),
     );
+    await registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup({ reason: "disable" });
+  });
+
+  it("serves the GPT-Live offer route from the registration config when the runtime config facade is absent", async () => {
+    const registerHttpRoute = vi.fn();
+    const registerRuntimeLifecycle = vi.fn();
+    // The HTTP-route registration context (Browser Talk WebRTC offer path) has no
+    // runtime config facade: api.runtime.config is absent, so the broker's getConfig
+    // must fall back to the registration snapshot instead of throwing a TypeError
+    // ("Cannot read properties of undefined (reading 'current')").
+    const registrationConfig = {
+      gateway: { controlUi: { allowedOrigins: ["https://control.example.test"] } },
+    } as never;
+    plugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: registrationConfig,
+        runtime: {} as never,
+        registerHttpRoute,
+        registerRuntimeLifecycle,
+      }),
+    );
+
+    const route = registerHttpRoute.mock.calls[0]?.[0] as {
+      path: string;
+      handler: (req: unknown, res: unknown) => Promise<boolean>;
+    };
+    expect(route.path).toBe("/plugins/openai/realtime/calls");
+
+    // An OPTIONS preflight from the registration config's allowed origin must be
+    // answered from the registration snapshot (204 + allow header), proving the
+    // route reached provider/CORS handling without a runtime-config TypeError.
+    const res = createResponseHarness();
+    const handled = await route.handler(
+      createPreflightRequest("https://control.example.test", "localhost:8788"),
+      res.res,
+    );
+    expect(handled).toBe(true);
+    expect(res.res.statusCode).toBe(204);
+    expect(res.setHeader).toHaveBeenCalledWith(
+      "Access-Control-Allow-Origin",
+      "https://control.example.test",
+    );
+
     await registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup({ reason: "disable" });
   });
 
