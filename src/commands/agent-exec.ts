@@ -606,7 +606,8 @@ export async function agentExecCommand(
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
     const timeout = normalizeTimeoutSeconds(opts.timeout);
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
-    const { resolveDefaultAgentDir } = await import("../agents/agent-scope-config.js");
+    const { resolveDefaultAgentDir, resolveDefaultAgentId } =
+      await import("../agents/agent-scope-config.js");
     // Resolve from the inherited config, not `{}`: the default agent may declare
     // its own `agentDir`, and that is where its stored auth profiles live. This
     // reads `baseConfig` rather than `runConfig` because the run config
@@ -615,6 +616,12 @@ export async function agentExecCommand(
     // Computed before the environment repoints the state dir so the unconfigured
     // case still resolves against the real one.
     const storedAuthAgentDir = resolveDefaultAgentDir(baseConfig);
+    // The run must carry the same agent id the SQLite session-store target
+    // resolves its owner to (`resolveSqliteTargetFromSessionStorePath`'s
+    // fallback is this same configured default), or the ownership guard
+    // compares a hardwired `main` against a store legitimately owned by the
+    // configured default and throws before the model is ever reached.
+    const execAgentId = resolveDefaultAgentId(baseConfig);
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths = await import("../config/paths.js");
     runtimePaths.pinRuntimePaths();
@@ -659,6 +666,7 @@ export async function agentExecCommand(
         {
           message: prompt,
           sessionId,
+          agentId: execAgentId,
           workspaceDir: cwd,
           cwd,
           model: opts.model,
