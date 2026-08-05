@@ -68,17 +68,6 @@ describe("sidebar session live-run projection", () => {
   });
 });
 
-describe("sidebar fork lineage projection", () => {
-  it("does not treat oversized-parent retry bookkeeping as fork lineage", () => {
-    expect(projectSidebarSession({ forkedFromParent: true }).hasForkSource).toBe(false);
-    expect(
-      projectSidebarSession({
-        forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
-      }).hasForkSource,
-    ).toBe(true);
-  });
-});
-
 describe("sidebar draft ownership presentation", () => {
   it("keeps owner drafts at normal emphasis", () => {
     expect(

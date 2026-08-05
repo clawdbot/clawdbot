@@ -176,7 +176,7 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const { running, leadingIndicator, trailingIndicator } = renderSessionLeadingState(
+  const { running, leadingIndicator } = renderSessionLeadingState(
     session,
     pullRequestState,
     ownerActor,
@@ -271,9 +271,7 @@ export function renderRecentSession(params: {
         aria-describedby=${metaId ?? nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        ${leadingIndicator === nothing
-          ? nothing
-          : html`<span class="sidebar-session-indicator">${leadingIndicator}</span>`}
+        <span class="sidebar-session-indicator">${leadingIndicator}</span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee"
             >${session.archived
@@ -342,9 +340,6 @@ export function renderRecentSession(params: {
           </button>`
         : nothing}
       <span class="sidebar-recent-session__aside session-row-aside">
-        ${trailingIndicator === nothing
-          ? nothing
-          : html`<span class="session-row-state">${trailingIndicator}</span>`}
         <span class="session-row-trail" id=${metaId ?? nothing}
           >${session.isChild && session.runtimeMs != null
             ? session.hasActiveRun

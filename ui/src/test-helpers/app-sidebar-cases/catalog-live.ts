@@ -341,7 +341,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(linkedMenu?.querySelector('[data-shortcut="d"]')).not.toBeNull();
     expect(
       catalogSection?.querySelector(
-        `[data-session-key="${backingSessionKey}"] .session-row-state .session-unread-dot`,
+        `[data-session-key="${backingSessionKey}"] .session-unread-dot`,
       ),
     ).not.toBeNull();
     expect(
@@ -364,7 +364,7 @@ describe("AppSidebar session catalog pagination", () => {
     const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
     expect(
       runningCatalogSection?.querySelector(
-        `[data-session-key="${backingSessionKey}"].session-row-host--running .session-row-state .session-run-spinner`,
+        `[data-session-key="${backingSessionKey}"].session-row-host--running .session-run-spinner`,
       ),
     ).not.toBeNull();
     expect(

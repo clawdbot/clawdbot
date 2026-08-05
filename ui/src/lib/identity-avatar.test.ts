@@ -98,11 +98,52 @@ describe("resolveAvatar profile URL origin restriction", () => {
 });
 
 describe("resolveAvatar gateway origin trust", () => {
+  it("applies an explicit base path for a same-origin gateway", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar?v=2" }),
+    ).toEqual({
+      kind: "profile",
+      url: "https://gw.example.com/wilfred/api/users/p1/avatar?v=2",
+    });
+  });
+
+  it("never infers a base path from the WebSocket pathname", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws");
+    expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
+  });
+
+  it("does not apply the page base path to a cross-origin gateway", () => {
+    vi.stubGlobal("location", { origin: "https://ui.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
+  });
+
+  it("rejects non-exact avatar routes under a same-origin mount", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    for (const profileAvatarUrl of [
+      "https://gw.example.com/wilfred/api/users/p1/avatar/extra",
+      "https://gw.example.com/wilfred/api/users/p1/avatar/other",
+      "https://gw.example.com/wilfred/api/secrets",
+    ]) {
+      expect(resolveAvatar({ id: "alice@example.com", profileAvatarUrl })).toMatchObject({
+        kind: "initials",
+      });
+    }
+  });
+
   it("resolves relative paths against the configured gateway origin", () => {
     setAvatarGatewayOrigin("wss://gw.example.com/ws");
     expect(
       resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "https://gw.example.com/ws/api/users/p1/avatar" });
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
   });
 
   it("allows an absolute URL only when it matches the gateway origin", () => {
@@ -130,29 +171,7 @@ describe("resolveAvatar gateway origin trust", () => {
     setAvatarGatewayOrigin("wss://gw.example.com/ws");
     expect(
       resolveAvatar({ id: "a@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "https://gw.example.com/ws/api/users/p1/avatar" });
-  });
-
-  it("accepts only the canonical avatar route under the gateway base path", () => {
-    setAvatarGatewayOrigin("wss://gw.example.com/wilfred");
-    expect(
-      resolveAvatar({
-        id: "a@example.com",
-        profileAvatarUrl: "https://gw.example.com/wilfred/api/users/p1/avatar?v=2",
-      }),
-    ).toEqual({
-      kind: "profile",
-      url: "https://gw.example.com/wilfred/api/users/p1/avatar?v=2",
-    });
-    for (const profileAvatarUrl of [
-      "https://gw.example.com/api/users/p1/avatar",
-      "https://gw.example.com/wilfred/api/users/p1/avatar/extra",
-      "https://gw.example.com/wilfred/api/secrets",
-    ]) {
-      expect(resolveAvatar({ id: "a@example.com", profileAvatarUrl })).toMatchObject({
-        kind: "initials",
-      });
-    }
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
   });
 });
 
@@ -170,7 +189,7 @@ describe("resolveAvatar profile-id senders", () => {
     setAvatarGatewayOrigin("wss://gw.example.com/ws");
     expect(resolveAvatar({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" })).toEqual({
       kind: "profile",
-      url: "https://gw.example.com/ws/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
+      url: "https://gw.example.com/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
     });
   });
 
@@ -191,7 +210,7 @@ describe("resolveAvatar profile-id senders", () => {
 
 describe("authenticated profile avatar cache", () => {
   it("shares one authenticated image fetch and blob across avatar surfaces", async () => {
-    setAvatarGatewayOrigin("wss://gateway.example.test/wilfred", "Bearer profile-token");
+    setAvatarGatewayOrigin("wss://gateway.example.test/ws", "Bearer profile-token");
     const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(new Uint8Array([1, 2, 3]), {
         headers: { "content-type": "image/png" },
@@ -207,7 +226,7 @@ describe("authenticated profile avatar cache", () => {
     await expect(second).resolves.toBe("blob:profile-ada");
     expect(fetchAvatar).toHaveBeenCalledOnce();
     expect(fetchAvatar).toHaveBeenCalledWith(
-      "https://gateway.example.test/wilfred/api/users/profile-ada/avatar?v=7",
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
       expect.objectContaining({
         credentials: "include",
         headers: { Authorization: "Bearer profile-token" },

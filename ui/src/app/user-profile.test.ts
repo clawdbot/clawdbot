@@ -54,7 +54,7 @@ describe("connection user profile helpers", () => {
         42,
         "https://gateway.example.test/control/profile",
       ),
-    ).toBe("https://gateway.example.test/control/api/users/profile%2F1/avatar?v=42");
+    ).toBe("https://gateway.example.test/api/users/profile%2F1/avatar?v=42");
     expect(
       userProfileAvatarUrl(
         "wss://remote.example.test",
@@ -63,13 +63,5 @@ describe("connection user profile helpers", () => {
         "https://gateway.example.test/control/profile",
       ),
     ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=42");
-    expect(
-      userProfileAvatarUrl(
-        "wss://gateway.example.test/wilfred",
-        "profile-1",
-        42,
-        "https://control.example.test/settings/profile",
-      ),
-    ).toBe("https://gateway.example.test/wilfred/api/users/profile-1/avatar?v=42");
   });
 });

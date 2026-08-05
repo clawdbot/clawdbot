@@ -1,9 +1,4 @@
 import type { PresenceEntry } from "../api/types.ts";
-import {
-  gatewayHttpBaseUrl,
-  gatewayUserAvatarUrl,
-  userAvatarRoute,
-} from "../lib/user-avatar-url.ts";
 
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
 export type PresencePayload = { presence: readonly PresenceEntry[] };
@@ -56,16 +51,25 @@ export function userProfileAvatarUrl(
   if (!documentHref) {
     return null;
   }
-  const gatewayBase = gatewayHttpBaseUrl(gatewayUrl, documentHref);
-  if (!gatewayBase) {
+  try {
+    const url = new URL(gatewayUrl, documentHref);
+    if (url.protocol === "ws:") {
+      url.protocol = "http:";
+    } else if (url.protocol === "wss:") {
+      url.protocol = "https:";
+    }
+    // The shared avatar loader authenticates cross-origin Gateway requests and
+    // turns their response into a local blob accepted by the Control UI CSP.
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return null;
+    }
+    url.username = "";
+    url.password = "";
+    url.pathname = `/api/users/${encodeURIComponent(profileId)}/avatar`;
+    url.search = `?v=${updatedAt}`;
+    url.hash = "";
+    return url.href;
+  } catch {
     return null;
   }
-  // The shared avatar loader authenticates cross-origin Gateway requests and
-  // turns their response into a local blob accepted by the Control UI CSP.
-  const url = gatewayUserAvatarUrl(gatewayBase, userAvatarRoute(profileId));
-  if (!url) {
-    return null;
-  }
-  url.search = `?v=${updatedAt}`;
-  return url.href;
 }

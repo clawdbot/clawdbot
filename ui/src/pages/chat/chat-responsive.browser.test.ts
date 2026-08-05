@@ -739,53 +739,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("keeps a terminal status chip beside an ellipsized headline in a narrow rail", async () => {
-    const page = await openBrowserPage(320, 240);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div data-terminal-rail-layout-fixture style="position:relative;width:250px;height:60px">
-            <div class="chat-session-rail chat-session-rail--pill">
-              <span class="chat-session-rail__status" data-health="done">
-                <span class="chat-session-rail__status-icon" aria-hidden="true">${iconSvg()}</span>
-                <span>Done</span>
-              </span>
-              <button class="chat-session-rail__expand" type="button" aria-label="Expand">
-                <span class="chat-session-rail__headline">Completed a deliberately long headline that must ellipsize beside status</span>
-              </button>
-              <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide" type="button" aria-label="Hide">${iconSvg()}</button>
-              <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__toggle" type="button" aria-label="Expand">${iconSvg()}</button>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const fixture = page.locator("[data-terminal-rail-layout-fixture]");
-      expect(await fixture.locator(".chat-session-rail__status-icon").isVisible()).toBe(true);
-      expect(await fixture.locator(".chat-session-rail__status").textContent()).toContain("Done");
-      expect(await fixture.locator(".chat-session-rail__hide").isVisible()).toBe(true);
-      expect(await fixture.locator(".chat-session-rail__toggle").isVisible()).toBe(true);
-
-      const status = await getBoundingBox(
-        page,
-        "[data-terminal-rail-layout-fixture] .chat-session-rail__status",
-      );
-      const headline = await getBoundingBox(
-        page,
-        "[data-terminal-rail-layout-fixture] .chat-session-rail__headline",
-      );
-      expect(status.x + status.width).toBeLessThanOrEqual(headline.x);
-
-      const overflow = await fixture.evaluate((node) => ({
-        clientWidth: node.clientWidth,
-        scrollWidth: node.scrollWidth,
-      }));
-      expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
   it.each([
     [320, 568],
     [1366, 900],

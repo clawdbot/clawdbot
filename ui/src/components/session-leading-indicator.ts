@@ -6,48 +6,34 @@ import {
   renderSessionAttentionIcon,
   renderSessionState,
 } from "./session-attention-presentation.ts";
-import { renderSessionGlyph } from "./session-glyph.ts";
+import {
+  renderSessionGlyph,
+  renderSessionUnreadBadge,
+  type SessionGlyphContent,
+} from "./session-glyph.ts";
 import { resolveSessionIcon } from "./session-icon-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
-function renderPullRequestIndicator(pullRequestState: SessionPullRequestIndicatorState) {
+function renderGlyphBadge(
+  session: SidebarRecentSession,
+  pullRequestState: SessionPullRequestIndicatorState,
+): SessionGlyphContent {
+  if (session.unread) {
+    return renderSessionUnreadBadge();
+  }
   if (pullRequestState === "none") {
     return nothing;
   }
   const label =
     pullRequestState === "open" ? t("sessionsView.openPullRequest") : t("chat.pullRequests.merged");
   return html`<span
-    class="sidebar-session-pr-indicator sidebar-session-pr-indicator--${pullRequestState}"
+    class="session-glyph__badge sidebar-session-pr-indicator--${pullRequestState}"
     data-session-pr-state=${pullRequestState}
     role="img"
     aria-label=${label}
     title=${label}
-    >${icons.gitBranch}</span
-  >`;
-}
-
-function renderSessionTrailingState(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-) {
-  const sessionState = renderSessionState(session);
-  if (!session.hasForkSource && pullRequestState === "none" && sessionState === nothing) {
-    return nothing;
-  }
-  const forkLabel = t("sessionsView.forkSession");
-  return html`
-    ${session.hasForkSource
-      ? html`<span
-          class="session-row-fork-indicator"
-          role="img"
-          aria-label=${forkLabel}
-          title=${forkLabel}
-          >${icons.gitFork}</span
-        >`
-      : nothing}
-    ${renderPullRequestIndicator(pullRequestState)} ${sessionState}
-  `;
+  ></span>`;
 }
 
 export function renderSessionLeadingState(
@@ -57,18 +43,17 @@ export function renderSessionLeadingState(
   attribution: "created" | "archived",
 ) {
   const running = session.hasActiveRun;
-  const trailingIndicator = session.isChild
-    ? nothing
-    : renderSessionTrailingState(session, pullRequestState);
 
   if (session.attention.kind !== "none") {
     return {
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderSessionAttentionIcon(session.attention),
-        running: false,
+        running,
+        // Attention does not replace unread: a row waiting on the user can also
+        // hold output the user has not seen.
+        badge: renderGlyphBadge(session, pullRequestState),
       }),
-      trailingIndicator,
     };
   }
   if (session.pinned) {
@@ -78,9 +63,9 @@ export function renderSessionLeadingState(
         content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
           >${resolveSessionIcon(session.icon)}</span
         >`,
-        running: false,
+        running,
+        badge: renderGlyphBadge(session, pullRequestState),
       }),
-      trailingIndicator,
     };
   }
   if (!session.isChild && ownerActor?.id?.trim()) {
@@ -88,22 +73,39 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderSessionOwnerChip(ownerActor, "row", attribution),
-        running: false,
+        running,
         circular: true,
+        badge: renderGlyphBadge(session, pullRequestState),
       }),
-      trailingIndicator,
     };
   }
-  if (session.isChild) {
+  // No artwork to ring: the bare spinner already sits in the leading slot.
+  if (running) {
+    return { running, leadingIndicator: renderSessionState(session) };
+  }
+  if (pullRequestState !== "none") {
+    const label =
+      pullRequestState === "open"
+        ? t("sessionsView.openPullRequest")
+        : t("chat.pullRequests.merged");
     return {
       running,
-      leadingIndicator: renderSessionState(session),
-      trailingIndicator: nothing,
+      leadingIndicator: html`<span
+        class="sidebar-session-pr-indicator sidebar-session-pr-indicator--${pullRequestState}"
+        data-session-pr-state=${pullRequestState}
+        role="img"
+        aria-label=${label}
+        title=${label}
+        >${icons.gitBranch}</span
+      >`,
     };
   }
+  const sessionState = renderSessionState(session);
   return {
     running,
-    leadingIndicator: nothing,
-    trailingIndicator,
+    leadingIndicator:
+      sessionState !== nothing
+        ? sessionState
+        : html`<span class="sidebar-session-indicator__dot" aria-hidden="true"></span>`,
   };
 }

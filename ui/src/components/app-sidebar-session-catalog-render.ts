@@ -441,6 +441,11 @@ function renderCatalogSessionRow(
           }
         }}
       >
+        <span class="sidebar-session-indicator"
+          >${running
+            ? renderSessionRunSpinner()
+            : html`<span class="sidebar-session-indicator__dot" aria-hidden="true"></span>`}</span
+        >
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>
@@ -450,9 +455,6 @@ function renderCatalogSessionRow(
         })}
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        ${running
-          ? html`<span class="session-row-state">${renderSessionRunSpinner()}</span>`
-          : nothing}
         <span class="session-row-actions">
           <button
             class="session-action"

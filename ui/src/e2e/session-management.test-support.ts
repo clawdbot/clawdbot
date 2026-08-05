@@ -45,9 +45,7 @@ export function sessionRow(
     endedAt?: number;
     childSessions?: string[];
     execNode?: string;
-    worktree?: { id?: string; branch?: string; repoRoot?: string };
-    forkedFromParent?: boolean;
-    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+    worktree?: { branch?: string; repoRoot?: string };
   } = {},
 ) {
   return {
