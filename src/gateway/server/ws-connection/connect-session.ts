@@ -19,6 +19,7 @@ import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js"
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
+import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
@@ -178,6 +179,10 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const authenticatedUserIsTailscaleProvider = Boolean(
+    authResult.tailscaleIdentity &&
+    classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
+  );
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -314,6 +319,7 @@ export async function attachAuthenticatedGatewayConnect(
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
@@ -464,7 +470,7 @@ export async function attachAuthenticatedGatewayConnect(
             user: authenticatedUserProfile
               ? {
                   id: authenticatedUserProfile.profileId,
-                  email: authenticatedUserId,
+                  ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
                   ...(authenticatedUserProfile.displayName
                     ? { name: authenticatedUserProfile.displayName }
                     : {}),
@@ -475,7 +481,10 @@ export async function attachAuthenticatedGatewayConnect(
                   // a stale cached image for the unchanged route.
                   avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
                 }
-              : { id: authenticatedUserId, email: authenticatedUserId },
+              : {
+                  id: authenticatedUserId,
+                  ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
+                },
           }
         : {}),
       reason: "connect",

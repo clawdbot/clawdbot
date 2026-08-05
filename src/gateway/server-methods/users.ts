@@ -10,7 +10,6 @@ import {
   validateUsersSetDisplayNameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { classifyTailscaleLogin } from "../../state/user-profiles-tailscale-login.js";
 import {
   ensureProfileForEmail,
   getUserProfileListItem,
@@ -62,7 +61,7 @@ function resolveAuthenticatedProfileId(
   }
   // A failed Tailscale profile snapshot must not recreate its provider login
   // through the legacy email resolver on a later self-profile request.
-  if (classifyTailscaleLogin(authenticatedUserId).kind === "provider") {
+  if (client.authenticatedUserIsTailscaleProvider) {
     return undefined;
   }
   return ensureProfileForEmail(authenticatedUserId).id;

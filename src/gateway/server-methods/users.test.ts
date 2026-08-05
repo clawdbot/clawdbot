@@ -17,10 +17,6 @@ const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profiles.js", () => ({
-  classifyTailscaleLogin: (login: string) =>
-    login.endsWith("@github")
-      ? { kind: "provider", provider: "github", subject: login.slice(0, -"@github".length) }
-      : { kind: "email", email: login },
   ensureProfileForEmail,
   getUserProfileListItem,
   linkEmail,
@@ -98,6 +94,7 @@ describe("users gateway methods", () => {
   it("uses the connect-time provider profile without recreating an email alias", async () => {
     const providerClient = {
       authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
       authenticatedUserProfile: {
         profileId: profile.id,
         displayName: "Ada",
@@ -112,6 +109,37 @@ describe("users gateway methods", () => {
     const respond = await runUsersHandler("users.self", {}, providerClient);
 
     expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
+    expect(ensureProfileForEmail).not.toHaveBeenCalled();
+  });
+
+  it("keeps generic proxy identities on the legacy profile fallback", async () => {
+    const proxyClient = {
+      authenticatedUserId: "ada@github",
+      connect: { scopes: ["operator.write"] },
+    };
+    ensureProfileForEmail.mockReturnValue({ id: profile.id });
+    getUserProfileListItem.mockReturnValue(profile);
+
+    const respond = await runUsersHandler("users.self", {}, proxyClient);
+
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+    expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@github");
+  });
+
+  it("does not recreate a failed Tailscale provider snapshot as an email alias", async () => {
+    const tailscaleClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
+
+    const respond = await runUsersHandler("users.self", {}, tailscaleClient);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "authenticated user profile is unavailable" }),
+    );
     expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
 
@@ -242,6 +270,7 @@ describe("users gateway methods", () => {
   it("authorizes provider-owned profile edits from the connect-time profile id", async () => {
     const providerClient = {
       authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
       authenticatedUserProfile: {
         profileId: profile.id,
         displayName: "Ada",

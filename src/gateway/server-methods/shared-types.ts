@@ -68,6 +68,8 @@ export type GatewayClient = {
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
   authenticatedUserId?: string;
+  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
+  authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;

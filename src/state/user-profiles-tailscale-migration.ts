@@ -26,6 +26,8 @@ export function migrateLegacyTailscaleProfileIdentities(
     return { changes: [], warnings: [] };
   }
   const kysely = getNodeSqliteKysely<UserProfilesDatabase>(database.db);
+  // Legacy aliases did not record auth provenance. Doctor intentionally applies
+  // the current LoginName classifier while preserving any conflicting alias.
   const legacyRows = executeSqliteQuerySync(
     database.db,
     kysely
