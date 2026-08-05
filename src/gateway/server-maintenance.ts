@@ -12,6 +12,7 @@ import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
@@ -42,6 +43,11 @@ const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
 // Cleanup uses process-owned state/SQLite resources, so shutdown may leave a
 // stuck operation settling, but it must not wait forever to restart the gateway.
 const MEDIA_CLEANUP_STOP_TIMEOUT_MS = 5_000;
+export type MediaCleanupStopResult = "drained" | "timed-out";
+const mediaCleanupDrains = resolveGlobalSingleton(
+  Symbol.for("openclaw.gateway.mediaCleanupDrains"),
+  () => new Set<Promise<void>>(),
+);
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -85,7 +91,7 @@ export function startGatewayMaintenanceTimers(params: {
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   startMediaCleanup: () => void;
-  stopMediaCleanup: () => Promise<void>;
+  stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval>;
   skillCuratorCleanup: () => void;
 } {
@@ -377,7 +383,7 @@ export function startGatewayMaintenanceTimers(params: {
     mediaCleanupInterval = setInterval(runMediaMaintenance, 60 * 60_000);
     runMediaMaintenance();
   };
-  let stopMediaCleanupPromise: Promise<void> | undefined;
+  let stopMediaCleanupPromise: Promise<MediaCleanupStopResult> | undefined;
   const stopMediaCleanup = () => {
     stopMediaCleanupPromise ??= (async () => {
       mediaCleanupStopped = true;
@@ -390,8 +396,14 @@ export function startGatewayMaintenanceTimers(params: {
         managedOutgoingCleanupLoader.peek(),
         mediaCleanupInFlight,
       ].filter((promise): promise is Promise<void> => promise !== undefined && promise !== null);
-      if (pending.length === 0) {
-        return;
+      if (pending.length > 0) {
+        const currentDrain = Promise.allSettled(pending).then(() => undefined);
+        mediaCleanupDrains.add(currentDrain);
+        void currentDrain.finally(() => mediaCleanupDrains.delete(currentDrain));
+      }
+      const processDrains = [...mediaCleanupDrains];
+      if (processDrains.length === 0) {
+        return "drained";
       }
       let timeout: ReturnType<typeof setTimeout> | undefined;
       const timedOut = new Promise<true>((resolve) => {
@@ -399,7 +411,7 @@ export function startGatewayMaintenanceTimers(params: {
         timeout.unref?.();
       });
       const result = await Promise.race([
-        Promise.allSettled(pending).then(() => false as const),
+        Promise.allSettled(processDrains).then(() => false as const),
         timedOut,
       ]);
       if (timeout) {
@@ -407,9 +419,11 @@ export function startGatewayMaintenanceTimers(params: {
       }
       if (result) {
         params.logHealth.error(
-          `media cleanup drain exceeded ${MEDIA_CLEANUP_STOP_TIMEOUT_MS}ms; continuing shutdown`,
+          `media cleanup drain exceeded ${MEDIA_CLEANUP_STOP_TIMEOUT_MS}ms; retaining shared state until cleanup settles`,
         );
+        return "timed-out";
       }
+      return "drained";
     })();
     return stopMediaCleanupPromise;
   };

@@ -2268,7 +2268,7 @@ describe("startGatewayPostAttachRuntime", () => {
       tickInterval: setInterval(() => {}, 1 << 30),
       healthInterval: setInterval(() => {}, 1 << 30),
       dedupeCleanup: setInterval(() => {}, 1 << 30),
-      stopMediaCleanup: vi.fn(async () => undefined),
+      stopMediaCleanup: vi.fn(async () => "drained" as const),
       worktreeCleanup: null,
       skillCuratorCleanup: vi.fn(),
       agentUnsub: null,

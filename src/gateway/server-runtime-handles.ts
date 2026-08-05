@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
+import type { MediaCleanupStopResult } from "./server-maintenance.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 // Mutable server handles track timers, sidecars, subscriptions, and service
@@ -23,7 +24,7 @@ export type GatewayServerMutableState = {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
-  stopMediaCleanup: () => Promise<void>;
+  stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval> | null;
   skillCuratorCleanup: () => void;
   heartbeatRunner: HeartbeatRunner;
@@ -59,7 +60,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     tickInterval: noopInterval(),
     healthInterval: noopInterval(),
     dedupeCleanup: noopInterval(),
-    stopMediaCleanup: async () => {},
+    stopMediaCleanup: async () => "drained",
     worktreeCleanup: null as ReturnType<typeof setInterval> | null,
     skillCuratorCleanup: () => {},
     heartbeatRunner: {

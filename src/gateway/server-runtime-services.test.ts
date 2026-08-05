@@ -960,7 +960,7 @@ function createMaintenanceHandles() {
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     startMediaCleanup: vi.fn(),
-    stopMediaCleanup: vi.fn(async () => undefined),
+    stopMediaCleanup: vi.fn(async () => "drained" as const),
     worktreeCleanup: setInterval(() => undefined, 60_000),
     skillCuratorCleanup: vi.fn(),
   };

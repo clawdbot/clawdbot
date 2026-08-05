@@ -128,7 +128,7 @@ async function stopMaintenanceTimers(timers: {
   healthInterval: NodeJS.Timeout;
   dedupeCleanup: NodeJS.Timeout;
   startMediaCleanup: () => void;
-  stopMediaCleanup: () => Promise<void>;
+  stopMediaCleanup: () => Promise<"drained" | "timed-out">;
   worktreeCleanup: NodeJS.Timeout;
   skillCuratorCleanup: () => void;
 }) {
@@ -557,7 +557,9 @@ describe("startGatewayMaintenanceTimers", () => {
     });
 
     let stopped = false;
-    const stopping = timers.stopMediaCleanup().then(() => {
+    let stopResult: "drained" | "timed-out" | undefined;
+    const stopping = timers.stopMediaCleanup().then((result) => {
+      stopResult = result;
       stopped = true;
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -571,6 +573,7 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(stopped).toBe(false);
     resolveGeneralCleanup();
     await stopping;
+    expect(stopResult).toBe("drained");
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
@@ -581,7 +584,14 @@ describe("startGatewayMaintenanceTimers", () => {
 
   it("bounds shutdown when active media cleanup never settles", async () => {
     vi.useFakeTimers();
-    cleanupManagedOutgoingMediaRecordsMock.mockImplementation(() => new Promise(() => {}));
+    let resolveCleanup = () => {};
+    cleanupManagedOutgoingMediaRecordsMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCleanup = () =>
+            resolve({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+        }),
+    );
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const timers = startGatewayMaintenanceTimers(deps);
@@ -591,7 +601,9 @@ describe("startGatewayMaintenanceTimers", () => {
     });
 
     let stopped = false;
-    const stopping = timers.stopMediaCleanup().then(() => {
+    let stopResult: "drained" | "timed-out" | undefined;
+    const stopping = timers.stopMediaCleanup().then((result) => {
+      stopResult = result;
       stopped = true;
     });
     await vi.advanceTimersByTimeAsync(4_999);
@@ -600,12 +612,49 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopping;
 
     expect(stopped).toBe(true);
+    expect(stopResult).toBe("timed-out");
     expect(deps.logHealth.error).toHaveBeenCalledWith(
-      "media cleanup drain exceeded 5000ms; continuing shutdown",
+      "media cleanup drain exceeded 5000ms; retaining shared state until cleanup settles",
     );
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    resolveCleanup();
+    await vi.advanceTimersByTimeAsync(0);
     await stopMaintenanceTimers(timers);
+  });
+
+  it("retains the timeout fence across gateway generations", async () => {
+    vi.useFakeTimers();
+    let resolveOldCleanup = () => {};
+    cleanupManagedOutgoingMediaRecordsMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldCleanup = () =>
+            resolve({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+        }),
+    );
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const oldTimers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    oldTimers.startMediaCleanup();
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    });
+    const oldStopping = oldTimers.stopMediaCleanup();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(oldStopping).resolves.toBe("timed-out");
+
+    const restartedTimers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    const restartedStopping = restartedTimers.stopMediaCleanup();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(restartedStopping).resolves.toBe("timed-out");
+
+    resolveOldCleanup();
+    await vi.advanceTimersByTimeAsync(0);
+    const settledTimers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    await expect(settledTimers.stopMediaCleanup()).resolves.toBe("drained");
+    await stopMaintenanceTimers(oldTimers);
+    await stopMaintenanceTimers(restartedTimers);
+    await stopMaintenanceTimers(settledTimers);
   });
 
   it("keeps stale buffers for active runs that still have abort controllers", async () => {
