@@ -3527,6 +3527,56 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("preserves an earlier explicit restart across an ordinary exact revert", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18792 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+      },
+    );
+
+    // Explicit writer-required restart A -> B plans a restart.
+    harness.emitWrite(
+      makeWrite(configB, "hash-b", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    const [firstPlan] = getOnlyRestartCall(harness);
+    expect(firstPlan.restartGateway).toBe(true);
+
+    // Ordinary exact revert B -> A: the reverting write carries no restart
+    // intent, but the pending restart was explicitly required by the earlier
+    // writer. The revert must NOT retire that debt — the process still needs
+    // the bounce to reconcile the writer's runtime contract.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configA);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(false);
+
+    await harness.reloader.stop();
+  });
+
   it.each([
     {
       label: "none",

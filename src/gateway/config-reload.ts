@@ -259,6 +259,13 @@ export function startGatewayConfigReloader(opts: {
   // settled candidate against this value lets an exact revert cancel the
   // pending restart instead of being planned as a new bounce.
   let runtimeAppliedCompareConfig = currentCompareConfig;
+  // Provenance of the currently pending deferred restart. Only planner-derived
+  // restart debt (plan.restartGateway without explicit writer intent) may be
+  // retired by an exact revert to the running config: an explicitly required
+  // restart (afterWrite.mode === "restart" / followUp.requiresRestart) is a
+  // hard lifecycle contract and must survive an ordinary revert, because the
+  // reverting write's followUp says nothing about the earlier writer's intent.
+  let pendingRestartWasExplicit = false;
   const resolveSettings = (config: OpenClawConfig) => {
     const resolved = resolveGatewayReloadSettings(config);
     return opts.testDebounceMs === undefined
@@ -714,11 +721,16 @@ export function startGatewayConfigReloader(opts: {
     // an explicit writer restart intent (afterWrite.mode === "restart",
     // followUp.requiresRestart) is a hard lifecycle contract and must never be
     // silently dropped, even when the settled bytes match the running config.
+    // pendingRestartWasExplicit carries that provenance from the write that
+    // armed the pending restart: the reverting write's own followUp only
+    // describes the reverting write, so an ordinary B -> A revert cannot speak
+    // for an explicit A -> B restart it is about to cancel.
     const revertsToRunningConfig =
       changedPaths.length > 0 &&
       pluginInstallRecordChangedPaths.length === 0 &&
       plan.restartGateway &&
       !followUp.requiresRestart &&
+      !pendingRestartWasExplicit &&
       isDeepStrictEqual(nextCompareConfig, runtimeAppliedCompareConfig);
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
@@ -750,6 +762,7 @@ export function startGatewayConfigReloader(opts: {
       await appliedRevision.apply(revertPlan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
       runtimeAppliedCompareConfig = nextCompareConfig;
+      pendingRestartWasExplicit = false;
       return;
     }
     if (followUp.requiresRestart) {
@@ -758,12 +771,14 @@ export function startGatewayConfigReloader(opts: {
         restartGateway: true,
         restartReasons: [...plan.restartReasons, followUp.reason],
       };
+      pendingRestartWasExplicit = true;
       await opts.onConfigChange?.(restartPlan, nextConfig);
       await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       return;
     }
     if (plan.restartGateway) {
+      pendingRestartWasExplicit = false;
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
