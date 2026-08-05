@@ -127,6 +127,7 @@ describe("assignSignalManagedNativePort", () => {
     const next = assignSignalManagedNativePort(
       { kind: "managed-native", url: "http://127.0.0.1:8080/signal" },
       9090,
+      { preservePathUrl: true },
     );
     expect(next.url).toBe("http://127.0.0.1:8080/signal");
     expect(next.httpPort).toBe(9090);

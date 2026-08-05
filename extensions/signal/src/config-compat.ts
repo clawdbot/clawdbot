@@ -348,7 +348,7 @@ function allocateMigratedManagedPorts(params: {
       ...(typeof preferredPort === "number" ? { preferredPort } : {}),
     });
     reservedPorts.add(httpPort);
-    return assignSignalManagedNativePort(transport, httpPort);
+    return assignSignalManagedNativePort(transport, httpPort, { preservePathUrl: true });
   });
 }
 
