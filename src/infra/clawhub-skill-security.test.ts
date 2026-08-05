@@ -95,6 +95,76 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
     expect(items.map((item) => item.requestedOwnerHandle)).toEqual(["alice", "bob"]);
   });
 
+  it("bounds concurrent exact verify fallbacks on older registries", async () => {
+    let activeFallbacks = 0;
+    let maxActiveFallbacks = 0;
+    let releaseFallbacks: (() => void) | undefined;
+    const fallbackGate = new Promise<void>((resolve) => {
+      releaseFallbacks = resolve;
+    });
+    mocks.fetchClawHubSkillSecurityVerdicts.mockImplementation(
+      async ({ items }: { items: Array<{ slug: string; version: string }> }) => ({
+        schema: "clawhub.skill.security-verdicts.v1",
+        items: items.map((item) => ({
+          ok: false,
+          decision: "fail",
+          reasons: ["skill.not_found"],
+          requestedSlug: item.slug,
+          requestedVersion: item.version,
+          slug: item.slug,
+          version: null,
+          error: { code: "skill_not_found", message: "Skill not found" },
+        })),
+      }),
+    );
+    mocks.fetchClawHubSkillVerification.mockImplementation(
+      async ({
+        slug,
+        ownerHandle,
+        version,
+      }: {
+        slug: string;
+        ownerHandle: string;
+        version: string;
+      }) => {
+        activeFallbacks += 1;
+        maxActiveFallbacks = Math.max(maxActiveFallbacks, activeFallbacks);
+        await fallbackGate;
+        activeFallbacks -= 1;
+        return {
+          schema: "clawhub.skill.verify.v1",
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          slug,
+          publisherHandle: ownerHandle,
+          version,
+          skill: null,
+          publisher: null,
+          card: null,
+          artifact: null,
+          provenance: null,
+          security: { status: "clean", passed: true },
+          signature: null,
+        };
+      },
+    );
+    const targets = Array.from({ length: 8 }, (_, index) => ({
+      slug: `skill-${index}`,
+      ownerHandle: `owner-${index}`,
+      version: "1.0.0",
+    }));
+
+    const resultPromise = fetchExactClawHubSkillSecurityVerdicts({ items: targets });
+    await vi.waitFor(() => expect(mocks.fetchClawHubSkillVerification).toHaveBeenCalledTimes(6));
+    expect(maxActiveFallbacks).toBe(6);
+    releaseFallbacks?.();
+
+    await expect(resultPromise).resolves.toHaveLength(8);
+    expect(mocks.fetchClawHubSkillVerification).toHaveBeenCalledTimes(8);
+    expect(maxActiveFallbacks).toBe(6);
+  });
+
   it("correlates reordered batches and fails closed on publisher mismatches", async () => {
     mocks.fetchClawHubSkillSecurityVerdicts.mockResolvedValue({
       schema: "clawhub.skill.security-verdicts.v1",

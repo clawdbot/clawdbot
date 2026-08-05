@@ -1,5 +1,6 @@
 // Shared owner-qualified ClawHub security verdict resolution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import pLimit from "p-limit";
 import {
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubSkillVerification,
@@ -8,6 +9,7 @@ import {
 } from "./clawhub.js";
 
 const MAX_SECURITY_VERDICT_BATCH_SIZE = 100;
+const OWNER_QUALIFIED_FALLBACK_CONCURRENCY = 6;
 const NON_SECURITY_VERIFY_REASONS = new Set(["card.missing", "card_missing"]);
 
 type ClawHubExactSkillSecurityTarget = {
@@ -305,23 +307,32 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
       timeoutMs: params.timeoutMs,
     });
     const correlated = correlateBatchItems(batch, response.items);
-    for (const target of batch) {
-      const key = targetKey(target);
-      const item = correlated.get(key);
-      if (!item) {
-        throw new Error("ClawHub skill security verdict response omitted a target.");
-      }
-      const fallbackItem =
-        target.ownerHandle && item.error?.code === "skill_not_found"
-          ? await resolveOwnerQualifiedFallback({
-              target: { ...target, ownerHandle: target.ownerHandle },
-              baseUrl: params.baseUrl,
-              token: params.token,
-              ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
-              timeoutMs: params.timeoutMs,
-            })
-          : item;
-      resolved.set(key, validateVerdictIdentity(target, fallbackItem));
+    const fallbackLimit = pLimit(OWNER_QUALIFIED_FALLBACK_CONCURRENCY);
+    const resolvedBatch = await Promise.all(
+      batch.map(async (target) => {
+        const key = targetKey(target);
+        const item = correlated.get(key);
+        if (!item) {
+          throw new Error("ClawHub skill security verdict response omitted a target.");
+        }
+        const ownerHandle = target.ownerHandle;
+        const fallbackItem =
+          ownerHandle && item.error?.code === "skill_not_found"
+            ? await fallbackLimit(() =>
+                resolveOwnerQualifiedFallback({
+                  target: { ...target, ownerHandle },
+                  baseUrl: params.baseUrl,
+                  token: params.token,
+                  ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
+                  timeoutMs: params.timeoutMs,
+                }),
+              )
+            : item;
+        return [key, validateVerdictIdentity(target, fallbackItem)] as const;
+      }),
+    );
+    for (const [key, item] of resolvedBatch) {
+      resolved.set(key, item);
     }
   }
   return targets.map((target) => {
