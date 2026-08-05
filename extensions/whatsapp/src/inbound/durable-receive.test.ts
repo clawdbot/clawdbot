@@ -135,7 +135,7 @@ describe("createWhatsAppIngressMonitor", () => {
     });
   });
 
-  it("keeps a second same-lane message pending until the first turn adopts", async () => {
+  it("lets a second same-lane message reach the debouncer while the first is deferred", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
         channelId: "whatsapp",
@@ -175,11 +175,14 @@ describe("createWhatsAppIngressMonitor", () => {
       monitor.start();
       await monitor.waitForIdle();
 
-      // Core drain serializes a conversation lane: msg-4b cannot reach the
-      // channel debouncer until msg-4a transfers into the reply lane.
-      expect(dispatched).toEqual(["msg-4a"]);
+      // Deferred means the message sits in the channel debounce window, not
+      // that the conversation lane is busy. The lane is released, so msg-4b
+      // can also reach the debouncer and merge into the same turn.
+      expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
+      // msg-4a is still deferred (claim held for debounce adoption); msg-4b
+      // completed its dispatch and was tombstoned.
       expect((await queue.listClaims()).map((row) => row.id)).toEqual([firstId]);
-      expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).toEqual([secondId]);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
       if (!adoptFirst) {
         throw new Error("expected first adoption callback");
@@ -187,7 +190,6 @@ describe("createWhatsAppIngressMonitor", () => {
       await adoptFirst();
       await monitor.waitForIdle();
 
-      expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await monitor.stop();

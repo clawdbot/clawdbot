@@ -137,6 +137,11 @@ export function createWhatsAppIngressMonitor(params: {
       failedMaxEntries: 450,
     },
     drain: {
+      // A deferred claim means the message is sitting in the inbound debounce
+      // window, not that the conversation lane is busy. Release the lane so a
+      // same-chat burst can reach the debouncer and merge into one turn;
+      // holding it starves the merge (see Telegram's identical opt-in).
+      deferredLaneOccupancy: "release",
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
       deriveLaneKey: (record) => {
         try {
