@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Documentation
+- **New "Deployment and browser exposure" section in the README** — states the
+  supported topology (browser → AG-UI runtime → this channel), the origin
+  allow-list and application-authentication hooks the runtime provides, where the
+  operator token is held, and a route-by-route table of caller, credential, and
+  scope for `/v1/ag-ui/operator` versus `/v1/ag-ui`.
+
 ### Security
 - **Dropped the retired `CLAWDBOT_GATEWAY_TOKEN` fallback** from gateway-secret
   resolution. The gateway ignores legacy `CLAWDBOT_*` / `MOLTBOT_*` names

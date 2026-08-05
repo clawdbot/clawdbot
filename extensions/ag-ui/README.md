@@ -232,6 +232,101 @@ curl -N http://localhost:8000/v1/ag-ui \
 
 ---
 
+## Deployment and browser exposure
+
+This channel speaks the AG-UI protocol and is consumed through an AG-UI-compatible
+client library. [CopilotKit](https://copilotkit.ai) is the reference
+implementation; any AG-UI runtime works the same way.
+
+Those libraries are built in three layers, and the middle layer is what a browser
+talks to:
+
+```
+Browser (React/Angular/Vanilla)
+      │  POST /api/copilotkit            same-origin, application session
+      ▼
+AG-UI runtime (your server)             ← origin allow-list + your authentication
+      │  POST /v1/ag-ui/operator        server-to-server, operator token
+      ▼
+OpenClaw gateway (this channel)
+```
+
+The runtime is the public surface. It owns origin policy and application
+authentication, and it reaches this channel server-side, so the operator token
+stays on your server and never reaches the browser.
+
+### Origin allow-list
+
+The runtime resolves allowed origins per request. With CopilotKit v2:
+
+```typescript
+import { CopilotRuntime, createCopilotRuntimeHandler } from "@copilotkit/runtime/v2";
+import { OpenClawAgent } from "@ag-ui/openclaw";
+
+const handler = createCopilotRuntimeHandler({
+  runtime: new CopilotRuntime({
+    agents: {
+      openclaw: new OpenClawAgent({
+        url: process.env.OPENCLAW_OPERATOR_URL!,
+        gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN!,
+      }),
+    },
+  }),
+  basePath: "/api/copilotkit",
+  cors: { origin: ["https://app.example.com"] },
+});
+```
+
+`origin` takes a literal, an array, or a predicate for dynamic tenants. Set
+`credentials: true` to send cookies; the runtime then resolves the allow-list to
+the request origin and emits `Vary: Origin`, as the Fetch specification requires.
+Omit `cors` entirely when a proxy or framework already sets these headers.
+
+### Application authentication
+
+Authenticate your own users at the runtime, above the operator token:
+
+```typescript
+const handler = createCopilotRuntimeHandler({
+  runtime,
+  basePath: "/api/copilotkit",
+  hooks: {
+    // Runs before routing — validate the session and short-circuit if absent.
+    onRequest: async ({ request }) => {
+      const session = await getSession(request);
+      if (!session) throw new Response("Unauthorized", { status: 401 });
+    },
+    // Runs after routing — `route` carries the resolved agentId for per-agent checks.
+    onBeforeHandler: async ({ route }) => {
+      await assertAgentAllowed(route);
+    },
+  },
+});
+```
+
+`onRequest` and `onBeforeHandler` may return a modified `Request` or throw a
+`Response`. `onResponse` and `onError` cover response shaping and error mapping.
+
+### Route trust levels
+
+| Route                | Caller                               | Credential                                | Scope                                                                      |
+| -------------------- | ------------------------------------ | ----------------------------------------- | -------------------------------------------------------------------------- |
+| `/v1/ag-ui/operator` | Your AG-UI runtime, server-side      | Gateway token, held in server environment | `operator.write` — runs agent turns; no admin, pairing, or secret surfaces |
+| `/v1/ag-ui`          | A paired device or standalone client | HMAC device token, issued per device      | Requires explicit owner approval via `openclaw pairing approve`            |
+
+Use `/v1/ag-ui/operator` for the runtime-mediated topology above. Use `/v1/ag-ui`
+when a client connects on its own and an owner approves each device; because those
+callers connect directly, the route answers cross-origin preflights and
+authenticates every request with a per-device bearer token rather than a cookie,
+so a browser on another origin can present a token but cannot borrow an existing
+session.
+
+`X-OpenClaw-Session-Key` subdivides a route's session scope and is validated on
+every request. Treat it as trusted-proxy input, exactly like `X-Forwarded-For` —
+see [Session isolation](#session-isolation).
+
+---
+
 ## Using an AG-UI client
 
 Any AG-UI client works. With `@ag-ui/client` against the pairing route:
