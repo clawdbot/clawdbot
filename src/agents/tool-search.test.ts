@@ -320,14 +320,11 @@ describe("Tool Search", () => {
     const catalogRef = createToolSearchCatalogRef();
     const readTool = fakeTool("read_file", "Read files");
     const writeTool = fakeTool("write_file", "Write files");
-
-    // In Code Mode, alwaysVisibleTools is ignored; only control tools remain direct.
-    // Note: we use a normal "exec" tool here to test that configured alwaysVisibleTools
-    // do not bypass the Code Mode gate. The real Code Mode exec tool has special handling
-    // elsewhere and is not part of this generic Tool Search compaction test.
     const fakeExecTool = fakeTool("exec_normal", "Run shell commands (normal tool)");
 
-    const compactedCodeMode = applyToolSearchCatalog({
+    // Test applyToolCatalogCompaction directly with Code Mode-like parameters.
+    // This verifies that alwaysVisibleTools is skipped when mode="code".
+    const compactedCodeMode = applyToolCatalogCompaction({
       tools: [
         fakeTool("code_mode_exec", "Execute code"),
         fakeTool("code_mode_wait", "Wait for code"),
@@ -336,6 +333,7 @@ describe("Tool Search", () => {
         fakeExecTool,
         pluginTool("fake_lookup", "Look up a record"),
       ],
+      enabled: true,
       config: {
         tools: {
           toolSearch: {
