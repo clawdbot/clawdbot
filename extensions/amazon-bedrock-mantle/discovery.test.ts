@@ -218,11 +218,11 @@ describe("bedrock mantle discovery", () => {
     const tokenProviderFactory = vi
       .fn()
       .mockImplementationOnce(() => {
-        throw new Error("first failure");
+        throw new Error("same failure");
       })
       .mockImplementationOnce(() => async () => "recovered-token")
       .mockImplementationOnce(() => {
-        throw new Error("later failure");
+        throw new Error("same failure");
       });
 
     await generateBearerTokenFromIam({
@@ -245,13 +245,46 @@ describe("bedrock mantle discovery", () => {
     expect(discoveryDebugSpy).toHaveBeenNthCalledWith(
       1,
       "Mantle IAM token generation unavailable",
-      { region: "us-east-1", error: "first failure" },
+      { region: "us-east-1", error: "same failure" },
     );
     expect(discoveryDebugSpy).toHaveBeenNthCalledWith(
       2,
       "Mantle IAM token generation unavailable",
-      { region: "us-east-1", error: "later failure" },
+      { region: "us-east-1", error: "same failure" },
     );
+  });
+
+  it("logs when the IAM token failure cause changes before recovery", async () => {
+    const tokenProviderFactory = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("credentials unavailable");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("credentials expired");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("credentials expired");
+      });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await generateBearerTokenFromIam({
+        region: "us-east-1",
+        tokenProviderFactory,
+      });
+    }
+
+    expect(tokenProviderFactory).toHaveBeenCalledTimes(3);
+    expect(discoveryDebugSpy.mock.calls).toEqual([
+      [
+        "Mantle IAM token generation unavailable",
+        { region: "us-east-1", error: "credentials unavailable" },
+      ],
+      [
+        "Mantle IAM token generation unavailable",
+        { region: "us-east-1", error: "credentials expired" },
+      ],
+    ]);
   });
 
   it("logs an ongoing IAM token failure after debug becomes enabled", async () => {
@@ -682,7 +715,7 @@ describe("bedrock mantle discovery", () => {
     }
   });
 
-  it("retries missing IAM credentials while logging once per region", async () => {
+  it("retries identical IAM failures while logging once per region", async () => {
     const tokenProviderFactory = vi.fn(() => {
       throw new Error("no credentials");
     });

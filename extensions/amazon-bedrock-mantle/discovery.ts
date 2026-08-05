@@ -116,8 +116,8 @@ export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): 
 
 /** Token cache for IAM-derived bearer tokens, keyed by region. */
 const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
-/** Regions whose current IAM token failure streak has already been logged. */
-const iamTokenFailureLogged = new Set<string>();
+/** Last emitted IAM token failure per region, retained until token generation succeeds. */
+const iamTokenFailureDetailByRegion = new Map<string, string>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
@@ -169,16 +169,19 @@ export async function generateBearerTokenFromIam(params: {
     if (expiresAt !== undefined) {
       iamTokenCache.set(params.region, { token, expiresAt });
     }
-    iamTokenFailureLogged.delete(params.region);
+    iamTokenFailureDetailByRegion.delete(params.region);
     return token;
   } catch (error) {
-    // Keep retrying the credential chain, but collapse diagnostics until it recovers.
-    if (!iamTokenFailureLogged.has(params.region) && log.isEnabled("debug")) {
-      iamTokenFailureLogged.add(params.region);
-      log.debug("Mantle IAM token generation unavailable", {
-        region: params.region,
-        error: formatErrorMessage(error),
-      });
+    // Keep retrying the credential chain while surfacing each distinct failure cause once.
+    if (log.isEnabled("debug")) {
+      const errorMessage = formatErrorMessage(error);
+      if (iamTokenFailureDetailByRegion.get(params.region) !== errorMessage) {
+        iamTokenFailureDetailByRegion.set(params.region, errorMessage);
+        log.debug("Mantle IAM token generation unavailable", {
+          region: params.region,
+          error: errorMessage,
+        });
+      }
     }
     return undefined;
   }
@@ -232,7 +235,7 @@ export async function resolveMantleRuntimeBearerToken(params: {
 /** Clear the IAM token cache for tests. */
 export function resetIamTokenCacheForTest(): void {
   iamTokenCache.clear();
-  iamTokenFailureLogged.clear();
+  iamTokenFailureDetailByRegion.clear();
 }
 
 // ---------------------------------------------------------------------------
