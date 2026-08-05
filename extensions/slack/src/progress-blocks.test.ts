@@ -221,10 +221,7 @@ describe("buildSlackProgressDraftBlocks", () => {
         ],
       }),
     ).toEqual([
-      legacyLineBlock(
-        "• *Commentary*",
-        "I’m using the `monorepo` skill on *Linux x86_64*.",
-      ),
+      legacyLineBlock("• *Commentary*", "I’m using the `monorepo` skill on *Linux x86_64*."),
       legacyLineBlock("• *Reasoning*", "_Reading the Slack handler_"),
     ]);
   });

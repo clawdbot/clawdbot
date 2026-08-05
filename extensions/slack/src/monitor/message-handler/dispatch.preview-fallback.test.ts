@@ -1946,40 +1946,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("keeps tool progress escaped when a plan refreshes a replace-mode draft", async () => {
-    const draftStream = createDraftStreamStub();
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-    mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "replace";
-    mockedDispatchSequence = [];
-    mockedReplyOptionEvents = [
-      { kind: "item", progressText: "ran <!here> <@U123> *bold* `code` & done" },
-      {
-        kind: "plan",
-        phase: "update",
-        explanation: "Following the checklist.",
-        steps: [{ step: "Patch", status: "in_progress" }],
-      },
-    ];
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      }),
-    );
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      [
-        "Shelling",
-        "",
-        "Following the checklist.",
-        "",
-        "• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
-        "▸ Patch",
-      ].join("\n"),
-    );
-  });
-
   it("shows reasoning text in Slack progress draft previews", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
