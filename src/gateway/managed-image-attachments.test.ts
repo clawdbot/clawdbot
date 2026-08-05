@@ -2182,21 +2182,23 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  it("keeps ticket/HTTP ownership checks fail-closed when the store read throws", async () => {
+  it("propagates store read errors on the ticket/HTTP path instead of minting a ticket", async () => {
     const fixture = await createFixture(stateDir);
     loadSessionEntryMock.mockImplementation(() => {
       throw new Error("session store is unreadable");
     });
 
-    // The non-strict path must not accept a thrown lookup as transcript
-    // ownership: no ticket may be minted, no media served.
-    const download = await resolveManagedOutgoingImageArtifactDownload({
-      sessionKey: fixture.sessionKey,
-      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${fixture.attachmentId}`,
-      stateDir,
-    });
-
-    expect(download).toBeNull();
+    // Non-strict artifact/HTTP readers keep the pre-existing error contract:
+    // an escaping lookup failure (for example a canonical-key migration error
+    // carrying openclaw doctor --fix guidance) propagates instead of degrading
+    // to an opaque null/404. No ticket is minted and no media is served.
+    await expect(
+      resolveManagedOutgoingImageArtifactDownload({
+        sessionKey: fixture.sessionKey,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${fixture.attachmentId}`,
+        stateDir,
+      }),
+    ).rejects.toThrow("session store is unreadable");
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 });

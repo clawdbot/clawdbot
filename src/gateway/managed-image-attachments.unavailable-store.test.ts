@@ -41,7 +41,10 @@ vi.mock("./http-utils.js", () => ({
   resolveOpenAiCompatibleHttpSenderIsOwner: vi.fn(),
 }));
 
-import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
+import {
+  cleanupManagedOutgoingMediaRecords,
+  resolveManagedOutgoingMediaArtifactDownload,
+} from "./managed-image-attachments.js";
 import {
   insertManagedImageRecord,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
@@ -49,8 +52,11 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function createManagedMediaFixture(stateDir: string, attachmentId: string) {
-  const sessionKey = "agent:main:main";
+async function createManagedMediaFixture(
+  stateDir: string,
+  attachmentId: string,
+  sessionKey = "agent:main:main",
+) {
   const filename = `${attachmentId}-cat-full.png`;
   const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, filename);
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
@@ -130,6 +136,90 @@ describe("cleanupManagedOutgoingMediaRecords with a real SQLite session store", 
       );
       const agentSqlitePath = await createRealSessionStore(stateDir);
       await fs.chmod(agentSqlitePath, 0o000);
+
+      const result = await cleanupManagedOutgoingMediaRecords({ stateDir });
+
+      expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+      await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    });
+  });
+});
+
+async function createDuplicateCanonicalKeyStore(stateDir: string): Promise<void> {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  writeSessionEntry(database, "agent:main:work", {
+    sessionId: "sess-work",
+    updatedAt: Date.now(),
+  });
+  // Raw insert of the legacy ":main" alias row. Canonical write assertions
+  // refuse this key under mainKey "work"; this is the pre-repair state that
+  // openclaw doctor --fix owns, so it must keep surfacing as a migration
+  // error instead of an unavailable store.
+  database.db
+    .prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+    )
+    .run(
+      "agent:main:main",
+      "sess-legacy-main",
+      JSON.stringify({ sessionId: "sess-legacy-main", updatedAt: 1 }),
+      1,
+    );
+  database.db
+    .prepare(
+      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?)",
+    )
+    .run("sess-legacy-main", "agent:main:main", 1, 1);
+  // The insert trigger marks new rows pending (entry_valid = 0); settle this
+  // row the way ensureSessionEntryValidityProjection would after open.
+  database.db
+    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+    .run("agent:main:main");
+  closeOpenClawAgentDatabasesForTest();
+}
+
+describe("managed media with a session store pending canonical-key repair", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = tempDirs.make("managed-image-canonical-migration-");
+    vi.clearAllMocks();
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }] },
+      session: { mainKey: "work" },
+    });
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  it("surfaces canonical migration errors on the artifact read path instead of a 404", async () => {
+    await withEnvAsync({ ...process.env, OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const attachmentId = "33333333-3333-4333-8333-333333333333";
+      await createManagedMediaFixture(stateDir, attachmentId, "agent:main:work");
+      await createDuplicateCanonicalKeyStore(stateDir);
+
+      await expect(
+        resolveManagedOutgoingMediaArtifactDownload({
+          sessionKey: "agent:main:work",
+          artifactId: `artifact_managed_image_${attachmentId}`,
+          stateDir,
+        }),
+      ).rejects.toThrow(/openclaw doctor --fix/);
+    });
+  });
+
+  it("retains managed media when the session store needs canonical-key repair", async () => {
+    await withEnvAsync({ ...process.env, OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const fixture = await createManagedMediaFixture(
+        stateDir,
+        "44444444-4444-4444-8444-444444444444",
+        "agent:main:work",
+      );
+      await createDuplicateCanonicalKeyStore(stateDir);
 
       const result = await cleanupManagedOutgoingMediaRecords({ stateDir });
 

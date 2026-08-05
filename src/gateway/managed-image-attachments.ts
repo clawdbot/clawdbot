@@ -891,11 +891,17 @@ async function getSessionManagedOutgoingAttachmentIndex(
       : loadSessionEntryReadOnly(sessionKey);
     storePath = loaded.storePath;
     entry = loaded.entry;
-  } catch {
+  } catch (error) {
+    if (opts?.strictStore !== true) {
+      // Only strict cleanup reads convert failures into the unavailable
+      // sentinel. Artifact/HTTP readers must keep their existing error
+      // contract: canonical-key migration errors surface recovery guidance
+      // (openclaw doctor --fix) instead of degrading to an opaque 404.
+      throw error;
+    }
     // Fail closed: an unreadable session store is unknown retention state, not
     // proof the record is unreferenced. Cleanup retains the artifact and the
-    // next healthy sweep can decide. HTTP/artifact readers never pass
-    // strictStore, so they keep their existing unavailable-to-404 behavior.
+    // next healthy sweep can decide.
     const unavailable: SessionManagedOutgoingAttachmentIndexResult = { kind: "unavailable" };
     cache?.set(cacheKey, unavailable);
     return unavailable;
