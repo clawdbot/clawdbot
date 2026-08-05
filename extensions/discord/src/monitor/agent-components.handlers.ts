@@ -258,6 +258,14 @@ async function handleDiscordModalTrigger(params: {
     );
   } catch (err) {
     logError(`${params.label}: failed to show modal: ${String(err)}`);
+    try {
+      await params.interaction.reply({
+        content: "Could not open this form. Request a new form and try again.",
+        ephemeral: true,
+      });
+    } catch {
+      // Interaction may have expired
+    }
   }
 }
 
