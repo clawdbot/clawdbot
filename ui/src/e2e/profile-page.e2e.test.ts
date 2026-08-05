@@ -21,6 +21,8 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "profile-identity");
+const basePath = "/wilfred";
+const profilePath = `${basePath}/settings/profile`;
 
 async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
@@ -74,12 +76,13 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
 
   async function openProfilePage(page: Page) {
     const gateway = await installMockGateway(page, {
+      basePath,
       presenceUsers: testPresenceUsers,
       methodResponses: {
         "users.self": { profile: testProfile },
       },
     });
-    const response = await page.goto(`${server.baseUrl}settings/profile`);
+    const response = await page.goto(new URL(profilePath, server.baseUrl).href);
     expect(response?.status()).toBe(200);
     return gateway;
   }
@@ -121,7 +124,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       viewport: { width: 1280, height: 800 },
     });
     const page = await context.newPage();
-    await page.route(`${server.baseUrl}settings/profile`, async (route) => {
+    await page.route(new URL(profilePath, server.baseUrl).href, async (route) => {
       const response = await route.fetch();
       const body = await response.text();
       await route.fulfill({
@@ -182,6 +185,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       });
     });
     const gateway = await installMockGateway(page, {
+      basePath,
       presenceUsers: testPresenceUsers,
       methodResponses: {
         "users.self": { profile: testProfile },
@@ -189,7 +193,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      const response = await page.goto(new URL(profilePath, server.baseUrl).href);
       expect(response?.status()).toBe(200);
       expect(response?.headers()["content-security-policy"]).toContain(
         "img-src 'self' data: blob:",
@@ -220,7 +224,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       await expect.poll(() => avatarRequests.length).toBe(1);
       expect(avatarRequests[0]).toEqual({
         authorization: "Bearer e2e-device-token",
-        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=2`),
+        url: new URL(`${basePath}/api/users/${testProfile.id}/avatar?v=2`, server.baseUrl).href,
       });
       expect(await sidebarAvatar.getAttribute("src")).toBe(imageUrl);
       expect(
@@ -286,7 +290,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       ).toBe(false);
       expect(avatarRequests[1]).toEqual({
         authorization: "Bearer e2e-device-token",
-        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=3`),
+        url: new URL(`${basePath}/api/users/${testProfile.id}/avatar?v=3`, server.baseUrl).href,
       });
       if (captureUiProof) {
         await page.screenshot({
@@ -321,7 +325,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
       expect(avatarRequests[2]).toEqual({
         authorization: "Bearer e2e-device-token",
-        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=4`),
+        url: new URL(`${basePath}/api/users/${testProfile.id}/avatar?v=4`, server.baseUrl).href,
       });
       if (captureUiProof) {
         await page.screenshot({
@@ -338,6 +342,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      basePath,
       presenceUsers: testPresenceUsers,
       methodResponses: {
         "users.self": { sequence: [{}, { profile: testProfile }] },
@@ -345,7 +350,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      const response = await page.goto(new URL(profilePath, server.baseUrl).href);
       expect(response?.status()).toBe(200);
 
       const emptyState = page.locator(".profile-identity-empty");
@@ -370,6 +375,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      basePath,
       deferredMethods: ["users.self"],
       presenceUsers: testPresenceUsers,
       methodResponses: {
@@ -378,7 +384,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      const response = await page.goto(new URL(profilePath, server.baseUrl).href);
       expect(response?.status()).toBe(200);
 
       const refresh = page.locator(".profile-refresh");

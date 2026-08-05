@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureExecutionIdentityAdmissionSink,
+  hasExecutionIdentityAdmissionSink,
+} from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -39,6 +43,11 @@ const agentCommand = vi.hoisted(() => vi.fn());
 const agentModuleLoadCount = vi.hoisted(() => vi.fn());
 const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
 const startOneShotDiagnosticsExporters = vi.hoisted(() => vi.fn());
+const auditRecorderMocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  recordExecutionIdentity: vi.fn(() => true),
+  stop: vi.fn(async () => {}),
+}));
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -69,6 +78,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       ...overrides?.session,
     },
     gateway: overrides?.gateway,
+    logging: overrides?.logging,
   };
   loadConfig.mockReturnValue(config);
   loadConfigWithShellEnvFallback.mockResolvedValue(config);
@@ -248,6 +258,15 @@ vi.mock("./agent.js", () => {
 vi.mock("../plugins/one-shot-diagnostics.js", () => ({
   startOneShotDiagnosticsExporters,
 }));
+vi.mock("../audit/audit-recorder.js", () => ({
+  createAuditEventRecorder: (...args: unknown[]) => {
+    auditRecorderMocks.create(...args);
+    return {
+      recordExecutionIdentity: auditRecorderMocks.recordExecutionIdentity,
+      stop: auditRecorderMocks.stop,
+    };
+  },
+}));
 
 let originalForceConsoleToStderr = false;
 let zeroTimeoutGatewayRequestMs: number | undefined;
@@ -275,6 +294,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  configureExecutionIdentityAdmissionSink(() => false)();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
@@ -1820,12 +1840,53 @@ describe("agentCliCommand", () => {
       expect(loadRuntimeConfig).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(stop).toHaveBeenCalledTimes(1);
+      expect(auditRecorderMocks.create).not.toHaveBeenCalled();
       const startOrder = requireFirstCallOrder(startOneShotDiagnosticsExporters, "exporter start");
       const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
       const stopOrder = requireFirstCallOrder(stop, "exporter stop");
       expect(startOrder).toBeLessThan(runOrder);
       expect(runOrder).toBeLessThan(stopOrder);
     });
+  });
+
+  it("owns and flushes the opt-in local audit writer without awaiting persistence", async () => {
+    await withTempStore(
+      async () => {
+        agentCommand.mockImplementationOnce(async () => {
+          expect(hasExecutionIdentityAdmissionSink()).toBe(true);
+          return {
+            payloads: [{ text: "local" }],
+            meta: {
+              durationMs: 1,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+            },
+          } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
+        });
+
+        await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+
+        expect(auditRecorderMocks.create).toHaveBeenCalledWith({ messageMode: "off" });
+        expect(auditRecorderMocks.stop).toHaveBeenCalledOnce();
+        expect(hasExecutionIdentityAdmissionSink()).toBe(false);
+      },
+      { logging: { audit: { executionIdentity: true } } },
+    );
+  });
+
+  it("reuses an existing lifecycle-owned identity writer for local dispatch", async () => {
+    await withTempStore(
+      async () => {
+        const clearSink = configureExecutionIdentityAdmissionSink(() => true);
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+
+        expect(auditRecorderMocks.create).not.toHaveBeenCalled();
+        expect(hasExecutionIdentityAdmissionSink()).toBe(true);
+        clearSink();
+      },
+      { logging: { audit: { executionIdentity: true } } },
+    );
   });
 
   it("suppresses stdout diagnostic logs around JSON local embedded runs", async () => {

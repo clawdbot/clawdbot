@@ -1230,6 +1230,15 @@ async function loadWebMediaInternal(
             { cause: err },
           );
         }
+        if (err.code === "path-mismatch") {
+          // fs-safe reports pre-open identity drift as path-mismatch; keep the
+          // product-facing classification as an access denial, not a bad path.
+          throw new LocalMediaAccessError(
+            "path-not-allowed",
+            `Local media path is not under an allowed directory: ${mediaUrl}`,
+            { cause: err },
+          );
+        }
         throw new LocalMediaAccessError(
           "invalid-path",
           `Local media path is not safe to read: ${mediaUrl}`,

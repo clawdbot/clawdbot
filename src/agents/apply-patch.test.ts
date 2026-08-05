@@ -16,7 +16,9 @@ import { applyPatch } from "./apply-patch.test-support.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
+  // realpath: production sandbox checks compare against canonical paths; on macOS
+  // os.tmpdir() is a /var -> /private/var symlink, which otherwise trips the guard.
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-")));
   try {
     return await fn(dir);
   } finally {
@@ -884,7 +886,9 @@ describe("applyPatch", () => {
 *** End Patch`;
 
       await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-        /path is not a regular file under root|symlink open blocked/i,
+        // fs-safe 0.5.2 reports the symlink rejection through the boundary-read
+        // validation path ("unsafe path") instead of a symlink-specific message.
+        /path is not a regular file under root|symlink open blocked|unsafe path/i,
       );
       const contents = await fs.readFile(target, "utf8");
       expect(contents).toBe("initial\n");

@@ -61,6 +61,7 @@ describe("refreshQueuedFollowupSession", () => {
           run: makeRun(),
         },
       ],
+      summaryLines: ["elided summary"],
       sourceRefs: new WeakMap(),
     });
 
@@ -232,6 +233,7 @@ describe("getFollowupQueue", () => {
           enqueuedAt: Date.now(),
           run: makeRun(),
         })),
+        summaryLines: Array.from({ length: count }, () => contextKey),
         sourceRefs: new WeakMap(),
       });
     }
@@ -241,6 +243,7 @@ describe("getFollowupQueue", () => {
 
     expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
     expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
+    expect(updated.summaryElisions[0]?.summaryLines).toEqual(["newest"]);
     expect(updated.evictedSummaryCount).toBe(13);
   });
 });

@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
-import { cleanOldMedia } from "../media/store.js";
+import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
@@ -309,23 +309,23 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
-  if (typeof params.mediaCleanupTtlMs !== "number") {
-    return {
-      tickInterval,
-      healthInterval,
-      dedupeCleanup,
-      mediaCleanup: null,
-      worktreeCleanup,
-      skillCuratorCleanup,
-    };
-  }
+  const playbackTranscodeCacheCleanupLoader = createLazyPromiseLoader(async () => {
+    try {
+      await prunePlaybackTranscodeCache();
+    } catch (err) {
+      params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
+    } finally {
+      playbackTranscodeCacheCleanupLoader.clear();
+    }
+  });
 
   let mediaCleanupInFlight: Promise<void> | null = null;
-  const runMediaCleanup = () => {
-    if (mediaCleanupInFlight) {
+  const runConfiguredMediaCleanup = () => {
+    const ttlMs = params.mediaCleanupTtlMs;
+    if (typeof ttlMs !== "number" || mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
-    mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
+    mediaCleanupInFlight = cleanOldMedia(ttlMs, {
       recursive: true,
       pruneEmptyDirs: true,
     })
@@ -338,11 +338,15 @@ export function startGatewayMaintenanceTimers(params: {
     return mediaCleanupInFlight;
   };
 
-  const mediaCleanup = setInterval(() => {
-    void runMediaCleanup();
-  }, 60 * 60_000);
+  const runMediaMaintenance = () => {
+    // Playback has a fixed cache lifecycle and must not depend on the optional
+    // attachment-retention sweep being enabled or completing successfully.
+    void playbackTranscodeCacheCleanupLoader.load();
+    void runConfiguredMediaCleanup();
+  };
+  const mediaCleanup = setInterval(runMediaMaintenance, 60 * 60_000);
 
-  void runMediaCleanup();
+  runMediaMaintenance();
 
   return {
     tickInterval,

@@ -158,6 +158,9 @@ export function extractToolOutput(input: ResponsesInputItem[]) {
   return item ? stringifyFunctionCallOutput(item.output) : "";
 }
 
+export const extractToolOutputValue = (input: ResponsesInputItem[]) =>
+  findCurrentToolOutput(input)?.output;
+
 export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const item = findCurrentToolOutput(input);
   return item?.is_error === true || item?.isError === true;
@@ -264,7 +267,7 @@ export function extractSlackMpimRetainedBotNonce(
   return undefined;
 }
 
-export function extractAllInputTexts(input: ResponsesInputItem[]) {
+function extractAllInputTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
     if (typeof item.output === "string" && item.output.trim()) {

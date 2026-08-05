@@ -17,9 +17,8 @@ export type TtsProviderAttempt = {
   error?: string;
 };
 
-export type TtsResult = {
+type TtsAttemptOutcome = {
   success: boolean;
-  audioPath?: string;
   error?: string;
   latencyMs?: number;
   provider?: string;
@@ -27,77 +26,48 @@ export type TtsResult = {
   fallbackFrom?: string;
   attemptedProviders?: string[];
   attempts?: TtsProviderAttempt[];
+};
+
+type TtsMediaOutcome = TtsAttemptOutcome & {
   outputFormat?: string;
+};
+
+type TtsProviderMediaOutcome = TtsMediaOutcome & {
+  providerModel?: string;
+  providerVoice?: string;
+};
+
+type TtsVoiceMediaOutcome = TtsProviderMediaOutcome & {
+  voiceCompatible?: boolean;
+  fileExtension?: string;
+  target?: "audio-file" | "voice-note";
+};
+
+export type TtsResult = TtsMediaOutcome & {
+  audioPath?: string;
   voiceCompatible?: boolean;
   audioAsVoice?: boolean;
   target?: "audio-file" | "voice-note";
 };
 
-export type TtsSynthesisResult = {
-  success: boolean;
+export type TtsSynthesisResult = TtsVoiceMediaOutcome & {
   audioBuffer?: Buffer;
-  error?: string;
-  latencyMs?: number;
-  provider?: string;
-  providerModel?: string;
-  providerVoice?: string;
-  persona?: string;
-  fallbackFrom?: string;
-  attemptedProviders?: string[];
-  attempts?: TtsProviderAttempt[];
-  outputFormat?: string;
-  voiceCompatible?: boolean;
-  fileExtension?: string;
-  target?: "audio-file" | "voice-note";
 };
 
-export type TtsStreamResult = {
-  success: boolean;
+export type TtsStreamResult = TtsVoiceMediaOutcome & {
   audioStream?: ReadableStream<Uint8Array>;
-  error?: string;
-  latencyMs?: number;
-  provider?: string;
-  providerModel?: string;
-  providerVoice?: string;
-  persona?: string;
-  fallbackFrom?: string;
-  attemptedProviders?: string[];
-  attempts?: TtsProviderAttempt[];
-  outputFormat?: string;
-  voiceCompatible?: boolean;
-  fileExtension?: string;
-  target?: "audio-file" | "voice-note";
   release?: () => Promise<void>;
 };
 
 export type TtsSynthesisStreamResult = TtsStreamResult;
 
-export type TtsTelephonyResult = {
-  success: boolean;
+export type TtsTelephonyResult = TtsProviderMediaOutcome & {
   audioBuffer?: Buffer;
-  error?: string;
-  latencyMs?: number;
-  provider?: string;
-  providerModel?: string;
-  providerVoice?: string;
-  persona?: string;
-  fallbackFrom?: string;
-  attemptedProviders?: string[];
-  attempts?: TtsProviderAttempt[];
-  outputFormat?: string;
   sampleRate?: number;
 };
 
-export type TtsStatusEntry = {
+export type TtsStatusEntry = TtsAttemptOutcome & {
   timestamp: number;
-  success: boolean;
   textLength: number;
   summarized: boolean;
-  provider?: string;
-  persona?: string;
-  fallbackFrom?: string;
-  attemptedProviders?: string[];
-  attempts?: TtsProviderAttempt[];
-  latencyMs?: number;
-  error?: string;
 };

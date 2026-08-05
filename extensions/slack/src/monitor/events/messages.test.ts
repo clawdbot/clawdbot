@@ -38,9 +38,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
-}));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {

@@ -787,6 +787,64 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
   });
 
+  it.each([
+    {
+      label: "implicit profile membership",
+      scenarioIds: undefined,
+      expectedExitCode: undefined,
+      explicitScenarioSelection: false,
+    },
+    {
+      label: "explicit profile selection",
+      scenarioIds: ["runtime-tool-image-generate"],
+      expectedExitCode: 1,
+      explicitScenarioSelection: true,
+    },
+  ])(
+    "keeps optional skips $label blocking semantics",
+    async ({ scenarioIds, expectedExitCode, explicitScenarioSelection }) => {
+      const priorExitCode = process.exitCode;
+      process.exitCode = undefined;
+      const optionalScenario = {
+        name: "Runtime tool fixture — image_generate",
+        status: "skip" as const,
+        details: "image_generate mock provider report-only: tool unavailable",
+      };
+      await fs.writeFile(
+        suiteSummaryPath,
+        JSON.stringify({
+          counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+          scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+        }),
+        "utf8",
+      );
+      runQaSuite.mockResolvedValueOnce(
+        flowSuiteRuntimeResult({
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+          scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+        }),
+      );
+
+      try {
+        await runQaProfileCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          profile: "all",
+          surface: "media",
+          category: "media.media-generation",
+          providerMode: "mock-openai",
+          scenarioIds,
+        });
+        expect(process.exitCode).toBe(expectedExitCode);
+        expect(mockFirstObjectArg(runQaSuite).adapterOptions).toMatchObject({
+          explicitScenarioSelection,
+        });
+      } finally {
+        process.exitCode = priorExitCode;
+      }
+    },
+  );
+
   it("filters QA-channel-pinned scenarios from an implicit Crabline smoke profile", async () => {
     runQaSuite.mockImplementationOnce(async () => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");

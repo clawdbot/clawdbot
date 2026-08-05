@@ -101,10 +101,30 @@ function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
 
+function inspectAuthProfileTable(
+  db: DatabaseSync,
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection | null {
+  const tableName = target === "store" ? "auth_profile_store" : "auth_profile_state";
+  const schemaObject = db
+    .prepare("SELECT type FROM sqlite_master WHERE name = ?")
+    .get(tableName) as { type?: unknown } | undefined;
+  if (!schemaObject) {
+    // Agent databases shipped before SQLite auth storage do not have these
+    // additive tables until their next writable bootstrap.
+    return { status: "missing", reason: "table" };
+  }
+  return schemaObject.type === "table" ? null : { status: "unreadable" };
+}
+
 function inspectAuthProfileJsonCell(
   db: DatabaseSync,
   target: "store" | "state",
 ): PersistedAuthProfileStoreInspection {
+  const tableInspection = inspectAuthProfileTable(db, target);
+  if (tableInspection) {
+    return tableInspection;
+  }
   const kysely = getAuthProfileKysely(db);
   let raw: string;
   if (target === "store") {
@@ -153,18 +173,6 @@ function inspectAuthProfileJsonCellReadOnly(
     if (readSqliteUserVersion(db) > OPENCLAW_AGENT_SCHEMA_VERSION) {
       return { status: "unreadable" };
     }
-    const tableName = target === "store" ? "auth_profile_store" : "auth_profile_state";
-    const schemaObject = db
-      .prepare("SELECT type FROM sqlite_master WHERE name = ?")
-      .get(tableName) as { type?: unknown } | undefined;
-    if (!schemaObject) {
-      // Agent databases shipped before SQLite auth storage do not have these
-      // additive tables until their next writable bootstrap.
-      return { status: "missing", reason: "table" };
-    }
-    if (schemaObject.type !== "table") {
-      return { status: "unreadable" };
-    }
     return inspectAuthProfileJsonCell(db, target);
   } catch {
     return { status: "unreadable" };
@@ -184,7 +192,7 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
 /** Distinguishes an absent auth row from a present store that could not be read. */
 export function inspectPersistedAuthProfileStoreRaw(
   agentDir?: string,
-  database?: OpenClawAgentDatabase,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
   if (database) {
     return inspectAuthProfileJsonCell(database.db, "store");
@@ -199,7 +207,7 @@ export function inspectPersistedAuthProfileStoreRaw(
 /** Distinguishes an absent auth-state row from state that could not be read. */
 export function inspectPersistedAuthProfileStateRaw(
   agentDir?: string,
-  database?: OpenClawAgentDatabase,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
   if (database) {
     return inspectAuthProfileJsonCell(database.db, "state");

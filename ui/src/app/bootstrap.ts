@@ -32,7 +32,6 @@ import type {
   ApplicationContext,
   ApplicationNavigationPreferences,
   ApplicationNavigationPreferencesSnapshot,
-  ApplicationSkillWorkshopRevisionHandoff,
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
@@ -51,6 +50,7 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
@@ -204,26 +204,6 @@ function createApplicationNavigationPreferences(
   };
 }
 
-function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionHandoff {
-  let pending: Parameters<ApplicationSkillWorkshopRevisionHandoff["prepare"]>[0] | null = null;
-  return {
-    prepare: (handoff) => {
-      pending = handoff;
-    },
-    consume: (sessionKey) => {
-      if (!pending || pending.sessionKey !== sessionKey) {
-        return null;
-      }
-      const handoff = pending;
-      pending = null;
-      return handoff;
-    },
-    clear: () => {
-      pending = null;
-    },
-  };
-}
-
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
@@ -296,7 +276,7 @@ export function bootstrapApplication(
     startup.password ?? "",
     startup.pendingBootstrapToken ?? "",
     undefined,
-    { persistDefaultConnectionSettings: documentMode === null },
+    { persistDefaultConnectionSettings: documentMode === null, basePath },
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
