@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   normalizeCommandEffectProfile,
   normalizeCommandExposure,
@@ -201,6 +202,7 @@ export function buildCatalogList(
     runtimeCommands?: readonly CliCatalogRuntimeCommand[];
     pluginCommands?: readonly CliCatalogPluginCommand[];
     nodeCommands?: readonly CliCatalogNodeCommand[];
+    nodeCommandScope?: CliCatalogNodeCommandScope;
   } = {},
 ): CliCatalogList {
   const descriptors = buildDescriptors();
@@ -209,7 +211,7 @@ export function buildCatalogList(
   const runtimeCommands = params.runtimeCommands ?? [];
   const pluginCommands = params.pluginCommands ?? [];
   const nodeCommands = buildNodeCommandCatalog(params.nodeCommands);
-  const nodeCommandScope = resolveNodeCommandScope(nodeCommands);
+  const nodeCommandScope = params.nodeCommandScope ?? resolveNodeCommandScope(nodeCommands);
   return {
     schemaVersion: 1,
     generatedFrom: "command-inventory",
@@ -246,6 +248,7 @@ export function renderCatalogListMarkdown(
     runtimeCommands?: readonly CliCatalogRuntimeCommand[];
     pluginCommands?: readonly CliCatalogPluginCommand[];
     nodeCommands?: readonly CliCatalogNodeCommand[];
+    nodeCommandScope?: CliCatalogNodeCommandScope;
   } = {},
 ): string {
   const list = buildCatalogList(params);
@@ -315,8 +318,11 @@ export function renderCatalogListMarkdown(
       "| --- | --- | --- | --- | --- | --- | --- |",
     );
     for (const command of list.cli.nodeCommands) {
+      const nodeLabel = sanitizeTerminalText(
+        markdownTableCell(command.nodeName ?? command.nodeId ?? "Any"),
+      );
       lines.push(
-        `| ${markdownCodeCell(command.command)} | ${markdownTableCell(command.nodeName ?? command.nodeId ?? "Any")} | ${markdownCodeCell(command.availability ?? "unknown")} | ${markdownCodeCell(command.approvalKind ?? "unknown")} | ${markdownCodeCell(command.risk ?? "unknown")} | ${markdownCodeCell(command.effectMode ?? "unknown")} | ${command.invocationHint ? markdownCodeCell(command.invocationHint) : "None"} |`,
+        `| ${markdownCodeCell(command.command)} | ${nodeLabel} | ${markdownCodeCell(command.availability ?? "unknown")} | ${markdownCodeCell(command.approvalKind ?? "unknown")} | ${markdownCodeCell(command.risk ?? "unknown")} | ${markdownCodeCell(command.effectMode ?? "unknown")} | ${command.invocationHint ? markdownCodeCell(command.invocationHint) : "None"} |`,
       );
     }
   }

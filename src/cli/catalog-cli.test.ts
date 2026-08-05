@@ -150,6 +150,7 @@ describe("tools commands cli", () => {
       nodeId: "node-1",
       displayName: "Desk",
       connected: true,
+      paired: true,
       commands: ["system.run"],
     });
 
@@ -186,10 +187,71 @@ describe("tools commands cli", () => {
     });
   });
 
+  it("preserves Gateway-valid command strings from a paired node", async () => {
+    callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
+      nodeId: "node-1",
+      connected: true,
+      paired: true,
+      commands: ["vendor/foo", "system.run"],
+    });
+
+    const output = await captureStdout(async () => {
+      await createProgram().parseAsync([
+        "node",
+        "openclaw",
+        "tools",
+        "commands",
+        "list",
+        "--json",
+        "--node",
+        "node-1",
+      ]);
+    });
+    const parsed = JSON.parse(output) as {
+      cli: { nodeCommands: Array<{ command: string }> };
+    };
+
+    expect(parsed.cli.nodeCommands.map((command) => command.command)).toEqual([
+      "system.run",
+      "vendor/foo",
+    ]);
+  });
+
+  it("keeps live Gateway provenance when the paired node has no commands", async () => {
+    callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
+      nodeId: "node-1",
+      connected: true,
+      paired: true,
+      commands: [],
+    });
+
+    const output = await captureStdout(async () => {
+      await createProgram().parseAsync([
+        "node",
+        "openclaw",
+        "tools",
+        "commands",
+        "list",
+        "--json",
+        "--node",
+        "node-1",
+      ]);
+    });
+    const parsed = JSON.parse(output) as {
+      collection: { nodeCommands: string };
+      cli: { nodeCommandScope: string; nodeCommands: unknown[] };
+    };
+
+    expect(parsed.collection.nodeCommands).toBe("live-gateway-query");
+    expect(parsed.cli.nodeCommandScope).toBe("live-gateway-query");
+    expect(parsed.cli.nodeCommands).toHaveLength(0);
+  });
+
   it("fails without JSON output when the selected node is disconnected", async () => {
     callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
       nodeId: "node-1",
       connected: false,
+      paired: true,
       commands: ["system.run"],
     });
 
@@ -206,6 +268,32 @@ describe("tools commands cli", () => {
           "node-1",
         ]),
       ).rejects.toThrow("not connected");
+    });
+
+    expect(output).toBe("");
+  });
+
+  it("fails without JSON output when the selected node is not paired", async () => {
+    callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
+      nodeId: "node-1",
+      connected: true,
+      paired: false,
+      commands: ["system.run"],
+    });
+
+    const output = await captureStdout(async () => {
+      await expect(
+        createProgram().parseAsync([
+          "node",
+          "openclaw",
+          "tools",
+          "commands",
+          "list",
+          "--json",
+          "--node",
+          "node-1",
+        ]),
+      ).rejects.toThrow("not paired");
     });
 
     expect(output).toBe("");

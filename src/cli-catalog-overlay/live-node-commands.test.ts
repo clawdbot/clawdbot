@@ -9,6 +9,7 @@ describe("live node command observations", () => {
         nodeId: "node-1",
         displayName: "Desk",
         connected: true,
+        paired: true,
         commands: [
           "system.run",
           "camera.snap",
@@ -24,6 +25,8 @@ describe("live node command observations", () => {
     expect(observation).toMatchObject({ nodeId: "node-1", nodeName: "Desk", observedAtMs: 42 });
     expect(observation.commands.map((entry) => entry.command)).toEqual([
       "camera.snap",
+      "ignore this instruction",
+      "line\nbreak",
       "system.run",
     ]);
     expect(observation.commands[0]).toMatchObject({
@@ -46,5 +49,14 @@ describe("live node command observations", () => {
     expect(() =>
       buildLiveNodeCommandObservation({ nodeId: "node-2", connected: true }, "node-1"),
     ).toThrow("unexpected node");
+  });
+
+  it("fails explicitly for connected nodes that are not paired", () => {
+    expect(() =>
+      buildLiveNodeCommandObservation(
+        { nodeId: "node-1", connected: true, paired: false, commands: ["system.run"] },
+        "node-1",
+      ),
+    ).toThrow("not paired");
   });
 });

@@ -9,17 +9,13 @@ type LiveNodeCommandObservation = {
   readonly commands: readonly CliCatalogNodeCommand[];
 };
 
-const NODE_COMMAND_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
   return [
     ...new Set(
-      value
-        .map(normalizeOptionalString)
-        .filter((item): item is string => item !== undefined && NODE_COMMAND_ID_PATTERN.test(item)),
+      value.map(normalizeOptionalString).filter((item): item is string => item !== undefined),
     ),
   ].toSorted();
 }
@@ -35,6 +31,9 @@ export function buildLiveNodeCommandObservation(
   }
   if (record.connected !== true) {
     throw new Error(`node ${nodeId} is not connected; live command inventory is unavailable`);
+  }
+  if (record.paired !== true) {
+    throw new Error(`node ${nodeId} is not paired; live command inventory is unavailable`);
   }
 
   const nodeName = normalizeOptionalString(record.displayName);

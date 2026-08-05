@@ -18,6 +18,7 @@ openclaw tools commands list
 openclaw tools commands list --json
 openclaw tools commands list --markdown
 openclaw tools commands list --json --plugin-descriptors
+openclaw tools commands list --json --node <node-id>
 ```
 
 The inventory joins these command-owned sources:
@@ -26,6 +27,7 @@ The inventory joins these command-owned sources:
 - routed command paths and their operation metadata
 - commands registered in the current CLI invocation
 - plugin CLI descriptors when `--plugin-descriptors` is supplied
+- commands advertised by one connected, paired Gateway node when `--node` is supplied
 
 Human output is Markdown by default. Use `--json` for the versioned machine-readable shape.
 `--json` and `--markdown` cannot be combined.
@@ -56,19 +58,25 @@ metadata where the owning registry provides it. Missing effect metadata is not a
 Callers should not infer that an unannotated command is read-only or low risk.
 
 The current runtime command scope is the command tree registered for this invocation. Plugin
-commands appear only with `--plugin-descriptors`. Node command records are supported by the catalog
-model but this CLI does not fetch live paired-node commands.
+commands appear only with `--plugin-descriptors`. A live node query is opt-in with `--node`; the
+selected node must be connected and paired, and an empty result is still reported with
+`nodeCommandScope: "live-gateway-query"` so callers can distinguish an executed Gateway query from
+caller-supplied records.
 
 The existing Gateway `commands.list` RPC remains the agent-facing chat, native, skill, and plugin
 inventory. This CLI is an operator and developer view and does not replace that RPC.
 
 ## Options
 
-| Flag                   | Meaning                                                      |
-| ---------------------- | ------------------------------------------------------------ |
-| `--json`               | Emit the versioned JSON inventory.                           |
-| `--markdown`           | Emit Markdown explicitly; this is the default human format.  |
-| `--plugin-descriptors` | Load plugin CLI descriptors and include their command shape. |
+| Flag                   | Meaning                                                           |
+| ---------------------- | ----------------------------------------------------------------- |
+| `--json`               | Emit the versioned JSON inventory.                                |
+| `--markdown`           | Emit Markdown explicitly; this is the default human format.       |
+| `--plugin-descriptors` | Load plugin CLI descriptors and include their command shape.      |
+| `--node <node-id>`     | Query one connected, paired Gateway node for advertised commands. |
+| `--url <url>`          | Gateway WebSocket URL for the live node query.                    |
+| `--token <token>`      | Gateway token for the live node query.                            |
+| `--timeout <ms>`       | Gateway timeout in milliseconds for the live node query.          |
 
 ## Related
 

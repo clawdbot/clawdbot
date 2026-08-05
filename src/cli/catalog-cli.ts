@@ -28,7 +28,7 @@ function addNodeInventoryOptions(command: Command): Command {
     .option("--timeout <ms>", "Gateway timeout in ms", "10000");
 }
 
-async function loadNodeCommands(opts: NodeInventoryOpts) {
+async function loadNodeCommandObservation(opts: NodeInventoryOpts) {
   if (!opts.node) {
     return undefined;
   }
@@ -37,7 +37,7 @@ async function loadNodeCommands(opts: NodeInventoryOpts) {
     { ...opts, json: true },
     { nodeId: opts.node },
   );
-  return buildLiveNodeCommandObservation(result, opts.node).commands;
+  return buildLiveNodeCommandObservation(result, opts.node);
 }
 
 function validateOutputOptions(
@@ -88,11 +88,16 @@ export function registerCommandsCli(program: Command): void {
       validateOutputOptions(opts, command);
       const runtimeCommands = collectRuntimeCommandTree(inventoryRoot);
       const pluginCommands = opts.pluginDescriptors ? await loadPluginCommands() : undefined;
-      const nodeCommands = await loadNodeCommands(opts);
+      const nodeObservation = await loadNodeCommandObservation(opts);
       const catalogParams = {
         runtimeCommands,
         ...(pluginCommands ? { pluginCommands } : {}),
-        ...(nodeCommands ? { nodeCommands } : {}),
+        ...(nodeObservation
+          ? {
+              nodeCommands: nodeObservation.commands,
+              nodeCommandScope: "live-gateway-query" as const,
+            }
+          : {}),
       };
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(buildCatalogList(catalogParams), null, 2)}\n`);
@@ -119,12 +124,17 @@ export function registerCommandsCli(program: Command): void {
       await loadInspectedCommandGroup(inventoryRoot, commandPath);
       const runtimeCommands = collectRuntimeCommandTree(inventoryRoot);
       const pluginCommands = opts.pluginDescriptors ? await loadPluginCommands() : undefined;
-      const nodeCommands = await loadNodeCommands(opts);
+      const nodeObservation = await loadNodeCommandObservation(opts);
       const inspection = inspectCommand(
         buildCatalogList({
           runtimeCommands,
           ...(pluginCommands ? { pluginCommands } : {}),
-          ...(nodeCommands ? { nodeCommands } : {}),
+          ...(nodeObservation
+            ? {
+                nodeCommands: nodeObservation.commands,
+                nodeCommandScope: "live-gateway-query" as const,
+              }
+            : {}),
         }),
         commandPath,
       );

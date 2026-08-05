@@ -117,6 +117,17 @@ describe("command inventory list", () => {
     expect(list.cli.nodeCommandScope).toBe("live-gateway-query");
   });
 
+  it("keeps explicit live Gateway collection scope for empty command results", () => {
+    const list = buildCatalogList({
+      nodeCommands: [],
+      nodeCommandScope: "live-gateway-query",
+    });
+
+    expect(list.counts.nodeCommands).toBe(0);
+    expect(list.collection.nodeCommands).toBe("live-gateway-query");
+    expect(list.cli.nodeCommandScope).toBe("live-gateway-query");
+  });
+
   it("renders a Markdown command inventory", () => {
     const markdown = renderCatalogListMarkdown();
 
@@ -156,5 +167,18 @@ describe("command inventory list", () => {
     );
     expect(markdown).toContain("`` nodes invoke `filesystem.read` \\| inspect next ``");
     expect(markdown).not.toContain("Build | prod\nprimary");
+  });
+
+  it("sanitizes node labels before Markdown terminal output", () => {
+    const command = {
+      ...sampleNodeCommands[0]!,
+      nodeName: `Desk ${String.fromCharCode(27)}[31mred${String.fromCharCode(7)} node`,
+    };
+
+    const markdown = renderCatalogListMarkdown({ nodeCommands: [command] });
+
+    expect(markdown).toContain("| `filesystem.read` | Desk red node |");
+    expect(markdown).not.toContain(String.fromCharCode(27));
+    expect(markdown).not.toContain(String.fromCharCode(7));
   });
 });
