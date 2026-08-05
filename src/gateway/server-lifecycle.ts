@@ -302,11 +302,17 @@ export async function prepareGatewayLifecycle(params: {
     outboundDeliveryRecoveryStopPromise ??= runtimeState.stopOutboundDeliveryRecovery();
     return outboundDeliveryRecoveryStopPromise;
   };
+  let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
+  const stopMediaCleanupForClose = () => {
+    mediaCleanupStopPromise ??= runtimeState.stopMediaCleanup();
+    return mediaCleanupStopPromise;
+  };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
-    // Fence outbound recovery before any awaited close step can tear down the
-    // plugin/channel runtime it needs for reconciliation.
+    // Fence background owners before any awaited close step can tear down the
+    // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();
+    void stopMediaCleanupForClose();
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();
@@ -325,10 +331,11 @@ export async function prepareGatewayLifecycle(params: {
   const beginClosePrelude = async () => {
     clearSessionSuspensionTimers();
     markClosePreludeStarted();
-    // Both owners are fenced synchronously above. Join them before any runtime
-    // they can publish into is torn down.
+    // Owners are fenced synchronously above. Join them before any runtime they
+    // can publish into is torn down.
     await Promise.all([
       stopOutboundDeliveryRecoveryForClose(),
+      stopMediaCleanupForClose(),
       stopConfigReloaderForClose().catch(() => {}),
     ]);
   };
@@ -408,7 +415,7 @@ export async function prepareGatewayLifecycle(params: {
       tickInterval: runtimeState.tickInterval,
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
-      mediaCleanup: runtimeState.mediaCleanup,
+      stopMediaCleanup: stopMediaCleanupForClose,
       worktreeCleanup: runtimeState.worktreeCleanup,
       skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,

@@ -649,7 +649,7 @@ export async function performClawHubSkillInstall(
         markClawPackageIndependentlyOwned({
           kind: "skill",
           source: "clawhub",
-          ref: params.slug,
+          ref: formatClawHubSkillRef(params),
           version,
           workspace: params.workspaceDir,
         });

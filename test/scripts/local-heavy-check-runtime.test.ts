@@ -148,7 +148,7 @@ describe("local-heavy-check-runtime", () => {
       "--checkers",
       "1",
     ]);
-    expect(env.GOMAXPROCS).toBe("1");
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
@@ -257,9 +257,18 @@ describe("local-heavy-check-runtime", () => {
       "--checkers",
       "1",
     ]);
-    expect(env.GOMAXPROCS).toBe("1");
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("does not oversubscribe a single-CPU host", () => {
+    const { env } = applyLocalTsgoPolicy([], makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "throttled" }), {
+      logicalCpuCount: 1,
+      totalMemoryBytes: 16 * 1024 ** 3,
+    });
+
+    expect(env.GOMAXPROCS).toBe("1");
   });
 
   it("allows forcing full-speed tsgo runs on roomy hosts", () => {

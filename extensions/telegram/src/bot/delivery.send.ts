@@ -24,6 +24,7 @@ import {
 } from "../rich-message.js";
 import {
   buildTelegramPlainFallbackPlan,
+  isTelegramEmptyContentError,
   isTelegramHtmlParseError,
   warnTelegramRichBlocksDegradations,
 } from "../rich-plain-fallback.js";
@@ -33,7 +34,6 @@ import type { TelegramThreadSpec } from "./helpers.js";
 
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
-const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 function createTelegramDeliverySendRetry() {
   return createChannelApiRetryRunner({
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
@@ -145,9 +145,7 @@ export async function sendTelegramText(
     });
     if (isEmptyTelegramRichMessage(richPlan.richMessage)) {
       if (!hasFallbackText) {
-        throw new Error(
-          "telegram sendRichMessage failed: empty rich text and empty plain fallback",
-        );
+        throw new Error("telegram text must be non-empty: rich and plain fallback rendered empty");
       }
       runtime.log?.("telegram sendRichMessage rendered empty; falling back to plain text");
       return await sendPlainFallback();
@@ -185,7 +183,9 @@ export async function sendTelegramText(
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
   if (!htmlText.trim()) {
     if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+      throw new Error(
+        "telegram text must be non-empty: formatted and plain fallback rendered empty",
+      );
     }
     return await sendPlainFallback();
   }
@@ -194,10 +194,7 @@ export async function sendTelegramText(
       operation: "sendMessage",
       runtime,
       requestParams: baseParams,
-      shouldLog: (err) => {
-        const errText = formatErrorMessage(err);
-        return !isTelegramHtmlParseError(err) && !EMPTY_TEXT_ERR_RE.test(errText);
-      },
+      shouldLog: (err) => !isTelegramHtmlParseError(err) && !isTelegramEmptyContentError(err),
       send: (effectiveParams) =>
         bot.api.sendMessage(chatId, htmlText, {
           parse_mode: "HTML",
@@ -210,7 +207,7 @@ export async function sendTelegramText(
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
-    if (isTelegramHtmlParseError(err) || EMPTY_TEXT_ERR_RE.test(errText)) {
+    if (isTelegramHtmlParseError(err) || isTelegramEmptyContentError(err)) {
       if (!hasFallbackText) {
         throw err;
       }

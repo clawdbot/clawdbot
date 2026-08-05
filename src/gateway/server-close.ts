@@ -34,6 +34,7 @@ import {
   type ChatRunEntry,
   type ChatRunState,
 } from "./server-chat-state.js";
+import type { MediaCleanupStopResult } from "./server-media-cleanup-lifecycle.js";
 import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
@@ -690,7 +691,7 @@ export function createGatewayCloseHandler(
     tickInterval: ReturnType<typeof setInterval>;
     healthInterval: ReturnType<typeof setInterval>;
     dedupeCleanup: ReturnType<typeof setInterval>;
-    mediaCleanup: ReturnType<typeof setInterval> | null;
+    stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
     worktreeCleanup: ReturnType<typeof setInterval> | null;
     skillCuratorCleanup: () => void;
     agentUnsub: (() => Promise<void> | void) | null;
@@ -899,7 +900,20 @@ export function createGatewayCloseHandler(
           }),
         ]);
       });
-      await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
+      let mediaCleanupStopResult: MediaCleanupStopResult = "timed-out";
+      try {
+        mediaCleanupStopResult = await params.stopMediaCleanup();
+      } catch (err) {
+        shutdownLog.warn(`media-cleanup: ${err instanceof Error ? err.message : String(err)}`);
+        recordShutdownWarning(warnings, "media-cleanup");
+      }
+      if (mediaCleanupStopResult === "drained") {
+        await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
+      } else {
+        // Timed-out cleanup still owns shared SQLite. Keep the process store open
+        // so late completion cannot resume against a database torn down by shutdown.
+        recordShutdownWarning(warnings, "media-cleanup");
+      }
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
@@ -926,9 +940,6 @@ export function createGatewayCloseHandler(
       clearInterval(params.tickInterval);
       clearInterval(params.healthInterval);
       clearInterval(params.dedupeCleanup);
-      if (params.mediaCleanup) {
-        clearInterval(params.mediaCleanup);
-      }
       if (params.worktreeCleanup) {
         clearInterval(params.worktreeCleanup);
       }
