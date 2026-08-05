@@ -1,7 +1,10 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  type OpenClawAgentDatabaseReadOnlyResult,
+  withOpenClawAgentDatabaseReadOnly,
+} from "../../state/openclaw-agent-db-readonly.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
@@ -200,21 +203,36 @@ export function listSqliteSessionEntryKeysReadOnly(
 export function loadExactSqliteSessionEntryReadOnly(
   scope: SessionAccessScope,
 ): ExactSessionEntry | undefined {
+  const result = loadExactSqliteSessionEntryReadOnlyResult(scope);
+  return result.found ? result.value : undefined;
+}
+
+/** Exact persisted-key probe that preserves read-only database availability. */
+export function loadExactSqliteSessionEntryReadOnlyResult(
+  scope: SessionAccessScope,
+): OpenClawAgentDatabaseReadOnlyResult<ExactSessionEntry | undefined> {
   const sessionKey = scope.sessionKey.trim();
   if (!sessionKey) {
-    return undefined;
+    return { found: true, value: undefined };
   }
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
     toDatabaseOptions(resolved),
   );
-  return result.found && result.value
-    ? {
-        sessionKey,
-        entry: scope.clone === false ? result.value : cloneSessionEntry(result.value),
-      }
-    : undefined;
+  if (!result.found) {
+    return result;
+  }
+  if (!result.value) {
+    return { found: true, value: undefined };
+  }
+  return {
+    found: true,
+    value: {
+      sessionKey,
+      entry: scope.clone === false ? result.value : cloneSessionEntry(result.value),
+    },
+  };
 }
 
 /** Lists direct child rows without cloning or rebuilding the complete session store. */

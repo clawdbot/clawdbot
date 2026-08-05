@@ -15,6 +15,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
@@ -112,6 +113,10 @@ type CleanupManagedOutgoingMediaRecordsResult = {
 };
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
+type SessionManagedOutgoingAttachmentIndexRead =
+  | { kind: "available"; index: SessionManagedOutgoingAttachmentIndex | null }
+  | { kind: "unavailable"; reason: "schema-missing" | "table-missing" };
+type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
   transcriptPath: string;
@@ -639,10 +644,12 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     ) {
       shouldDelete = true;
     } else if (!entry.cleanupPending && record.messageId) {
-      shouldDelete = !(await recordMatchesTranscriptMessage(
+      const transcriptMatch = await recordMatchesTranscriptMessage(
         record,
         transcriptAttachmentIndexCache,
-      ));
+      );
+      // Session-store unavailability is not proof that durable chat history no longer owns media.
+      shouldDelete = transcriptMatch === "missing";
     } else if (!entry.cleanupPending) {
       const createdAtMs = Date.parse(record.createdAt);
       shouldDelete = Number.isFinite(createdAtMs) && nowMs - createdAtMs >= transientMaxAgeMs;
@@ -853,20 +860,32 @@ async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
   agentId?: string,
-) {
+): Promise<SessionManagedOutgoingAttachmentIndexRead> {
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
-    return cache.get(cacheKey) ?? null;
+    return { kind: "available", index: cache.get(cacheKey) ?? null };
   }
-  const { storePath, entry } = loadSessionEntryReadOnly(
-    sessionKey,
-    sessionKey === "global" && agentId ? { agentId } : undefined,
-  );
+  const sessionOptions = sessionKey === "global" && agentId ? { agentId } : undefined;
+  const loaded = loadSessionEntryReadOnly(sessionKey, sessionOptions);
+  let entry = loaded.entry;
+  if (!entry) {
+    const exact = loadExactSessionEntryReadOnlyResult({
+      ...(sessionOptions?.agentId ? { agentId: sessionOptions.agentId } : {}),
+      clone: false,
+      sessionKey,
+      storePath: loaded.storePath,
+    });
+    if (!exact.found && exact.reason !== "database-missing") {
+      return { kind: "unavailable", reason: exact.reason };
+    }
+    entry = exact.found ? exact.value?.entry : undefined;
+  }
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     cache?.set(cacheKey, null);
-    return null;
+    return { kind: "available", index: null };
   }
+  const storePath = loaded.storePath;
 
   let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
   // This path is only a cache/reset-archive hint. Canonical active messages are
@@ -892,7 +911,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       );
       if (cachedIndex) {
         cache?.set(cacheKey, cachedIndex);
-        return cachedIndex;
+        return { kind: "available", index: cachedIndex };
       }
     } catch {
       sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
@@ -958,30 +977,35 @@ async function getSessionManagedOutgoingAttachmentIndex(
     setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
   }
   cache?.set(cacheKey, index);
-  return index;
+  return { kind: "available", index };
 }
 
 async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-) {
+): Promise<ManagedOutgoingTranscriptMatch> {
   if (!record.messageId) {
-    return false;
+    return "missing";
   }
-  const index = await getSessionManagedOutgoingAttachmentIndex(
+  const read = await getSessionManagedOutgoingAttachmentIndex(
     record.sessionKey,
     cache,
     record.agentId,
   );
-  return (
-    index?.has(buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId)) ?? false
-  );
+  if (read.kind === "unavailable") {
+    return "unavailable";
+  }
+  return read.index?.has(
+    buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId),
+  )
+    ? "match"
+    : "missing";
 }
 
 async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   record: ManagedImageRecord,
 ): Promise<ManagedOutgoingMediaArtifactDownload | null> {
-  if (!(await recordMatchesTranscriptMessage(record))) {
+  if ((await recordMatchesTranscriptMessage(record)) !== "match") {
     return null;
   }
   const kind = resolveManagedRecordKind(record);
@@ -1444,7 +1468,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  if (!(await recordMatchesTranscriptMessage(record))) {
+  if ((await recordMatchesTranscriptMessage(record)) !== "match") {
     sendStatus(res, 404, "not found");
     return true;
   }

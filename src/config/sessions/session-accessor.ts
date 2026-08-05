@@ -133,6 +133,7 @@ export {
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
   loadExactSessionEntryReadOnly,
+  loadExactSessionEntryReadOnlyResult,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,

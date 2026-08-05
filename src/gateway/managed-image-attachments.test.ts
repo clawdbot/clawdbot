@@ -13,7 +13,12 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -1852,6 +1857,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -1972,6 +1978,25 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
     await expect(fs.access(orphanPath)).resolves.toBeUndefined();
+  });
+
+  it("retains history records when the session table is unavailable", async () => {
+    const fixture = await createFixture(stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec("DROP TABLE session_nodes;");
+    database.close();
+    loadSessionEntryMock.mockReturnValue({ storePath: databasePath, entry: undefined });
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   it("retains committed records that are still referenced by a full-image block", async () => {
