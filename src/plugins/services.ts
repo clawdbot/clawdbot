@@ -5,6 +5,7 @@ import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
@@ -171,16 +172,18 @@ export async function startPluginServices(params: {
 }): Promise<PluginServicesHandle> {
   const running: Array<{
     id: string;
+    diagnosticsExporter: boolean;
     stop?: () => void | Promise<void>;
     revokeGatewayEvents: () => void;
   }> = [];
-  const stopService = async (entry: (typeof running)[number]) => {
+  const stopService = async (entry: (typeof running)[number], failures?: unknown[]) => {
     try {
       if (entry.stop) {
         await withPluginHttpRouteRegistry(params.registry, () => entry.stop?.());
       }
     } catch (err) {
       log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
+      failures?.push(err);
     } finally {
       entry.revokeGatewayEvents();
     }
@@ -202,6 +205,7 @@ export async function startPluginServices(params: {
     });
     const runningService = {
       id: service.id,
+      diagnosticsExporter: serviceContext.internalDiagnostics !== undefined,
       stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
       revokeGatewayEvents: scopedGatewayEvents.revoke,
     };
@@ -235,8 +239,30 @@ export async function startPluginServices(params: {
     stop: () =>
       // Store the shared promise before plugin cleanup runs so shutdown cannot start twice.
       (stopPromise ??= Promise.resolve().then(async () => {
-        for (const entry of running.toReversed()) {
-          await stopService(entry);
+        const reversed = running.toReversed();
+        const diagnosticsExporters = reversed.filter((entry) => entry.diagnosticsExporter);
+        const exporterFailures: unknown[] = [];
+        const stopServices = async (services: typeof reversed, failures?: unknown[]) => {
+          for (const entry of services) {
+            await stopService(entry, failures);
+          }
+        };
+        await stopServices(reversed.filter((entry) => !entry.diagnosticsExporter));
+        if (diagnosticsExporters.length > 0) {
+          // Producers stop first; this barrier preserves their queued tail before exporters detach.
+          await waitForDiagnosticEventsDrained();
+        }
+        // Ordinary plugin cleanup stays warn-and-continue. Trusted diagnostics
+        // exporter failures propagate because they can mean telemetry was lost.
+        await stopServices(diagnosticsExporters, exporterFailures);
+        if (exporterFailures.length === 1) {
+          throw exporterFailures[0];
+        }
+        if (exporterFailures.length > 1) {
+          throw new AggregateError(
+            exporterFailures,
+            "multiple diagnostics exporters failed to stop",
+          );
         }
       })),
   };

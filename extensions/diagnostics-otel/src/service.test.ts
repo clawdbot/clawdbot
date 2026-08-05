@@ -1027,6 +1027,27 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
   });
 
+  test("attempts every provider shutdown and reports every failure", async () => {
+    const logError = new Error("log provider failed");
+    const sdkError = new Error("SDK providers failed");
+    logShutdown.mockRejectedValueOnce(logError);
+    sdkShutdown.mockRejectedValueOnce(sdkError);
+    const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
+
+    const stopError = await Promise.resolve(service.stop?.(ctx)).catch((error: unknown) => error);
+
+    expect(logShutdown).toHaveBeenCalledTimes(1);
+    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+    expect(stopError).toBeInstanceOf(AggregateError);
+    expect(stopError).toMatchObject({
+      errors: [logError, sdkError],
+      message: expect.stringContaining("log provider failed"),
+    });
+    expect(stopError).toMatchObject({
+      message: expect.stringContaining("SDK providers failed"),
+    });
+  });
+
   test("registers and removes an OTLP exporter unhandled rejection handler", async () => {
     const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
 
@@ -1056,6 +1077,38 @@ describe("diagnostics-otel service", () => {
 
     await service.stop?.(ctx);
     expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
+  });
+
+  test("cleans up existing providers and does not reinitialize without capability", async () => {
+    const service = createDiagnosticsOtelService();
+    const enabledCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(enabledCtx);
+
+    sdkCtor.mockClear();
+    sdkStart.mockClear();
+    logExporterCtor.mockClear();
+    const deniedCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    delete deniedCtx.internalDiagnostics;
+
+    await service.start(deniedCtx);
+    await service.stop?.(deniedCtx);
+
+    expect(deniedCtx.logger.error).toHaveBeenCalledWith(
+      "diagnostics-otel: internal diagnostics capability unavailable",
+    );
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(sdkStart).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(sdkShutdown).toHaveBeenCalledOnce();
+    expect(logShutdown).toHaveBeenCalledOnce();
   });
 
   test("does not retain an OTLP exporter handler when startup setup fails", async () => {
