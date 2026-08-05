@@ -53,6 +53,12 @@ export type ReplyBackendQueueMessageOptions = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
+export type ReplyBackendQueueMessageResult = {
+  /** Acceptance was irreversible, but the harness could not prove transcript commitment. */
+  transcriptCommit: "unconfirmed";
+  errorMessage: string;
+};
+
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -63,7 +69,10 @@ export type ReplyBackendHandle = {
   isStreaming(): boolean;
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
-  queueMessage?: (text: string, options?: ReplyBackendQueueMessageOptions) => Promise<void>;
+  queueMessage?: (
+    text: string,
+    options?: ReplyBackendQueueMessageOptions,
+  ) => Promise<void | ReplyBackendQueueMessageResult>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.

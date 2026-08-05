@@ -48,7 +48,7 @@ export function registerCopilotActiveRun(params: {
             : undefined,
         }))
       ) {
-        return;
+        return undefined;
       }
       if (params.isSettled() || params.isAborted()) {
         throw new Error("Copilot steering is unavailable after the active run ended");
@@ -58,11 +58,22 @@ export function registerCopilotActiveRun(params: {
       }
       const messageId = await params.session.send({ prompt: text });
       if (options?.waitForTranscriptCommit === true) {
-        await waitForPersistenceReceipt(
-          params.transcriptJournal.waitForSdkUserPersisted(messageId),
-          options.deliveryTimeoutMs,
-        );
+        try {
+          await waitForPersistenceReceipt(
+            params.transcriptJournal.waitForSdkUserPersisted(messageId),
+            options.deliveryTimeoutMs,
+          );
+        } catch (error) {
+          return {
+            transcriptCommit: "unconfirmed" as const,
+            errorMessage:
+              error instanceof Error
+                ? error.message
+                : "Copilot accepted steering but its transcript receipt was not confirmed",
+          };
+        }
       }
+      return undefined;
     },
     isStreaming: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
     isAborted: params.isAborted,

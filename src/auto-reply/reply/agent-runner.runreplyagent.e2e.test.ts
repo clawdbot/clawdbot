@@ -751,6 +751,46 @@ describe("runReplyAgent active steering", () => {
     expect(onAdopted).not.toHaveBeenCalled();
   });
 
+  it("adopts but never replays steering accepted without transcript confirmation", async () => {
+    const cancel = vi.fn();
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    active.setPhase("running");
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
+      queued: true,
+      sessionId: "session",
+      target: "embedded_run",
+      gatewayHealth: "live",
+      transcriptCommit: "unconfirmed",
+      errorMessage: "receipt unavailable",
+    });
+    const onAdopted = vi.fn();
+    const { run, typing } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("admits an ordinary rejected steering turn with durable recovery state", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

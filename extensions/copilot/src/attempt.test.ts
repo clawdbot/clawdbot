@@ -2160,7 +2160,10 @@ describe("runCopilotAttempt", () => {
 
       await expect(
         handle.queueMessage("waited suppressed steer", { waitForTranscriptCommit: true }),
-      ).rejects.toThrow("steering user write was suppressed");
+      ).resolves.toEqual({
+        transcriptCommit: "unconfirmed",
+        errorMessage: "Copilot steering user write was suppressed",
+      });
 
       initialTurn.resolve(makeAssistantMessageEvent("done"));
       await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
