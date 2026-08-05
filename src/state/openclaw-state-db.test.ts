@@ -189,7 +189,6 @@ function seedLegacySessionWatchCursorSchema(stateDir: string): {
   replacementWatcherSessionKey: string;
   watcherSessionKey: string;
 } {
-  const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
   const databasePath = materializeCurrentStateDatabase(stateDir);
 
   const watcherSessionKey = "agent:main:main";
