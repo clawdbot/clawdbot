@@ -201,7 +201,9 @@ export async function admitChatSend(params: {
     // The lifecycle admission keeps branch identity fixed after this check; if
     // the owner clears, acceptance-aware dispatch preserves this turn as follow-up.
     const hasActiveSteeringOwner =
-      p.queueMode === "steer" && replyRunRegistry.isStreaming(activeRunScopeKey);
+      p.queueMode === "steer" &&
+      expectedLeafEntryId !== undefined &&
+      replyRunRegistry.isStreamingFromOriginatingLeaf(activeRunScopeKey, expectedLeafEntryId);
     if (commitOutcome && expectedLeafEntryId !== undefined && !hasActiveSteeringOwner) {
       // Runtime session identity resolves through the canonical SQLite accessor;
       // legacy/reset-archive files are read-only history fallbacks, never send targets.

@@ -206,6 +206,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       kind: replyTurnKind,
       resetTriggered: false,
       routeThreadId: params.routeThreadId,
+      originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
@@ -253,6 +254,8 @@ export function createDispatchReplyOperationCoordinator(params: {
           kind: replyTurnKind,
           resetTriggered: false,
           routeThreadId: params.routeThreadId,
+          originatingLeafEntryId:
+            params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,

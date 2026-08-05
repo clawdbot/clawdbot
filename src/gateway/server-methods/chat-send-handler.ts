@@ -93,6 +93,7 @@ export async function handleChatSend(
     backingSessionId,
     agentId,
     activeRunScopeKey,
+    expectedLeafEntryId,
     resolvedSessionModel,
     now,
   } = preparedSession.value;
@@ -414,6 +415,9 @@ export async function handleChatSend(
                 turnAdoptionLifecycle: {
                   // Gateway cancel identity only — share collect key via ownerKey.
                   admission: "cancel-only",
+                  ...(expectedLeafEntryId !== undefined
+                    ? { originatingLeafEntryId: expectedLeafEntryId }
+                    : {}),
                   ownerKey: queuedFollowupOwnerKey,
                   onAdopted: async () => {},
                   onDeferred: () => {

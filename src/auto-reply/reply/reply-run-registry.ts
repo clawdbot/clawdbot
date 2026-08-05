@@ -146,6 +146,8 @@ export type ReplyOperation = {
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
   readonly routeThreadId?: string | number;
+  /** Transcript branch leaf from which this operation was admitted. */
+  readonly originatingLeafEntryId?: string | null;
   readonly abortSignal: AbortSignal;
   readonly resetTriggered: boolean;
   /**
@@ -232,11 +234,16 @@ type ReplyRunRegistry = {
     sessionId: string;
     resetTriggered: boolean;
     routeThreadId?: string | number;
+    originatingLeafEntryId?: string | null;
     upstreamAbortSignal?: AbortSignal;
   }): ReplyOperation;
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
   isStreaming(sessionKey: string): boolean;
+  isStreamingFromOriginatingLeaf(
+    sessionKey: string,
+    originatingLeafEntryId: string | null,
+  ): boolean;
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,
@@ -568,6 +575,7 @@ export function createReplyOperation(params: {
   sessionId: string;
   resetTriggered: boolean;
   routeThreadId?: string | number;
+  originatingLeafEntryId?: string | null;
   upstreamAbortSignal?: AbortSignal;
   respectFollowupAdmissionBarrier?: boolean;
 }): ReplyOperation {
@@ -701,6 +709,9 @@ export function createReplyOperation(params: {
     lifecycleGeneration,
     get routeThreadId() {
       return params.routeThreadId;
+    },
+    get originatingLeafEntryId() {
+      return params.originatingLeafEntryId;
     },
     get abortSignal() {
       return controller.signal;
@@ -1161,6 +1172,17 @@ export const replyRunRegistry: ReplyRunRegistry = {
   isStreaming(sessionKey) {
     const operation = this.get(sessionKey);
     if (!operation || operation.phase !== "running") {
+      return false;
+    }
+    return getAttachedBackend(operation)?.isStreaming() ?? false;
+  },
+  isStreamingFromOriginatingLeaf(sessionKey, originatingLeafEntryId) {
+    const operation = this.get(sessionKey);
+    if (
+      !operation ||
+      operation.phase !== "running" ||
+      operation.originatingLeafEntryId !== originatingLeafEntryId
+    ) {
       return false;
     }
     return getAttachedBackend(operation)?.isStreaming() ?? false;

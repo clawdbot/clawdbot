@@ -111,6 +111,7 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   lastDispatchThinkingLevelOverride: undefined as string | undefined,
+  lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
   lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
@@ -319,12 +320,17 @@ dispatchInboundMessageMock.mockImplementation(
         imageOrder?: string[];
         thinkingLevelOverride?: string;
         taskSuggestionDeliveryMode?: "gateway";
+        turnAdoptionLifecycle?: {
+          originatingLeafEntryId?: string | null;
+        };
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
       mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+      mockState.lastDispatchOriginatingLeafEntryId =
+        params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
       mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
@@ -1220,6 +1226,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
     mockState.lastDispatchThinkingLevelOverride = undefined;
+    mockState.lastDispatchOriginatingLeafEntryId = undefined;
     mockState.lastTaskSuggestionDeliveryMode = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
@@ -1294,6 +1301,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.any(Object),
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
+    expect(mockState.lastDispatchOriginatingLeafEntryId).toBeNull();
   });
 
   it.each([
@@ -1363,6 +1371,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       sessionKey: "main",
       sessionId: mockState.sessionId,
       resetTriggered: false,
+      originatingLeafEntryId: "leaf-before-active-run-output",
     });
     operation.setPhase("running");
     operation.attachBackend({
@@ -1391,6 +1400,51 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.any(Object),
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
+    expect(mockState.lastDispatchOriginatingLeafEntryId).toBe("leaf-before-active-run-output");
+  });
+
+  it("rejects a stale explicit steer when a different leaf owns the active run", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-different-owner-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working elsewhere" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "different-branch-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      isStreaming: () => true,
+      queueMessage: async () => {},
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-different-owner",
+        requestParams: {
+          expectedLeafEntryId: "stale-pane-leaf",
+          queueMode: "steer",
+        },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
   });
 
   it("broadcasts session metadata changes reported by chat command dispatch", async () => {

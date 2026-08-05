@@ -516,6 +516,7 @@ export async function runReplyAgent(
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,
+      originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: opts?.abortSignal,
       onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });
