@@ -137,6 +137,62 @@ describe("resolveCompactionContextTokenBudget", () => {
       }),
     ).toBe(128_000);
   });
+
+  it("uses the selected agent cap when gateway compaction supplies no caller budget", () => {
+    expect(
+      resolveCompactionContextTokenBudget({
+        config: {
+          agents: {
+            defaults: {
+              contextTokens: 128_000,
+            },
+            list: [
+              {
+                id: "specialist",
+                contextTokens: 500_000,
+              },
+            ],
+          },
+        } as unknown as OpenClawConfig,
+        agentId: "specialist",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          contextWindow: 1_000_000,
+        } as never,
+      }),
+    ).toBe(500_000);
+  });
+
+  it("clamps selected agent caps to the compaction model limit without a caller budget", () => {
+    expect(
+      resolveCompactionContextTokenBudget({
+        config: {
+          agents: {
+            defaults: {
+              contextTokens: 128_000,
+            },
+            list: [
+              {
+                id: "specialist",
+                contextTokens: 2_000_000,
+              },
+            ],
+          },
+        } as unknown as OpenClawConfig,
+        agentId: "specialist",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          contextWindow: 1_000_000,
+        } as never,
+      }),
+    ).toBe(1_000_000);
+  });
 });
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {

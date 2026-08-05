@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
@@ -304,6 +305,7 @@ export function resolveCompactionHarnessRuntime(params: {
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionContextTokenBudget(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
@@ -312,6 +314,11 @@ export function resolveCompactionContextTokenBudget(params: {
 }) {
   const requestedTokenBudget = normalizeContextTokenBudget(params.requestedTokenBudget);
   const fallbackTokenBudget = normalizeContextTokenBudget(params.fallbackTokenBudget);
+  const configuredAgentTokenBudget = normalizeContextTokenBudget(
+    params.config && params.agentId
+      ? resolveAgentConfig(params.config, params.agentId)?.contextTokens
+      : undefined,
+  );
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -320,7 +327,7 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: readAgentModelContextTokens(params.model),
         modelContextWindow: params.model?.contextWindow,
-        agentContextTokens: requestedTokenBudget,
+        agentContextTokens: requestedTokenBudget ?? configuredAgentTokenBudget,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
