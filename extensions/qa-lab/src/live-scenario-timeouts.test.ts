@@ -329,6 +329,40 @@ function runCompletionPolicyFlow(
   };
 }
 
+describe("live transport scenario timeouts", () => {
+  it("uses the model-aware timeout for the Telegram compact tools reply", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("telegram-tools-compact-command"));
+    const waitForReply = scenario.execution.flow?.steps
+      .flatMap((step) => step.actions)
+      .find(
+        (action) => typeof action === "object" && action !== null && "waitForOutbound" in action,
+      );
+
+    expect(waitForReply).toMatchObject({
+      waitForOutbound: {
+        timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" },
+      },
+    });
+    expect(waitForReply).not.toHaveProperty("waitForOutbound.textIncludes");
+  });
+
+  it("reports the unexpected Telegram compact tools reply", async () => {
+    await expect(
+      runLoadedScenarioFlow("telegram-tools-compact-command", {
+        onWaitForOutboundMessage: ({ state }) => {
+          state.addOutboundMessage({
+            accountId: "qa-channel",
+            to: "channel:telegram-command-room",
+            text: "Couldn't load available tools right now. Try again in a moment.",
+          });
+        },
+      }),
+    ).rejects.toThrow(
+      "tools reply missing expected text: Couldn't load available tools right now. Try again in a moment.",
+    );
+  });
+});
+
 describe("live subagent scenario timeouts", () => {
   it.each([
     {

@@ -16,7 +16,9 @@ import { applyPatch } from "./apply-patch.test-support.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
+  // realpath: production sandbox checks compare against canonical paths; on macOS
+  // os.tmpdir() is a /var -> /private/var symlink, which otherwise trips the guard.
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-")));
   try {
     return await fn(dir);
   } finally {

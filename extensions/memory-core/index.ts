@@ -1,8 +1,8 @@
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
+  listAgentIds,
   resolveMemorySearchConfig,
   resolveSessionAgentIds,
   type MemoryPluginRuntime,

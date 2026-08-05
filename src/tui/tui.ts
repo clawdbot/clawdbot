@@ -1,9 +1,6 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
   Container,
@@ -17,6 +14,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
@@ -44,6 +42,7 @@ import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import { filterTuiExecArgv } from "./tui-exec-argv.js";
 import {
   formatTuiErrorMessage,
   formatTuiFooter,
@@ -84,13 +83,6 @@ export {
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui-submit.js";
-
-const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", import.meta.url));
-const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
-  new URL("../../scripts/run-node.mjs", import.meta.url),
-);
-const DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
-const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import.meta.url));
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
@@ -133,27 +125,6 @@ export async function resolveCodexCliBin(): Promise<string | null> {
   }
 }
 
-export function resolveLocalAuthCliInvocation(params?: {
-  execPath?: string;
-  wrapperPath?: string;
-  runNodePath?: string;
-  hasDistEntry?: boolean;
-  hasRunNodeScript?: boolean;
-}): { command: string; args: string[] } {
-  const hasDistEntry =
-    params?.hasDistEntry ?? (existsSync(DIST_ENTRY_JS_PATH) || existsSync(DIST_ENTRY_MJS_PATH));
-  const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
-  const command = params?.execPath ?? process.execPath;
-  const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;
-  const runNodePath = params?.runNodePath ?? OPENCLAW_RUN_NODE_SCRIPT_PATH;
-
-  // Prefer the packaged wrapper when build output exists, but keep source-tree
-  // auth working in unbuilt checkouts that only have scripts/run-node.mjs.
-  return hasDistEntry || !hasRunNodeScript
-    ? { command, args: [wrapperPath, "models", "auth", "login"] }
-    : { command, args: [runNodePath, "models", "auth", "login"] };
-}
-
 export function resolveLocalAuthSpawnInvocation(params: {
   command: string;
   args: string[];
@@ -174,21 +145,17 @@ export function resolveLocalAuthSpawnInvocation(params: {
   };
 }
 
-export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
-  const defaultCwd =
-    params.defaultCwd ?? tryProcessCwd() ?? path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
-  const entryArg = params.args[0]?.trim();
-  if (!entryArg) {
-    return defaultCwd;
-  }
-  const entryBase = path.basename(entryArg).toLowerCase();
-  if (entryBase === "openclaw.mjs") {
-    return path.dirname(entryArg);
-  }
-  if (entryBase === "run-node.mjs") {
-    return path.dirname(path.dirname(entryArg));
-  }
-  return defaultCwd;
+export function resolveTuiLocalAuthCliInvocation(params: {
+  provider?: string;
+  execArgv?: readonly string[];
+}) {
+  const provider = params.provider?.trim();
+  return resolveCurrentOpenClawCliInvocation(
+    ["models", "auth", "login", ...(provider ? ["--provider", provider] : [])],
+    {
+      execArgv: filterTuiExecArgv(params.execArgv ?? process.execArgv),
+    },
+  );
 }
 
 export function resolveTuiSessionKey(params: {
@@ -606,8 +573,8 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
-  const fallbackCwd = path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
-  const resolveUsableCwd = () => tryProcessCwd() ?? fallbackCwd;
+  const cliInvocation = resolveCurrentOpenClawCliInvocation([]);
+  const resolveUsableCwd = () => tryProcessCwd() ?? cliInvocation.cwd;
   const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
   const initialSessionInput = (opts.session ?? "").trim();
   const sessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
@@ -1198,19 +1165,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
             (resolve, reject) => {
               let command: string;
               let args: string[];
+              let cwd: string;
               if (codexBin) {
                 command = codexBin;
                 args = ["login"];
+                cwd = resolveUsableCwd();
               } else {
-                ({ command, args } = resolveLocalAuthCliInvocation());
-                if (provider) {
-                  args.push("--provider", provider);
-                }
+                const invocation = resolveTuiLocalAuthCliInvocation({ provider });
+                ({ command, args, cwd } = invocation);
               }
 
               const invocation = resolveLocalAuthSpawnInvocation({ command, args });
               const child = spawn(invocation.command, invocation.args, {
-                cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
+                cwd,
                 env: process.env,
                 stdio: "inherit",
                 ...invocation.options,

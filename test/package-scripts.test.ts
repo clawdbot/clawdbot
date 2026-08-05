@@ -245,6 +245,13 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs SQLite transcript archive worker coverage in Windows CI", () => {
+    const windowsCi = readPackageJson().scripts["test:windows:ci"];
+    expect(windowsCi).toContain(
+      "src/config/sessions/session-accessor.sqlite-archive.worker.test.ts",
+    );
+  });
+
   it("runs cross-OS installer behavior coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/openclaw-cross-os-installer.windows.test.ts",
