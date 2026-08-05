@@ -395,7 +395,7 @@ describe("context-window-guard", () => {
     ).toContain("This looks like a local model endpoint.");
   });
 
-  it("points config-backed block remediation at agents.defaults.contextTokens", () => {
+  it("uses neutral remediation for an agent context cap", () => {
     const guard = evaluateContextWindowGuard({
       info: { tokens: 8_000, source: "agentContextTokens" },
     });
@@ -405,8 +405,26 @@ describe("context-window-guard", () => {
       runtimeBaseUrl: "http://127.0.0.1:11434/v1",
     });
 
-    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    expect(message).toContain("OpenClaw is capped by an agent contextTokens setting.");
+    expect(message).toContain("Raise that setting.");
+    expect(message).not.toContain("agents.defaults.contextTokens");
     expect(message).not.toContain("choose a larger model");
+  });
+
+  it("uses neutral remediation for an agent context cap in warnings", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 6_000, source: "agentContextTokens" },
+    });
+
+    const message = formatContextWindowWarningMessage({
+      provider: "lmstudio",
+      modelId: "qwen3",
+      guard,
+      runtimeBaseUrl: "http://127.0.0.1:1234/v1",
+    });
+
+    expect(message).toContain("OpenClaw is capped by an agent contextTokens setting");
+    expect(message).not.toContain("agents.defaults.contextTokens");
   });
 
   it("points model config block remediation at contextWindow/contextTokens", () => {
