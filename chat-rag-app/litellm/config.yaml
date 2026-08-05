@@ -1,0 +1,31 @@
+# =============================================================================
+# LiteLLM Proxy Config
+# =============================================================================
+# This is the marketplace pattern: the app calls "llama3.2" and never knows
+# (or cares) which real provider serves it. Fase 4 adds more entries here
+# (OpenAI, Anthropic) — the app code does not change, only this file.
+# =============================================================================
+
+model_list:
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+
+  # --- Fase 4: uncomment and add API keys via env vars ---
+  # - model_name: gpt-4o
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_key: os.environ/OPENAI_API_KEY
+  #
+  # - model_name: claude-sonnet
+  #   litellm_params:
+  #     model: anthropic/claude-3-5-sonnet-20241022
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

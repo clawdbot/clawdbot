@@ -1,0 +1,147 @@
+version: "3.9"
+
+networks:
+  chatnet:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  opensearch_data:
+  ollama_data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — chat history / users
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatrag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chatrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatrag}
+      POSTGRES_DB: ${POSTGRES_DB:-chatrag}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chatrag}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - chatnet
+
+  # ---------------------------------------------------------------------------
+  # OpenSearch — vector store (used starting Fase 3). Single-node, no
+  # ML Commons remote inference needed: embeddings are computed in the
+  # backend via sentence-transformers and sent as raw vectors.
+  # ---------------------------------------------------------------------------
+  opensearch:
+    image: opensearchproject/opensearch:2.17.0
+    container_name: chatrag-opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - bootstrap.memory_lock=false
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - chatnet
+
+  # ---------------------------------------------------------------------------
+  # Ollama — local LLM runtime (no API keys needed)
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: chatrag-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - chatnet
+
+  # ---------------------------------------------------------------------------
+  # LiteLLM — proxy that abstracts LLM providers behind one OpenAI-compatible
+  # API. Today only Ollama is configured; Fase 4 adds OpenAI/Anthropic here.
+  # ---------------------------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: chatrag-litellm
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-local-dev-key}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    depends_on:
+      - ollama
+    networks:
+      - chatnet
+
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+    container_name: chatrag-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-chatrag}:${POSTGRES_PASSWORD:-chatrag}@postgres:5432/${POSTGRES_DB:-chatrag}
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      OPENSEARCH_URL: http://opensearch:9200
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-llama3.2}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    networks:
+      - chatnet
+    volumes:
+      - ./backend/app:/app/app
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js chat UI
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+    container_name: chatrag-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - chatnet

@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0
+httpx==0.28.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+sentence-transformers==3.3.1
+opensearch-py==2.8.0
+sse-starlette==2.2.1
