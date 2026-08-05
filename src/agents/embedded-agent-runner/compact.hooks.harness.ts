@@ -32,22 +32,27 @@ type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
 
-export const contextEngineCompactMock = vi.fn(async () => ({
-  ok: true as boolean,
-  compacted: true as boolean,
-  reason: undefined as string | undefined,
-  failure: undefined as
-    | {
-        reason?: string;
-        status?: number;
-        code?: string;
-        rawError?: string;
-      }
-    | undefined,
-  result: { summary: "engine-summary", tokensAfter: 50 } as
-    | { summary: string; tokensAfter: number }
-    | undefined,
-}));
+type MockCompactionResult = {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+    rawError?: string;
+  };
+  result?: { summary: string; tokensAfter: number };
+};
+
+export const contextEngineCompactMock = vi.fn(
+  async (): Promise<MockCompactionResult> => ({
+    ok: true,
+    compacted: true,
+    reason: undefined,
+    result: { summary: "engine-summary", tokensAfter: 50 },
+  }),
+);
 
 export const hookRunner = {
   hasHooks: vi.fn<(hookName?: string) => boolean>(),
