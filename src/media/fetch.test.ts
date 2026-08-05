@@ -1645,5 +1645,68 @@ describe("readRemoteMediaBuffer", () => {
     ).rejects.toThrow("exceeds maxBytes");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("retries saveRemoteMedia against the original file when Wikimedia rejects a thumbnail width", async () => {
+    const thumbUrl =
+      "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
+    const originalUrl =
+      "https://upload.wikimedia.org/wikipedia/commons/e/e7/007_American_Pit_Bull_Terrier.jpg";
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("Use thumbnail sizes listed on https://w.wiki/GHai", {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+      );
+
+    const saved = await saveRemoteMedia({
+      url: thumbUrl,
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(thumbUrl);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(originalUrl);
+    expect(saved.contentType).toBe("image/jpeg");
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3]));
+  });
+
+  it("does not retry a non-Wikimedia 400, and does not retry a non-thumbnail-size Wikimedia 400", async () => {
+    const plainFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Bad Request", { status: 400 }));
+
+    await expect(
+      saveRemoteMedia({
+        url: "https://example.com/image.jpg",
+        fetchImpl: plainFetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ code: "http_error", status: 400 });
+    expect(plainFetchImpl).toHaveBeenCalledTimes(1);
+
+    const otherWikimediaErrorFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("File not found", { status: 400 }));
+
+    await expect(
+      saveRemoteMedia({
+        url: "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/missing.jpg/800px-missing.jpg",
+        fetchImpl: otherWikimediaErrorFetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ code: "http_error", status: 400 });
+    expect(otherWikimediaErrorFetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

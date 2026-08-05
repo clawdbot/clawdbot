@@ -673,9 +673,57 @@ export async function saveResponseMedia(
   });
 }
 
+/**
+ * Rewrites a Wikimedia thumbnail URL to the original (non-thumbnail) file
+ * URL, which Wikimedia always serves regardless of pre-rendered thumbnail
+ * width. Returns undefined if the URL isn't a Wikimedia thumbnail URL.
+ */
+function resolveWikimediaOriginalUrl(url: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (!parsed.hostname.endsWith("wikimedia.org")) {
+    return undefined;
+  }
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts.length < 5 || parts[0] !== "wikipedia" || parts[2] !== "thumb") {
+    return undefined;
+  }
+  const rest = parts.slice(0, 2).concat(parts.slice(3, -1));
+  return `${parsed.origin}/${rest.join("/")}`;
+}
+
+/**
+ * True when a media-fetch error is Wikimedia rejecting a thumbnail width
+ * that isn't in its pre-rendered whitelist for that file (HTTP 400 with a
+ * "Use thumbnail sizes listed on ..." body) — the one case the
+ * original-file fallback can actually fix.
+ */
+function isWikimediaThumbSizeError(err: unknown): err is MediaFetchError {
+  if (!(err instanceof MediaFetchError) || err.status !== 400) {
+    return false;
+  }
+  return err.message.toLowerCase().includes("thumbnail sizes");
+}
+
 /** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
+  try {
+    return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
+  } catch (err) {
+    const fallbackUrl = isWikimediaThumbSizeError(err)
+      ? resolveWikimediaOriginalUrl(options.url)
+      : undefined;
+    if (!fallbackUrl) {
+      throw err;
+    }
+    return await withMediaFetchRetry(options, () =>
+      saveRemoteMediaOnce({ ...options, url: fallbackUrl }),
+    );
+  }
 }
 
 async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
