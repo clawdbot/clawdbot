@@ -4590,6 +4590,37 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
   });
 
+  it("preserves the session agent for queued sandbox budget resolution", async () => {
+    resolveSessionAgentIdsMock.mockReturnValue({
+      defaultAgentId: "main",
+      sessionAgentId: "work",
+    });
+
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        agentId: "work",
+        config: {
+          agents: {
+            defaults: { contextTokens: 128_000 },
+            list: [{ id: "work", contextTokens: 200_000 }],
+          },
+        },
+        sandboxSessionKey: "agent:work:telegram:default:direct:12345",
+        sessionKey: "agent:work:main",
+        sessionTarget: {
+          agentId: "work",
+          sessionId: TEST_SESSION_ID,
+          sessionKey: "agent:work:main",
+          storePath: "/tmp/work-sessions.json",
+        },
+      }),
+    );
+
+    expect(resolveContextWindowInfoMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentContextTokens: 200_000 }),
+    );
+  });
+
   it("keeps a delegated result that echoes the current transcript on the active transcript", async () => {
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,

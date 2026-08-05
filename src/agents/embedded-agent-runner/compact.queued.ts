@@ -362,6 +362,7 @@ async function compactEmbeddedAgentSessionImpl(
         agentDir,
         resolvedWorkspaceDir,
         lease.snapshot,
+        agentIds.sessionAgentId,
         () => {
           disposeContextEngineOnExit = false;
         },
@@ -385,6 +386,7 @@ async function compactResolvedContextEngine(
   agentDir: string,
   resolvedWorkspaceDir: string,
   preparedModelRuntime: PreparedModelRuntimeSnapshot,
+  sessionAgentId: string,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
   const runtimeTarget = await resolveAgentRunSessionTarget(params);
@@ -526,7 +528,7 @@ async function compactResolvedContextEngine(
   }
   const contextTokenBudget = resolveCompactionContextTokenBudget({
     config: params.config,
-    agentId: runtimePolicyAgentId,
+    agentId: sessionAgentId,
     provider: ceContextConfigProvider,
     modelId: ceModelId,
     model: effectiveRuntimeModel,
