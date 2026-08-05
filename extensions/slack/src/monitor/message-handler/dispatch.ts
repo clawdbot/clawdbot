@@ -63,6 +63,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     statusReactions,
     statusReactionsEnabled,
     statusThreadTs,
+    suppressImplicitThreadFeedback,
     suppressRoomEventTyping,
     useStreaming,
   } = setup;
@@ -405,15 +406,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           : {}),
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
-        // Room events are observe-style turns; Slack status indicators imply an
-        // automatic visible reply and can auto-open assistant threads.
-        suppressTyping: suppressRoomEventTyping ? true : undefined,
+        // Observed room events and implicit thread follow-ups can finish silently;
+        // provider status would otherwise promise a reply that never arrives.
+        suppressTyping:
+          suppressRoomEventTyping || suppressImplicitThreadFeedback ? true : undefined,
         hasRepliedRef,
         disableBlockStreaming,
         onModelSelected,
-        suppressDefaultToolProgressMessages: progress.suppressDefaultToolProgressMessages
-          ? true
-          : undefined,
+        suppressDefaultToolProgressMessages:
+          suppressImplicitThreadFeedback || progress.suppressDefaultToolProgressMessages
+            ? true
+            : undefined,
         commentaryProgressEnabled: progress.commentaryProgressEnabled ? true : undefined,
         progressPreambleEnabled:
           progress.progressDraftActive && slackStreaming.mode === "progress" ? true : undefined,

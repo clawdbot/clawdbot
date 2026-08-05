@@ -107,6 +107,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
+  const suppressImplicitThreadFeedback = prepared.ctxPayload.MentionSource === "implicit_thread";
 
   // Shared context for the `message_sent` plugin hook emitted on each delivered
   // reply (both the `deliverReplies` paths and the native-streaming finalizer).
@@ -127,6 +128,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
+    !suppressImplicitThreadFeedback &&
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&
@@ -276,7 +278,8 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     (hookRunner?.hasHooks("message_sending") ?? false);
   // Portable previews and native progress cards exist before outbound modifiers accept the
   // payload. Native answer streaming stays enabled because it begins after both hook gates.
-  const allowPreHookProviderStreaming = !modifyingHooksRegistered;
+  const allowPreHookProviderStreaming =
+    !suppressImplicitThreadFeedback && !modifyingHooksRegistered;
   const previewStreamingEnabled =
     allowPreHookProviderStreaming &&
     !sourceRepliesAreToolOnly &&
@@ -335,6 +338,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     sourceReplyDeliveryMode,
     sourceRepliesAreToolOnly,
     suppressRoomEventTyping,
+    suppressImplicitThreadFeedback,
     messageSentHookTarget,
     messageSentHookContext,
     messageSentDeliveryHookContext,
