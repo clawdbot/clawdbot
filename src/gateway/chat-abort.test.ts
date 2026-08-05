@@ -790,23 +790,13 @@ describe("resolveInFlightRunSnapshot", () => {
     return result;
   };
 
-  it("returns the live assistant text of a matching active run", () => {
-    const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:tui-x")]]),
-      chatRunBuffers: new Map([["run-1", "partial answer so far"]]),
-      sessionKey: "agent:main:tui-x",
-    });
-    expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
-  });
-
-  it("returns the authoritative run start timestamp", () => {
-    const startedAtMs = 1_234;
+  it("returns live assistant text with the authoritative run start timestamp", () => {
     const result = resolveSnap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s", { startedAtMs })]]),
-      chatRunBuffers: new Map(),
-      sessionKey: "agent:main:s",
+      chatAbortControllers: new Map([["run-1", inFlightEntry("s", { startedAtMs: 1_234 })]]),
+      chatRunBuffers: new Map([["run-1", "partial answer so far"]]),
+      sessionKey: "s",
     });
-    expect(result?.startedAt).toBe(startedAtMs);
+    expect(result).toEqual({ runId: "run-1", text: "partial answer so far", startedAt: 1_234 });
   });
 
   it("returns the active run plan snapshot with buffered text", () => {
