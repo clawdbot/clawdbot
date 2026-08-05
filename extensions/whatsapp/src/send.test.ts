@@ -14,6 +14,7 @@ const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   controllerListeners: new Map<string, ActiveWebListener>(),
   transcodeAudioBufferToOpus: vi.fn(),
+  rememberWhatsAppOwnPollCreation: vi.fn(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
@@ -61,6 +62,15 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   return {
     ...actual,
     transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus,
+  };
+});
+
+vi.mock("./inbound/poll-votes.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./inbound/poll-votes.js")>("./inbound/poll-votes.js");
+  return {
+    ...actual,
+    rememberWhatsAppOwnPollCreation: hoisted.rememberWhatsAppOwnPollCreation,
   };
 });
 
@@ -775,6 +785,15 @@ describe("web outbound", () => {
       durationSeconds: undefined,
       durationHours: undefined,
     });
+    // Ownership is recorded from the accepted send itself — not only from
+    // later observing our own message echo on the inbound stream — so a
+    // vote arriving before (or without) that echo isn't silently dropped
+    // by the poll_vote_received hook's ownership gate.
+    expect(hoisted.rememberWhatsAppOwnPollCreation).toHaveBeenCalledWith(
+      "default",
+      "1555@s.whatsapp.net",
+      "poll123",
+    );
   });
 
   it("rejects polls without an accepted provider message key", async () => {

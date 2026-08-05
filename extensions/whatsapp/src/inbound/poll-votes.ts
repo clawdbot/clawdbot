@@ -218,6 +218,8 @@ const WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS = {
 function emitWhatsAppPollVoteReceivedHook(params: {
   accountId: string;
   vote: WhatsAppDecodedPollVote;
+  /** The vote-update message's own id — distinct per vote/retraction, unlike pollMessageId (shared by every vote on the same poll). */
+  voteUpdateId: string;
 }): void {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("poll_vote_received")) {
@@ -238,7 +240,10 @@ function emitWhatsAppPollVoteReceivedHook(params: {
           accountId: params.accountId,
           conversationId: params.vote.chatJid,
           senderId: params.vote.voter,
-          messageId: params.vote.pollMessageId,
+          // The vote-update id, not the poll creation id: every vote and
+          // retraction on the same poll must get a distinct hook message
+          // identity so consumers can correlate/dedupe individual events.
+          messageId: params.voteUpdateId,
         },
       ),
     "whatsapp: poll_vote_received plugin hook failed",
@@ -298,6 +303,13 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     selfJid: params.selfJid,
   });
   if (decoded) {
-    emitWhatsAppPollVoteReceivedHook({ accountId: params.accountId, vote: decoded });
+    emitWhatsAppPollVoteReceivedHook({
+      accountId: params.accountId,
+      vote: decoded,
+      // Falls back to the poll id in the (practically unseen) case a vote
+      // update key has no id of its own — still a valid identity, just not
+      // distinct per-vote.
+      voteUpdateId: voteUpdateId ?? decoded.pollMessageId,
+    });
   }
 }

@@ -137,8 +137,9 @@ describe("web monitor inbox poll vote hook", () => {
     });
     const baileysCache = createBaileysCacheSupport();
     const pollMessageId = "POLL-HAPPY-PATH";
+    const voteMessageId = "VOTE-HAPPY-PATH";
 
-    await emitPollAndVote({ baileysCache, pollMessageId, voteMessageId: "VOTE-HAPPY-PATH" });
+    await emitPollAndVote({ baileysCache, pollMessageId, voteMessageId });
     await waitForMessageCalls(runPollVoteReceivedMock, 1);
 
     expect(runPollVoteReceivedMock).toHaveBeenCalledWith(
@@ -154,7 +155,9 @@ describe("web monitor inbox poll vote hook", () => {
         accountId: "default",
         conversationId: CHAT_JID,
         senderId: VOTER_JID,
-        messageId: pollMessageId,
+        // The vote-update's own id, not the poll creation id — distinct
+        // per vote/retraction so consumers can correlate individual events.
+        messageId: voteMessageId,
       },
     );
   });
