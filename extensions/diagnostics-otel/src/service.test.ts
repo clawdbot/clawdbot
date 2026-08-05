@@ -1061,6 +1061,38 @@ describe("diagnostics-otel service", () => {
     });
   });
 
+  test("preserves SDK startup failure when rollback shutdown also fails", async () => {
+    const startupError = new Error("SDK startup failed");
+    const rollbackError = new Error("SDK rollback failed");
+    sdkStart.mockImplementationOnce(() => {
+      throw startupError;
+    });
+    sdkShutdown.mockRejectedValueOnce(rollbackError);
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+
+    const startError = await Promise.resolve(service.start(ctx)).catch((error: unknown) => error);
+
+    expect(startError).toBeInstanceOf(AggregateError);
+    expect(startError).toMatchObject({
+      message: "diagnostics-otel startup failed and rollback cleanup failed",
+      cause: startupError,
+      errors: [startupError, rollbackError],
+    });
+    expect(ctx.logger.error).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("diagnostics-otel: failed to start SDK: Error: SDK startup failed"),
+    );
+    expect(ctx.logger.error).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining(
+        "diagnostics-otel: SDK startup rollback cleanup failed: Error: SDK rollback failed",
+      ),
+    );
+    expect(sdkShutdown).toHaveBeenCalledOnce();
+    await expect(service.stop?.(ctx)).resolves.toBeUndefined();
+  });
+
   test("registers and removes an OTLP exporter unhandled rejection handler", async () => {
     const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
 

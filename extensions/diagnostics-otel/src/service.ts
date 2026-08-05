@@ -75,6 +75,14 @@ function resolveSignalProtocol(
   );
 }
 
+function createStartupRollbackError(startupError: unknown, cleanupError: unknown) {
+  return new AggregateError(
+    [startupError, cleanupError],
+    "diagnostics-otel startup failed and rollback cleanup failed",
+    { cause: startupError },
+  );
+}
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
   let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
@@ -329,8 +337,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               errorCategory: errorCategory(err),
             },
           );
-          await stopStarted();
           ctx.logger.error(`diagnostics-otel: failed to start SDK: ${formatError(err)}`);
+          try {
+            await stopStarted();
+          } catch (cleanupError) {
+            ctx.logger.error(
+              `diagnostics-otel: SDK startup rollback cleanup failed: ${formatError(cleanupError)}`,
+            );
+            throw createStartupRollbackError(err, cleanupError);
+          }
           throw err;
         }
       } else if (sdkPreloaded && (tracesEnabled || metricsEnabled)) {
