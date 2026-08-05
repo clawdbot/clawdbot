@@ -129,7 +129,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
     await this.sendInbound({
       ...message,
       text: `/${command}`,
-      nativeCommand: { name: command },
+      nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
     });
   }
   async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {

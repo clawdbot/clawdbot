@@ -4,10 +4,7 @@ import {
   normalizeQaTransportId,
 } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
-import {
-  resolveRequestedQaSuiteModels,
-  resolveSelectedQaSuiteModels,
-} from "./suite-model-selection.js";
+import { resolveRequestedQaSuiteModels } from "./suite-model-selection.js";
 import {
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
@@ -32,10 +29,13 @@ import {
 export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const requestedModels = resolveRequestedQaSuiteModels(params ?? {});
+  const catalog = readQaBootstrapScenarioCatalog();
+  const requestedModels = resolveRequestedQaSuiteModels({
+    ...params,
+    scenarios: catalog.scenarios,
+  });
   const transportId = normalizeQaTransportId(params?.transportId);
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
-  const catalog = readQaBootstrapScenarioCatalog();
   const channelDriver = params?.channelDriver ?? params?.channelDriverSelection?.channelDriver;
   const selectedScenarios = selectQaFlowSuiteScenarios({
     scenarios: catalog.scenarios,
@@ -51,13 +51,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       "QA suite selected no runnable scenarios; check the scenario catalog and provider, model, or channel filters.",
     );
   }
-  const { alternateModel, fastMode, primaryModel, providerMode } = resolveSelectedQaSuiteModels({
-    alternateModelExplicit: params?.alternateModel !== undefined,
-    fastMode: params?.fastMode,
-    primaryModelExplicit: params?.primaryModel !== undefined,
-    requested: requestedModels,
-    scenarios: selectedScenarios,
-  });
+  const { alternateModel, fastMode, primaryModel, providerMode } = requestedModels;
   if (
     params?.roundTripProbe &&
     !selectedScenarios.some((scenario) => scenario.id === params.roundTripProbe?.scenarioId)

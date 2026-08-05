@@ -299,6 +299,8 @@ jobs:
         id: run_profile
         env:
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
+          REQUESTED_REF: ${{ inputs.ref }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -311,15 +313,85 @@ jobs:
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$output_dir"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
+          timeout_supervisor_log="$(mktemp)"
+          timeout_supervisor_fifo="${timeout_supervisor_log}.fifo"
+          supervisor_tee_pid=""
+          cleanup_timeout_supervisor() {
+            if [[ -n "$supervisor_tee_pid" ]]; then
+              kill "$supervisor_tee_pid" 2>/dev/null || true
+              wait "$supervisor_tee_pid" 2>/dev/null || true
+            fi
+            rm -f "$timeout_supervisor_fifo" "$timeout_supervisor_log"
+          }
+          trap cleanup_timeout_supervisor EXIT
+
+          mkfifo "$timeout_supervisor_fifo"
+          tee "$timeout_supervisor_log" <"$timeout_supervisor_fifo" >&2 &
+          supervisor_tee_pid=$!
+
+          timeout_child_env=(env)
+          if [[ -v LC_ALL ]]; then
+            timeout_child_env+=("LC_ALL=$LC_ALL")
+          else
+            timeout_child_env+=("-u" "LC_ALL")
+          fi
+
           qa_exit_code=0
-          pnpm openclaw qa run \
-            --repo-root . \
-            --qa-profile "${QA_PROFILE}" \
-            --concurrency 3 \
-            --fast \
-            --output-dir "${output_dir}" || qa_exit_code=$?
+          LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m \
+            "${timeout_child_env[@]}" bash -c 'exec "$@" 2>&3' bash \
+            pnpm openclaw qa run \
+              --repo-root . \
+              --qa-profile "${QA_PROFILE}" \
+              --concurrency 3 \
+              --fast \
+              --output-dir "${output_dir}" \
+            3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?
+
+          wait "$supervisor_tee_pid"
+          supervisor_tee_pid=""
+
+          timeout_outcome="none"
+          if [[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
+            timeout_outcome="kill"
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and required SIGKILL after the 30-second grace period; partial evidence will still be uploaded."
+          elif [[ "$qa_exit_code" -eq 124 ]] && grep -Eq "^timeout: sending signal TERM to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
+            timeout_outcome="term"
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and was terminated; partial evidence will still be uploaded."
+          fi
+
+          QA_EXIT_CODE="$qa_exit_code" TIMEOUT_OUTCOME="$timeout_outcome" OUTPUT_DIR="$output_dir" \
+            node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const timeoutOutcome = process.env.TIMEOUT_OUTCOME;
+          if (!["none", "term", "kill"].includes(timeoutOutcome)) {
+            throw new Error(`Unexpected timeout outcome: ${JSON.stringify(timeoutOutcome)}`);
+          }
+
+          const status = {
+            target: {
+              ref: process.env.REQUESTED_REF,
+              sha: process.env.TARGET_SHA,
+            },
+            profile: process.env.QA_PROFILE,
+            run: {
+              id: process.env.GITHUB_RUN_ID,
+              attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            },
+            exitCode: Number(process.env.QA_EXIT_CODE),
+            timedOut: timeoutOutcome !== "none",
+            timeoutOutcome,
+            completedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync(
+            path.join(process.env.OUTPUT_DIR, "qa-profile-run-status.json"),
+            `${JSON.stringify(status, null, 2)}\n`,
+          );
+          NODE
 
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
 
