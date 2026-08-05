@@ -10,6 +10,11 @@ import {
 } from "openclaw/plugin-sdk/web-content-extractor";
 
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
+// Sole guard before a synchronous, uncancellable Readability parse whose cost
+// grows superlinearly with nesting depth: 800 keeps real pages (browsers
+// flatten near depth 512) while bounding the worst accepted parse to a few
+// seconds. Raising it restores multi-minute gateway event-loop stalls on
+// attacker-crafted pages; over-cap pages intentionally use fallback extraction.
 const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 800;
 const HTML_VOID_TAGS = new Set([
   "area",
