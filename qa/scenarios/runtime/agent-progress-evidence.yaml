@@ -190,10 +190,10 @@ flow:
                 expr: |-
                   (() => {
                     const snapshot = state.getSnapshot();
-                    const visible = snapshot.messages.filter((message) => message.direction === "outbound" && !message.deleted && message.conversation.id === config.conversationId && message.text.includes(config.completionText));
+                    const visible = snapshot.messages.filter((message) => message.accountId === transport.accountId && message.direction === "outbound" && !message.deleted && message.conversation.id === config.conversationId && message.text.includes(config.completionText));
                     if (visible.length !== 1) return undefined;
                     const candidate = visible[0];
-                    const events = snapshot.events.filter((event) => event.cursor > busCursorBefore && "message" in event && event.message.direction === "outbound" && event.message.conversation.id === config.conversationId && event.message.text.includes(config.completionText));
+                    const events = snapshot.events.filter((event) => event.cursor > busCursorBefore && "message" in event && event.message.accountId === transport.accountId && event.message.direction === "outbound" && event.message.conversation.id === config.conversationId && event.message.text.includes(config.completionText));
                     const finalSent = events.find((event) => event.kind === "outbound-message" && event.message.id === candidate.id);
                     if (!finalSent) return undefined;
                     const previewRetired = events.find((event) => event.kind === "message-deleted" && event.message.id !== candidate.id && event.cursor < finalSent.cursor);

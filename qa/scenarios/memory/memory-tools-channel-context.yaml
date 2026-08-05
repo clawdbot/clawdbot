@@ -133,10 +133,10 @@ flow:
                 expr: |-
                   (() => {
                     const snapshot = state.getSnapshot();
-                    const visible = snapshot.messages.slice(outboundStartIndex).filter((message) => message.direction === "outbound" && !message.deleted && message.conversation.id === config.channelId && message.conversation.kind === "channel" && message.text.includes(config.expectedNeedle));
+                    const visible = snapshot.messages.slice(outboundStartIndex).filter((message) => message.accountId === transport.accountId && message.direction === "outbound" && !message.deleted && message.conversation.id === config.channelId && message.conversation.kind === "channel" && message.text.includes(config.expectedNeedle));
                     if (visible.length !== 1) return undefined;
                     const candidate = visible[0];
-                    const events = snapshot.events.filter((event) => event.cursor > busCursorBeforeInbound && "message" in event && event.message.direction === "outbound" && event.message.conversation.id === config.channelId && event.message.text.includes(config.expectedNeedle));
+                    const events = snapshot.events.filter((event) => event.cursor > busCursorBeforeInbound && "message" in event && event.message.accountId === transport.accountId && event.message.direction === "outbound" && event.message.conversation.id === config.channelId && event.message.text.includes(config.expectedNeedle));
                     const finalSent = events.find((event) => event.kind === "outbound-message" && event.message.id === candidate.id);
                     if (!finalSent) return undefined;
                     const previewRetired = events.find((event) => event.kind === "message-deleted" && event.message.id !== candidate.id && event.cursor < finalSent.cursor);

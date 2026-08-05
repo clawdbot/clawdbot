@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById, readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
+import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 describe("qa scenario catalog causality", () => {
   it("loads live gateway sentinel scenarios for harness self-health", () => {
@@ -243,5 +245,70 @@ describe("qa scenario catalog causality", () => {
     expect(durableWait, scenarioId).toMatchObject({
       args: [expect.any(Object), { expr: `liveTurnTimeoutMs(env, ${ms})` }],
     });
+  });
+
+  it.each([
+    {
+      scenarioId: "memory-tools-channel-context",
+      saveAs: "durableChannelLifecycle",
+      cursorName: "busCursorBeforeInbound",
+      conversationKey: "channelId",
+      markerKey: "expectedNeedle",
+      targetPrefix: "channel",
+    },
+    {
+      scenarioId: "agent-progress-evidence",
+      saveAs: "durableCompletionLifecycle",
+      cursorName: "busCursorBefore",
+      conversationKey: "conversationId",
+      markerKey: "completionText",
+      targetPrefix: "dm",
+    },
+  ] as const)("isolates $scenarioId durable lifecycle evidence by account", async (fixture) => {
+    const scenario = requireFlowScenario(readQaScenarioById(fixture.scenarioId));
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+    const durableWait = actions.find(
+      (action) =>
+        (action as { call?: string }).call === "waitForCondition" &&
+        (action as { saveAs?: string }).saveAs === fixture.saveAs,
+    );
+    expect(durableWait, fixture.scenarioId).toBeDefined();
+    if (!durableWait) {
+      throw new Error(`missing durable lifecycle wait for ${fixture.scenarioId}`);
+    }
+
+    const config = scenario.execution.config ?? {};
+    const conversationId = String(config[fixture.conversationKey]);
+    const marker = String(config[fixture.markerKey]);
+    const target = `${fixture.targetPrefix}:${conversationId}`;
+    const state = createQaBusState();
+    for (const accountId of ["foreign", "qa-channel"]) {
+      const preview = state.addOutboundMessage({ accountId, to: target, text: marker });
+      state.deleteMessage({ accountId, messageId: preview.id });
+      state.addOutboundMessage({ accountId, to: target, text: marker });
+    }
+
+    await expect(
+      runLoadedScenarioFlow(fixture.scenarioId, {
+        state,
+        flow: {
+          steps: [
+            {
+              name: "keeps foreign account lifecycle evidence isolated",
+              actions: [
+                { set: "outboundStartIndex", value: { expr: "0" } },
+                { set: fixture.cursorName, value: { expr: "0" } },
+                durableWait,
+                {
+                  assert: {
+                    expr: `${fixture.saveAs}.message.accountId === transport.accountId`,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({ status: "pass" });
   });
 });
