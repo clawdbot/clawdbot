@@ -76,14 +76,6 @@ async function cleanupMatrixQaTempDevices(
   }
 }
 
-function requireMatrixQaPassword(context: MatrixQaScenarioContext, actor: "driver" | "observer") {
-  const password = actor === "driver" ? context.driverPassword : context.observerPassword;
-  if (!password) {
-    throw new Error(`Matrix E2EE destructive ${actor} password is required`);
-  }
-  return password;
-}
-
 function requireMatrixQaRegistrationToken(context: MatrixQaScenarioContext) {
   const token = context.registrationToken?.trim();
   if (!token) {
