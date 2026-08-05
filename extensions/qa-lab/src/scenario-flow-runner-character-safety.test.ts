@@ -113,7 +113,11 @@ describe("character scenario transcript safety", () => {
 
   it.each(
     characterScenarioIds.flatMap((scenarioId) =>
-      classifiedFailureReplies.map((failure) => ({ scenarioId, ...failure })),
+      classifiedFailureReplies.map(({ failureName, failureText }) => ({
+        scenarioId,
+        failureName,
+        failureText,
+      })),
     ),
   )(
     "rejects a $failureName after an actual reply in $scenarioId",
