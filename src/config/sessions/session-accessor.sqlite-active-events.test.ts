@@ -14,6 +14,7 @@ import {
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
+  readSessionTranscriptContextByteSize,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -154,6 +155,77 @@ describe("SQLite active transcript event projection", () => {
     });
   });
 
+  it("measures the latest compaction replay window while retaining durable history", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "large-old",
+          parentId: null,
+          message: { role: "user", content: `old ${"x".repeat(8_000)}` },
+        },
+        {
+          eventId: "kept",
+          parentId: "large-old",
+          message: { role: "assistant", content: "kept answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const bytesBefore = readSessionTranscriptContextByteSize(scope);
+
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "first-compaction",
+      parentId: "kept",
+      timestamp: "2026-07-22T00:01:00.000Z",
+      summary: "short summary",
+      firstKeptEntryId: "kept",
+      tokensBefore: 2_000,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-compaction",
+          parentId: "first-compaction",
+          message: { role: "user", content: `new turn ${"y".repeat(2_000)}` },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const bytesAfterFirstCompaction = readSessionTranscriptContextByteSize(scope);
+
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "latest-compaction",
+      parentId: "post-compaction",
+      timestamp: "2026-07-22T00:02:00.000Z",
+      summary: "latest summary",
+      firstKeptEntryId: "missing-entry",
+      tokensBefore: 1_000,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "latest-turn",
+          parentId: "latest-compaction",
+          message: { role: "user", content: "latest turn" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const activeStats = readSessionTranscriptActiveStats(scope);
+    const latestBytes = readSessionTranscriptContextByteSize(scope);
+    expect(bytesBefore).toBeGreaterThan(8_000);
+    expect(bytesAfterFirstCompaction).toBeGreaterThan(2_000);
+    expect(bytesAfterFirstCompaction).toBeLessThan(bytesBefore / 2);
+    expect(latestBytes).toBeGreaterThan(0);
+    expect(latestBytes).toBeLessThan(bytesAfterFirstCompaction / 2);
+    expect(activeStats.sizeBytes).toBeGreaterThan(bytesBefore);
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(4);
+    expect(readSessionTranscriptMessageEventById(scope, "large-old")).toBeDefined();
+  });
+
   it("defers mixed legacy and canonical rebuilds off request stacks", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
@@ -264,7 +336,11 @@ describe("SQLite active transcript event projection", () => {
   it("projects reset kept-tail and post-boundary messages without rewriting raw positions", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "old",
+          parentId: null,
+          message: { role: "user", content: `old ${"x".repeat(8_000)}` },
+        },
         {
           eventId: "kept-user",
           parentId: "old",
@@ -303,6 +379,13 @@ describe("SQLite active transcript event projection", () => {
     });
 
     const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+    const contextBytes = readSessionTranscriptContextByteSize(scope);
+    const visibleJsonlBytes = page.events.reduce(
+      (total, entry) => total + Buffer.byteLength(JSON.stringify(entry.event)) + 1,
+      0,
+    );
+    expect(contextBytes).toBe(visibleJsonlBytes);
+    expect(contextBytes).toBeLessThan(readSessionTranscriptActiveStats(scope).sizeBytes / 2);
 
     expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
       "kept-user",

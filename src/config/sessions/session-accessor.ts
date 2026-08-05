@@ -222,6 +222,7 @@ export {
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
+  readSessionTranscriptContextByteSize,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,

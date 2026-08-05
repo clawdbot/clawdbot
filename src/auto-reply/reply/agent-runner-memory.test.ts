@@ -3031,6 +3031,81 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
   });
 
+  it("does not recompact durable SQLite history before the latest compaction boundary", async () => {
+    const storePath = path.join(rootDir, "sqlite-compacted-session.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        type: "message",
+        id: "large-old",
+        parentId: null,
+        timestamp: "2026-07-25T00:00:00.000Z",
+        message: { role: "user", content: "x".repeat(8_000) },
+      },
+      {
+        type: "message",
+        id: "kept",
+        parentId: "large-old",
+        timestamp: "2026-07-25T00:00:01.000Z",
+        message: { role: "assistant", content: "kept" },
+      },
+      {
+        type: "compaction",
+        id: "compacted",
+        parentId: "kept",
+        timestamp: "2026-07-25T00:00:02.000Z",
+        summary: "short summary",
+        firstKeptEntryId: "kept",
+        tokensBefore: 2_000,
+      },
+      {
+        type: "message",
+        id: "post-compaction",
+        parentId: "compacted",
+        timestamp: "2026-07-25T00:00:03.000Z",
+        message: { role: "user", content: "continue" },
+      },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(8_000);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "1kb",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps incognito preflight compaction in the process-local transcript store", async () => {
     const durableStorePath = path.join(rootDir, "durable-sessions.json");
     const sessionKey = "agent:main:dashboard:incognito-preflight";

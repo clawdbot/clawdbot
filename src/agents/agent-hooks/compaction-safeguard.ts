@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { buildSessionRecoveryContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import type { SessionTreeEntry } from "../../../packages/agent-core/src/harness/types.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
@@ -106,51 +108,33 @@ function prependPreviousSummaryForRedistill(params: {
   ];
 }
 
-function coerceTimestamp(value: unknown): number {
-  const timestamp = typeof value === "string" ? Date.parse(value) : value;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function sessionBranchEntryToMessage(entry: Record<string, unknown>): unknown {
-  if (entry.type === "message" && entry.message && typeof entry.message === "object") {
-    return entry.message;
-  }
-  if (entry.type === "custom_message") {
-    return {
-      role: "custom",
-      customType: typeof entry.customType === "string" ? entry.customType : "custom",
-      content: entry.content,
-      display: entry.display !== false,
-      details: entry.details,
-      timestamp: coerceTimestamp(entry.timestamp),
-    };
-  }
-  if (entry.type === "branch_summary") {
-    return {
-      role: "branchSummary",
-      summary: typeof entry.summary === "string" ? entry.summary : "",
-      fromId: typeof entry.fromId === "string" ? entry.fromId : "root",
-      timestamp: coerceTimestamp(entry.timestamp),
-    };
-  }
-  return undefined;
-}
-
 function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
   try {
     const entries: unknown = (sessionManager as { getBranch?: () => unknown })?.getBranch?.();
     return Array.isArray(entries)
-      ? entries.flatMap((entry) => {
-          const message =
-            entry && typeof entry === "object"
-              ? sessionBranchEntryToMessage(entry as Record<string, unknown>)
-              : undefined;
-          return message ? [message as AgentMessage] : [];
-        })
+      ? (buildSessionRecoveryContext(entries as SessionTreeEntry[]).messages as AgentMessage[])
       : [];
   } catch {
     return [];
   }
+}
+
+function splitSessionBranchCompactionSummary(messages: AgentMessage[]): {
+  messages: AgentMessage[];
+  previousSummary?: string;
+} {
+  let previousSummary: string | undefined;
+  const replayMessages = messages.filter((message) => {
+    if (message.role !== "compactionSummary") {
+      return true;
+    }
+    const summary = (message as { summary?: unknown }).summary;
+    if (!previousSummary && typeof summary === "string" && summary.trim()) {
+      previousSummary = summary.trim();
+    }
+    return false;
+  });
+  return { messages: replayMessages, ...(previousSummary ? { previousSummary } : {}) };
 }
 
 function isSessionsSendToolName(value: unknown): boolean {
@@ -861,18 +845,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       preparation.messagesToSummarize,
     );
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
+    let recoveredPreviousSummary: string | undefined;
     let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
     let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
-      const branchMessages = filterReplayUnsafeSessionBranchMessages(
+      const recoveredBranch = splitSessionBranchCompactionSummary(
         stripRuntimeContextCustomMessages(collectSessionBranchMessages(ctx.sessionManager)),
       );
+      const branchMessages = filterReplayUnsafeSessionBranchMessages(recoveredBranch.messages);
       if (containsRealConversation(branchMessages)) {
         log.info(
           "Compaction safeguard: using session branch messages after compaction preparation omitted real conversation content.",
         );
         baseMessagesToSummarize = branchMessages;
         baseTurnPrefixMessages = [];
+        recoveredPreviousSummary = recoveredBranch.previousSummary;
         hasRealSummarizable = true;
         hasRealTurnPrefix = false;
       }
@@ -963,7 +950,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             signal,
             customInstructions: structuredInstructions,
             summarizationInstructions,
-            previousSummary: preparation.previousSummary,
+            previousSummary: preparation.previousSummary ?? recoveredPreviousSummary,
           });
           if (typeof providerResult === "string" && providerResult.trim()) {
             const { preservedMessages } = splitPreservedRecentTurns({
@@ -1090,7 +1077,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   messages: pruned.droppedMessagesList,
                   maxChunkTokens: droppedMaxChunkTokens,
                   customInstructions: structuredInstructions,
-                  previousSummary: preparation.previousSummary,
+                  previousSummary: preparation.previousSummary ?? recoveredPreviousSummary,
                 });
               } catch (droppedError) {
                 if (signal?.aborted) {
@@ -1134,7 +1121,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.
-      const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
+      const effectivePreviousSummary =
+        droppedSummary ?? preparation.previousSummary ?? recoveredPreviousSummary;
 
       let lastHistorySummary = "";
       let lastSplitTurnSection = "";

@@ -3239,6 +3239,302 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(JSON.stringify(messages)).toContain("historical reply");
   });
 
+  it("recovers the retained compaction tail without duplicating the previous summary", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult("active branch summary"));
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "message",
+          id: "old-user",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          message: { role: "user", content: "already summarized request", timestamp: now },
+        },
+        {
+          type: "message",
+          id: "kept-user",
+          parentId: "old-user",
+          timestamp: new Date(now + 1).toISOString(),
+          message: { role: "user", content: "inspect the active state", timestamp: now + 1 },
+        },
+        {
+          type: "message",
+          id: "kept-assistant",
+          parentId: "kept-user",
+          timestamp: new Date(now + 2).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "status", arguments: {} }],
+            timestamp: now + 2,
+          },
+        },
+        {
+          type: "message",
+          id: "kept-result",
+          parentId: "kept-assistant",
+          timestamp: new Date(now + 3).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "status",
+            content: [{ type: "text", text: "active result" }],
+            timestamp: now + 3,
+          },
+        },
+        {
+          type: "compaction",
+          id: "latest-compaction",
+          parentId: "kept-result",
+          timestamp: new Date(now + 4).toISOString(),
+          summary: "prior summary",
+          firstKeptEntryId: "kept-user",
+          tokensBefore: 38_000,
+        },
+        {
+          type: "message",
+          id: "post-user",
+          parentId: "latest-compaction",
+          timestamp: new Date(now + 5).toISOString(),
+          message: { role: "user", content: "continue the active work", timestamp: now + 5 },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: {
+        preparation: {
+          messagesToSummarize: [
+            {
+              role: "toolResult",
+              toolCallId: "unpaired",
+              toolName: "status",
+              content: [{ type: "text", text: "orphaned preparation output" }],
+              timestamp: now + 6,
+            },
+          ] as AgentMessage[],
+          turnPrefixMessages: [] as AgentMessage[],
+          previousSummary: undefined,
+          firstKeptEntryId: "post-user",
+          tokensBefore: 38_085,
+          fileOps: { read: [], edited: [], written: [] },
+          settings: { reserveTokens: 4_000 },
+          isSplitTurn: true,
+        },
+        customInstructions: "",
+        signal: new AbortController().signal,
+      },
+      apiKey: "dummy",
+    });
+
+    expect(expectCompactionResult(result).summary).toContain("active branch summary");
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const serializedMessages = JSON.stringify(requireArray(summarizeCall.messages));
+    expect(serializedMessages.match(/prior summary/g)).toHaveLength(1);
+    expect(serializedMessages).not.toContain("already summarized request");
+    expect(serializedMessages).toContain("inspect the active state");
+    expect(serializedMessages).toContain("active result");
+    expect(serializedMessages).toContain("continue the active work");
+  });
+
+  it("recovers paired tool results from a retained reset tail", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult("reset branch summary"));
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "message",
+          id: "old-user",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          message: { role: "user", content: "discarded request", timestamp: now },
+        },
+        {
+          type: "message",
+          id: "kept-user",
+          parentId: "old-user",
+          timestamp: new Date(now + 1).toISOString(),
+          message: { role: "user", content: "inspect active state", timestamp: now + 1 },
+        },
+        {
+          type: "message",
+          id: "kept-assistant",
+          parentId: "kept-user",
+          timestamp: new Date(now + 2).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "status", arguments: {} }],
+            timestamp: now + 2,
+          },
+        },
+        {
+          type: "message",
+          id: "kept-result",
+          parentId: "kept-assistant",
+          timestamp: new Date(now + 3).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "status",
+            content: [{ type: "text", text: "active reset result" }],
+            timestamp: now + 3,
+          },
+        },
+        {
+          type: "message",
+          id: "unrelated-result",
+          parentId: "kept-result",
+          timestamp: new Date(now + 4).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "unrelated",
+            toolName: "status",
+            content: [{ type: "text", text: "unrelated reset output" }],
+            timestamp: now + 4,
+          },
+        },
+        {
+          type: "reset",
+          id: "latest-reset",
+          parentId: "unrelated-result",
+          timestamp: new Date(now + 5).toISOString(),
+          reason: "new",
+          firstKeptEntryId: "kept-user",
+        },
+        {
+          type: "message",
+          id: "post-user",
+          parentId: "latest-reset",
+          timestamp: new Date(now + 6).toISOString(),
+          message: { role: "user", content: "continue after reset", timestamp: now + 6 },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: {
+        preparation: {
+          messagesToSummarize: [
+            {
+              role: "toolResult",
+              toolCallId: "orphaned",
+              toolName: "status",
+              content: [{ type: "text", text: "orphaned preparation output" }],
+              timestamp: now + 7,
+            },
+          ] as AgentMessage[],
+          turnPrefixMessages: [] as AgentMessage[],
+          previousSummary: undefined,
+          firstKeptEntryId: "post-user",
+          tokensBefore: 38_085,
+          fileOps: { read: [], edited: [], written: [] },
+          settings: { reserveTokens: 4_000 },
+          isSplitTurn: true,
+        },
+        customInstructions: "",
+        signal: new AbortController().signal,
+      },
+      apiKey: "dummy",
+    });
+
+    expect(expectCompactionResult(result).summary).toContain("reset branch summary");
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const serializedMessages = JSON.stringify(requireArray(summarizeCall.messages));
+    expect(serializedMessages).toContain("inspect active state");
+    expect(serializedMessages).toContain("active reset result");
+    expect(serializedMessages).toContain("continue after reset");
+    expect(serializedMessages).not.toContain("discarded request");
+    expect(serializedMessages).not.toContain("unrelated reset output");
+  });
+
+  it("passes a recovered branch summary to a configured compaction provider", async () => {
+    const providerSummarize = vi.fn().mockResolvedValue("provider branch summary");
+    registerCompactionProvider({
+      id: "branch-recovery-provider",
+      label: "Branch Recovery Provider",
+      summarize: providerSummarize,
+    });
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "message",
+          id: "old-user",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          message: { role: "user", content: "already summarized request", timestamp: now },
+        },
+        {
+          type: "compaction",
+          id: "latest-compaction",
+          parentId: "old-user",
+          timestamp: new Date(now + 1).toISOString(),
+          summary: "recovered prior summary",
+          firstKeptEntryId: "missing",
+          tokensBefore: 38_000,
+        },
+        {
+          type: "message",
+          id: "post-user",
+          parentId: "latest-compaction",
+          timestamp: new Date(now + 2).toISOString(),
+          message: { role: "user", content: "continue active work", timestamp: now + 2 },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "branch-recovery-provider",
+      recentTurnsPreserve: 0,
+    });
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: {
+        preparation: {
+          messagesToSummarize: [
+            {
+              role: "toolResult",
+              toolCallId: "unpaired",
+              toolName: "status",
+              content: [{ type: "text", text: "orphaned output" }],
+              timestamp: now + 3,
+            },
+          ] as AgentMessage[],
+          turnPrefixMessages: [] as AgentMessage[],
+          previousSummary: undefined,
+          firstKeptEntryId: "post-user",
+          tokensBefore: 38_085,
+          fileOps: { read: [], edited: [], written: [] },
+          settings: { reserveTokens: 4_000 },
+          isSplitTurn: true,
+        },
+        customInstructions: "",
+        signal: new AbortController().signal,
+      },
+      apiKey: null,
+    });
+
+    expect(expectCompactionResult(result).summary).toContain("provider branch summary");
+    const providerInput = requireRecord(mockCallArg(providerSummarize));
+    expect(providerInput.previousSummary).toBe("recovered prior summary");
+    expect(JSON.stringify(providerInput.messages)).toContain("continue active work");
+    expect(JSON.stringify(providerInput.messages)).not.toContain("already summarized request");
+  });
+
   it("recovers user and assistant branch turns when compaction preparation has only tool output", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary with visible turns"));
