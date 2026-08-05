@@ -37,6 +37,12 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - call: readSessionTranscriptSummary
+          saveAs: beforeAttemptTranscript
+          args:
+            - ref: env
+            - agent:qa:model-switch-tools
+            - allowEmpty: true
         - call: runAgentPrompt
           args:
             - ref: env
@@ -45,14 +51,20 @@ flow:
                 expr: config.initialPrompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 30000)
-        - call: readSessionTranscriptSummary
+        - call: waitForCondition
           saveAs: beforeSwitchTranscript
           args:
-            - ref: env
-            - agent:qa:model-switch-tools
+            - lambda:
+                async: true
+                expr: "readSessionTranscriptSummary(env, 'agent:qa:model-switch-tools', { afterEventCursor: beforeAttemptTranscript.eventCursor, allowEmpty: true }).then((summary) => (summary.successfulToolCallCounts.read ?? 0) >= 1 ? summary : undefined)"
+            - 5000
+            - 50
         - set: alternate
           value:
             expr: splitModelRef(env.alternateModel)
+        - set: expectedAlternate
+          value:
+            expr: normalizeModelRef(env.alternateModel)
         - set: beforeSwitchCursor
           value:
             expr: state.getSnapshot().messages.length
@@ -71,6 +83,17 @@ flow:
                 expr: alternate?.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
+        - call: readRawQaSessionStore
+          saveAs: afterSwitchSessions
+          args:
+            - ref: env
+        - set: afterSwitchSession
+          value:
+            expr: "afterSwitchSessions['agent:qa:model-switch-tools']"
+        - assert:
+            expr: "normalizeLowercaseStringOrEmpty(afterSwitchSession?.modelProvider) === normalizeLowercaseStringOrEmpty(expectedAlternate?.provider) && String(afterSwitchSession?.model ?? '') === String(expectedAlternate?.model ?? '')"
+            message:
+              expr: "`expected alternate persisted model ${String(expectedAlternate?.provider ?? '')}/${String(expectedAlternate?.model ?? '')}, got ${String(afterSwitchSession?.modelProvider ?? '')}/${String(afterSwitchSession?.model ?? '')}`"
         - call: waitForCondition
           saveAs: afterSwitchTranscript
           args:
@@ -87,7 +110,7 @@ flow:
           saveAs: outbound
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && hasModelSwitchContinuitySignal(candidate.text)).at(-1)"
+                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && hasModelSwitchContinuitySignal(candidate.text)).at(-1)"
             - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
         - assert:
             expr: hasModelSwitchContinuitySignal(outbound.text)
@@ -103,7 +126,7 @@ flow:
                 value:
                   expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
               - assert:
-                  expr: "String(switchRequest?.model ?? '') === String(alternate?.model ?? '')"
+                  expr: "String(switchRequest?.model ?? '') === String(expectedAlternate?.model ?? '')"
                   message:
                     expr: "`expected alternate model, got ${String(switchRequest?.model ?? '')}`"
       detailsExpr: outbound.text

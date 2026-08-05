@@ -51,6 +51,9 @@ flow:
         - set: alternate
           value:
             expr: splitModelRef(env.alternateModel)
+        - set: expectedAlternate
+          value:
+            expr: normalizeModelRef(env.alternateModel)
         - set: switchRequestCursor
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
@@ -69,11 +72,22 @@ flow:
                 expr: alternate?.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
+        - call: readRawQaSessionStore
+          saveAs: sessionStore
+          args:
+            - ref: env
+        - set: sessionEntry
+          value:
+            expr: "sessionStore['agent:qa:model-switch']"
+        - assert:
+            expr: "normalizeLowercaseStringOrEmpty(sessionEntry?.modelProvider) === expectedAlternate?.provider && sessionEntry?.model === expectedAlternate?.model"
+            message:
+              expr: "`expected persisted alternate model ${String(expectedAlternate?.provider ?? '')}/${String(expectedAlternate?.model ?? '')}, got ${String(sessionEntry?.modelProvider ?? '')}/${String(sessionEntry?.model ?? '')}`"
         - call: waitForCondition
           saveAs: outbound
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && (() => { const lower = normalizeLowercaseStringOrEmpty(candidate.text); return lower.includes('switch') || lower.includes('handoff'); })()).at(-1)"
+                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && (() => { const lower = normalizeLowercaseStringOrEmpty(candidate.text); return lower.includes('switch') || lower.includes('handoff'); })()).at(-1)"
             - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
         - if:
             expr: "Boolean(env.mock)"
@@ -85,7 +99,7 @@ flow:
                 value:
                   expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.followupPrompt))"
               - assert:
-                  expr: "String(switchRequest?.model ?? '') === String(alternate?.model ?? '')"
+                  expr: "String(switchRequest?.model ?? '') === String(expectedAlternate?.model ?? '')"
                   message:
-                    expr: "`expected alternate model ${String(alternate?.model ?? '')}, got ${String(switchRequest?.model ?? '')}`"
+                    expr: "`expected alternate model ${String(expectedAlternate?.model ?? '')}, got ${String(switchRequest?.model ?? '')}`"
       detailsExpr: outbound.text
