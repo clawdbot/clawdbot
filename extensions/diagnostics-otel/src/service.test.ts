@@ -1034,7 +1034,7 @@ describe("diagnostics-otel service", () => {
     sdkShutdown.mockRejectedValueOnce(sdkError);
     const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
 
-    const stopError = await service.stop?.(ctx).catch((error: unknown) => error);
+    const stopError = await Promise.resolve(service.stop?.(ctx)).catch((error: unknown) => error);
 
     expect(logShutdown).toHaveBeenCalledTimes(1);
     expect(sdkShutdown).toHaveBeenCalledTimes(1);
