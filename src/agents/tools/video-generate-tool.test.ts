@@ -924,6 +924,52 @@ describe("createVideoGenerateTool", () => {
     expect(delivered.reaction).toBeUndefined();
   });
 
+  it("rolls back earlier video saves after sequential persistence fails", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        { buffer: Buffer.from("saved"), mimeType: "video/mp4", fileName: "saved.mp4" },
+        { buffer: Buffer.from("failed"), mimeType: "video/mp4", fileName: "failed.mp4" },
+      ],
+    });
+    const terminalError = new Error("video persistence failed");
+    const savedMedia = {
+      path: "/tmp/saved.mp4",
+      id: "saved.mp4",
+      size: 5,
+      contentType: "video/mp4",
+    };
+    const saveMediaBuffer = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValueOnce(savedMedia)
+      .mockRejectedValueOnce(terminalError);
+    const deleteMediaBuffer = vi
+      .spyOn(mediaStore, "deleteMediaBuffer")
+      .mockRejectedValueOnce(new Error("video cleanup failed"));
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await expect(tool.execute("call-partial-save", { prompt: "two videos" })).rejects.toBe(
+      terminalError,
+    );
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(2);
+    expect(deleteMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("saved.mp4", "tool-video-generation");
+  });
+
   it("falls back to the provider URL when generated video persistence exceeds the media cap", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "fal",

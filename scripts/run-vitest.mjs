@@ -9,6 +9,7 @@ import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mjs";
+import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mjs";
 import { signalExitCode } from "./lib/managed-child-process.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
@@ -125,6 +126,16 @@ const VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES = [
   "--retry.",
   "--sequence.",
   "--typecheck.",
+];
+const UNBOUNDED_CONFIG_ONLY_OPTIONS = [
+  "--changed",
+  "--coverage",
+  "--dir",
+  "--mergeReports",
+  "--outputFile",
+  "--project",
+  "--root",
+  "--shard",
 ];
 const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -427,13 +438,64 @@ function resolveVitestConfigArg(argv) {
 }
 
 function resolveVitestConfigNoOutputTimeoutMs(config) {
-  const normalized = path.normalize(config).replaceAll(path.sep, "/").replace(/^\.\//u, "");
+  const normalized = normalizeVitestConfigPath(config);
   for (const [candidate, timeoutMs] of VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS) {
-    if (normalized === candidate || normalized.endsWith(`/${candidate}`)) {
+    if (matchesVitestConfigPath(normalized, candidate)) {
       return timeoutMs;
     }
   }
   return null;
+}
+
+function normalizeVitestConfigPath(config) {
+  return path.normalize(config).replaceAll(path.sep, "/").replace(/^\.\//u, "");
+}
+
+function matchesVitestConfigPath(normalized, candidate) {
+  return normalized === candidate || normalized.endsWith("/" + candidate);
+}
+
+function hasVitestOption(argv, option) {
+  for (const arg of argv) {
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === option || arg.startsWith(option + "=") || arg.startsWith(option + ".")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function insertVitestTargets(argv, targets) {
+  const separatorIndex = argv.indexOf("--");
+  const insertionIndex = separatorIndex < 0 ? argv.length : separatorIndex;
+  return [...argv.slice(0, insertionIndex), ...targets, ...argv.slice(insertionIndex)];
+}
+
+/**
+ * Splits config-only Gateway server runs into fresh processes before the
+ * non-isolated module graph reaches the worker heap limit.
+ */
+export function resolveBoundedVitestInvocations(argv, options = {}) {
+  const config = resolveVitestConfigArg(argv);
+  const normalizedConfig = config === null ? "" : normalizeVitestConfigPath(config);
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  const mode = resolveExplicitVitestMode(argv);
+  if (
+    !matchesVitestConfigPath(normalizedConfig, GATEWAY_SERVER_VITEST_CONFIG) ||
+    mode === "watch" ||
+    (mode !== "run" && !isTruthyEnvValue(env.CI)) ||
+    hasNonRunVitestSubcommand(argv) ||
+    hasAlternateVitestRootArg(argv) ||
+    collectExplicitProjectRouterTargetArgs(argv, cwd).length > 0 ||
+    UNBOUNDED_CONFIG_ONLY_OPTIONS.some((option) => hasVitestOption(argv, option))
+  ) {
+    return [argv];
+  }
+  const chunks = options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd);
+  return chunks.length > 1 ? chunks.map((targets) => insertVitestTargets(argv, targets)) : [argv];
 }
 
 /**
@@ -1115,9 +1177,11 @@ async function finishVitestProcess({ completion, getForwardedSignal }) {
   if (exitSignal) {
     writeFailedTrailer("vitest", signalExitCode(exitSignal));
     process.kill(process.pid, exitSignal);
-    return;
+    return signalExitCode(exitSignal);
   }
-  process.exitCode = code ?? 1;
+  const exitCode = code ?? 1;
+  process.exitCode = exitCode;
+  return exitCode;
 }
 
 async function main(argv = process.argv.slice(2), env = process.env) {
@@ -1146,8 +1210,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
-  const guardedVitestArgs = resolveExplicitTestFileNoPassArgs(vitestArgs);
-  const spawnEnv = resolveRunVitestSpawnEnv(env, guardedVitestArgs);
+  const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   let vitestCliEntry;
   try {
     vitestCliEntry = resolveVitestCliEntry();
@@ -1160,20 +1223,30 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     throw error;
   }
 
-  await finishVitestProcess(
-    spawnWatchedVitestProcess({
-      pnpmArgs: [
-        "exec",
-        "node",
-        ...resolveVitestNodeArgs(env),
-        vitestCliEntry,
-        ...guardedVitestArgs,
-      ],
-      spawnParams: resolveVitestSpawnParams(spawnEnv),
-      env: spawnEnv,
-      label: guardedVitestArgs.join(" "),
-    }),
-  );
+  for (let index = 0; index < invocations.length; index += 1) {
+    const guardedVitestArgs = resolveExplicitTestFileNoPassArgs(invocations[index]);
+    const spawnEnv = resolveRunVitestSpawnEnv(env, guardedVitestArgs);
+    if (invocations.length > 1) {
+      console.error("[vitest] Gateway server process " + (index + 1) + "/" + invocations.length);
+    }
+    const exitCode = await finishVitestProcess(
+      spawnWatchedVitestProcess({
+        pnpmArgs: [
+          "exec",
+          "node",
+          ...resolveVitestNodeArgs(env),
+          vitestCliEntry,
+          ...guardedVitestArgs,
+        ],
+        spawnParams: resolveVitestSpawnParams(spawnEnv),
+        env: spawnEnv,
+        label: guardedVitestArgs.join(" "),
+      }),
+    );
+    if (exitCode !== 0) {
+      return;
+    }
+  }
 }
 
 if (import.meta.main) {

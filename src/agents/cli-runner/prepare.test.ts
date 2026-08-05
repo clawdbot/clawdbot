@@ -146,6 +146,32 @@ function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConf
   return {};
 }
 
+const SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE =
+  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.";
+
+function createBundledMessageToolConfig(): OpenClawConfig {
+  setCliRunnerPrepareTestDeps({
+    getActiveMcpLoopbackRuntime: vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    })),
+    resolveMcpLoopbackScopedTools: vi.fn(() => ({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          label: "Message",
+          description: "Send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+      ],
+    })),
+  });
+  return createCliBackendConfig({ bundleMcp: true });
+}
+
 function setCliBackendForPrepareTest(
   params: {
     authEpochMode?: CliBackendPlugin["authEpochMode"];
@@ -2191,6 +2217,58 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPrompt).not.toContain("Telegram rich OFF");
   });
 
+  it.each(["group", "channel"] as const)(
+    "uses explicit %s chat type for bundled message-tool etiquette with an opaque session key",
+    async (chatType) => {
+      const context = await fixture.prepare({
+        config: createBundledMessageToolConfig(),
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+
+      expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
+    },
+  );
+
+  it.each([
+    {
+      name: "prefers current-turn metadata",
+      chatType: "group" as const,
+      sessionEntryChatType: "direct" as const,
+      expectedChatType: "group" as const,
+    },
+    {
+      name: "falls back to stored session metadata",
+      chatType: undefined,
+      sessionEntryChatType: "channel" as const,
+      expectedChatType: "channel" as const,
+    },
+  ])("$name for bootstrap and prompt preparation", async (testCase) => {
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [],
+      contextFiles: [],
+    }));
+    setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun });
+
+    const context = await fixture.prepare({
+      config: createBundledMessageToolConfig(),
+      sessionKey: "agent:main:opaque:binding",
+      chatType: testCase.chatType,
+      sessionEntry: {
+        sessionId: "stored-session",
+        updatedAt: 0,
+        chatType: testCase.sessionEntryChatType,
+      },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+      expect.objectContaining({ chatType: testCase.expectedChatType }),
+    );
+    expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
+  });
+
   it("ignores volatile prompt text when static prompt text matches", async () => {
     const { dir } = fixture.session;
     const staticPrompt = "## Direct Context\nYou are in a Telegram direct conversation.";
@@ -2733,8 +2811,15 @@ describe("prepareCliRunContext", () => {
     const grantContext = mintMcpLoopbackClientGrant.mock.calls.at(-1)?.[0]?.context;
     expect(projected).toBeDefined();
     expect(grantContext).toBeDefined();
-    const { cfg: projectedConfig, ...projectedContext } = projected ?? {};
+    const {
+      cfg: projectedConfig,
+      authProfileStore,
+      authProfileStoreAgentDir,
+      ...projectedContext
+    } = projected ?? {};
     expect(projectedConfig).toEqual(expect.any(Object));
+    expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+    expect(authProfileStoreAgentDir).toEqual(expect.any(String));
     expect(projectedContext).toEqual(grantContext);
     expect(projectedContext).toMatchObject({
       sessionKey: "agent:worker:main",
@@ -2981,6 +3066,10 @@ describe("prepareCliRunContext", () => {
         spawnedBy: "agent:main:telegram:group:parent",
       },
       runtimeOwnerToken: "loopback-owner-token",
+      toolAuth: {
+        agentDir: expect.any(String),
+        store: expect.objectContaining({ version: 1, profiles: {} }),
+      },
     });
     context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
     context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
@@ -3626,10 +3715,14 @@ describe("prepareCliRunContext", () => {
       const {
         cfg: _projectedConfig,
         toolsAllow: projectedPolicy,
+        authProfileStore,
+        authProfileStoreAgentDir,
         ...projectedTrustedContext
       } = projected ?? {};
       const { toolsAllow: grantedTools, ...grantTrustedContext } = grantContext ?? {};
       expect(projectedPolicy).toEqual(["write"]);
+      expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+      expect(authProfileStoreAgentDir).toEqual(expect.any(String));
       expect(grantedTools).toEqual(["write", "apply_patch"]);
       expect(projectedTrustedContext).toEqual(grantTrustedContext);
     } finally {

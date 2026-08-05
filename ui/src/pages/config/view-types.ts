@@ -61,6 +61,8 @@ export type ConfigProps = {
   /** App updater running; config writes and restarts are interlocked. */
   updating: boolean;
   connected: boolean;
+  mutationAllowed?: boolean;
+  openFileAllowed?: boolean;
   schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;

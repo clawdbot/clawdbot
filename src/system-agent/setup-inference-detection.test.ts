@@ -97,6 +97,7 @@ describe("isolated setup inference detection", () => {
         partialDetection: fallback,
       },
       timeoutMs: 100,
+      fallbackEnv: {},
     });
     const startedAt = performance.now();
     const response = await requestHealth(`http://127.0.0.1:${address.port}/health`);

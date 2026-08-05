@@ -67,7 +67,7 @@ describe("warnIfModelConfigLooksOff", () => {
       },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, prompter, { validateCatalog: false });
+    await warnIfModelConfigLooksOff(config, prompter, { env: {}, validateCatalog: false });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();

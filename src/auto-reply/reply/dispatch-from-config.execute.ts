@@ -66,6 +66,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     wrapProgressCallback,
   } = state;
   let deliberateSilentTerminalReply = false;
+  let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
@@ -83,6 +84,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 ...({
                   onDeliberateSilentTerminalReply: () => {
                     deliberateSilentTerminalReply = true;
+                  },
+                  onPendingContinuation: () => {
+                    pendingContinuation = true;
                   },
                   onSessionMetadataChanges: notifySessionMetadataChanges,
                   onSessionPrepared: state.notePreparedSession,
@@ -597,6 +601,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   }
   const nextState = extendPreparedDispatchState(state, {
     deliberateSilentTerminalReply,
+    pendingContinuation,
     replyResult,
   });
   return { status: "ready" as const, state: nextState };

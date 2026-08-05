@@ -210,6 +210,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
     if (
       entry.collect ||
       !requesterSessionKey ||
+      (entry.requesterTurnRunId && entry.requesterTurnYielded === true) ||
       scheduledRequesterSettleWakeRuns.has(runId) ||
       scheduledRequesterSettleWakeTimers.has(runId)
     ) {

@@ -1,7 +1,11 @@
 // @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability, resolveAgentConfigEntryTarget } from "./index.ts";
@@ -23,6 +27,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     client: GatewayBrowserClient;
     phase: ApplicationGatewayPhase;
     sessionKey: string;
+    hello?: GatewayHelloOk | null;
   } = { client, phase: "connected", sessionKey: "main" };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
@@ -35,11 +40,16 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         return () => listeners.delete(listener);
       },
     },
-    publish: (connected: boolean, nextClient: GatewayBrowserClient = client) => {
+    publish: (
+      connected: boolean,
+      nextClient: GatewayBrowserClient = client,
+      hello?: GatewayHelloOk | null,
+    ) => {
       snapshot = {
         client: nextClient,
         phase: connected ? "connected" : "reconnecting",
         sessionKey: "main",
+        hello,
       };
       for (const listener of listeners) {
         listener(snapshot);
@@ -394,6 +404,45 @@ describe("createRuntimeConfigCapability", () => {
     runtimeConfig.dispose();
   });
 
+  it("does not stage a default agent after access downgrades", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          sourceConfig: {
+            agents: {
+              entries: {
+                main: {},
+                reviewer: { default: true },
+              },
+            },
+          },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.set"] },
+    } as GatewayHelloOk);
+
+    expect(runtimeConfig.stageDefaultAgent("main")).toBe(false);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { entries: { main: {}, reviewer: { default: true } } },
+    });
+    runtimeConfig.dispose();
+  });
+
   it("refuses to create blocked agent entry paths", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"
@@ -564,6 +613,55 @@ describe("config form auto-save", () => {
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
     // The post-save reload rebased the clean draft onto the new hash.
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.dispose();
+  });
+
+  it("does not auto-save a dirty draft after reconnecting with read-only access", async () => {
+    vi.useFakeTimers();
+    const server = createConfigServerMock();
+    const client = { request: server.request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["count"], 2);
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.set"] },
+    } as GatewayHelloOk);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+
+    expect(server.submissions).toHaveLength(0);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    runtimeConfig.dispose();
+  });
+
+  it("rechecks operator access after the original-config parser settles", async () => {
+    vi.useFakeTimers();
+    const server = createConfigServerMock();
+    const client = { request: server.request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const originalParse = deferred<void>();
+
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
+    runtimeConfig.patchForm(["count"], 2);
+    const timerAdvance = vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    await Promise.resolve();
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.set"] },
+    } as GatewayHelloOk);
+    originalParse.resolve();
+    await timerAdvance;
+
+    expect(server.submissions).toHaveLength(0);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
     runtimeConfig.dispose();
   });
 
@@ -1175,9 +1273,12 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
-  it("reschedules a stranded dirty draft after reconnect", async () => {
+  it("keeps a stranded dirty draft unsaved until an explicit save after replacement", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
+    const replacementClient = {
+      request: server.request,
+    } as unknown as GatewayBrowserClient;
     const { runtimeConfig, publish } = createHarness(
       server.request as GatewayBrowserClient["request"],
     );
@@ -1190,8 +1291,12 @@ describe("config form auto-save", () => {
     expect(server.submissions).toHaveLength(0);
     expect(runtimeConfig.state.configFormDirty).toBe(true);
 
-    publish(true);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    publish(true, replacementClient);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+    expect(server.submissions).toHaveLength(0);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(server.submissions).toEqual([
       { method: "config.set", raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
     ]);
@@ -2259,6 +2364,52 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("rechecks external mutation access after pending config writes settle", async () => {
+    vi.useFakeTimers();
+    const firstSet = deferred<unknown>();
+    const methods: string[] = [];
+    let canDispatch = true;
+    const request = vi.fn((method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        return firstSet.promise;
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+
+    runtimeConfig.patchForm(["count"], 2);
+    const result = runtimeConfig.runExternalMutation(
+      (client) => client.request("agents.update", { agentId: "main", name: "Agent Smith" }),
+      {
+        canDispatch: () => canDispatch,
+        dispatchError: "Access changed before the agent identity update started.",
+      },
+    );
+    await vi.waitFor(() => expect(methods).toEqual(["config.set"]));
+    canDispatch = false;
+    firstSet.resolve({ hash: "hash-2" });
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      error: "Access changed before the agent identity update started.",
+    });
+    expect(methods).toEqual(["config.set"]);
+    runtimeConfig.dispose();
+  });
+
   it("forces a post-mutation refresh instead of joining a pre-existing config load", async () => {
     const staleLoad = deferred<ConfigSnapshot>();
     let getCalls = 0;
@@ -2641,7 +2792,7 @@ describe("config form auto-save", () => {
     expect(submissions[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
   });
 
-  it("reconciles an uncertain in-flight save after reconnect before autosave resumes", async () => {
+  it("reconciles an uncertain in-flight save without autosaving its trailing draft", async () => {
     vi.useFakeTimers();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
@@ -2665,6 +2816,7 @@ describe("config form auto-save", () => {
           hash = "hash-2";
           return new Promise(() => {});
         }
+        committedRaw = (params as { raw: string }).raw;
         hash = "hash-3";
         return Promise.resolve({ hash });
       }
@@ -2683,9 +2835,14 @@ describe("config form auto-save", () => {
     publish(true);
     // Reconnect fetches the authoritative snapshot; the fresh bytes match the
     // interrupted submission, so the surviving draft is rebased onto the
-    // committed hash instead of false-conflicting against our own write.
+    // committed hash without sending it through the replacement connection.
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(sets).toHaveLength(2);
     expect(sets[1]).toEqual({ raw: '{\n  "count": 3\n}\n', baseHash: "hash-2" });
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
@@ -2821,6 +2978,117 @@ describe("config form auto-save", () => {
     await expect(stalePatch).resolves.toBe(false);
     await expect(staleSet).resolves.toBe(false);
     expect(setCalls).toBe(0);
+    runtimeConfig.dispose();
+  });
+
+  it("rechecks operator access before a queued config write dispatches", async () => {
+    const firstPatch = deferred<unknown>();
+    let patchCalls = 0;
+    let setCalls = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({ config: { count: 1 }, hash: "hash-1", valid: true, issues: [] });
+      }
+      if (method === "config.patch") {
+        patchCalls += 1;
+        return firstPatch.promise;
+      }
+      if (method === "config.set") {
+        setCalls += 1;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const patch = runtimeConfig.patch({ raw: { ui: { prefs: {} } }, note: "test" });
+    const save = runtimeConfig.save();
+    await vi.waitFor(() => expect(patchCalls).toBe(1));
+    publish(true, undefined, {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.patch", "config.set"] },
+    } as GatewayHelloOk);
+    firstPatch.resolve({});
+
+    await patch;
+    await expect(save).resolves.toBe(false);
+    expect(setCalls).toBe(0);
+    expect(runtimeConfig.canSet).toBe(false);
+    runtimeConfig.dispose();
+  });
+
+  it.each(["save", "patch"] as const)(
+    "rechecks the caller lifecycle before a queued config %s dispatches",
+    async (action) => {
+      const firstPatch = deferred<unknown>();
+      const methods: string[] = [];
+      let canDispatch = true;
+      const request = vi.fn((method: string) => {
+        methods.push(method);
+        if (method === "config.get") {
+          return Promise.resolve({
+            config: { count: 1 },
+            raw: '{"count":1}',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          });
+        }
+        if (method === "config.patch" && methods.filter((entry) => entry === method).length === 1) {
+          return firstPatch.promise;
+        }
+        return Promise.resolve({});
+      });
+      const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+      await runtimeConfig.ensureLoaded();
+      methods.length = 0;
+
+      const activePatch = runtimeConfig.patch({ raw: { count: 2 }, note: "active" });
+      const queued =
+        action === "save"
+          ? runtimeConfig.save({ canDispatch: () => canDispatch })
+          : runtimeConfig.patch({
+              raw: { count: 3 },
+              note: "queued",
+              canDispatch: () => canDispatch,
+            });
+      await vi.waitFor(() => expect(methods).toEqual(["config.patch"]));
+      canDispatch = false;
+      firstPatch.resolve({ config: { count: 2 }, hash: "hash-2" });
+
+      await expect(activePatch).resolves.toBe(true);
+      await expect(queued).resolves.toBe(false);
+      expect(methods).toEqual(["config.patch"]);
+      runtimeConfig.dispose();
+    },
+  );
+
+  it.each([
+    { action: "save" as const, method: "config.set" },
+    { action: "apply" as const, method: "config.apply" },
+  ])("rechecks operator access after parsing before $method dispatch", async ({ action }) => {
+    const server = createConfigServerMock();
+    const client = { request: server.request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const originalParse = deferred<void>();
+
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
+    const result = runtimeConfig[action]();
+    await Promise.resolve();
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.apply", "config.set"] },
+    } as GatewayHelloOk);
+    originalParse.resolve();
+
+    await expect(result).resolves.toBe(false);
+    expect(server.submissions).toHaveLength(0);
     runtimeConfig.dispose();
   });
 
@@ -2960,11 +3228,10 @@ describe("config form auto-save", () => {
     // process-local pending state survives instead of silently disappearing.
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
 
-    // …and the still-dirty draft retries against the committed hash.
+    // The matching committed bytes leave no draft to retry on the replacement.
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(sets).toHaveLength(2);
-    expect(sets[1]).toEqual({ raw: '{\n  "count": 2\n}\n', baseHash: "hash-2" });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
     runtimeConfig.dispose();
   });
 
@@ -3021,8 +3288,8 @@ describe("config form auto-save", () => {
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
-    expect(sets).toHaveLength(2);
-    expect(sets[1]).toEqual({ raw: '{\n  "count": 2\n}\n', baseHash: "hash-2" });
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
     runtimeConfig.dispose();
   });
 
@@ -3071,6 +3338,12 @@ describe("config form auto-save", () => {
     publish(true);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(sets).toHaveLength(2);
     expect(sets[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
     expect(runtimeConfig.state.configForm).toEqual({ count: 1 });

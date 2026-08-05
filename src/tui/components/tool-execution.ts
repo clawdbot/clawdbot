@@ -1,9 +1,10 @@
 // Tool execution component renders tool call status and output in the TUI.
-import { Box, Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
-import { sanitizeRenderableText } from "../tui-formatters.js";
+import * as tuiFormatters from "../tui-formatters.js";
+import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 
 // Rendering model for live tool calls in the chat log.
 type ToolResultContent = {
@@ -24,16 +25,17 @@ const MAX_PREVIEW_CHARS = PREVIEW_LINES * 256;
 
 // Bound the actual wrapped Markdown, not just source newlines: a single long
 // tool-output line can otherwise produce thousands of rows and stall the TUI.
-class ToolOutputComponent extends Markdown {
+class ToolOutputComponent extends HyperlinkMarkdown {
   private sourceText = "";
   private renderedSource: string | undefined;
   private expanded = false;
 
   override setText(text: string): void {
-    if (this.sourceText === text) {
+    const sourceText = tuiFormatters.sanitizeMarkdownSource(text);
+    if (this.sourceText === sourceText) {
       return;
     }
-    this.sourceText = text;
+    this.sourceText = sourceText;
     this.renderedSource = undefined;
     super.invalidate();
   }
@@ -75,13 +77,13 @@ function formatArgs(toolName: string, args: unknown): string {
   const display = resolveToolDisplay({ name: toolName, args });
   const detail = formatToolDetail(display);
   if (detail) {
-    return sanitizeRenderableText(detail);
+    return tuiFormatters.sanitizeRenderableText(detail);
   }
   if (!args || typeof args !== "object") {
     return "";
   }
   try {
-    return sanitizeRenderableText(JSON.stringify(args));
+    return tuiFormatters.sanitizeRenderableText(JSON.stringify(args));
   } catch {
     return "";
   }
@@ -95,7 +97,7 @@ function extractText(result?: ToolResult): string {
   const lines: string[] = [];
   for (const entry of result.content) {
     if (entry.type === "text" && entry.text) {
-      lines.push(sanitizeRenderableText(entry.text));
+      lines.push(entry.text);
     } else if (entry.type === "image") {
       const mime = entry.mimeType ?? "image";
       const size = entry.bytes ? ` ${Math.round(entry.bytes / 1024)}kb` : "";
@@ -176,7 +178,9 @@ export class ToolExecutionComponent extends Container {
       name: this.toolName,
       args: this.args,
     });
-    const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
+    const title = tuiFormatters.sanitizeRenderableLine(
+      `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`,
+    );
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
     const argLine = formatArgs(this.toolName, this.args);

@@ -73,11 +73,14 @@ jobs:
           }
           const shards = [...coreShards, ...additionalShards];
           const configs = [...new Set(shards.flatMap((shard) => shard.configs))];
+          const groups = configs.map((config) => ({
+            configs: [config],
+            shard_name: `cache-warm:${config}`,
+          }));
           appendFileSync(
             process.env.GITHUB_ENV,
             [
-              `OPENCLAW_NODE_TEST_CONFIGS_JSON=${JSON.stringify(configs)}`,
-              "OPENCLAW_VITEST_SHARD_NAME=core-unit-fast",
+              `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`,
               "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
             ].join("\n") + "\n",
           );
