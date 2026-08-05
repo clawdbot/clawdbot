@@ -30,6 +30,12 @@ function requireAttributionField(value: string, field: "runId" | "lifecycleGener
   return value;
 }
 
+function freezeAgentExecutionAttribution(
+  value: AgentExecutionAttribution,
+): AgentExecutionAttribution {
+  return Object.freeze(Object.assign(Object.create(null) as AgentExecutionAttribution, value));
+}
+
 export function createAgentExecutionAttribution(params: {
   runId: string;
   lifecycleGeneration: string;
@@ -39,8 +45,11 @@ export function createAgentExecutionAttribution(params: {
   executionIdentityAdmission?: AgentExecutionIdentityAdmission;
 }): AgentExecutionAttribution {
   const runId = requireAttributionField(params.runId, "runId");
-  const token = params.executionIdentityAdmission
-    ? parseExecutionIdentityAdmissionToken(params.executionIdentityAdmission.token)
+  const executionIdentityAdmission = Object.hasOwn(params, "executionIdentityAdmission")
+    ? params.executionIdentityAdmission
+    : undefined;
+  const token = executionIdentityAdmission
+    ? parseExecutionIdentityAdmissionToken(executionIdentityAdmission.token)
     : undefined;
   if (token && token.runId !== runId) {
     throw new TypeError("Agent execution attribution token disagrees with runId");
@@ -48,7 +57,7 @@ export function createAgentExecutionAttribution(params: {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const sessionId = normalizeOptionalString(params.sessionId);
   const agentId = normalizeOptionalString(params.agentId);
-  return Object.freeze({
+  return freezeAgentExecutionAttribution({
     runId,
     contextId: token?.contextId ?? randomUUID(),
     executionId: token?.executionId ?? randomUUID(),
@@ -58,7 +67,7 @@ export function createAgentExecutionAttribution(params: {
       ? {
           executionIdentityAdmission: Object.freeze({
             token,
-            retryOnly: params.executionIdentityAdmission?.retryOnly === true,
+            retryOnly: executionIdentityAdmission?.retryOnly === true,
           }),
         }
       : {}),
@@ -72,7 +81,7 @@ export function rebindAgentExecutionAttribution(
   attribution: AgentExecutionAttribution,
   lifecycleGeneration: string,
 ): AgentExecutionAttribution {
-  return Object.freeze({
+  return freezeAgentExecutionAttribution({
     ...attribution,
     lifecycleGeneration: requireAttributionField(lifecycleGeneration, "lifecycleGeneration"),
   });

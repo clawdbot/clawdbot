@@ -4,7 +4,9 @@ import {
   type ExecutionIdentityAdmissionFacts,
 } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AgentCommandOpts } from "./command/types.js";
+import { captureAgentRunLifecycleGeneration } from "../infra/agent-events.js";
+import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
+import type { AgentCommandGatewayIngressOpts, AgentCommandOpts } from "./command/types.js";
 
 type AgentCommandAdmissionIngress = ExecutionIdentityAdmissionFacts["ingress"];
 
@@ -53,8 +55,74 @@ function recordAgentCommandExecutionIdentity(params: {
   );
 }
 
+function resolveAgentCommandExecutionAttribution(
+  opts: AgentCommandOpts,
+  params: {
+    runId: string;
+    sessionKey?: string;
+    sessionId?: string;
+    sessionAgentId?: string;
+  },
+): {
+  attribution: NonNullable<AgentCommandOpts["executionAttribution"]>;
+  lifecycleGeneration: string;
+} {
+  if (opts.executionAttribution && opts.executionAttribution.runId !== params.runId) {
+    throw new Error("Agent command execution attribution runId does not match the command runId.");
+  }
+  const lifecycleGeneration =
+    opts.executionAttribution?.lifecycleGeneration ??
+    opts.lifecycleGeneration ??
+    captureAgentRunLifecycleGeneration(params.runId);
+  return {
+    attribution:
+      opts.executionAttribution ??
+      createAgentExecutionAttribution({
+        runId: params.runId,
+        lifecycleGeneration,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.sessionAgentId,
+      }),
+    lifecycleGeneration,
+  };
+}
+
+function replaceAgentCommandExecutionAttribution(
+  opts: AgentCommandOpts,
+  attribution: AgentCommandOpts["executionAttribution"],
+): AgentCommandOpts {
+  return attribution === opts.executionAttribution
+    ? opts
+    : { ...opts, executionAttribution: attribution };
+}
+
+function prepareAgentCommandIngress(
+  opts: AgentCommandGatewayIngressOpts,
+  trustedAttribution: boolean,
+): {
+  lifecycleGeneration: string;
+  opts: AgentCommandGatewayIngressOpts;
+} {
+  const internalOpts: AgentCommandGatewayIngressOpts = trustedAttribution
+    ? opts
+    : { ...opts, executionAttribution: undefined };
+  if (typeof internalOpts.allowModelOverride !== "boolean") {
+    throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
+  }
+  return {
+    lifecycleGeneration:
+      internalOpts.lifecycleGeneration ??
+      captureAgentRunLifecycleGeneration(internalOpts.runId ?? ""),
+    opts: internalOpts,
+  };
+}
+
 export const executionIdentity = {
   localIngress: LOCAL_CLI_ADMISSION_INGRESS,
+  prepareIngress: prepareAgentCommandIngress,
   record: recordAgentCommandExecutionIdentity,
+  replaceAttribution: replaceAgentCommandExecutionAttribution,
+  resolveAttribution: resolveAgentCommandExecutionAttribution,
   systemIngress,
 };

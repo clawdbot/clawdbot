@@ -447,7 +447,7 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
-  it("strips private execution attribution from runtime-shaped public ingress", async () => {
+  it("replaces private execution attribution on runtime-shaped public ingress", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
@@ -487,9 +487,11 @@ describe("agentCommand", () => {
           runtime,
         );
 
-        expect(record).toHaveBeenCalledWith(
-          expect.objectContaining({ attribution: undefined, runId: "public-ingress-run" }),
-        );
+        const recordedAttribution = record.mock.calls[0]?.[0].attribution;
+        expect(recordedAttribution).toMatchObject({ runId: "public-ingress-run" });
+        expect(recordedAttribution?.contextId).not.toBe("inherited-context");
+        expect(recordedAttribution?.contextId).not.toBe("forged-context");
+        expect(recordedAttribution).not.toHaveProperty("executionIdentityAdmission");
       } finally {
         record.mockRestore();
         if (priorDescriptor) {

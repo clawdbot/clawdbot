@@ -12,6 +12,7 @@ import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-tool-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -21,7 +22,7 @@ import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
-type InternalRunParams = RunEmbeddedAgentParams & {
+type InternalRunParams = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
   systemAgentTool?: SystemAgentToolOptions;
 };
