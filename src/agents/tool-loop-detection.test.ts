@@ -17,6 +17,7 @@ import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliatio
 import {
   UNKNOWN_TOOL_THRESHOLD,
   detectToolCallLoop,
+  hashToolCall,
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
@@ -1765,6 +1766,101 @@ describe("tool-loop-detection", () => {
         .map((call) => call.resultHash);
       expect(hashes?.[0]).toBeTypeOf("string");
       expect(hashes?.[0]).not.toBe(hashes?.[1]);
+    });
+
+    it("hashes sessions_send calls to one target identically despite reworded bodies", () => {
+      const hashA = hashToolCall("sessions_send", {
+        sessionKey: "agent:main:peer",
+        message: "check-in variant A",
+      });
+      const hashB = hashToolCall("sessions_send", {
+        sessionKey: "agent:main:peer",
+        message: "entirely different wording, same target",
+      });
+      expect(hashA).toBe(hashB);
+    });
+
+    it("keeps sessions_send calls to different targets distinct", () => {
+      const hashA = hashToolCall("sessions_send", { sessionKey: "agent:a:peer", message: "hi" });
+      const hashB = hashToolCall("sessions_send", { sessionKey: "agent:b:peer", message: "hi" });
+      expect(hashA).not.toBe(hashB);
+    });
+
+    it("escalates reworded sessions_send floods to critical via generic_repeat", () => {
+      const state = createState();
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "sessions_send",
+          { sessionKey: "agent:main:peer", message: `reworded check-in variant ${i}` },
+          { ok: true, runId: `run_${i}` },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(
+        state,
+        "sessions_send",
+        { sessionKey: "agent:main:peer", message: "yet another reworded variant" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("allows mixed-target sessions_send fan-out below threshold", () => {
+      const state = createState();
+      for (let i = 0; i < 10; i += 1) {
+        recordSend(
+          state,
+          "sessions_send",
+          { sessionKey: `agent:target-${i}:peer`, message: "one-shot update" },
+          { ok: true, runId: `run_${i}` },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(
+        state,
+        "sessions_send",
+        { sessionKey: "agent:target-10:peer", message: "one-shot update" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("keeps conversations_send and conversations_turn text-sensitive (external channel delivery)", () => {
+      // Conversation tools deliver directly to an external channel conversation;
+      // reworded texts to one conversationRef are legitimate distinct messages
+      // and must keep distinct hashes (same contract as the message tool).
+      for (const toolName of ["conversations_send", "conversations_turn"] as const) {
+        const hashA = hashToolCall(toolName, {
+          conversationRef: "channel:telegram:123",
+          message: "first distinct update",
+        });
+        const hashB = hashToolCall(toolName, {
+          conversationRef: "channel:telegram:123",
+          message: "second distinct update, different words",
+        });
+        expect(hashA).not.toBe(hashB);
+      }
+    });
+
+    it("does not change message-tool hashing for reworded channel sends", () => {
+      // Channel message sends with different texts remain distinct calls; the
+      // semantic collapse is scoped to inter-agent send tools only.
+      const hashA = hashToolCall("message", {
+        action: "send",
+        target: "feishu:oc_chat",
+        text: "line 1",
+      });
+      const hashB = hashToolCall("message", {
+        action: "send",
+        target: "feishu:oc_chat",
+        text: "line 2",
+      });
+      expect(hashA).not.toBe(hashB);
     });
 
     it("keeps full result hashing for administrative message mutations", () => {
