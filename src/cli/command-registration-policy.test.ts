@@ -67,9 +67,9 @@ describe("command-registration-policy", () => {
     ).toBe(true);
     expect(
       shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "tools", "effective"],
+        argv: ["node", "openclaw", "tools", "commands"],
         primary: "tools",
-        hasBuiltinPrimary: false,
+        hasBuiltinPrimary: true,
       }),
     ).toBe(true);
     expect(

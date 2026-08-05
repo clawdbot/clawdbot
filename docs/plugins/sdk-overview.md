@@ -507,7 +507,7 @@ own trust.
 
 ### CLI registration metadata
 
-`api.registerCli(registrar, opts?)` accepts two kinds of command metadata:
+`api.registerCli(registrar, opts?)` accepts command ownership data:
 
 - `commands`: explicit command names owned by the registrar
 - `descriptors`: parse-time command descriptors used for CLI help,
@@ -523,6 +523,9 @@ For paired-node features, prefer
 If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
 registrar.
+
+Descriptors describe parse-time command shape only. They do not declare effect
+risk, grant permission, enforce policy, or hide commands from inventory.
 
 ```typescript
 api.registerCli(

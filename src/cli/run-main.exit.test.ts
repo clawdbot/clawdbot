@@ -2807,7 +2807,6 @@ describe("runCli exit behavior", () => {
   it.each([
     ["auth", ["node", "openclaw", "auth", "--help"]],
     ["tool", ["node", "openclaw", "tool", "image_generate"]],
-    ["tools", ["node", "openclaw", "tools", "effective"]],
   ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     const program = {
@@ -2821,6 +2820,28 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
+  it("keeps tools available to plugin command discovery", async () => {
+    const argv = ["node", "openclaw", "tools", "effective"];
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(argv);
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "tools", argv]]);
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      program,
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "tools", skipPluginValidation: false },
+    );
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
