@@ -1552,6 +1552,64 @@ describe("runCodexAppServerSideQuestion", () => {
     ).toBeUndefined();
   });
 
+  it("interrupts the side turn when the native relay reports a critical loop", async () => {
+    const client = createFakeClient();
+    let relayIdDuringFork: string | undefined;
+    let resolveTurnStarted!: () => void;
+    const turnStarted = new Promise<void>((resolve) => {
+      resolveTurnStarted = resolve;
+    });
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        relayIdDuringFork = extractRelayIdFromThreadConfig(
+          (requestParams as { config?: Record<string, unknown> }).config,
+        );
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        // The turn never completes on its own: only run-controller
+        // cancellation can settle the active collector wait here.
+        queueMicrotask(() => resolveTurnStarted());
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    const run = runCodexAppServerSideQuestion(sideParams(), {
+      nativeHookRelay: { enabled: true },
+    });
+    const assertion = expect(run).rejects.toThrow("critical no-progress tool loop");
+    await turnStarted;
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+      relayIdDuringFork!,
+    );
+    if (!registration?.onCriticalToolLoop) {
+      throw new Error("Expected native critical-loop termination callback");
+    }
+
+    registration.onCriticalToolLoop({
+      toolName: "exec",
+      toolCallId: "critical-loop-call",
+      reason: "critical no-progress tool loop",
+    });
+
+    // The relay-triggered abort settles the active wait immediately and the
+    // cleanup path interrupts the orphaned side turn instead of waiting for
+    // the completion timeout.
+    await assertion;
+    expect(client.request.mock.calls.some((call) => call[0] === "turn/interrupt")).toBe(true);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
+    ).toBeUndefined();
+  });
+
   it("unregisters the native hook relay when side thread fork fails", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
