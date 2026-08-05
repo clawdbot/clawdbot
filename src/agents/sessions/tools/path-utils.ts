@@ -6,6 +6,7 @@
 import * as os from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { recoverMalformedWindowsPath } from "@openclaw/ai/internal/runtime";
 import { pathExistsSync } from "../../../infra/fs-safe.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -56,7 +57,7 @@ function expandPath(filePath: string): string {
  * Handles ~ expansion and absolute paths.
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
-  const expanded = expandPath(filePath);
+  const expanded = expandPath(recoverMalformedWindowsPath(filePath));
   if (isAbsolute(expanded)) {
     return expanded;
   }

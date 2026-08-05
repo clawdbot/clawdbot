@@ -178,6 +178,19 @@ describe("write tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("finished\n");
   });
 
+  it("recovers malformed Windows path segments before resolving", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+    await createTempPath();
+    const malformedPath = `${tmpDir}\n` + "ew.txt";
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute("call-1", { path: malformedPath, content: "hello\n" }, undefined);
+
+    await expect(fs.readFile(path.join(tmpDir, "new.txt"), "utf-8")).resolves.toBe("hello\n");
+  });
+
   it("returns terminal no-op when writing identical content to existing file", async () => {
     const filePath = await createTempPath("identical.txt");
     await fs.writeFile(filePath, "hello\n", "utf-8");
