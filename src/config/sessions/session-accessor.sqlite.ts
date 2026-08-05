@@ -1,6 +1,7 @@
 // Stable SQLite accessor surface. Domain owners live in the focused modules below.
 export {
   countSqliteSessionEntryRowsReadOnly,
+  ensureSqliteSessionEntrySync,
   hasSqliteSessionEntriesByStatusReadOnly,
   listSqliteSessionEntries,
   listSqliteSessionChildEntriesReadOnly,

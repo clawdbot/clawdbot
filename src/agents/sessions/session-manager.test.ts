@@ -359,6 +359,28 @@ describe("SessionManager.open", () => {
     expect(loadSessionEntry(scope)).toEqual(before);
   });
 
+  it("does not overwrite a rebound session row when the first append seeds its header", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-stale-appender",
+      sessionKey: "agent:main:sqlite-rebound-before-header",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "sqlite-current-owner",
+      updatedAt: 456,
+      label: "preserved",
+    });
+    const before = loadSessionEntry(scope);
+    const manager = SessionManager.open(scope, dir);
+
+    expect(() =>
+      manager.appendMessage({ role: "user", content: "stale message", timestamp: 1 }),
+    ).toThrow("Session transcript header was not persisted");
+    expect(loadSessionEntry(scope)).toEqual(before);
+  });
+
   it("rejects invalid entries before mutating in-memory state", () => {
     const manager = SessionManager.inMemory("/tmp");
     const entriesBefore = manager.getEntries();
