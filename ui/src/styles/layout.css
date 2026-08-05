@@ -2182,8 +2182,8 @@ html.openclaw-native-macos
 
 /* Resting semantic state remains visible, so reserve its overlay slot before
    the title. Action-only rows still get the full resting width. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):has(
-    > .sidebar-recent-session__aside > .session-row-state
+.sidebar-recent-session:not(.sidebar-recent-session--child):where(
+    :has(> .sidebar-recent-session__aside > .session-row-state)
   )
   > .sidebar-recent-session__link {
   padding-right: 68px;

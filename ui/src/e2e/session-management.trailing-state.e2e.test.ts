@@ -261,8 +261,12 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
+      const link = row.locator(".sidebar-recent-session__link");
       const pin = row.getByRole("button", { name: "Pin thread" });
       const menu = row.getByRole("button", { name: "Open thread menu" });
+      await expect
+        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("68px");
 
       const [restingNameBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([
@@ -286,6 +290,9 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
+      await expect
+        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("52px");
 
       const [nameBounds, pinBounds, menuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
@@ -303,6 +310,9 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
+      await expect
+        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("52px");
 
       const [focusedNameBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
