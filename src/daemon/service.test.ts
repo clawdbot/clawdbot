@@ -13,6 +13,7 @@ import {
   readGatewayServiceState,
   resolveGatewayService,
   startGatewayService,
+  startGatewayServiceAfterFailedUpdate,
 } from "./service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
 
@@ -94,6 +95,15 @@ describe("resolveGatewayService", () => {
       await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
         "Refusing to restart the gateway service",
       );
+
+      // Failed-update recovery must survive this guard: the swap already
+      // installed the newer binary the unit runs, so refusing here only strands
+      // a gateway this process stopped. Reaching the platform adapter (which
+      // rejects for the unsupported platform) proves the guard was not applied.
+      setPlatform("aix");
+      await expect(
+        startGatewayServiceAfterFailedUpdate({ env: process.env, stdout: process.stdout }),
+      ).rejects.toThrow("Gateway service install not supported on aix");
     } finally {
       envSnapshot.restore();
       clearConfigCache();
@@ -125,6 +135,11 @@ describe("resolveGatewayService", () => {
         "gateway lifecycle is managed by an external supervisor",
       );
     }
+
+    // Failed-update recovery skips the version guard but not ownership.
+    await expect(
+      startGatewayServiceAfterFailedUpdate({ env, stdout: process.stdout }),
+    ).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
   });
 
   it("describes scheduled restart handoffs consistently", () => {

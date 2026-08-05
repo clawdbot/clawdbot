@@ -453,3 +453,35 @@ export function resolveGatewayService(): GatewayService {
   }
   return createUnsupportedGatewayService();
 }
+
+/**
+ * Restores a managed service that this process stopped for an update.
+ *
+ * A package swap installs a newer OpenClaw and its config, so the updater that
+ * stopped the service is now older than the config and the future-config guard
+ * refuses its recovery restart. Leaving the gateway stopped is the worse
+ * outcome, and starting is not the action the guard protects against: it does
+ * not rewrite the unit and does not act on the config, it asks the service
+ * manager to run the unit already on disk, whose ExecStart points at the newly
+ * installed binary. That binary applies the version guard itself at startup.
+ *
+ * This is the same recovery the detached update handoff performs by invoking the
+ * service manager directly; going through the platform adapter keeps launchd and
+ * Scheduled Tasks working instead of only systemd. Ownership is still enforced,
+ * so a service OpenClaw does not manage is never touched.
+ */
+export async function startGatewayServiceAfterFailedUpdate(
+  args: GatewayServiceControlArgs,
+): Promise<void> {
+  // Ownership only — do not go through withGatewayServiceMutationGuards, which
+  // also applies the future-config version block this recovery must survive.
+  assertGatewayServiceMutationAllowed("start the gateway service", process.env);
+  if (args.env && args.env !== process.env) {
+    assertGatewayServiceMutationAllowed("start the gateway service", args.env);
+  }
+  if (isSupportedGatewayServicePlatform(process.platform)) {
+    await GATEWAY_SERVICE_REGISTRY[process.platform].start(args);
+    return;
+  }
+  await createUnsupportedGatewayService().start(args);
+}

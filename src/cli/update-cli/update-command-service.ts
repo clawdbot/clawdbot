@@ -31,7 +31,11 @@ import {
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  startGatewayServiceAfterFailedUpdate,
+} from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -583,9 +587,37 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
     }
   } catch (err) {
-    defaultRuntime.error(
-      `Failed to restart managed gateway service after failed update: ${String(err)}`,
-    );
+    // A completed package swap leaves this process older than the config it now
+    // reads, so the version guard refuses the restart and the service stays
+    // stopped. Recover by starting the already-installed unit, but only after
+    // this update already recorded a rooted ownership verdict. Missing verdict
+    // is not a future-config restart refusal.
+    if (!before.serviceUpdateVerdict || !("root" in before.serviceUpdateVerdict)) {
+      defaultRuntime.error(
+        `Failed to restart managed gateway service after failed update: ${String(err)}`,
+      );
+      return;
+    }
+    try {
+      await startGatewayServiceAfterFailedUpdate({
+        env: before.serviceEnv,
+        stdout: serviceControlStdoutForMode(params.jsonMode),
+      });
+      if (!params.jsonMode) {
+        defaultRuntime.log(
+          theme.muted("Started managed gateway service after failed update recovery restart."),
+        );
+      }
+    } catch (recoveryErr) {
+      const message =
+        `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
+        `recovery start also failed: ${String(recoveryErr)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+    }
   }
 }
 
