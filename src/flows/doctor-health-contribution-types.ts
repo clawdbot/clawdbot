@@ -3,9 +3,10 @@ import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
@@ -23,6 +24,7 @@ type DoctorConfigResult = {
   blockedCodexModelIdentities?: readonly string[];
   /** Ephemeral doctor-only auth rename plan; never part of persisted config. */
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
+  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 };
 
 export type DoctorHealthFlowContext = {
@@ -48,6 +50,12 @@ export type DoctorHealthFlowContext = {
   gatewayStatus?: import("../status/types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+};
+
+/** Internal facts carried through Doctor detect/repair/validate passes without widening the SDK. */
+export type DoctorHealthCheckContext = HealthCheckContext & {
+  readonly runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 };
 
 export type DoctorHealthContribution = FlowContribution & {

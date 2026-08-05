@@ -1681,6 +1681,7 @@ describe("doctor health contributions", () => {
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     const ctx = {
       cfg,
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1721,6 +1722,7 @@ describe("doctor health contributions", () => {
     }));
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(false),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1761,6 +1763,7 @@ describe("doctor health contributions", () => {
     }));
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1782,6 +1785,7 @@ describe("doctor health contributions", () => {
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     const ctx = {
       cfg,
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1813,6 +1817,7 @@ describe("doctor health contributions", () => {
     });
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
