@@ -3,6 +3,10 @@ import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import {
+  applyInputProvenanceToUserMessage,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -336,6 +340,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    inputProvenance?: InputProvenance,
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -355,6 +360,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         : undefined,
       media,
       imageOrder,
+      inputProvenance,
     );
   }
 
@@ -390,10 +396,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     },
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    inputProvenance?: InputProvenance,
   ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
-    const runtimeMessage = this.createUserMessage(text, images);
+    const runtimeMessage = applyInputProvenanceToUserMessage(
+      this.createUserMessage(text, images),
+      inputProvenance,
+    ) as PersistedUserTurnMessage;
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;

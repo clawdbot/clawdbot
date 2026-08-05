@@ -393,6 +393,27 @@ describe("AgentSession tree navigation", () => {
 });
 
 describe("AgentSession queued user turns", () => {
+  it("carries typed provenance on the queued user message", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const origin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      sourceChannel: "internal",
+      sourceTool: "sessions_send",
+    };
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+
+    await session.steer("delegated work", undefined, undefined, undefined, undefined, origin);
+
+    const runtimeMessage = steer.mock.calls[0]?.[0];
+    expect(runtimeMessage).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "delegated work" }],
+      provenance: origin,
+    });
+    session.dispose();
+  });
+
   it("carries prepared transcript context on the exact steered message", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const recorder = createUserTurnTranscriptRecorder({

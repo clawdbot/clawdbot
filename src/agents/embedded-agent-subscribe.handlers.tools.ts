@@ -1665,7 +1665,8 @@ export async function handleToolExecutionEnd(
   });
   ctx.params.trajectoryRecorder?.recordEvent("tool.result", {
     ...toolResultEventData,
-    success: !isToolError,
+    isError: observerIsError,
+    success: !observerIsError,
   });
   const endedAt = Date.now();
   const itemId = buildToolItemId(toolCallId);

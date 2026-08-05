@@ -24,6 +24,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
     const projector = await createProjector(
@@ -282,6 +283,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
     const projector = await createProjector(await createParams(), {
@@ -338,6 +340,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
     const projector = await createProjector(await createParams(), {
@@ -392,6 +395,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
     const projector = await createProjector(await createParams(), {
@@ -497,6 +501,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
     const projector = await createProjector(

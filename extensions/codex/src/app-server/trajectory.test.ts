@@ -173,22 +173,26 @@ describe("Codex trajectory recorder", () => {
     ).resolves.toEqual([expect.objectContaining({ type: "session.started" })]);
   });
 
-  it("redacts secrets and keeps recorded strings UTF-16 safe", async () => {
+  it("redacts secrets, including routing-shaped tool arguments, and keeps strings UTF-16 safe", async () => {
     const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
-    recorder.recordEvent("model.output", {
+    recorder.recordEvent("tool.call", {
       text: `${"x".repeat(19_999)}😀`,
       apiKey: "secret",
       authorization: "Bearer sk-test-secret-token",
-      sessionKey: "agent:receiver:main",
-      sourceSessionKey: "agent:sender:main",
+      arguments: {
+        sessionKey: "agent:receiver:main",
+        sourceSessionKey: "agent:sender:main",
+      },
     });
     await recorder.flush();
 
     expect(events[0]?.data?.text).toBe(`${"x".repeat(19_999)}…`);
     expect(events[0]?.data?.apiKey).toBe("<redacted>");
     expect(events[0]?.data?.authorization).toBe("<redacted>");
-    expect(events[0]?.data?.sessionKey).toBe("agent:receiver:main");
-    expect(events[0]?.data?.sourceSessionKey).toBe("agent:sender:main");
+    expect(events[0]?.data?.arguments).toEqual({
+      sessionKey: "<redacted>",
+      sourceSessionKey: "<redacted>",
+    });
   });
 
   it("records namespace dynamic tools as callable trajectory definitions", async () => {
@@ -285,5 +289,83 @@ describe("Codex trajectory recorder", () => {
     });
     expect(events[0]?.data?.messagesSnapshot).toBeUndefined();
     expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");
+  });
+
+  it("preserves trusted prompt origin when truncating an oversized prompt event", async () => {
+    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+    const oversized = "界".repeat(30_000);
+    const truncated = `${"界".repeat(20_000)}…`;
+    const origin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      originSessionId: oversized,
+      sourceChannel: oversized,
+      sourceTool: oversized,
+    };
+
+    recorder.recordPromptSubmitted(
+      {
+        threadId: oversized,
+        turnId: oversized,
+        prompt: oversized,
+        imagesCount: 0,
+      },
+      origin,
+    );
+    await recorder.flush();
+
+    expect(events[0]?.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        originSessionId: truncated,
+        sourceChannel: truncated,
+        sourceTool: truncated,
+      },
+    });
+    expect(events[0]?.data?.prompt).toBeUndefined();
+    expect(events[0]?.data?.droppedFields).toContain("prompt");
+  });
+
+  it("validates prompt provenance and projects only canonical fields", async () => {
+    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+
+    recorder.recordPromptSubmitted(
+      { threadId: "thread-1", turnId: "turn-1", prompt: "hello", imagesCount: 0 },
+      {
+        kind: "forged",
+        sourceSessionKey: "agent:sender:main",
+      } as never,
+    );
+    recorder.recordPromptSubmitted(
+      { threadId: "thread-1", turnId: "turn-2", prompt: "hello again", imagesCount: 0 },
+      {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+        apiKey: "must-not-leak",
+      } as never,
+    );
+    await recorder.flush();
+
+    expect(events[0]?.data).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      prompt: "hello",
+      imagesCount: 0,
+    });
+    expect(events[1]?.data).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-2",
+      prompt: "hello again",
+      imagesCount: 0,
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+      },
+    });
   });
 });

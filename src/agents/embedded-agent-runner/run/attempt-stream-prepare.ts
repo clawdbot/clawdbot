@@ -409,6 +409,14 @@ export function prepareEmbeddedAttemptStream(input: {
           options,
           attempt.sessionKey,
         );
+        if (options?.waitForTranscriptCommit && options.inputProvenance) {
+          input.trajectoryRecorder?.recordEvent("prompt.submitted", {
+            prompt: text,
+            messages: input.activeSession.messages,
+            imagesCount: options.images?.length ?? 0,
+            origin: options.inputProvenance,
+          });
+        }
       } finally {
         activeQueueAdmissions--;
       }

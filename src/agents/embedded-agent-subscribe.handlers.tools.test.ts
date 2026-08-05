@@ -9,6 +9,8 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "../trajectory/paths.js";
+import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
@@ -213,6 +215,29 @@ function createTestContext(): {
 }
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
+type RecordedTrajectoryEvent = { type: string; data?: Record<string, unknown> };
+
+function attachRecorder(ctx: ToolHandlerContext): RecordedTrajectoryEvent[] {
+  const recorded: RecordedTrajectoryEvent[] = [];
+  ctx.params.trajectoryRecorder = {
+    recordEvent: (type, data) => {
+      recorded.push({ type, ...(data ? { data } : {}) });
+    },
+    flush: async () => {},
+  };
+  return recorded;
+}
+
+function requireRecorded(
+  recorded: readonly RecordedTrajectoryEvent[],
+  type: string,
+): Record<string, unknown> {
+  const event = recorded.find((entry) => entry.type === type);
+  if (!event?.data) {
+    throw new Error(`expected recorded ${type} event`);
+  }
+  return event.data;
+}
 
 function requireEvent(
   events: CapturedAgentEvent[],
@@ -2314,11 +2339,12 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
   });
 
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
-    const { ctx } = createTestContext();
+    const { ctx, onAgentEvent } = createTestContext();
     const onToolResult = vi.fn();
     const onAgentToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
     ctx.params.onAgentToolResult = onAgentToolResult;
+    const recorded = attachRecorder(ctx);
 
     await endTool(ctx, {
       toolName: "exec",
@@ -2358,6 +2384,25 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         details: expect.objectContaining({ status: "approval-unavailable" }),
       }),
       isError: true,
+    });
+    expectRecordFields(requireRecorded(recorded, "tool.result"), "recorded tool.result", {
+      name: "exec",
+      toolCallId: "tool-exec-unavailable",
+      isError: true,
+      success: false,
+    });
+    const blockedCommand = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .find(
+        (event) =>
+          event.stream === "item" &&
+          event.data?.itemId === "command:tool-exec-unavailable" &&
+          event.data.status === "blocked",
+      );
+    expectRecordFields(blockedCommand?.data, "blocked command item", {
+      kind: "command",
+      status: "blocked",
+      toolCallId: "tool-exec-unavailable",
     });
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
@@ -3463,30 +3508,6 @@ describe("control UI credential redaction (issue #72283)", () => {
   });
 });
 describe("tool trajectory recording", () => {
-  type RecordedTrajectoryEvent = { type: string; data?: Record<string, unknown> };
-
-  function attachRecorder(ctx: ToolHandlerContext): RecordedTrajectoryEvent[] {
-    const recorded: RecordedTrajectoryEvent[] = [];
-    ctx.params.trajectoryRecorder = {
-      recordEvent: (type, data) => {
-        recorded.push({ type, ...(data ? { data } : {}) });
-      },
-      flush: async () => {},
-    };
-    return recorded;
-  }
-
-  function requireRecorded(
-    recorded: readonly RecordedTrajectoryEvent[],
-    type: string,
-  ): Record<string, unknown> {
-    const event = recorded.find((entry) => entry.type === type);
-    if (!event?.data) {
-      throw new Error(`expected recorded ${type} event`);
-    }
-    return event.data;
-  }
-
   afterEach(() => {
     resetAgentEventsForTest();
   });
@@ -3555,6 +3576,57 @@ describe("tool trajectory recording", () => {
       isError: true,
       success: false,
     });
+  });
+
+  it("retains tool identity and outcome when a 33-block result requires compaction", async () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-tool-result-compaction",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+    if (!recorder) {
+      throw new Error("expected trajectory recorder");
+    }
+    const { ctx } = createTestContext();
+    ctx.params.trajectoryRecorder = recorder;
+
+    await executeTool(ctx, {
+      toolName: "custom_fetch",
+      toolCallId: "tool-trajectory-oversized-result",
+      args: { query: "incident timeline" },
+      isError: false,
+      result: {
+        content: Array.from({ length: 33 }, (_value, index) => ({
+          type: "text",
+          text: `${index}:${"x".repeat(7_990)}`,
+        })),
+      },
+    });
+
+    const resultLine = writes.find((line) => JSON.parse(line).type === "tool.result");
+    if (!resultLine) {
+      throw new Error("expected persisted tool.result");
+    }
+    const persisted = JSON.parse(resultLine) as { data: Record<string, unknown> };
+    expect(persisted.data).toMatchObject({
+      name: "custom_fetch",
+      toolCallId: "tool-trajectory-oversized-result",
+      isError: false,
+      success: true,
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
+    expect(persisted.data.result).toBeUndefined();
+    expect(Buffer.byteLength(resultLine, "utf8")).toBeLessThanOrEqual(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    );
   });
 
   it("redacts secrets from recorded tool arguments", async () => {

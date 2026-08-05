@@ -246,6 +246,173 @@ describe("prepareEmbeddedAttemptStream", () => {
     await queued;
   });
 
+  it("records queued prompt provenance only after transcript commitment", async () => {
+    const origin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      sourceChannel: "internal",
+      sourceTool: "sessions_send",
+    };
+    let emit!: (event: unknown) => void;
+    const message = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "delegated work" }],
+      timestamp: 1,
+      provenance: origin,
+    };
+    const activeSession = {
+      agent: {
+        hasQueuedMessages: () => true,
+        steeringQueue: { messages: [message] },
+      },
+      isStreaming: true,
+      messages: [message],
+      pendingMessageCount: 1,
+      steer: vi.fn(async () => undefined),
+      subscribe: vi.fn((listener: (event: unknown) => void) => {
+        emit = listener;
+        return () => undefined;
+      }),
+    };
+    const recordEvent = vi.fn();
+    const prepared = prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-active-delegation",
+        sessionId: "session-active-delegation",
+        sessionKey: "agent:receiver:main",
+      } as never,
+      activeSession: activeSession as never,
+      hookRunner: undefined as never,
+      hookAgentId: "receiver",
+      diagnosticTrace: {} as never,
+      clientToolCallSlots: [],
+      toolSearchTargetTranscriptProjections: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:receiver:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      trajectoryRecorder: { recordEvent } as never,
+    });
+
+    const queued = prepared.queueHandle.queueMessage("delegated work", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      inputProvenance: origin,
+    });
+    await vi.waitFor(() => expect(activeSession.steer).toHaveBeenCalledOnce());
+    expect(recordEvent).not.toHaveBeenCalled();
+
+    emit({ type: "message_end", message });
+    await queued;
+
+    expect(recordEvent).toHaveBeenCalledOnce();
+    expect(recordEvent).toHaveBeenCalledWith("prompt.submitted", {
+      prompt: "delegated work",
+      messages: [message],
+      imagesCount: 0,
+      origin,
+    });
+  });
+
+  it.each([
+    {
+      name: "runtime rejection",
+      steer: vi.fn(async () => {
+        throw new Error("steering rejected");
+      }),
+      timeoutMs: 10_000,
+      expectedError: "steering rejected",
+    },
+    {
+      name: "transcript timeout",
+      steer: vi.fn(async () => undefined),
+      timeoutMs: 1,
+      expectedError: "before timeout",
+    },
+  ])("does not record queued prompt provenance after $name", async (testCase) => {
+    vi.useFakeTimers();
+    try {
+      const origin = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+      };
+      const queuedMessage = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "delegated work" }],
+      };
+      const recordEvent = vi.fn();
+      const prepared = prepareEmbeddedAttemptStream({
+        attempt: {
+          runId: `run-${testCase.name}`,
+          sessionId: `session-${testCase.name}`,
+          sessionKey: "agent:receiver:main",
+        } as never,
+        activeSession: {
+          agent: {
+            hasQueuedMessages: () => true,
+            steeringQueue: { messages: [queuedMessage] },
+          },
+          isStreaming: true,
+          messages: [],
+          pendingMessageCount: 1,
+          steer: testCase.steer,
+          subscribe: vi.fn(() => () => undefined),
+          getSteeringMessages: () => ["delegated work"],
+        } as never,
+        hookRunner: undefined as never,
+        hookAgentId: "receiver",
+        diagnosticTrace: {} as never,
+        clientToolCallSlots: [],
+        toolSearchTargetTranscriptProjections: [],
+        isReplaySafeTool: () => false,
+        runAbortController: new AbortController(),
+        abortRun: vi.fn(),
+        markExternalAbort: vi.fn(),
+        getRunState: () => ({
+          aborted: false,
+          promptError: undefined,
+          timedOut: false,
+          yieldDetected: false,
+        }),
+        hasDeliveredSourceReply: () => false,
+        markSourceReplyDelivered: vi.fn(),
+        onBlockReply: vi.fn(),
+        onBlockReplyFlush: vi.fn(),
+        sandboxSessionKey: "agent:receiver:main",
+        builtinToolNames: new Set(),
+        replaySafeToolNames: new Set(),
+        trajectoryRecorder: { recordEvent } as never,
+      });
+
+      const queued = prepared.queueHandle.queueMessage("delegated work", {
+        deliveryTimeoutMs: testCase.timeoutMs,
+        waitForTranscriptCommit: true,
+        inputProvenance: origin,
+      });
+      const rejected = expect(queued).rejects.toThrow(testCase.expectedError);
+      await vi.advanceTimersByTimeAsync(testCase.timeoutMs + 1);
+
+      await rejected;
+      expect(recordEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("routes live events to the transcript session instead of the sandbox authority session", () => {
     prepareCatalogExecutor([], {
       sessionKey: "agent:main:internal-session-effects:companion-run",

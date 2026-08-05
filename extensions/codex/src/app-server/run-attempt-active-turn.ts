@@ -75,13 +75,15 @@ export async function activateCodexAttemptTurn(
     turnId: activeTurnId,
     signal: runAbortController.signal,
   });
-  trajectoryRecorder?.recordEvent("prompt.submitted", {
-    threadId: resourceState.thread.threadId,
-    turnId: activeTurnId,
-    prompt: turnState.codexTurnPromptText,
-    imagesCount: params.images?.length ?? 0,
-    ...(params.inputProvenance ? { origin: params.inputProvenance } : {}),
-  });
+  trajectoryRecorder?.recordPromptSubmitted(
+    {
+      threadId: resourceState.thread.threadId,
+      turnId: activeTurnId,
+      prompt: turnState.codexTurnPromptText,
+      imagesCount: params.images?.length ?? 0,
+    },
+    params.inputProvenance,
+  );
   projectorRef.current = new CodexAppServerEventProjector(
     {
       ...dynamicToolParams,

@@ -5,6 +5,7 @@ import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import {
   cancelPendingAgentQuestionForSession,
@@ -29,6 +30,7 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    inputProvenance?: InputProvenance,
   ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
@@ -50,7 +52,18 @@ function steerActiveSession(
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
+  inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
 ): Promise<void> {
+  if (inputProvenance) {
+    return activeSession.steer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      inputProvenance,
+    );
+  }
   if (media?.length) {
     return activeSession.steer(text, images, userTurnTranscriptRecorder, media, imageOrder);
   }
@@ -171,6 +184,7 @@ async function steerAndWaitForTranscriptCommit(
   images?: ImageContent[],
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
+  inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -265,6 +279,7 @@ async function steerAndWaitForTranscriptCommit(
       userTurnTranscriptRecorder,
       media,
       imageOrder,
+      inputProvenance,
     );
     steer.catch((err: unknown) => {
       finish(err);
@@ -314,6 +329,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options?.userTurnTranscriptRecorder,
       options?.media,
       options?.imageOrder,
+      options?.inputProvenance,
     );
     return;
   }
@@ -326,6 +342,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options.images,
       options.media,
       options.imageOrder,
+      options.inputProvenance,
     );
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {

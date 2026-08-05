@@ -60,6 +60,12 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
   "systemPrompt",
 ] as const;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache", "prompt"] as const;
+const TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS = [
+  "name",
+  "toolCallId",
+  "isError",
+  "success",
+] as const;
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
 
@@ -87,6 +93,13 @@ function truncateOversizedTrajectoryEvent(
   const originalData = event.data ?? {};
   const originalDataKeys = Object.keys(originalData);
   const preservedDataKeys = new Set<string>();
+  const preservedDataKeyOrder =
+    event.type === "tool.result"
+      ? [
+          ...TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS,
+          ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
+        ]
+      : TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS;
   const baseData = {
     truncated: true,
     originalBytes: bytes,
@@ -116,7 +129,7 @@ function truncateOversizedTrajectoryEvent(
 
   const buildTruncatedEventLine = (includeDroppedFields: boolean): string | undefined => {
     const data: Record<string, unknown> = { ...baseData };
-    for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+    for (const key of preservedDataKeyOrder) {
       if (preservedDataKeys.has(key)) {
         data[key] = originalData[key];
       }
@@ -139,7 +152,7 @@ function truncateOversizedTrajectoryEvent(
     return undefined;
   }
 
-  for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+  for (const key of preservedDataKeyOrder) {
     if (!Object.hasOwn(originalData, key)) {
       continue;
     }
