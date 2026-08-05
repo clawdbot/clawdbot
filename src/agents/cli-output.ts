@@ -3,6 +3,7 @@
  * JSONL streaming, Claude stream-json dialects, usage metadata, and tool event
  * reconstruction.
  */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -575,6 +576,88 @@ function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: n
     return `CLI JSONL output exceeded ${limit} lines; refusing to parse output.`;
   }
   return `CLI JSONL output exceeded ${limit} characters; refusing to parse output.`;
+}
+
+/**
+ * Strips base64 image payloads from a Claude stream-json line so echoed image
+ * tool_result data does not count toward the per-turn output cap or survive in
+ * the retained raw-line buffer. The CLI has already sent the image to the model
+ * by the time these bytes are streamed back, and no downstream openclaw reader
+ * consumes `source.data`, so the base64 is dead weight that only inflates the
+ * cap and aborts photo-heavy turns (#119445). Uses the same reduced
+ * representation as the gateway display projection: `source.data` removed,
+ * `block.omitted` + `block.bytes` retained, preserving block type, tool state,
+ * and MIME metadata. Bare-array text tool results and every non-image field are
+ * left untouched. Returns the line unchanged when it is not a JSON record
+ * carrying such a payload, so the pre-parse hostile-input line ceiling and
+ * unparseable-line handling stay intact.
+ */
+export function normalizeClaudeStreamJsonImagePayload(line: string): string {
+  if (!line.includes('"base64"')) {
+    return line;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return line;
+  }
+  const { value, changed } = stripImageBase64Payloads(parsed);
+  return changed ? JSON.stringify(value) : line;
+}
+
+function stripImageBase64Payloads(value: unknown): {
+  value: unknown;
+  changed: boolean;
+} {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const mapped = value.map((item) => {
+      const res = stripImageBase64Payloads(item);
+      changed ||= res.changed;
+      return res.value;
+    });
+    return { value: changed ? mapped : value, changed };
+  }
+  if (!isRecord(value)) {
+    return { value, changed: false };
+  }
+  if (value.type === "image") {
+    const stripped = stripImageBlockBase64(value);
+    if (stripped) {
+      return { value: stripped, changed: true };
+    }
+  }
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value)) {
+    const res = stripImageBase64Payloads(val);
+    changed ||= res.changed;
+    out[key] = res.value;
+  }
+  return { value: changed ? out : value, changed };
+}
+
+function stripImageBlockBase64(entry: Record<string, unknown>): Record<string, unknown> | null {
+  let imageData = typeof entry.data === "string" ? entry.data : undefined;
+  const source = isRecord(entry.source) ? entry.source : undefined;
+  let projectedSource: Record<string, unknown> | undefined;
+  if (source && source.type === "base64" && typeof source.data === "string") {
+    imageData ??= source.data;
+    projectedSource = { ...source };
+    delete projectedSource.data;
+  }
+  if (imageData === undefined) {
+    return null;
+  }
+  const out: Record<string, unknown> = { ...entry };
+  if (projectedSource) {
+    out.source = projectedSource;
+  }
+  delete out.data;
+  out.omitted = true;
+  out.bytes = estimateBase64DecodedBytes(imageData);
+  return out;
 }
 
 function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {

@@ -41,6 +41,7 @@ import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
+  normalizeClaudeStreamJsonImagePayload,
   parseCliOutput,
   type CliOutput,
   type CliUsage,
@@ -1380,7 +1381,13 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   ) {
     turn.hasReplayUnsafeActivity = true;
   }
-  turn.rawChars += trimmed.length + 1;
+  // Strip echoed base64 image payloads before aggregate accounting, the
+  // raw-line buffer, and the streaming parser. The CLI has already sent the
+  // image to the model by the time these bytes stream back, and no downstream
+  // openclaw reader consumes source.data, so the base64 only inflates the
+  // per-turn output cap that aborts photo-heavy turns (#119445).
+  const payload = normalizeClaudeStreamJsonImagePayload(trimmed);
+  turn.rawChars += payload.length + 1;
   if (
     turn.rawChars > turn.outputLimits.maxTurnRawChars ||
     turn.rawLines.length >= turn.outputLimits.maxTurnLines
@@ -1392,10 +1399,10 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     );
     return;
   }
-  turn.rawLines.push(trimmed);
+  turn.rawLines.push(payload);
   applyBackgroundTasksChanged(session, parsed);
   const toolEventCountBefore = turn.toolEventCount;
-  turn.streamingParser.push(`${trimmed}\n`);
+  turn.streamingParser.push(`${payload}\n`);
   turn.sessionId = parsedSessionId ?? turn.sessionId;
   noteClaudeLiveProgress(turn, parsed, turn.toolEventCount !== toolEventCountBefore);
   handleClaudeLiveControlRequest(session, turn, parsed);

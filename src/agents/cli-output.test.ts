@@ -2,9 +2,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   formatCliOutputError,
+  normalizeClaudeStreamJsonImagePayload,
   parseCliOutput,
   type CliThinkingProgress,
   type CliToolResultDelta,
@@ -3938,6 +3940,139 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
+  });
+});
+
+describe("normalizeClaudeStreamJsonImagePayload", () => {
+  it("strips base64 image source.data and retains omitted, bytes, and MIME metadata", () => {
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            is_error: false,
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "AAAA" } },
+              { type: "text", text: "photo 1" },
+            ],
+          },
+        ],
+      },
+    });
+    const normalized = normalizeClaudeStreamJsonImagePayload(line);
+    const parsed = JSON.parse(normalized);
+    const imageBlock = parsed.message.content[0].content[0];
+    expect(imageBlock.type).toBe("image");
+    expect(imageBlock.source).toEqual({ type: "base64", media_type: "image/jpeg" });
+    expect(imageBlock.source.data).toBeUndefined();
+    expect(imageBlock.omitted).toBe(true);
+    expect(imageBlock.bytes).toBeGreaterThan(0);
+    // Text sibling, tool id, and tool state are preserved.
+    expect(parsed.message.content[0].content[1]).toEqual({ type: "text", text: "photo 1" });
+    expect(parsed.message.content[0].tool_use_id).toBe("toolu_1");
+    expect(parsed.message.content[0].is_error).toBe(false);
+  });
+
+  it("shrinks a photo-bearing line below the per-turn cap so the parser no longer aborts", () => {
+    const cap = CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS;
+    const imageBase64 = "B".repeat(cap + 1024);
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_img",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: imageBase64 },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    // The raw line exceeds the 8 MiB cap and trips the parser's aggregate guard.
+    expect(line.length).toBeGreaterThan(cap);
+    const rawParser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+    });
+    rawParser.push(`${line}\n`);
+    rawParser.finish();
+    expect(rawParser.getErrorText()).toMatch(/exceeded .* characters/);
+
+    // After normalization the line is far below the cap and parses cleanly.
+    const normalized = normalizeClaudeStreamJsonImagePayload(line);
+    expect(normalized.length).toBeLessThan(cap);
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+    });
+    parser.push(`${normalized}\n`);
+    parser.finish();
+    expect(parser.getErrorText()).toBeNull();
+  });
+
+  it("leaves bare-array text tool results, non-image JSON, and unparseable lines intact", () => {
+    const textOnly = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_2", content: "plain text result" }],
+      },
+    });
+    expect(normalizeClaudeStreamJsonImagePayload(textOnly)).toBe(textOnly);
+
+    const controlLine = JSON.stringify({ type: "system", subtype: "init", session_id: "s" });
+    expect(normalizeClaudeStreamJsonImagePayload(controlLine)).toBe(controlLine);
+
+    const unparseable = "{ not json at all base64";
+    expect(normalizeClaudeStreamJsonImagePayload(unparseable)).toBe(unparseable);
+  });
+
+  it("strips every image block in a multi-image tool_result", () => {
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_multi",
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "AAAA" } },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "BBBB" } },
+            ],
+          },
+        ],
+      },
+    });
+    const blocks = JSON.parse(normalizeClaudeStreamJsonImagePayload(line)).message.content[0]
+      .content;
+    expect(blocks[0].source.data).toBeUndefined();
+    expect(blocks[0].omitted).toBe(true);
+    expect(blocks[0].source.media_type).toBe("image/jpeg");
+    expect(blocks[1].source.data).toBeUndefined();
+    expect(blocks[1].omitted).toBe(true);
+    expect(blocks[1].source.media_type).toBe("image/png");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
