@@ -238,7 +238,6 @@ function resolveTelegramButtonsFromParams(
 function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
-  hasButtons: boolean;
   hasLocation?: boolean;
   interactive?: unknown;
   presentation?: MessagePresentation;
@@ -247,44 +246,34 @@ function readTelegramSendContent(params: {
     readStringParam(params.args, "content", { allowEmpty: true }) ??
     readStringParam(params.args, "message", { allowEmpty: true }) ??
     readStringParam(params.args, "caption", { allowEmpty: true });
+  const hasExplicitContent = Boolean(explicitContent?.trim());
   const unsupportedBlocks =
     params.presentation?.blocks.filter(
       (block) => block.type === "chart" || block.type === "table",
     ) ?? [];
   const presentationText =
-    explicitContent == null && params.presentation
+    !hasExplicitContent && params.presentation
       ? renderMessagePresentationFallbackText({ presentation: params.presentation })
-      : explicitContent != null && unsupportedBlocks.length > 0
+      : hasExplicitContent && unsupportedBlocks.length > 0
         ? renderMessagePresentationFallbackText({
             text: explicitContent,
             presentation: { ...params.presentation, blocks: unsupportedBlocks },
           })
         : undefined;
   const interactiveText =
-    explicitContent == null && !params.presentation
+    !hasExplicitContent && !params.presentation
       ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
       : undefined;
-  let content =
+  const content =
     (presentationText?.trim() ? presentationText : undefined) ??
-    explicitContent ??
+    (hasExplicitContent ? explicitContent : undefined) ??
     (interactiveText?.trim() ? interactiveText : undefined);
-  if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
-    const fallback = presentationText?.trim() ? presentationText : interactiveText;
-    if (fallback?.trim()) {
-      content = fallback;
-    }
-  }
-  if (
-    (content == null || content.trim().length === 0) &&
-    !params.mediaUrl &&
-    !params.hasButtons &&
-    !params.hasLocation
-  ) {
+  if ((content == null || content.trim().length === 0) && !params.mediaUrl && !params.hasLocation) {
     throw new Error("content required.");
   }
   return {
     content: content ?? "",
-    hasExplicitContent: explicitContent != null,
+    hasExplicitContent,
   };
 }
 
@@ -552,7 +541,6 @@ export async function handleTelegramAction(
     const resolvedContent = readTelegramSendContent({
       args: params,
       mediaUrl: firstMediaUrl,
-      hasButtons: Array.isArray(buttons) && buttons.length > 0,
       hasLocation: Boolean(location),
       interactive: params.interactive,
       presentation,

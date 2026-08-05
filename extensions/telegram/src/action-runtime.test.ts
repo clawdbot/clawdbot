@@ -1725,22 +1725,25 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/content required/i);
   });
 
-  it("rejects an empty-string content instead of sending an empty message", async () => {
-    await expect(
-      handleTelegramAction(
-        {
-          action: "sendMessage",
-          to: "123456",
-          content: "",
-        },
-        telegramConfig(),
-      ),
-    ).rejects.toThrow(/content required/i);
-    expect(sendMessageTelegram).not.toHaveBeenCalled();
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
-  });
+  it.each(["", "   "])(
+    "rejects blank text-only content %j before durable delivery",
+    async (content) => {
+      await expect(
+        handleTelegramAction(
+          {
+            action: "sendMessage",
+            to: "123456",
+            content,
+          },
+          telegramConfig(),
+        ),
+      ).rejects.toThrow(/content required/i);
+      expect(sendMessageTelegram).not.toHaveBeenCalled();
+      expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    },
+  );
 
-  it("still sends media with an empty caption", async () => {
+  it("keeps an empty caption for media-only sends", async () => {
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -1751,7 +1754,15 @@ describe("handleTelegramAction", () => {
       telegramConfig(),
     );
 
-    expect(sendMessageTelegram).toHaveBeenCalled();
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "empty media caption");
+    expect(requireRecord(durableCall[0], "empty media caption params")).toMatchObject({
+      payloads: [
+        {
+          text: "",
+          mediaUrls: ["https://example.com/photo.jpg"],
+        },
+      ],
+    });
   });
 
   it("maps video notes through the existing durable send action", async () => {
@@ -1779,11 +1790,12 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(sendCall[2], "video note options").asVideoNote).toBe(true);
   });
 
-  it("accepts a standalone normalized location", async () => {
+  it("accepts a standalone normalized location with blank content", async () => {
     await handleTelegramAction(
       {
         action: "sendMessage",
         to: "123456",
+        content: "   ",
         location: {
           latitude: 48.858844,
           longitude: 2.294351,
@@ -1947,6 +1959,31 @@ describe("handleTelegramAction", () => {
     expect(call[0]).toBe("123456");
     expect(call[1]).toBe("- Approve");
     expect(requireRecord(call[2], "button-only fallback options").buttons).toEqual([
+      [{ text: "Approve", callback_data: "approve" }],
+    ]);
+  });
+
+  it("uses presentation button fallback when explicit content is blank", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "   ",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve" }],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "blank presentation button fallback");
+    expect(call[1]).toBe("- Approve");
+    expect(requireRecord(call[2], "blank presentation button fallback options").buttons).toEqual([
       [{ text: "Approve", callback_data: "approve" }],
     ]);
   });
@@ -2494,6 +2531,25 @@ describe("handleTelegramAction", () => {
     expect(call[0]).toBe("@testchannel");
     expect(call[1]).toBe("- Retry");
     expect(requireRecord(call[2], "interactive button fallback options").buttons).toEqual([
+      [{ text: "Retry", callback_data: "cmd:retry" }],
+    ]);
+  });
+
+  it("uses interactive button fallback when explicit content is blank", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+    const call = mockCall(sendMessageTelegram, 0, "blank interactive button fallback");
+    expect(call[1]).toBe("- Retry");
+    expect(requireRecord(call[2], "blank interactive button fallback options").buttons).toEqual([
       [{ text: "Retry", callback_data: "cmd:retry" }],
     ]);
   });
