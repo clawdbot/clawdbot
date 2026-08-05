@@ -134,10 +134,11 @@ function parseAllowFromFilename(
       continue;
     }
     const accountKey = stem.slice(channel.length + 1);
-    // Fold case only: accountKey is already lossy, so re-encoding can misattribute access.
+    // Fold case only: either side may contain punctuation that safe-key encoding would conflate.
     const matchingAccountIds = (accountIds[channel] ?? []).filter((accountId) => {
       try {
-        return safeAccountKey(accountId) === accountKey.toLowerCase();
+        safeAccountKey(accountId);
+        return accountId.toLowerCase() === accountKey.toLowerCase();
       } catch {
         // One invalid configured candidate must not abort every legacy migration.
         // With no valid match, the source remains in place as unresolved below.
