@@ -7,7 +7,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogCreateTarget } from "../session-catalog.js";
 
-export type RuntimeSessionCatalogCreateTargetParams = {
+type RuntimeSessionCatalogCreateTargetParams = {
   config: OpenClawConfig;
   requestedAgentId?: string;
   provider: string;

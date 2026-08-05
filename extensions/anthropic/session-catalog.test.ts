@@ -2,16 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginNodeHostCommand,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import {
-  createClaudeSessionNodeHostCommands,
   createClaudeSessionNodeInvokePolicies,
-  registerClaudeSessionCatalog,
+  registerClaudeSessionDiscovery,
 } from "./session-catalog-registration.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import {
@@ -22,6 +24,27 @@ import {
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
 } from "./session-catalog.js";
+
+function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
+  registerClaudeSessionDiscovery({
+    ...api,
+    registerNodeHostCommand: api.registerNodeHostCommand ?? (() => {}),
+  });
+}
+
+function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+  const commands: OpenClawPluginNodeHostCommand[] = [];
+  registerClaudeSessionDiscovery({
+    id: "anthropic",
+    config: {},
+    runtime: createPluginRuntimeMock(),
+    registerSessionCatalog: () => {},
+    registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => {
+      commands.push(command);
+    },
+  } as unknown as OpenClawPluginApi);
+  return commands;
+}
 
 function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider {
   let provider: SessionCatalogProvider | undefined;

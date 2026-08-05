@@ -54,7 +54,7 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
 
-export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
+function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   const loadCatalogRuntime = createLazyRuntimeSurface(
     () => import("./session-catalog.js"),
     (module) => module.createClaudeSessionCatalogRuntime(api),
@@ -80,7 +80,7 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   api.registerSessionCatalog(provider);
 }
 
-export function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
   return [
     {
       command: CLAUDE_SESSIONS_LIST_COMMAND,
