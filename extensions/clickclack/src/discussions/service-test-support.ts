@@ -82,6 +82,7 @@ export function createHarness(
     gatewayEvents?: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
     startTimer?: boolean;
     maxRetainedDetachedBindings?: number;
+    openSyncKeyedStore?: PluginRuntime["state"]["openSyncKeyedStore"];
   } = {},
 ) {
   let sessionEntry = entry;
@@ -92,15 +93,17 @@ export function createHarness(
   const runtime = createPluginRuntimeMock({
     config: { current: vi.fn(() => config) },
     state: {
-      openSyncKeyedStore: vi.fn((storeOptions: { namespace: string }) => {
-        if (storeOptions.namespace === "discussion-binding-generations") {
-          return generationStore;
-        }
-        if (storeOptions.namespace === "discussion-revoked-channels") {
-          return revokedStore;
-        }
-        return store;
-      }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
+      openSyncKeyedStore:
+        options.openSyncKeyedStore ??
+        (vi.fn((storeOptions: { namespace: string }) => {
+          if (storeOptions.namespace === "discussion-binding-generations") {
+            return generationStore;
+          }
+          if (storeOptions.namespace === "discussion-revoked-channels") {
+            return revokedStore;
+          }
+          return store;
+        }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"]),
     },
     agent: {
       session: {
@@ -121,7 +124,10 @@ export function createHarness(
     }),
   );
   const updateChannel = vi.fn(
-    async (_channelId: string, patch: Parameters<ClickClackClient["updateChannel"]>[1]) => ({
+    async (
+      _channelId: string,
+      patch: Parameters<ClickClackClient["updateChannel"]>[1],
+    ): Promise<ClickClackChannel> => ({
       id: "chn_discussion",
       route_id: "discussion-route",
       workspace_id: "wsp_team",
@@ -132,7 +138,6 @@ export function createHarness(
       external_url: patch.external_url ?? "https://control.example/control/chat/main",
       sidebar_section: patch.sidebar_section ?? "Projects",
       ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
-      archived: patch.archived ?? false,
       created_at: "2026-07-19T00:00:00.000Z",
     }),
   );
