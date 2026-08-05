@@ -553,8 +553,11 @@ function createLazyXaiRealtimeVoiceBridge(
       }
       const pending = { callId, result, ...(options ? { options } : {}) };
       const resultBytes = serializedJsonBytes(pending);
+      if (resultBytes === undefined) {
+        req.onError?.(new Error("xAI realtime voice tool result is not JSON-serializable"));
+        return;
+      }
       if (
-        resultBytes === undefined ||
         pendingToolResultCount >= MAX_LAZY_REALTIME_VOICE_TOOL_RESULTS ||
         pendingToolResultBytes + resultBytes > MAX_LAZY_REALTIME_VOICE_TOOL_RESULT_BYTES
       ) {

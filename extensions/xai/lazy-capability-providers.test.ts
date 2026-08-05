@@ -398,6 +398,24 @@ describe("xAI lazy capability providers", () => {
     );
   });
 
+  it("reports unserializable voice tool results distinctly from overflow", async () => {
+    const lazy = await loadLazyProviders();
+    const onError = vi.fn();
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider()
+      .createBridge(createVoiceRequest({ onError }));
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    await bridge.submitToolResult("call-1", circular);
+
+    expect(runtimeMocks.voiceSubmitToolResult).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError.mock.calls[0]?.[0]).toEqual(
+      new Error("xAI realtime voice tool result is not JSON-serializable"),
+    );
+  });
+
   it("bounds pending voice tool results by aggregate serialized bytes", async () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
