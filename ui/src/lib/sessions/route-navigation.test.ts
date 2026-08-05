@@ -6,6 +6,8 @@ import {
   resolveSessionPreferredFace,
   resolveSessionPreferredFaceForKey,
   SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_HISTORY_MESSAGE_ID_PARAM,
+  SESSION_HISTORY_SESSION_ID_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "./route-navigation.ts";
@@ -87,6 +89,25 @@ describe("sessionNavigationTarget", () => {
     ).toEqual({
       href: "/chat/research/telegram/12345",
       options: { pathname: "/chat/research/telegram/12345" },
+    });
+  });
+
+  it("carries a transcript anchor only in the in-app navigation target", () => {
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: "telegram:12345",
+      fallbackAgentId: "research",
+      historyAnchor: { sessionId: "historical-session", messageId: "historical-message" },
+    });
+    const search = new URLSearchParams({
+      [SESSION_HISTORY_SESSION_ID_PARAM]: "historical-session",
+      [SESSION_HISTORY_MESSAGE_ID_PARAM]: "historical-message",
+    });
+
+    expect(target.href).toBe("/chat/research/telegram/12345");
+    expect(target.options).toEqual({
+      pathname: "/chat/research/telegram/12345",
+      search: `?${search}`,
     });
   });
 

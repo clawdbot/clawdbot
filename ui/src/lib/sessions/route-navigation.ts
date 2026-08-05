@@ -18,6 +18,13 @@ import {
 export const SESSION_FACE_PREFERENCE_PARAM = "__openclawSessionFacePreference";
 export const SESSION_NAVIGATION_KEY_PARAM = "__openclawSessionKey";
 export const SESSION_COMPOSER_FOCUS_PARAM = "__openclawComposerFocus";
+export const SESSION_HISTORY_SESSION_ID_PARAM = "__openclawHistorySessionId";
+export const SESSION_HISTORY_MESSAGE_ID_PARAM = "__openclawHistoryMessageId";
+
+export type SessionHistoryAnchor = {
+  sessionId: string;
+  messageId: string;
+};
 
 export function composerDraftSearch(draft: string): string {
   return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
@@ -38,6 +45,7 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
   navigationKey?: string;
+  historyAnchor?: SessionHistoryAnchor;
 };
 
 type ExplicitSessionNavigationTargetParams = {
@@ -53,6 +61,7 @@ type ExplicitSessionNavigationTargetParams = {
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
   navigationKey?: string;
+  historyAnchor?: SessionHistoryAnchor;
 };
 
 type SessionNavigationTarget = {
@@ -193,6 +202,10 @@ export function sessionNavigationTarget<TRouteId extends string>(
     // Sidebar navigation already owns the full row. Carry its key only through the
     // in-app location so the short route never has to rediscover it from sessions.list.
     navigationParams.set(SESSION_NAVIGATION_KEY_PARAM, navigationKey);
+  }
+  if (params.historyAnchor) {
+    navigationParams.set(SESSION_HISTORY_SESSION_ID_PARAM, params.historyAnchor.sessionId);
+    navigationParams.set(SESSION_HISTORY_MESSAGE_ID_PARAM, params.historyAnchor.messageId);
   }
   const serializedNavigation = navigationParams.toString();
   const options = serializedNavigation

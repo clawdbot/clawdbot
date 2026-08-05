@@ -3,6 +3,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import type { SessionHistoryAnchor } from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
@@ -25,6 +26,7 @@ type ChatMetadataApplyResult = {
 
 type ChatRefreshOptions = {
   deferBranches?: boolean;
+  historyAnchor?: SessionHistoryAnchor;
   scheduleScroll?: boolean;
   awaitHistory?: boolean;
   startup?: boolean;
@@ -343,10 +345,11 @@ async function refreshChat(
   const previousSessionsResult = host.sessionsResult;
   const historyLoad = loadChatHistory(host, {
     deferBranches: opts?.deferBranches === true,
+    historyAnchor: opts?.historyAnchor,
     startup: opts?.startup === true,
   });
   const historyRefresh = historyLoad.finally(() => {
-    if (opts?.scheduleScroll !== false) {
+    if (!opts?.historyAnchor && opts?.scheduleScroll !== false) {
       scheduleChatScroll(host);
     }
     requestUpdate();

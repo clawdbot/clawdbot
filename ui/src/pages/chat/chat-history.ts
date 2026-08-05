@@ -33,6 +33,7 @@ import {
   type SessionCapability,
   type SessionMessageSubscription,
 } from "../../lib/sessions/index.ts";
+import type { SessionHistoryAnchor } from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
@@ -929,6 +930,7 @@ type InFlightChatHistoryRequest = {
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
+  historyAnchor?: SessionHistoryAnchor;
   startup?: boolean;
 };
 
@@ -976,6 +978,7 @@ async function requestChatHistory(
   method: "chat.history" | "chat.startup",
   sessionKey: string,
   requestAgentId: string | undefined,
+  historyAnchor: SessionHistoryAnchor | undefined,
   shouldContinue: () => boolean,
   shouldRetry: () => boolean,
 ): Promise<ChatHistoryResult> {
@@ -984,6 +987,7 @@ async function requestChatHistory(
       return await client.request<ChatHistoryResult>(method, {
         sessionKey,
         ...(requestAgentId ? { agentId: requestAgentId } : {}),
+        ...historyAnchor,
         limit: CHAT_HISTORY_REQUEST_LIMIT,
       });
     } catch (err) {
@@ -994,6 +998,7 @@ async function requestChatHistory(
         return await client.request<ChatHistoryResult>("chat.history", {
           sessionKey,
           ...(requestAgentId ? { agentId: requestAgentId } : {}),
+          ...historyAnchor,
           limit: CHAT_HISTORY_REQUEST_LIMIT,
         });
       }
@@ -1015,6 +1020,7 @@ function requestSharedChatHistory(
   method: "chat.history" | "chat.startup",
   sessionKey: string,
   requestAgentId: string | undefined,
+  historyAnchor: SessionHistoryAnchor | undefined,
   consumerOwner: object,
   isCurrentConsumer: () => boolean,
 ): Promise<ChatHistoryResult> {
@@ -1045,6 +1051,7 @@ function requestSharedChatHistory(
       method,
       sessionKey,
       requestAgentId,
+      historyAnchor,
       shouldContinue,
       shouldRetry,
     ).finally(() => {
@@ -1433,11 +1440,14 @@ export async function loadChatHistory(
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
   const startupAdvertised = isGatewayMethodAdvertised(state, "chat.startup");
+  const historyAnchor = opts.historyAnchor;
   const method =
-    opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
+    !historyAnchor && opts.startup === true && startupAdvertised !== false
+      ? "chat.startup"
+      : "chat.history";
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
-  const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
+  const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${historyAnchor?.sessionId ?? ""}\u0000${historyAnchor?.messageId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
   const requests = getChatHistoryPaneRequests(state);
   const inFlight = requests.inFlightHistory;
   // Live events replace the rendered array while their snapshot is pending;
@@ -1463,6 +1473,7 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
+    historyAnchor,
   ).finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
@@ -1544,6 +1555,7 @@ async function loadChatHistoryUncached(
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
+  historyAnchor: SessionHistoryAnchor | undefined,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1577,13 +1589,14 @@ async function loadChatHistoryUncached(
   state.chatLoading = true;
   setChatError(state, null);
   try {
-    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
+    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${historyAnchor?.sessionId ?? ""}\u0000${historyAnchor?.messageId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
     const res = await requestSharedChatHistory(
       client,
       requestKey,
       method,
       sessionKey,
       requestAgentId,
+      historyAnchor,
       state as object,
       () => shouldApplyChatHistoryResult(state, ownership),
     );
@@ -1608,7 +1621,9 @@ async function loadChatHistoryUncached(
     ).runs;
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const nextPagination = resolveChatHistoryPagination(res);
-    const nextSessionId = resolveChatHistorySessionId(res);
+    const nextSessionId = historyAnchor
+      ? (state.currentSessionId ?? null)
+      : resolveChatHistorySessionId(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = visibleChatHistoryMessages(messages);
     const previousTerminalMessages = reconcileAuthoritativeTerminalHistory({
@@ -1624,14 +1639,16 @@ async function loadChatHistoryUncached(
       (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
       (previousDisplayedLeafEntryId === undefined ||
         previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
-    const reconciledHistory = reconcileLoadedHistoryTail({
-      nextMessages: visibleMessages,
-      nextPagination,
-      nextSessionId,
-      previousMessages: retainsTranscriptIdentity ? previousTerminalMessages : [],
-      previousPagination,
-      previousSessionId,
-    });
+    const reconciledHistory = historyAnchor
+      ? null
+      : reconcileLoadedHistoryTail({
+          nextMessages: visibleMessages,
+          nextPagination,
+          nextSessionId,
+          previousMessages: retainsTranscriptIdentity ? previousTerminalMessages : [],
+          previousPagination,
+          previousSessionId,
+        });
     const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const scope = readChatSessionProjectionScope(state, {
       sessionKey,
@@ -1653,7 +1670,7 @@ async function loadChatHistoryUncached(
       },
       {
         scope,
-        messages: retainsTranscriptIdentity ? state.chatMessages : [],
+        messages: !historyAnchor && retainsTranscriptIdentity ? state.chatMessages : [],
         runActive:
           res.sessionInfo &&
           (typeof res.sessionInfo.hasActiveRun === "boolean" ||
@@ -1668,7 +1685,9 @@ async function loadChatHistoryUncached(
     retirePersistedSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
-    replaceCachedChatMessages(state, sessionKey, requestAgentId);
+    if (!historyAnchor) {
+      replaceCachedChatMessages(state, sessionKey, requestAgentId);
+    }
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId

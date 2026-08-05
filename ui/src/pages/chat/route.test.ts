@@ -2,6 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  SESSION_HISTORY_MESSAGE_ID_PARAM,
+  SESSION_HISTORY_SESSION_ID_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";
@@ -154,6 +158,33 @@ describe("loadChatRoute", () => {
         face: "chat",
       });
     }
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("decodes an exact transcript history anchor from internal navigation", async () => {
+    const { context, list } = contextFor(result([]));
+    const search = new URLSearchParams({
+      [SESSION_HISTORY_SESSION_ID_PARAM]: "historical-session",
+      [SESSION_HISTORY_MESSAGE_ID_PARAM]: "historical-message",
+    });
+
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/telegram/12345", search: `?${search}`, hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:main:telegram:12345",
+      draft: undefined,
+      historyAnchor: {
+        sessionId: "historical-session",
+        messageId: "historical-message",
+      },
+      face: "chat",
+    });
     expect(list).not.toHaveBeenCalled();
   });
 

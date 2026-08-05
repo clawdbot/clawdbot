@@ -5,6 +5,7 @@ import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import type { SessionHistoryAnchor } from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import type { RouteDraftComposerFocus } from "./route-draft-focus-handoff.ts";
@@ -20,6 +21,10 @@ type ChatPagePaneRenderOptions = {
   context?: ApplicationContext;
   data?: SessionChatRouteData;
   draftFocus: RouteDraftComposerFocus;
+  historyAnchor: (
+    active: boolean,
+    sessionKey: string,
+  ) => { anchor: SessionHistoryAnchor; data: SessionChatRouteData } | undefined;
   mergedChrome: boolean;
   narrow: boolean;
   navDrawerOpen: boolean;
@@ -27,6 +32,7 @@ type ChatPagePaneRenderOptions = {
   onClosePane?: (paneId: string) => void;
   onFaceChange: (paneId: string, sessionKey: string, face: BoardFace) => void;
   onFocusPane: (paneId: string) => void;
+  onHistoryAnchorConsumed: (data: SessionChatRouteData) => void;
   onOpenSplitView?: () => void;
   onPaneSessionChange: (
     paneId: string,
@@ -67,6 +73,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
             const presented = visible && (!options.narrow || options.active);
             const active = options.active && visible;
+            const historyAnchor = options.historyAnchor(active, sessionKey);
             const draft = active
               ? routeDraft(options.data, options.consumedDraftData, sessionKey)
               : undefined;
@@ -92,6 +99,10 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .sessionKey=${sessionKey}
               .presented=${presented}
               .active=${active}
+              .historyAnchor=${historyAnchor?.anchor}
+              .onHistoryAnchorConsumed=${historyAnchor
+                ? () => options.onHistoryAnchorConsumed(historyAnchor.data)
+                : undefined}
               .draft=${draft}
               .focusComposer=${options.draftFocus.shouldFocusPane(
                 active,

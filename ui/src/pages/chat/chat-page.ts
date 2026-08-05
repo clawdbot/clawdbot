@@ -12,7 +12,6 @@ import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-t
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -20,6 +19,7 @@ import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
+import { ChatPageRouteController } from "./chat-page-route-controller.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.css";
@@ -83,6 +83,11 @@ export class ChatPage extends OpenClawLightDomElement {
   private routeHref = "";
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
   private readonly viewerPresence = new ChatViewerPresenceController(this);
+  private readonly route = new ChatPageRouteController({
+    context: () => this.context,
+    data: () => this.data,
+    requestUpdate: () => this.requestUpdate(),
+  });
   private readonly retainedSessions = new ChatPageRetainedSessions(this, {
     context: () => this.context,
     face: () => this.data?.face ?? "chat",
@@ -180,7 +185,7 @@ export class ChatPage extends OpenClawLightDomElement {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
           this.draftFocus.beforeDraftCleanup(data);
           this.consumedDraftData = data;
-          this.updateRoute(data.sessionKey, true, data.face ?? "chat");
+          this.route.update(data.sessionKey, true, data.face ?? "chat");
           this.requestUpdate();
         }
       });
@@ -209,7 +214,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const { command, sessionKey: sourceSessionKey } = event.detail as UiCommandDetail;
     if (command.kind === "navigate") {
       event.preventDefault();
-      this.updateRoute(command.sessionKey);
+      this.route.update(command.sessionKey);
       return;
     }
     if (command.kind !== "split" && command.kind !== "close-pane" && command.kind !== "focus") {
@@ -245,7 +250,7 @@ export class ChatPage extends OpenClawLightDomElement {
     this.persistLayout(next);
     const activePane = next && findPane(next, next.activePaneId)?.pane;
     if (activePane) {
-      this.updateRoute(activePane.sessionKey, true);
+      this.route.update(activePane.sessionKey, true);
     }
   };
 
@@ -390,30 +395,6 @@ export class ChatPage extends OpenClawLightDomElement {
     patchSettings({ chatSplitLayout: layout });
   }
 
-  private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
-    const data = this.data;
-    if (
-      data?.sessionKey === sessionKey &&
-      (data.face ?? "chat") === face &&
-      !data.draft &&
-      !data.focusComposer
-    ) {
-      return;
-    }
-    const options = sessionNavigationTarget({
-      context: this.context,
-      face,
-      sessionKey,
-      agentId: data?.agentId,
-      shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
-    }).options;
-    if (replace) {
-      this.context.replace(face, options);
-    } else {
-      this.context.navigate(face, options);
-    }
-  }
-
   private applySessionDrop(sessionKey: string, paneId: string, zone: SplitDropZone): void {
     const trimmed = sessionKey.trim();
     if (!trimmed) {
@@ -422,7 +403,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const layout = this.layout;
     if (!layout) {
       if (zone.kind === "center") {
-        this.updateRoute(trimmed);
+        this.route.update(trimmed);
         return;
       }
       const currentSessionKey = this.data?.sessionKey?.trim();
@@ -436,7 +417,7 @@ export class ChatPage extends OpenClawLightDomElement {
         zone.edge,
       );
       this.persistLayout(next);
-      this.updateRoute(trimmed, true);
+      this.route.update(trimmed, true);
       return;
     }
     const pane = findPane(layout, paneId)?.pane;
@@ -449,11 +430,11 @@ export class ChatPage extends OpenClawLightDomElement {
       }
       const active = setActivePane(layout, paneId);
       this.persistLayout(setPaneSession(active, paneId, trimmed));
-      this.updateRoute(trimmed, true);
+      this.route.update(trimmed, true);
       return;
     }
     this.persistLayout(insertPane(layout, paneId, trimmed, zone.edge));
-    this.updateRoute(trimmed, true);
+    this.route.update(trimmed, true);
   }
 
   private readonly handleFocusPane = (paneId: string) => {
@@ -466,7 +447,7 @@ export class ChatPage extends OpenClawLightDomElement {
       return;
     }
     this.persistLayout(setActivePane(layout, paneId));
-    this.updateRoute(pane.sessionKey, true);
+    this.route.update(pane.sessionKey, true);
   };
 
   private readonly handlePaneSessionChange = (
@@ -485,7 +466,7 @@ export class ChatPage extends OpenClawLightDomElement {
       return false;
     }
     if (!this.layout) {
-      this.updateRoute(trimmed, options?.replace);
+      this.route.update(trimmed, options?.replace);
       return true;
     }
     if (pane.sessionKey === trimmed) {
@@ -493,7 +474,7 @@ export class ChatPage extends OpenClawLightDomElement {
     }
     this.persistLayout(setPaneSession(resolvedLayout, paneId, trimmed));
     if (resolvedLayout.activePaneId === paneId) {
-      this.updateRoute(trimmed, options?.replace);
+      this.route.update(trimmed, options?.replace);
     }
     return true;
   };
@@ -512,7 +493,7 @@ export class ChatPage extends OpenClawLightDomElement {
       this.persistLayout(setActivePane(this.layout, paneId));
     }
     persistSessionBoardFace(this.context, sessionKey, face);
-    this.updateRoute(sessionKey, false, face);
+    this.route.update(sessionKey, false, face);
   };
 
   private readonly openSplitView = () => {
@@ -550,7 +531,7 @@ export class ChatPage extends OpenClawLightDomElement {
     this.persistLayout(next);
     const activePane = next ? findPane(next, next.activePaneId)?.pane : survivingPane;
     if (activePane) {
-      this.updateRoute(activePane.sessionKey, true);
+      this.route.update(activePane.sessionKey, true);
     }
   }
 
@@ -599,6 +580,8 @@ export class ChatPage extends OpenClawLightDomElement {
                     context: this.context,
                     data: this.data,
                     draftFocus: this.draftFocus,
+                    historyAnchor: (active, sessionKey) =>
+                      this.route.historyAnchor(active, sessionKey),
                     mergedChrome: this.mergedChrome,
                     narrow: this.narrow,
                     navDrawerOpen: this.navDrawerOpen,
@@ -606,6 +589,7 @@ export class ChatPage extends OpenClawLightDomElement {
                     onClosePane: splitMode ? this.handleClosePane : undefined,
                     onFaceChange: this.handlePaneFaceChange,
                     onFocusPane: this.handleFocusPane,
+                    onHistoryAnchorConsumed: (data) => this.route.consumeHistoryAnchor(data),
                     onOpenSplitView: splitMode || this.narrow ? undefined : this.openSplitView,
                     onPaneSessionChange: this.handlePaneSessionChange,
                     onSessionDeleted: this.retainedSessions.removeSession,

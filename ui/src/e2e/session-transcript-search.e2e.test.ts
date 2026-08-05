@@ -90,6 +90,23 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
   it("searches once on submit, shows provenance, and opens the matching chat", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
+    const historicalMessages = Array.from({ length: 31 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: [
+        {
+          type: "text",
+          text:
+            index === 14
+              ? "The historical nebula launch checklist is ready."
+              : `Historical context ${index + 1}`,
+        },
+      ],
+      timestamp: timestamp + index,
+      __openclaw: {
+        id: index === 14 ? "message-launch" : `historical-${index + 1}`,
+        seq: index + 1,
+      },
+    }));
     context = await browser.newContext({
       colorScheme: "light",
       locale: "en-US",
@@ -105,11 +122,34 @@ describeControlUiE2e("Control UI session transcript search", () => {
       historyMessages: [
         {
           role: "assistant",
-          content: [{ type: "text", text: "The nebula launch checklist is ready." }],
+          content: [{ type: "text", text: "Current session tail." }],
           timestamp,
         },
       ],
       methodResponses: {
+        "chat.history": {
+          cases: [
+            {
+              match: { sessionId: "session-launch", messageId: "message-launch" },
+              response: {
+                messages: historicalMessages,
+                sessionId: "session-launch",
+              },
+            },
+            {
+              response: {
+                messages: [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "Current session tail." }],
+                    timestamp,
+                  },
+                ],
+                sessionId: "session-launch",
+              },
+            },
+          ],
+        },
         "sessions.list": {
           count: 1,
           defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
@@ -131,7 +171,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
           results: [
             {
               messageId: "message-launch",
-              role: "assistant",
+              role: "user",
               score: 3.4,
               sessionId: "session-launch",
               sessionKey: "agent:main:launch",
@@ -165,7 +205,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
       sessionKeys: ["agent:main:launch"],
     });
     await expect.poll(() => result.textContent()).toContain("Launch planning");
-    await expect.poll(() => result.textContent()).toContain("Assistant");
+    await expect.poll(() => result.textContent()).toContain("User");
     await expect.poll(() => result.textContent()).toContain("nebula launch checklist");
     await captureUiProof("03-results.png");
 
@@ -182,10 +222,43 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await expect
       .poll(() => (page ? new URL(page.url()).pathname : ""))
       .toBe(controlUiSessionPath("agent:main:launch"));
+    await expect
+      .poll(async () => gateway.getRequests("chat.history"))
+      .toContainEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            sessionId: "session-launch",
+            messageId: "message-launch",
+          }),
+        }),
+      );
+    await expect.poll(() => (page ? new URL(page.url()).search : "pending")).toBe("");
+    const transcriptRequests = (await gateway.getRequests()).filter(
+      (request) => request.method === "chat.startup" || request.method === "chat.history",
+    );
+    expect(transcriptRequests.at(-1)).toEqual(
+      expect.objectContaining({
+        method: "chat.history",
+        params: expect.objectContaining({
+          sessionId: "session-launch",
+          messageId: "message-launch",
+        }),
+      }),
+    );
     await page
-      .getByText("The nebula launch checklist is ready.", { exact: true })
+      .getByText("The historical nebula launch checklist is ready.", { exact: true })
       .waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("04-matching-chat.png");
+
+    await page.reload();
+    await page.getByText("Current session tail.", { exact: true }).waitFor({
+      state: "visible",
+      timeout: 10_000,
+    });
+    const historicalResult = page.getByText("The historical nebula launch checklist is ready.", {
+      exact: true,
+    });
+    await expect.poll(() => historicalResult.count()).toBe(0);
   });
 
   it("finds a transcript when updated session order moves across a paged roster", async () => {

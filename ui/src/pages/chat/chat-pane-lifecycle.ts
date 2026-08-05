@@ -32,7 +32,7 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
-import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
+import { ChatPaneHistoryAnchor } from "./chat-pane-history-anchor.ts";
 import {
   CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
@@ -62,7 +62,7 @@ import { readChatSessionSnapshot } from "./session-message-cache.ts";
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
-export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
+export abstract class ChatPaneLifecycle extends ChatPaneHistoryAnchor {
   private chatRouteReadyReported = false;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
@@ -560,6 +560,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    this.loadHistoryAnchorIfNeeded();
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
