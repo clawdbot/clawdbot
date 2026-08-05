@@ -25,6 +25,7 @@ export type GatewayRunOpts = {
   ambientChannels?: boolean;
   devAmbientChannels?: boolean;
   reset?: boolean;
+  restoreAdmissionDescriptor?: unknown;
 };
 
 const GATEWAY_RUN_VALUE_KEYS = [
@@ -37,6 +38,7 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "tailscale",
   "wsLog",
   "rawStreamPath",
+  "restoreAdmissionDescriptor",
 ] as const;
 
 const GATEWAY_RUN_BOOLEAN_KEYS = [

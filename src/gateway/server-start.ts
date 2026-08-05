@@ -20,13 +20,14 @@ const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks,
 const POST_READY_WORK_START_DELAY_MS = 500;
 
 export { resetPreparedModelCatalogForTestCore };
-const RESTORED_ADMISSION_FILE_ENV = "OPENCLAW_RFC0013_RESTORED_ADMISSION_FILE";
 
 export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  const restoredStartup = await prepareRestoredAdmissionStartup();
+  const restoredStartup = await prepareRestoredAdmissionStartup(
+    opts.restoredAdmissionDescriptorPath,
+  );
   try {
     return await startGatewayServerRuntime(port, opts, restoredStartup);
   } catch (error) {
@@ -139,12 +140,12 @@ async function startGatewayServerRuntime(
   };
 }
 
-async function prepareRestoredAdmissionStartup(): Promise<RestoredAdmissionStartup | null> {
-  const descriptorPath = process.env[RESTORED_ADMISSION_FILE_ENV];
+async function prepareRestoredAdmissionStartup(
+  descriptorPath: string | undefined,
+): Promise<RestoredAdmissionStartup | null> {
   if (descriptorPath === undefined) {
     return null;
   }
-  delete process.env[RESTORED_ADMISSION_FILE_ENV];
   const { tryBeginGatewaySuspendAdmission } = await import("../process/gateway-work-admission.js");
   const admission = tryBeginGatewaySuspendAdmission(() => {});
   if (!admission || !admission.commit()) {

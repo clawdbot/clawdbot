@@ -63,6 +63,12 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
+    .addOption(
+      new Option(
+        "--restore-admission-descriptor <path>",
+        "Internal recovery-point restore lifecycle handoff",
+      ).hideHelp(),
+    )
     .action(async (opts, command) => {
       const resolved = resolveGatewayRunOptions(opts, command);
       await hooks.beforeRun?.(resolved);
