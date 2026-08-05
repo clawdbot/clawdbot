@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js";
 
@@ -18,6 +19,23 @@ function safeJson(value: unknown): string {
   }
 }
 
+export function selectCurrentSkillTurnMessages(messages: readonly unknown[]): readonly unknown[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isRecord(message) && message.role === "user") {
+      return messages.slice(index);
+    }
+  }
+  return messages;
+}
+
+export function countSkillModelIterations(messages: readonly unknown[]): number {
+  return messages.reduce<number>(
+    (count, message) => count + (isRecord(message) && message.role === "assistant" ? 1 : 0),
+    0,
+  );
+}
+
 function renderContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -30,17 +48,16 @@ function renderContent(content: unknown): string {
       if (typeof block === "string") {
         return block;
       }
-      if (!block || typeof block !== "object" || Array.isArray(block)) {
+      if (!isRecord(block)) {
         return safeJson(block);
       }
-      const record = block as Record<string, unknown>;
-      if (record.type === "text" && typeof record.text === "string") {
-        return record.text;
+      if (block.type === "text" && typeof block.text === "string") {
+        return block.text;
       }
-      if (["toolCall", "tool_use", "function_call"].includes(String(record.type))) {
-        const toolName = typeof record.name === "string" ? record.name : "unknown";
+      if (["toolCall", "tool_use", "function_call"].includes(String(block.type))) {
+        const toolName = typeof block.name === "string" ? block.name : "unknown";
         return `[tool call: ${toolName}] ${safeJson(
-          record.arguments ?? record.input ?? record.args ?? {},
+          block.arguments ?? block.input ?? block.args ?? {},
         )}`;
       }
       return safeJson(block);
@@ -49,14 +66,13 @@ function renderContent(content: unknown): string {
 }
 
 function renderMessage(message: unknown): string {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
+  if (!isRecord(message)) {
     return `[unknown]\n${safeJson(message)}`;
   }
-  const record = message as Record<string, unknown>;
-  const role = typeof record.role === "string" ? record.role : "unknown";
-  const error = record.isError === true ? " error" : "";
-  const toolName = typeof record.toolName === "string" ? ` ${record.toolName}` : "";
-  return `[${role}${toolName}${error}]\n${renderContent(record.content)}`;
+  const role = typeof message.role === "string" ? message.role : "unknown";
+  const error = message.isError === true ? " error" : "";
+  const toolName = typeof message.toolName === "string" ? ` ${message.toolName}` : "";
+  return `[${role}${toolName}${error}]\n${renderContent(message.content)}`;
 }
 
 export function formatSkillExperienceReviewTranscript(messages: readonly unknown[]): string {
