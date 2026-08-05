@@ -168,7 +168,7 @@ export async function runQaFlowSuiteIsolated(
         updateScenarioRun();
         try {
           const scenarioOutputDir = path.join(outputDir, "scenarios", scenario.id);
-          const result: QaSuiteResult = await runQaFlowSuite(
+          const childSuiteResult: QaSuiteResult = await runQaFlowSuite(
             markQaSuiteNestedRun(
               buildQaIsolatedScenarioWorkerParams({
                 repoRoot,
@@ -187,7 +187,7 @@ export async function runQaFlowSuiteIsolated(
             ),
           );
           const scenarioResult: QaSuiteScenarioResult =
-            result.scenarios[0] ??
+            childSuiteResult.scenarios[0] ??
             ({
               name: scenario.title,
               status: "fail",
@@ -252,7 +252,8 @@ export async function runQaFlowSuiteIsolated(
       },
       {
         startStaggerMs: workerStartStaggerMs,
-        shouldStop: (result) => params?.failFast === true && result.status === "fail",
+        shouldStop: (scenarioResult) =>
+          params?.failFast === true && scenarioResult.status === "fail",
       },
     );
     await artifactWriteQueue;

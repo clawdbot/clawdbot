@@ -163,13 +163,16 @@ function runCleanupTestSuite(params: {
 
 describe("runtime parity suite transport cleanup", () => {
   it("keeps parent artifacts discoverable when owned lab cleanup fails", async () => {
-    const lab = createCleanupTestLab();
     const cleanupError = Object.assign(new Error("owned lab shutdown reset"), {
       code: "ECONNRESET",
     });
-    lab.stop = vi.fn(async () => {
+    const setLatestReport = vi.fn<QaLabServerHandle["setLatestReport"]>();
+    const stopLab = vi.fn<QaLabServerHandle["stop"]>(async () => {
       throw cleanupError;
     });
+    const lab = createCleanupTestLab();
+    lab.setLatestReport = setLatestReport;
+    lab.stop = stopLab;
     const cleanup = vi.fn(async () => {});
     const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -201,11 +204,11 @@ describe("runtime parity suite transport cleanup", () => {
       }).catch((error: unknown) => error);
 
       expect(cleanup).toHaveBeenCalledOnce();
-      expect(lab.setLatestReport).toHaveBeenCalledWith(
+      expect(setLatestReport).toHaveBeenCalledWith(
         expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
       );
-      expect(lab.setLatestReport.mock.invocationCallOrder[0]).toBeLessThan(
-        lab.stop.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      expect(setLatestReport.mock.invocationCallOrder[0]).toBeLessThan(
+        stopLab.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
       expect((thrown as Error).message.split("\n")[0]).toBe(
         "QA scenarios passed, but cleanup failed",

@@ -219,16 +219,16 @@ export async function runQaRuntimeParitySuite(params: {
           },
         });
 
-        const result = buildRuntimeParityScenarioResult({
+        const parityScenarioResult = buildRuntimeParityScenarioResult({
           scenarioName: scenario.title,
           result: parity,
         });
         liveScenarioOutcomes[index] = {
           id: scenario.id,
           name: scenario.title,
-          status: result.status,
-          details: result.details,
-          steps: result.steps,
+          status: parityScenarioResult.status,
+          details: parityScenarioResult.details,
+          steps: parityScenarioResult.steps,
           startedAt: liveScenarioOutcomes[index]?.startedAt,
           finishedAt: new Date().toISOString(),
         };
@@ -240,9 +240,9 @@ export async function runQaRuntimeParitySuite(params: {
         });
         writeQaSuiteProgress(
           params.progressEnabled,
-          `runtime pair ${result.status} (${index + 1}/${params.selectedScenarios.length}): ${scenarioIdForLog}`,
+          `runtime pair ${parityScenarioResult.status} (${index + 1}/${params.selectedScenarios.length}): ${scenarioIdForLog}`,
         );
-        return result;
+        return parityScenarioResult;
       },
       {
         startStaggerMs: resolveQaSuiteWorkerStartStaggerMs(params.concurrency),

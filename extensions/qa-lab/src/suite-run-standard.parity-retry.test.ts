@@ -7,6 +7,7 @@ import type {
   QaSuiteScenarioResult,
   QaSuiteScenarioRunner,
 } from "./suite-types.js";
+import type { runQaFlowSuiteCleanupPlan } from "./suite.js";
 
 const mocks = vi.hoisted(() => ({
   captureRuntimeParityCell: vi.fn(async (params: { runtime: "codex"; wallClockMs: number }) => ({
@@ -44,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   })),
   waitForGatewayHealthy: vi.fn(async () => {}),
   waitForTransportReady: vi.fn(async () => {}),
-  runQaFlowSuiteCleanupPlan: vi.fn(async () => []),
+  runQaFlowSuiteCleanupPlan: vi.fn<typeof runQaFlowSuiteCleanupPlan>(async () => []),
   writeQaSuiteProgress: vi.fn(),
 }));
 
