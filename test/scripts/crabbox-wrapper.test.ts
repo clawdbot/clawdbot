@@ -1003,7 +1003,21 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
-    expect(result.stderr).toContain("coordinator GET /v1/whoami: http 401: unauthorized");
+    expect(result.stderr).toContain("coordinator GET /v1/whoami: http 401");
+  });
+
+  it("fails closed when legacy whoami fails after a successful doctor check", () => {
+    const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.1",
+        OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("whoami exited 1");
+    expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
   });
 
   it("preserves an old explicit provider when legacy whoami succeeds", () => {

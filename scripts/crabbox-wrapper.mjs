@@ -853,13 +853,15 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
   }
   doctorArgs.push("--json");
   const doctor = checkedOutput(binary, doctorArgs);
+  const legacyFailure = legacyBrokerAuthFailure(versionText);
+  if (legacyFailure) {
+    return legacyFailure;
+  }
   if (doctor.status !== 0) {
     const diagnostic = compactDiagnosticText(doctor.text);
-    const brokerAuthFailure =
-      doctorReportsBrokerAuthFailure(doctor.stdout) || legacyBrokerAuthProbeFailed(versionText);
     return {
       ready: false,
-      brokerAuthFailure,
+      brokerAuthFailure: doctorReportsBrokerAuthFailure(doctor.stdout),
       reason: `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`,
       recovery: `run \`${recoveryCommand(doctorArgs)}\``,
     };
@@ -887,13 +889,23 @@ function doctorReportsBrokerAuthFailure(stdout) {
   }
 }
 
-function legacyBrokerAuthProbeFailed(versionText) {
-  // Crabbox <0.26.1 did not classify broker failures in doctor JSON. Retain
-  // its standalone discriminator only for those accepted legacy binaries.
-  return (
-    !satisfiesMinimumCrabboxVersion(versionText, minimumStructuredBrokerAuthCrabboxVersion) &&
-    checkedOutput(binary, ["whoami"]).status !== 0
-  );
+function legacyBrokerAuthFailure(versionText) {
+  // Crabbox <0.26.1 did not classify auth in doctor JSON, so its standalone
+  // whoami result remains authoritative even when doctor reports success.
+  if (satisfiesMinimumCrabboxVersion(versionText, minimumStructuredBrokerAuthCrabboxVersion)) {
+    return null;
+  }
+  const whoami = checkedOutput(binary, ["whoami"]);
+  if (whoami.status === 0) {
+    return null;
+  }
+  const diagnostic = compactDiagnosticText(whoami.text);
+  return {
+    ready: false,
+    brokerAuthFailure: true,
+    reason: `whoami exited ${whoami.status}${diagnostic ? `: ${diagnostic}` : ""}`,
+    recovery: `run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry`,
+  };
 }
 
 function formatProviderReadiness(readiness) {
