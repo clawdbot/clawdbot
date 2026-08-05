@@ -428,8 +428,8 @@ function markEmbeddedRunAbandoned(params: {
     agentId: abandonedRun.agentId,
   });
   if (scopedFallbackKey) {
-    // Fallback session ids and keys may be reused by several agents. Keep their
-    // abandonment evidence scoped so one timeout cannot suppress another owner.
+    // Fallback keys are reused by several agents. Keep abandonment evidence
+    // scoped so one timeout cannot suppress another owner.
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set(
       scopedFallbackKey,
       sessionId,
@@ -1248,6 +1248,8 @@ export function setActiveEmbeddedRun(
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
+  // A session id identifies one active run generation. Retire every alias for
+  // the replaced handle before publishing the current owner's scoped alias.
   clearActiveRunSessionKeys(sessionId);
   setActiveRunSessionKey(sessionKey, sessionId, agentId);
   clearActiveRunSessionFiles(sessionId);

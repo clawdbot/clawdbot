@@ -114,12 +114,13 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
   getRequesterSessionActivity: (requesterSessionKey: string) => {
-    const sessionId =
-      resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
-      loadRequesterSessionEntry(requesterSessionKey).entry?.sessionId;
+    const { cfg, entry, canonicalKey } = loadRequesterSessionEntry(requesterSessionKey);
+    const agentId = resolveAgentIdFromSessionKey(canonicalKey, resolveDefaultAgentId(cfg));
+    const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey, agentId);
+    const sessionId = activeSessionId ?? entry?.sessionId;
     return {
       sessionId,
-      isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
+      isActive: Boolean(activeSessionId && isEmbeddedAgentRunActive(activeSessionId)),
     };
   },
   isRequesterSessionAbandoned: (requesterSessionKey, sessionId, agentId) =>

@@ -19,7 +19,11 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
-import { isUnscopedSessionKeySentinel, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 function normalizeEmbeddedSessionFileKey(sessionFile: string | undefined): string | undefined {
@@ -143,14 +147,16 @@ export const EMBEDDED_RUN_WAITERS =
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
 
 // `global` and `unknown` are per-agent store rows but process-wide runtime keys.
-// Diagnostics need the agent side index so one agent's fallback run is not
-// attributed to another agent's row.
+// Session ids remain run-generation identities; this side index scopes those
+// fallback aliases without creating a second active-handle ownership model.
 export function resolveEmbeddedRunAgentScopedFallbackIndexKey(params: {
   sessionKey?: string;
   agentId?: string;
 }): string | undefined {
-  const sessionKey = params.sessionKey?.trim();
-  const agentId = params.agentId?.trim();
+  const rawSessionKey = params.sessionKey?.trim();
+  const parsedSessionKey = parseAgentSessionKey(rawSessionKey);
+  const sessionKey = parsedSessionKey?.rest ?? rawSessionKey;
+  const agentId = params.agentId?.trim() || parsedSessionKey?.agentId;
   if (!sessionKey || !agentId || !isUnscopedSessionKeySentinel(sessionKey)) {
     return undefined;
   }
@@ -368,14 +374,32 @@ export function setActiveEmbeddedRunLifecycleGeneration(
 }
 
 /** Resolves the current session id for an active run after resets or compaction. */
-export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
+export function resolveActiveEmbeddedRunSessionId(
+  sessionKey: string,
+  agentId?: string,
+): string | undefined {
   const normalizedSessionKey = sessionKey.trim();
   if (!normalizedSessionKey) {
     return undefined;
   }
+  const parsedSessionKey = parseAgentSessionKey(normalizedSessionKey);
+  const resolvedAgentId = agentId ?? parsedSessionKey?.agentId;
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: normalizedSessionKey,
+    agentId: resolvedAgentId,
+  });
+  const fallbackSessionKey = scopedFallbackKey ? parsedSessionKey?.rest : undefined;
+  const scopedReplySessionId =
+    scopedFallbackKey && resolvedAgentId
+      ? (resolveActiveReplyRunSessionIdForAgent(normalizedSessionKey, resolvedAgentId) ??
+        (fallbackSessionKey
+          ? resolveActiveReplyRunSessionIdForAgent(fallbackSessionKey, resolvedAgentId)
+          : undefined))
+      : undefined;
   return (
-    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
-    resolveActiveEmbeddedRunSessionIdByKey(normalizedSessionKey)
+    scopedReplySessionId ??
+    (!scopedFallbackKey ? resolveActiveReplyRunSessionId(normalizedSessionKey) : undefined) ??
+    resolveActiveEmbeddedRunSessionIdByKey(normalizedSessionKey, resolvedAgentId)
   );
 }
 
@@ -404,6 +428,10 @@ function resolveEmbeddedRunDiagnosticSessionId(params: {
 }): string | undefined {
   const sessionId = params.sessionId?.trim();
   const sessionKey = params.sessionKey?.trim();
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey,
+    agentId: params.agentId,
+  });
   if (sessionKey) {
     const embeddedSessionId = resolveActiveEmbeddedRunSessionIdByKey(sessionKey, params.agentId);
     const activeSessionId =
@@ -416,7 +444,7 @@ function resolveEmbeddedRunDiagnosticSessionId(params: {
   }
   const sessionFile = params.sessionFile?.trim();
   const sessionFileKey = normalizeEmbeddedSessionFileKey(sessionFile);
-  if (sessionFile) {
+  if (sessionFile && !scopedFallbackKey) {
     const activeSessionId = sessionFileKey
       ? ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey)
       : undefined;
@@ -443,7 +471,7 @@ function resolveEmbeddedRunDiagnosticSessionId(params: {
       return abandonedSessionId;
     }
   }
-  if (sessionFileKey) {
+  if (sessionFileKey && !scopedFallbackKey) {
     const abandonedSessionId = sessionFileKey
       ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey)
       : undefined;
@@ -482,7 +510,11 @@ function isReplyRunActiveForDiagnosticIdentity(params: {
   sessionKey?: string;
   agentId?: string;
 }): boolean {
-  if (params.sessionKey && params.agentId && isUnscopedSessionKeySentinel(params.sessionKey)) {
+  if (
+    params.sessionKey &&
+    params.agentId &&
+    resolveEmbeddedRunAgentScopedFallbackIndexKey(params)
+  ) {
     return isReplyRunActiveForSessionIdAndAgent(params.sessionId, params.agentId);
   }
   return isReplyRunActiveForSessionId(params.sessionId);
@@ -548,12 +580,6 @@ function hasActiveEmbeddedRunDiagnosticOwnership(params: {
   if (!ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
     return false;
   }
-  if (
-    params.sessionFileKey &&
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(params.sessionFileKey) === params.sessionId
-  ) {
-    return true;
-  }
   const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -563,6 +589,12 @@ function hasActiveEmbeddedRunDiagnosticOwnership(params: {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey) ===
       params.sessionId
     );
+  }
+  if (
+    params.sessionFileKey &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(params.sessionFileKey) === params.sessionId
+  ) {
+    return true;
   }
   if (params.sessionKey && isUnscopedSessionKeySentinel(params.sessionKey)) {
     const scoped = resolveOnlyAgentScopedFallbackSessionId(
@@ -670,7 +702,7 @@ export function getEmbeddedRunDiagnosticSnapshot(params: {
     ...(handle?.sourceReplyDeliveryMode
       ? { sourceReplyDeliveryMode: handle.sourceReplyDeliveryMode }
       : {}),
-    ...(sessionId ? { hasTranscriptSnapshot: ACTIVE_EMBEDDED_RUN_SNAPSHOTS.has(sessionId) } : {}),
+    ...(handle ? { hasTranscriptSnapshot: ACTIVE_EMBEDDED_RUN_SNAPSHOTS.has(sessionId) } : {}),
     ...(abandoned
       ? {
           abandoned: {

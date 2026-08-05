@@ -8,6 +8,7 @@ import {
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
@@ -16,6 +17,7 @@ import {
 
 afterEach(() => {
   ACTIVE_EMBEDDED_RUNS.clear();
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
@@ -68,7 +70,6 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
     ).toEqual({
       active: false,
       sessionId: "session-2",
-      hasTranscriptSnapshot: false,
       abandoned: {
         sessionId: "session-2",
         abandonedAtMs: 10,
@@ -108,6 +109,9 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
       isCompacting: () => false,
       queueMessage: async () => {},
       abort: () => {},
+    });
+    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set("session-shared", {
+      transcriptLeafId: "other-agent-leaf",
     });
 
     expect(
@@ -174,11 +178,10 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
       active: false,
       sessionId: "session-shared",
       sessionKey: "global",
-      hasTranscriptSnapshot: false,
     });
   });
 
-  it("accepts exact file ownership for scoped fallback rows", () => {
+  it("does not treat a file index as scoped fallback ownership", () => {
     const sessionFile = "sqlite:work-global";
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(sessionFile, "session-shared");
     ACTIVE_EMBEDDED_RUNS.set("session-shared", {
@@ -195,11 +198,10 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
         sessionFile,
         agentId: "work",
       }),
-    ).toMatchObject({
-      active: true,
+    ).toEqual({
+      active: false,
       sessionId: "session-shared",
       sessionKey: "global",
-      streaming: true,
     });
   });
 
@@ -223,7 +225,6 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
       active: false,
       sessionId: "session-shared",
       sessionKey: "global",
-      hasTranscriptSnapshot: false,
     });
   });
 
@@ -256,7 +257,6 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
       active: true,
       sessionId: "session-reply",
       sessionKey: "global",
-      hasTranscriptSnapshot: false,
     });
     expect(
       getEmbeddedRunDiagnosticSnapshot({
@@ -267,7 +267,6 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
       active: true,
       sessionId: "session-reply",
       sessionKey: "global",
-      hasTranscriptSnapshot: false,
     });
   });
 
@@ -289,7 +288,6 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
       active: false,
       sessionId: "session-shared",
       sessionKey: "global",
-      hasTranscriptSnapshot: false,
     });
   });
 
