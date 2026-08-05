@@ -1,6 +1,6 @@
 {
-  "globs": ["docs/**/*.md", "docs/**/*.mdx", "README.md"],
-  "ignores": ["docs/zh-CN/**", "docs/.i18n/**", "docs/reference/templates/**", "**/.local/**"],
+  "globs": ["docs/**/*.md", "docs/**/*.mdx", "README.md", "src/agents/templates/HEARTBEAT.md"],
+  "ignores": ["docs/zh-CN/**", "docs/.i18n/**", "**/.local/**"],
   "config": {
     "default": true,
 
