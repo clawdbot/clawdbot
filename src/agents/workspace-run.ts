@@ -115,7 +115,7 @@ export function resolveRunWorkspaceDir(params: {
   // Workspace ownership is an isolation boundary. Raw/configless SDK inputs may
   // retain implicit-main routing compatibility, but must not invent an owner here.
   const config = params.config;
-  if (!config || !hasAgentRosterProperty(config)) {
+  if (!config) {
     throw new RunWorkspaceRosterRequiredError();
   }
   const env = params.env ?? process.env;
@@ -125,7 +125,17 @@ export function resolveRunWorkspaceDir(params: {
     agentId: params.agentId,
     config,
   });
-  if (!resolveAgentConfig(config, agentId)) {
+  // A rosterless config (e.g. `agent exec --isolated`/`--auth-env-only`, which
+  // discard the roster by design) has no entry to validate against, but it
+  // still resolves the implicit legacy agent the same way listAgentIds and
+  // resolveDefaultAgentId already do for that identical input. An explicitly
+  // named owner -- via `agentId` or an agent-prefixed session key -- has no
+  // roster to check it against, so that case keeps refusing to invent one.
+  if (!hasAgentRosterProperty(config)) {
+    if (agentIdSource !== "default") {
+      throw new RunWorkspaceRosterRequiredError();
+    }
+  } else if (!resolveAgentConfig(config, agentId)) {
     throw new RunWorkspaceAgentNotConfiguredError(agentId);
   }
   if (typeof requested === "string") {

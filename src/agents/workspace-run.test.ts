@@ -132,6 +132,17 @@ describe("resolveRunWorkspaceDir", () => {
     ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
+  it("resolves the implicit legacy agent for a rosterless config (agent exec --isolated)", () => {
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      config: {},
+    });
+
+    expect(result.agentId).toBe("main");
+    expect(result.agentIdSource).toBe("default");
+    expect(result.usedFallback).toBe(true);
+  });
+
   it.each([
     { agentId: "research", sessionKey: undefined },
     { agentId: undefined, sessionKey: "agent:research:subagent:test" },
