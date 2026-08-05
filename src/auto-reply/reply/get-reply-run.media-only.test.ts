@@ -826,6 +826,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
       expect.objectContaining({ channel }),
     );
+    expect(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
+      `agent:main:${channel}:direct:steer-smoke`,
+      "default",
+    );
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call).toMatchObject({
       shouldSteer: true,

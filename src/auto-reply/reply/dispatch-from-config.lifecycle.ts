@@ -161,6 +161,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     const activeReplyOperation = replyRunRegistry.get(params.dispatchOperationSessionKey);
     const activeEmbeddedSessionId = resolveActiveEmbeddedRunSessionId(
       params.dispatchOperationSessionKey,
+      params.ctx.AgentId,
     );
     const allowGatewayEmbeddedQueueResolution =
       replyTurnKind === "visible" &&

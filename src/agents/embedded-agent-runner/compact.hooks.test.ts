@@ -63,6 +63,7 @@ import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
+  resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
 } from "./runs.js";
 
@@ -237,6 +238,26 @@ function wrappedCompactionArgs(overrides: Record<string, unknown> = {}) {
     enqueue: async <T>(task: () => Promise<T> | T) => await task(),
     ...overrides,
   };
+}
+
+function fallbackCompactionArgs(
+  sessionKey: "global" | "unknown",
+  agentId: string,
+  sessionId: string,
+) {
+  return wrappedCompactionArgs({
+    agentId,
+    sessionId,
+    sessionKey,
+    sessionFile: sessionKey,
+    sessionTarget: {
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath: `/tmp/${agentId}-sessions.json`,
+    },
+    trigger: "manual",
+  });
 }
 
 function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
@@ -4209,6 +4230,82 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       );
     }
   });
+
+  it.each(["global", "unknown"] as const)(
+    "rejects manual compaction for its agent's active $sessionKey fallback",
+    async (sessionKey) => {
+      const createHandle = () => ({
+        kind: "embedded" as const,
+        queueMessage: async () => {},
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: vi.fn(),
+      });
+      const mainHandle = createHandle();
+      const workHandle = createHandle();
+      const mainSessionId = `active-main-${sessionKey}`;
+      const workSessionId = `active-work-${sessionKey}`;
+      setActiveEmbeddedRun(mainSessionId, mainHandle, sessionKey, undefined, "main");
+      setActiveEmbeddedRun(workSessionId, workHandle, sessionKey, undefined, "work");
+
+      try {
+        await expect(
+          compactEmbeddedAgentSession(
+            fallbackCompactionArgs(sessionKey, "work", `manual-work-${sessionKey}`),
+          ),
+        ).resolves.toMatchObject({
+          ok: false,
+          compacted: false,
+          failure: { reason: "active_run" },
+        });
+        expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      } finally {
+        clearActiveEmbeddedRun(mainSessionId, mainHandle, sessionKey);
+        clearActiveEmbeddedRun(workSessionId, workHandle, sessionKey);
+      }
+    },
+  );
+
+  it.each(["global", "unknown"] as const)(
+    "keeps pending manual $sessionKey compactions scoped by agent",
+    async (sessionKey) => {
+      const mainPending = mockPendingContextEngineCompaction();
+      const workPending = mockPendingContextEngineCompaction();
+      const mainSessionId = `manual-main-${sessionKey}`;
+      const workSessionId = `manual-work-${sessionKey}`;
+      let mainPromise: ReturnType<typeof compactEmbeddedAgentSession> | undefined;
+      let workPromise: ReturnType<typeof compactEmbeddedAgentSession> | undefined;
+
+      try {
+        mainPromise = compactEmbeddedAgentSession(
+          fallbackCompactionArgs(sessionKey, "main", mainSessionId),
+        );
+        await mainPending.started.promise;
+        workPromise = compactEmbeddedAgentSession(
+          fallbackCompactionArgs(sessionKey, "work", workSessionId),
+        );
+        await vi.waitFor(() => {
+          expect(resolveActiveEmbeddedRunHandleSessionId(sessionKey, "main")).toBe(mainSessionId);
+          expect(resolveActiveEmbeddedRunHandleSessionId(sessionKey, "work")).toBe(workSessionId);
+        });
+        await workPending.started.promise;
+        expect(resolveActiveEmbeddedRunHandleSessionId(sessionKey)).toBeUndefined();
+
+        mainPending.release.resolve(undefined);
+        workPending.release.resolve(undefined);
+        await expect(Promise.all([mainPromise, workPromise])).resolves.toEqual([
+          expect.objectContaining({ ok: true }),
+          expect.objectContaining({ ok: true }),
+        ]);
+        expect(resolveActiveEmbeddedRunHandleSessionId(sessionKey, "main")).toBeUndefined();
+        expect(resolveActiveEmbeddedRunHandleSessionId(sessionKey, "work")).toBeUndefined();
+      } finally {
+        mainPending.release.resolve(undefined);
+        workPending.release.resolve(undefined);
+        await Promise.allSettled([mainPromise, workPromise].filter((run) => run !== undefined));
+      }
+    },
+  );
 
   it("does not duplicate transcript updates or sync in the wrapper when the engine delegates compaction", async () => {
     const listener = vi.fn();

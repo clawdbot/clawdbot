@@ -57,7 +57,10 @@ import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
-import type { EmbeddedAgentQueueHandle } from "./run-state.js";
+import {
+  resolveEmbeddedRunAgentScopedFallbackIndexKey,
+  type EmbeddedAgentQueueHandle,
+} from "./run-state.js";
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunHandleActive,
@@ -100,11 +103,16 @@ function createCompactionAbortedResult(): EmbeddedAgentCompactResult {
 
 function resolveManualCompactionActiveRunSessionId(
   params: CompactEmbeddedAgentSessionParams,
+  registrySessionFile?: string,
 ): string | undefined {
   return (
     (isEmbeddedAgentRunHandleActive(params.sessionId) ? params.sessionId : undefined) ??
-    (params.sessionKey ? resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) : undefined) ??
-    resolveActiveEmbeddedRunHandleSessionIdBySessionFile(params.sessionFile)
+    (params.sessionKey
+      ? resolveActiveEmbeddedRunHandleSessionId(params.sessionKey, params.agentId)
+      : undefined) ??
+    (registrySessionFile
+      ? resolveActiveEmbeddedRunHandleSessionIdBySessionFile(registrySessionFile)
+      : undefined)
   );
 }
 
@@ -251,9 +259,17 @@ export async function compactEmbeddedAgentSession(
   if (resolvedParams.trigger !== "manual") {
     return await compactEmbeddedAgentSessionImpl(resolvedParams);
   }
+  // Fallback store rows share literal global/unknown file aliases across agents.
+  // Keep their active-run lookup and registration on the agent-scoped key only.
+  const registrySessionFile = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: resolvedParams.sessionKey,
+    agentId: resolvedParams.agentId,
+  })
+    ? undefined
+    : resolvedParams.sessionFile;
   // Reply operations and embedded handles are separate lifecycle owners. A
   // /compact reply may coexist with this handle, but another embedded writer may not.
-  if (resolveManualCompactionActiveRunSessionId(resolvedParams)) {
+  if (resolveManualCompactionActiveRunSessionId(resolvedParams, registrySessionFile)) {
     return {
       ok: false,
       compacted: false,
@@ -279,7 +295,8 @@ export async function compactEmbeddedAgentSession(
     resolvedParams.sessionId,
     handle,
     resolvedParams.sessionKey,
-    resolvedParams.sessionFile,
+    registrySessionFile,
+    resolvedParams.agentId,
   );
   try {
     return await compactEmbeddedAgentSessionImpl({
@@ -291,7 +308,7 @@ export async function compactEmbeddedAgentSession(
       resolvedParams.sessionId,
       handle,
       resolvedParams.sessionKey,
-      resolvedParams.sessionFile,
+      registrySessionFile,
     );
   }
 }

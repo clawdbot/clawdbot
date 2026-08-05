@@ -1667,6 +1667,7 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     expect(result).toEqual({ runId: "run-local-first" });
+    expect(resolveActiveEmbeddedRunSessionIdMock).toHaveBeenCalledWith("agent:main:main", "main");
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
       "active-session",
       "steer this turn",

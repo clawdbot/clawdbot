@@ -488,7 +488,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         sessionEntry: entry,
       });
       if (queueSettings.mode === "steer") {
-        const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
+        const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey, agentId);
         if (activeSessionId) {
           const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
             activeSessionId,
