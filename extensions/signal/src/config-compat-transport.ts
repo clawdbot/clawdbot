@@ -133,16 +133,20 @@ export function buildManagedNativeTransport(
   const value = (key: string) => inherited(entry, parent, key);
   const configPath = optionalString(value("configPath"));
   const cliPath = optionalString(value("cliPath"));
+  const sourceUrl = optionalString(value("httpUrl"));
   const url = resolveManagedConnectionUrl(entry, parent);
   const httpHost = optionalString(value("httpHost"));
   const rawHttpPort = value("httpPort");
   const inferredHttpPort =
     typeof rawHttpPort !== "number"
-      ? inferLegacyManagedNativePortFromConnectionUrl({
-          kind: "managed-native",
-          ...(url ? { url } : {}),
-          ...(httpHost ? { httpHost } : {}),
-        })
+      ? inferLegacyManagedNativePortFromConnectionUrl(
+          {
+            kind: "managed-native",
+            ...(url ? { url } : {}),
+            ...(httpHost ? { httpHost } : {}),
+          },
+          sourceUrl,
+        )
       : undefined;
   const httpPort = typeof rawHttpPort === "number" ? rawHttpPort : inferredHttpPort;
   const startupTimeoutMs = value("startupTimeoutMs");

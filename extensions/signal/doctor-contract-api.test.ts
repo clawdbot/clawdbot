@@ -438,6 +438,27 @@ describe("signal transport compatibility", () => {
     expect(result.config.channels?.signal?.transport).not.toHaveProperty("httpPort");
   });
 
+  it("preserves an explicit default port through legacy migration and resolution", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:80",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1",
+      httpPort: 80,
+    });
+    expect(resolveSignalAccount({ cfg: result.config }).transport).toMatchObject({
+      baseUrl: "http://127.0.0.1",
+      httpPort: 80,
+    });
+  });
+
   it("does not infer an invalid managed bind port from a legacy loopback httpUrl", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({

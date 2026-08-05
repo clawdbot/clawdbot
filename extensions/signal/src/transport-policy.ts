@@ -71,17 +71,18 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
 // Canonical transport.url may intentionally point at a distinct connection endpoint.
 export function inferLegacyManagedNativePortFromConnectionUrl(
   transport: SignalTransportConfig,
+  sourceUrl = transport.url,
 ): number | undefined {
-  if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
+  if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !sourceUrl) {
     return undefined;
   }
   let connectionUrl: URL;
   try {
-    connectionUrl = new URL(transport.url);
+    connectionUrl = new URL(sourceUrl);
   } catch {
     return undefined;
   }
-  const authority = transport.url.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1];
+  const authority = sourceUrl.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1];
   const hostPort = authority?.slice(authority.lastIndexOf("@") + 1);
   const hasExplicitPort = hostPort
     ? hostPort.startsWith("[")
@@ -91,7 +92,7 @@ export function inferLegacyManagedNativePortFromConnectionUrl(
   if (!hasExplicitPort) {
     return undefined;
   }
-  const localPort = resolveLocalSignalTransportPort(transport.url);
+  const localPort = resolveLocalSignalTransportPort(sourceUrl);
   if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
     return undefined;
   }

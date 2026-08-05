@@ -29,6 +29,15 @@ describe("inferLegacyManagedNativePortFromConnectionUrl", () => {
     ).toBe(8082);
   });
 
+  it("preserves an explicit default port from the raw legacy URL", () => {
+    expect(
+      inferLegacyManagedNativePortFromConnectionUrl(
+        { kind: "managed-native", url: "http://127.0.0.1" },
+        "http://127.0.0.1:80",
+      ),
+    ).toBe(80);
+  });
+
   it("keeps the managed default for an unported local URL", () => {
     expect(
       inferLegacyManagedNativePortFromConnectionUrl({
