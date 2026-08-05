@@ -24,6 +24,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
   hasEnvironmentFileSource,
+  readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "../daemon/service-managed-env.js";
 import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
@@ -500,22 +501,6 @@ function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
-function readExistingEnvironmentValueSource(params: {
-  existingEnvironmentValueSources?: Record<
-    string,
-    GatewayServiceEnvironmentValueSource | undefined
-  >;
-  normalizedKey: string;
-}): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(params.existingEnvironmentValueSources ?? {})) {
-    const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
-    if (key === params.normalizedKey) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
 function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
   existingEnvironment: Record<string, string | undefined> | undefined;
   existingEnvironmentValueSources?: Record<
@@ -540,10 +525,10 @@ function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
       continue;
     }
-    const source = readExistingEnvironmentValueSource({
-      existingEnvironmentValueSources: params.existingEnvironmentValueSources,
+    const source = readEnvironmentValueSource(
+      params.existingEnvironmentValueSources,
       normalizedKey,
-    });
+    );
     if (!hasEnvironmentFileSource(source)) {
       continue;
     }
@@ -651,10 +636,7 @@ async function buildGatewayInstallEnvironment(params: {
   const plan = createMutableServiceEnvPlan();
   addServiceEnvPlanEntries(plan, preservedExistingEnvironment, {
     valueSource: ({ normalizedKey }) =>
-      readExistingEnvironmentValueSource({
-        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-        normalizedKey,
-      }) ?? "inline",
+      readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
   addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(plan, configEnvironment, {});

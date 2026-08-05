@@ -206,6 +206,11 @@ describe("acp translator stable lifecycle handlers", () => {
     ]);
     expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
     expect(second.nextCursor).toBeNull();
+    await expect(
+      agent.listSessions(
+        createListSessionsRequest({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),
+      ),
+    ).rejects.toThrow("Invalid ACP session list cursor.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       limit: 3,
       includeDerivedTitles: true,

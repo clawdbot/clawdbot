@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
@@ -10,7 +10,7 @@ import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-reque
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: conversation failures", () => {
+describe("executeAgentTurn: conversation failures", () => {
   it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(
@@ -18,8 +18,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -53,8 +53,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
       new Error("Custom tool call output is missing for call id: call_live_123."),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -87,8 +87,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     const resetSessionAfterRoleOrderingConflict = vi.fn(async () => true);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("400 Incorrect role information"));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -118,14 +118,13 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     }
   });
 
-  it("keeps raw generic errors on internal control surfaces", async () => {
+  it("keeps actionable provider errors on internal control surfaces", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error("INVALID_ARGUMENT: some other failure"),
-    );
+    const providerError = "provider failed with actionable details";
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(providerError));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -151,9 +150,9 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("Agent failed before reply");
-      expect(result.payload.text).toContain("INVALID_ARGUMENT: some other failure");
-      expect(result.payload.text).toContain("Logs: openclaw logs --follow");
+      expect(result.payload.text).toContain(providerError);
+      expect(result.payload.text).toContain("openclaw logs --follow");
+      expect(result.payload.text).toMatch(/terminal/i);
     }
   });
 });

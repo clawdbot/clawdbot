@@ -8,10 +8,17 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveCreateTargetParams } from "./create-target-params.js";
+import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import {
   type ExtensionToRelayMessage,
+  PAGE_SHARE_MAX_NOTE_CHARS,
+  PAGE_SHARE_MAX_TITLE_CHARS,
+  PAGE_SHARE_MAX_URL_CHARS,
+  type PageSharePayload,
   parseExtensionMessage,
   type RelayCommandBody,
+  type RelayPageShareResultMessage,
   type RelayTabInfo,
   type RelayToExtensionMessage,
 } from "./relay-protocol.js";
@@ -22,6 +29,7 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 const EXTENSION_COMMAND_TIMEOUT_MS = 15_000;
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
+const PAGE_SHARE_MAX_BODY_CHARS = 300_000;
 
 /** Synthetic targetId for the emulated browser target. */
 const BROWSER_TARGET_ID = "openclaw-extension-relay";
@@ -103,9 +111,16 @@ export class ExtensionRelayBridge {
   private nextSessionOrdinal = 1;
   private pingTimer: NodeJS.Timeout | null = null;
   private readonly onStateChange?: () => void;
+  private readonly onPageShare?: (payload: PageSharePayload) => Promise<void>;
 
-  constructor(opts: { onStateChange?: () => void } = {}) {
+  constructor(
+    opts: {
+      onStateChange?: () => void;
+      onPageShare?: (payload: PageSharePayload) => Promise<void>;
+    } = {},
+  ) {
     this.onStateChange = opts.onStateChange;
+    this.onPageShare = opts.onPageShare;
   }
 
   /** True once an extension socket completed its hello handshake. */
@@ -121,6 +136,25 @@ export class ExtensionRelayBridge {
   /** Tabs currently shared with OpenClaw (the extension's tab group). */
   sharedTabs(): RelayTabInfo[] {
     return [...this.tabs.values()].map((tab) => tab.info);
+  }
+
+  /**
+   * DevTools-style descriptors for `/json/list`: RelayTabInfo plus the `id`
+   * and `type` fields CDP discovery clients expect. `id` is the live debugger
+   * targetId once a tab is attached; before that it is the same `tab-<tabId>`
+   * fallback ensureTabAttached mints, so unattached tabs still list stably.
+   * No per-target webSocketDebuggerUrl: all CDP traffic multiplexes over the
+   * single browser endpoint (`/cdp`).
+   */
+  devtoolsTargetDescriptors(): Array<RelayTabInfo & { id: string; type: string }> {
+    return [...this.tabs.values()].map((tab) => ({
+      tabId: tab.info.tabId,
+      url: tab.info.url,
+      title: tab.info.title,
+      active: tab.info.active,
+      id: tab.attached?.targetId ?? `tab-${tab.info.tabId}`,
+      type: "page",
+    }));
   }
 
   /** Number of connected CDP clients (diagnostics). */
@@ -209,6 +243,10 @@ export class ExtensionRelayBridge {
         this.syncTabs(msg.tabs);
         return;
       }
+      case "pageShare": {
+        void this.handlePageShare(msg.requestId, msg.payload);
+        return;
+      }
       case "detached": {
         const tab = this.tabs.get(msg.tabId);
         if (tab?.attached) {
@@ -220,6 +258,54 @@ export class ExtensionRelayBridge {
       case "pong":
       case "hello":
         break;
+    }
+  }
+
+  private async handlePageShare(requestId: number, payload: PageSharePayload): Promise<void> {
+    const validRequestId = Number.isSafeInteger(requestId) && requestId >= 0;
+    const validPayload =
+      payload !== null &&
+      typeof payload === "object" &&
+      typeof payload.url === "string" &&
+      payload.url.length <= PAGE_SHARE_MAX_URL_CHARS &&
+      typeof payload.title === "string" &&
+      payload.title.length <= PAGE_SHARE_MAX_TITLE_CHARS &&
+      typeof payload.content === "string" &&
+      (payload.selection === undefined || typeof payload.selection === "string") &&
+      (payload.note === undefined ||
+        (typeof payload.note === "string" && payload.note.length <= PAGE_SHARE_MAX_NOTE_CHARS)) &&
+      payload.content.length + (payload.selection?.length ?? 0) <= PAGE_SHARE_MAX_BODY_CHARS;
+
+    if (!validRequestId || !validPayload) {
+      this.sendPageShareResult({
+        requestId: validRequestId ? requestId : 0,
+        ok: false,
+        error: "Invalid page-share payload.",
+      });
+      return;
+    }
+    if (!this.onPageShare) {
+      this.sendPageShareResult({ requestId, ok: false, error: PAGE_SHARE_GATEWAY_REQUIRED_ERROR });
+      return;
+    }
+
+    try {
+      await this.onPageShare(payload);
+      this.sendPageShareResult({ requestId, ok: true });
+    } catch (err) {
+      this.sendPageShareResult({
+        requestId,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private sendPageShareResult(result: Omit<RelayPageShareResultMessage, "type">): void {
+    try {
+      this.sendToExtension({ type: "pageShareResult", ...result });
+    } catch (err) {
+      log.warn(`failed to send page-share result: ${String(err)}`);
     }
   }
 
@@ -807,18 +893,16 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const created = (await this.callExtension({ type: "createTab", url })) as {
-          tabId?: unknown;
-        } | null;
+        const createParams = resolveCreateTargetParams(request.params);
+        const command = { type: "createTab", url, ...createParams } as const;
+        const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
           this.respondError(client, request, "extension did not return a tabId for createTab");
           return;
         }
         const tabId = created.tabId;
         if (!this.tabs.has(tabId)) {
-          this.tabs.set(tabId, {
-            info: { tabId, url, title: "", active: false },
-          });
+          this.tabs.set(tabId, { info: { tabId, url, title: "", active: false } });
         }
         const attached = await this.ensureTabAttached(tabId);
         // Announce before responding, mirroring Chrome's event-then-result order.
@@ -862,6 +946,13 @@ export class ExtensionRelayBridge {
         }
         await this.callExtension({ type: "activateTab", tabId: found.tabId });
         this.respond(client, request, {});
+        return;
+      }
+      case "Target.getBrowserContexts": {
+        // Real Chrome reports only contexts made via Target.createBrowserContext
+        // here — never the default one — so the relay's answer is always empty.
+        // Puppeteer's connect bootstrap (chrome-devtools-mcp) requires this.
+        this.respond(client, request, { browserContextIds: [] });
         return;
       }
       case "Target.createBrowserContext": {

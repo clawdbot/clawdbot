@@ -1,6 +1,9 @@
 /**
  * Gateway tool-resolution tests.
  */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -65,6 +68,52 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
+  });
+
+  it("keeps default-agent credentials out of unbound gateway calls", () => {
+    const cfg = {
+      agents: { defaults: { imageModel: { primary: "openai/gpt-5.4-mini" } } },
+    } as OpenClawConfig;
+    const unbound = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+    const grantBound = resolveGatewayScopedTools({
+      cfg,
+      agentDir: "/agents/cli",
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    expect(unbound.tools.some((tool) => tool.name === "image")).toBe(false);
+    expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
+  });
+
+  it("materializes an executable write tool on the mediated CLI surface", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
+    try {
+      const result = resolveGatewayScopedTools({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:cron:mediated-write",
+        surface: "loopback",
+        workspaceDir,
+        mediatedToolNames: ["write"],
+        excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
+      });
+
+      const writeTool = result.tools.find((tool) => tool.name === "write");
+      expect(writeTool).toBeDefined();
+      await writeTool?.execute?.("mediated-write-call", {
+        path: "proof.txt",
+        content: "mediated write ok",
+      });
+      await expect(fs.readFile(path.join(workspaceDir, "proof.txt"), "utf8")).resolves.toBe(
+        "mediated write ok",
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("applies sandbox tool denies to sandboxed loopback turns", () => {

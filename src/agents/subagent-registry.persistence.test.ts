@@ -13,15 +13,16 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
+  canonicalSubagentRunFixtures,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -38,16 +39,13 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
 }));
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
-}));
-
-vi.mock("./subagent-orphan-recovery.js", () => ({
-  scheduleOrphanRecovery: vi.fn(),
 }));
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -131,7 +129,7 @@ describe("subagent registry persistence", () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const runs = (persisted.runs ?? {}) as Record<string, SubagentRunRecord>;
-    saveSubagentRegistryToSqlite(new Map(Object.entries(runs)));
+    saveCanonicalRunFixtures(new Map(Object.entries(runs)));
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
@@ -194,6 +192,10 @@ describe("subagent registry persistence", () => {
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
     saveSubagentRegistryToSqlite(runs);
 
+  function saveCanonicalRunFixtures(runs: ReadonlyMap<string, SubagentRunFixture>) {
+    saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
+  }
+
   beforeEach(() => {
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
@@ -208,7 +210,6 @@ describe("subagent registry persistence", () => {
       startedAt: 111,
       endedAt: 222,
     });
-    vi.mocked(scheduleOrphanRecovery).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
   });
@@ -243,6 +244,7 @@ describe("subagent registry persistence", () => {
       task: "persist progress source",
       cleanup: "keep",
       createdAt: 1,
+      execution: { status: "running" },
     };
 
     await writePersistedRegistry(
@@ -276,12 +278,10 @@ describe("subagent registry persistence", () => {
       task: "persist timing",
       cleanup: "keep",
       createdAt: startedAt,
-      startedAt,
       sessionStartedAt: startedAt,
       accumulatedRuntimeMs: 0,
-      endedAt,
-      outcome: { status: "ok" },
-    } as never);
+      execution: { status: "terminal", startedAt, endedAt, outcome: { status: "ok" } },
+    });
 
     const store = await readSubagentSessionStore(storePath);
     const persisted = store["agent:main:subagent:timing"];
@@ -311,10 +311,13 @@ describe("subagent registry persistence", () => {
         task: "do not persist stale timing",
         cleanup: "keep",
         createdAt: startedAt,
-        startedAt,
-        endedAt: startedAt + 500,
-        outcome: { status: "ok" },
-      } as never,
+        execution: {
+          status: "terminal",
+          startedAt,
+          endedAt: startedAt + 500,
+          outcome: { status: "ok" },
+        },
+      },
       { isCurrentGeneration: () => false },
     );
 
@@ -359,11 +362,14 @@ describe("subagent registry persistence", () => {
       task: "preserve completion",
       cleanup: "keep",
       createdAt: startedAt,
-      startedAt,
-      endedAt: completedAt + 1,
       endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-    } as never);
+      execution: {
+        status: "terminal",
+        startedAt,
+        endedAt: completedAt + 1,
+        outcome: { status: "error", error: "manual kill" },
+      },
+    });
 
     const persisted = (await readSubagentSessionStore(storePath))["agent:main:subagent:kill-race"];
     expect(persisted).toMatchObject({
@@ -388,7 +394,7 @@ describe("subagent registry persistence", () => {
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "do the other thing",
-          cleanup: "keep",
+          cleanup: "keep" as const,
           createdAt: 1,
           startedAt: 1,
           endedAt: 2,
@@ -396,9 +402,7 @@ describe("subagent registry persistence", () => {
         },
       },
     };
-    saveSubagentRegistryToSqlite(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:two",
       sessionId: "sess-two",
@@ -485,6 +489,115 @@ describe("subagent registry persistence", () => {
     });
     expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
+    });
+  });
+
+  it("reloads waitable swarm collector completions after a gateway restart", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    const run: SubagentRunRecord = {
+      runId: "run-swarm-restart",
+      childSessionKey: "agent:worker:subagent:swarm-restart",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist collector result",
+      cleanup: "keep",
+      createdAt: 1,
+      execution: { status: "terminal", endedAt: 2 },
+      collect: true,
+      swarmRequesterSessionKey: "agent:worker:subagent:owner",
+      swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
+      groupId: "swarm:agent:main:main:parent-run",
+      outputSchema: { type: "object", required: ["answer"] },
+      completion: { required: false, resultText: "raw answer", capturedAt: 2 },
+      collectorCompletion: {
+        status: "done",
+        structured: { answer: 42 },
+        usage: { inputTokens: 10, outputTokens: 3 },
+      },
+    };
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
+    await writeChildSessionEntry({
+      sessionKey: run.childSessionKey,
+      sessionId: "session-swarm-restart",
+      updatedAt: run.execution.endedAt,
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    const restored = loadSubagentRegistryFromSqlite().get(run.runId);
+
+    expect(restored).toMatchObject({
+      runId: run.runId,
+      collect: true,
+      swarmRequesterSessionKey: run.swarmRequesterSessionKey,
+      swarmWaitOwnerSessionKeys: run.swarmWaitOwnerSessionKeys,
+      groupId: run.groupId,
+      outputSchema: run.outputSchema,
+      completion: { resultText: "raw answer" },
+      collectorCompletion: {
+        status: "done",
+        structured: { answer: 42 },
+        usage: { inputTokens: 10, outputTokens: 3 },
+      },
+    });
+
+    restartRegistry();
+    const wait = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+    const waited = await wait.execute("wait-after-restart", {
+      ids: [run.runId],
+      timeoutSeconds: 0,
+    });
+    expect(waited.details).toMatchObject({
+      completed: [
+        {
+          runId: run.runId,
+          status: "done",
+          result: "raw answer",
+          structured: { answer: 42 },
+        },
+      ],
+      pending: [],
+    });
+  });
+
+  it("reloads queued launch and in-flight structured state", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    const run: SubagentRunRecord = {
+      runId: "run-swarm-in-flight",
+      childSessionKey: "agent:worker:subagent:swarm-in-flight",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist collector launch",
+      cleanup: "keep",
+      createdAt: 1,
+      collect: true,
+      swarmRequesterSessionKey: "agent:main:telegram:default:direct:456",
+      groupId: "logical-group",
+      outputSchema: { type: "object" },
+      execution: { status: "queued" },
+      structuredOutput: { invalidAttempts: 1, schemaError: "answer is required" },
+      queuedLaunch: {
+        request: { sessionKey: "agent:worker:subagent:swarm-in-flight" },
+        authorization: {
+          modelOverride: { provider: "openai", model: "gpt-5.4" },
+        },
+        timeoutMs: 1_000,
+        schedulerGroupKey: '["agent:main:main","logical-group"]',
+        maxConcurrent: 8,
+      },
+    };
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
+
+    closeOpenClawStateDatabaseForTest();
+    expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+      swarmRequesterSessionKey: run.swarmRequesterSessionKey,
+      structuredOutput: run.structuredOutput,
+      queuedLaunch: run.queuedLaunch,
     });
   });
 
@@ -717,13 +830,13 @@ describe("subagent registry persistence", () => {
     );
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
+    await flushQueuedRegistryWork();
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
     expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
       expect.objectContaining({ runId, terminalOwner: "interrupted-recovery" }),
     ]);
+    await testing.sweepOnceForTests();
   });
 
   it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
@@ -757,7 +870,7 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("keeps stale unended restored runs with abortedLastRun for lifecycle recovery", async () => {
+  it("finalizes stale unended restored runs with abortedLastRun in the sweeper", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
       expectFields(request, {
         method: "agent.wait",
@@ -798,15 +911,15 @@ describe("subagent registry persistence", () => {
     });
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
+    await flushQueuedRegistryWork();
+    await testing.sweepOnceForTests();
 
-    // The dead pre-restart run must not be queried before orphan recovery can
-    // replace it with a fresh turn through the Gateway-owned runtime.
+    // The dead pre-restart run is terminalized without querying its stale run id.
     expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
-    expect(
-      listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
-    ).toBe(true);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("stale aborted subagent run"),
+    });
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {
@@ -828,9 +941,7 @@ describe("subagent registry persistence", () => {
       attachmentsDir,
     });
 
-    saveSubagentRegistryToSqlite(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
 
     restartRegistry();
     await waitForRegistryWork(async () => {
@@ -890,7 +1001,7 @@ describe("subagent registry persistence", () => {
       runId: "run-active",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBeUndefined();
+    expect(resolved?.execution.endedAt).toBeUndefined();
   });
 
   it("can resolve the newest child-session row even when an older stale row is still active", async () => {
@@ -936,7 +1047,7 @@ describe("subagent registry persistence", () => {
       runId: "run-current-ended",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBe(220);
+    expect(resolved?.execution.endedAt).toBe(220);
   });
 
   it("resume guard prunes orphan runs before announce retry", async () => {
@@ -961,6 +1072,9 @@ describe("subagent registry persistence", () => {
       createdAt: now - 50,
       startedAt: now - 25,
       endedAt: now,
+      execution: { status: "terminal", startedAt: now - 25, endedAt: now },
+      completion: { required: false },
+      delivery: { status: "pending" },
       suppressAnnounceReason: "steer-restart",
       cleanupHandled: false,
     });

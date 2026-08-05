@@ -17,12 +17,9 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "./runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { startPluginServices } from "./services.js";
 
 function createRegistry(
@@ -168,6 +165,72 @@ describe("startPluginServices", () => {
     expectServiceLifecycleState({ starts, stops, contexts, config });
   });
 
+  it("rolls back partially started services before starting their siblings", async () => {
+    const acquired = new Set<string>();
+    const received = vi.fn();
+    const siblingStart = vi.fn();
+    const rollback = vi.fn((ctx: OpenClawPluginServiceContext) => {
+      acquired.delete("failed-service");
+      ctx.gatewayEvents?.emit("rolled-back", {}, { scope: "operator.read" });
+    });
+    const broadcastPluginEvent = vi.fn();
+
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "failed-service",
+          start: (ctx) => {
+            acquired.add("failed-service");
+            ctx.gatewayEvents?.onSessionsChanged(received);
+            throw new Error("start failed after acquiring resources");
+          },
+          stop: rollback,
+        },
+        { id: "sibling-service", start: siblingStart },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(acquired.size).toBe(0);
+    expect(siblingStart).toHaveBeenCalledOnce();
+    expect(broadcastPluginEvent).toHaveBeenCalledWith(
+      "plugin.plugin:test.rolled-back",
+      {},
+      "operator.read",
+    );
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+    expect(received).not.toHaveBeenCalled();
+
+    await handle.stop();
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("runs concurrent and repeated shutdowns through one cleanup operation", async () => {
+    let releaseStop: (() => void) | undefined;
+    const stopping = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const stop = vi.fn(() => stopping);
+    const handle = await startTrackingServices({
+      services: [{ id: "service", start: () => {}, stop }],
+    });
+
+    const firstStop = handle.stop();
+    const secondStop = handle.stop();
+    releaseStop?.();
+    await Promise.all([firstStop, secondStop]);
+
+    expect(firstStop).toBe(secondStop);
+    expect(stop).toHaveBeenCalledOnce();
+
+    await handle.stop();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("binds gateway events to the owning plugin namespace and scope", async () => {
     const broadcastPluginEvent = vi.fn();
     await startPluginServices({
@@ -191,6 +254,124 @@ describe("startPluginServices", () => {
       { revision: 1 },
       "operator.read",
     );
+  });
+
+  it("omits gateway events entirely when no broadcaster exists", async () => {
+    let context: OpenClawPluginServiceContext | undefined;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+    });
+
+    // Presence of ctx.gatewayEvents is the capability signal plugins
+    // feature-detect; a facade with a dropping emit would defeat fallbacks.
+    expect(context?.gatewayEvents).toBeUndefined();
+    await handle.stop();
+  });
+
+  it("subscribes services to sessions.changed and revokes them on stop", async () => {
+    const received = vi.fn();
+    let context: OpenClawPluginServiceContext | undefined;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+            ctx.gatewayEvents?.onSessionsChanged(received);
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent: vi.fn(),
+    });
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", reason: "rename", ignored: 1 });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      reason: "rename",
+    });
+    expect(() =>
+      context?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
+    ).not.toThrow();
+
+    await handle.stop();
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", reason: "archive" });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledOnce();
+  });
+
+  it("keeps duplicate handler subscriptions independent", async () => {
+    const received = vi.fn();
+    const unsubscribeFirst = subscribePluginSessionsChanged(received);
+    const unsubscribeSecond = subscribePluginSessionsChanged(received);
+
+    unsubscribeFirst();
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    unsubscribeSecond();
+  });
+
+  it("uses a stable sessions.changed subscription snapshot", async () => {
+    const received = vi.fn();
+    let unsubscribe: () => void = () => undefined;
+    const handler = () => {
+      received();
+      unsubscribe();
+      unsubscribe = subscribePluginSessionsChanged(handler);
+    };
+    unsubscribe = subscribePluginSessionsChanged(handler);
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+
+  it("logs a throwing sessions.changed handler without blocking siblings", async () => {
+    const received = vi.fn();
+    const rejectingHandler = (() =>
+      Promise.reject(new Error("async handler failed"))) as () => void;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            ctx.gatewayEvents?.onSessionsChanged(() => {
+              throw new Error("handler failed");
+            });
+            ctx.gatewayEvents?.onSessionsChanged(rejectingHandler);
+            ctx.gatewayEvents?.onSessionsChanged(received);
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent: vi.fn(),
+    });
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", phase: "message" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: handler failed",
+    );
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: async handler failed",
+    );
+    await handle.stop();
   });
 
   it("rejects unsafe event names, scopes, and payloads", async () => {
@@ -281,7 +462,6 @@ describe("startPluginServices", () => {
     const pinnedRegistry = createEmptyPluginRegistry();
 
     setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
 
     const handle = await startPluginServices({
       registry: serviceRegistry,
@@ -324,6 +504,35 @@ describe("startPluginServices", () => {
     ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("continues starting siblings when rollback also fails", async () => {
+    const rollback = vi.fn(() => {
+      throw new Error("rollback failed");
+    });
+    const siblingStart = vi.fn();
+
+    const handle = await startTrackingServices({
+      services: [
+        {
+          id: "failed-service",
+          start: () => {
+            throw new Error("start failed");
+          },
+          stop: rollback,
+        },
+        { id: "sibling-service", start: siblingStart },
+      ],
+    });
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(siblingStart).toHaveBeenCalledOnce();
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin service stop failed (failed-service): Error: rollback failed",
+    );
+
+    await handle.stop();
+    expect(rollback).toHaveBeenCalledOnce();
   });
 
   it("emits per-service startup trace spans and summary", async () => {

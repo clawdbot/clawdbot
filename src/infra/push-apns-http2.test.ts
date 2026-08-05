@@ -64,8 +64,13 @@ const {
     setEncoding: vi.fn(),
     end: vi.fn(() => {
       queueMicrotask(() => {
+        const responseBody = Buffer.from(
+          '{"reason":"InvalidProviderToken","detail":"split 🚀 response"}',
+        );
+        const emojiOffset = responseBody.indexOf(Buffer.from("🚀"));
         fakeRequestLocal.emit("response", { ":status": 403 });
-        fakeRequestLocal.emit("data", '{"reason":"InvalidProviderToken"}');
+        fakeRequestLocal.emit("data", responseBody.subarray(0, emojiOffset + 2));
+        fakeRequestLocal.emit("data", responseBody.subarray(emojiOffset + 2));
         fakeRequestLocal.emit("end");
       });
     }),
@@ -81,7 +86,10 @@ const {
     }),
     request: vi.fn(() => fakeRequestLocal),
   });
-  const fakeProxySocketLocal = { destroy: vi.fn() };
+  const fakeProxySocketLocal = Object.assign(new FakeEmitter(), {
+    destroy: vi.fn(),
+    unshift: vi.fn(),
+  });
   const fakeTlsSocketLocal = Object.assign(new FakeEmitter(), {
     encrypted: true,
     alpnProtocol: "h2" as string | false,
@@ -158,7 +166,9 @@ describe("connectApnsHttp2Session", () => {
     tunnelSpy.mockClear();
     tlsConnectSpy.mockClear();
     setTargetTlsEvent("secureConnect");
+    fakeProxySocket.reset();
     fakeProxySocket.destroy.mockClear();
+    fakeProxySocket.unshift.mockClear();
     fakeRequest.reset();
     fakeRequest.setEncoding.mockClear();
     fakeRequest.end.mockClear();
@@ -189,6 +199,22 @@ describe("connectApnsHttp2Session", () => {
     expect(session).toBe(fakeSession);
     expect(tunnelSpy).not.toHaveBeenCalled();
     expect(connectSpy).toHaveBeenCalledWith("https://api.sandbox.push.apple.com");
+  });
+
+  it("rejects an already invalidated direct APNs setup before opening a session", async () => {
+    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+    const controller = new AbortController();
+    controller.abort(new Error("pairing removed"));
+
+    await expect(
+      connectApnsHttp2Session({
+        authority: "https://api.sandbox.push.apple.com",
+        timeoutMs: 10_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("pairing removed");
+
+    expect(connectSpy).not.toHaveBeenCalled();
   });
 
   it("normalizes the default APNs HTTPS port", async () => {
@@ -222,30 +248,33 @@ describe("connectApnsHttp2Session", () => {
   });
 
   it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
-      loopbackMode: "gateway-only",
-      proxyTls: { ca: "active-proxy-ca" },
-    });
+    const registration = registerActiveManagedProxyUrl(
+      new URL("https://user:pass@proxy.example:8443"),
+      {
+        loopbackMode: "gateway-only",
+        proxyTls: { ca: "active-proxy-ca" },
+      },
+    );
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
+    const controller = new AbortController();
     const session = await connectApnsHttp2Session({
       authority: "https://api.push.apple.com",
       timeoutMs: 10_000,
+      signal: controller.signal,
     });
     stopActiveManagedProxyRegistration(registration);
 
     expect(session).toBe(fakeSession);
     const tunnelCall = lastTunnelCall();
-    const proxyUrl = tunnelCall.proxyUrl;
-    expect(proxyUrl).toBeInstanceOf(URL);
-    if (!(proxyUrl instanceof URL)) {
-      throw new Error("expected active managed proxy URL");
-    }
-    expect(proxyUrl.href).toBe("https://proxy.example:8443/");
-    expect(tunnelCall.proxyTls).toEqual({ ca: "active-proxy-ca" });
-    expect(tunnelCall.targetHost).toBe("api.push.apple.com");
-    expect(tunnelCall.targetPort).toBe(443);
-    expect(tunnelCall.timeoutMs).toBe(10_000);
+    expect(tunnelCall).toMatchObject({
+      targetHost: "api.push.apple.com",
+      targetPort: 443,
+      timeoutMs: 10_000,
+      proxyTls: { ca: "active-proxy-ca" },
+    });
+    expect(String(tunnelCall.proxyUrl)).toBe("https://user:pass@proxy.example:8443/");
+    expect(tunnelCall).toMatchObject({ signal: controller.signal });
     expect(tlsConnectSpy).toHaveBeenCalledWith({
       socket: fakeProxySocket,
       servername: "api.push.apple.com",
@@ -373,9 +402,10 @@ describe("connectApnsHttp2Session", () => {
 
     expect(result).toEqual({
       status: 403,
-      body: '{"reason":"InvalidProviderToken"}',
+      body: '{"reason":"InvalidProviderToken","detail":"split 🚀 response"}',
       responseHeaders: {},
     });
+    expect(fakeRequest.setEncoding).not.toHaveBeenCalled();
     const tunnelCall = lastTunnelCall();
     const proxyUrl = tunnelCall.proxyUrl;
     expect(proxyUrl).toBeInstanceOf(URL);

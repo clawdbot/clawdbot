@@ -12,7 +12,7 @@ import {
   validateApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -192,15 +192,15 @@ describe("operator approval gateway client e2e", () => {
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
-    const requesterIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-requester.json"),
-    );
-    const reviewerIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-reviewer.json"),
-    );
-    const underscopedIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-underscoped.json"),
-    );
+    const requesterIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-requester.sqlite"),
+    });
+    const reviewerIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-reviewer.sqlite"),
+    });
+    const underscopedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-underscoped.sqlite"),
+    });
     expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
 
     const port = await getFreeGatewayPort();

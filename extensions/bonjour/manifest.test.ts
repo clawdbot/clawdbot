@@ -16,8 +16,8 @@ describe("bonjour package manifest", () => {
       fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     ) as PackageManifest;
 
-    expect(pluginPackageJson.dependencies?.["@homebridge/ciao"]).toBe("1.3.9");
-    expect(rootPackageJson.dependencies?.["@homebridge/ciao"]).toBe("1.3.9");
+    expect(pluginPackageJson.dependencies?.["@homebridge/ciao"]).toBe("1.3.10");
+    expect(rootPackageJson.dependencies?.["@homebridge/ciao"]).toBe("1.3.10");
     expect(pluginPackageJson.devDependencies?.["@homebridge/ciao"]).toBeUndefined();
   });
 });

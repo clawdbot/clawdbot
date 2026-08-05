@@ -984,6 +984,7 @@ describe("imessage message actions", () => {
         {
           target: { kind: "chat_id", chatId: 42 },
           options: imsgOptions(),
+          conversationReadOrigin: "delegated",
         },
       ],
     ]);
@@ -1111,6 +1112,7 @@ describe("imessage message actions", () => {
         {
           target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
           options: imsgOptions(),
+          conversationReadOrigin: "delegated",
         },
       ],
     ]);
@@ -1355,6 +1357,7 @@ describe("imessage message actions", () => {
               chatIdentifier: "iMessage;-;+12069106512",
             },
             options: imsgOptions(),
+            conversationReadOrigin: "direct-operator",
           },
         ],
       ]);

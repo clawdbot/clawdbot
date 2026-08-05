@@ -4,5 +4,8 @@ import type { CronJob } from "./types.js";
 export function toPublicCronJob(job: CronJob): CronJob {
   const state = { ...job.state };
   delete state.queuedAtMs;
+  delete state.startupCatchupAtMs;
+  delete state.pacedNextRunAtMs;
+  delete state.forcePreservedNextRunAtMs;
   return { ...job, state };
 }

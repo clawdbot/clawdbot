@@ -2,13 +2,19 @@
 // boundary imports resolve through public package surfaces.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
-import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
+import { pathToFileURL } from "node:url";
+import {
+  ensureRepoToolNodeModulesLink,
+  isLocalCheckEnabled,
+  resolveRepoToolBinPath,
+} from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
-
-const repoRoot = resolve(import.meta.dirname, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
@@ -30,6 +36,17 @@ let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
 let parentSignalExitCode = 1;
 let parentSignalExitTimer;
+
+/** Resolve tsx's loader through the selected checkout toolchain. */
+export function resolveTsxImportSpecifier({
+  resolveTool = resolveRepoToolBinPath,
+  createRequireFrom = createRequire,
+  ensureToolchain = ensureRepoToolNodeModulesLink,
+} = {}) {
+  const tsxBinPath = resolveTool("tsx");
+  ensureToolchain(tsxBinPath);
+  return pathToFileURL(createRequireFrom(tsxBinPath).resolve("tsx")).href;
+}
 
 function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
   const packageJson = JSON.parse(
@@ -81,6 +98,7 @@ function listSourceDtsOutputs({ sourceDir, outputPrefix }) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  "src/plugins/provider-runtime-model.types.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
   "packages/ai/src",
@@ -256,6 +274,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const MEMORY_CORE_DTS_INPUTS = [
+  "extensions/memory-core/api.ts",
+  "extensions/memory-core/src",
+  "extensions/memory-core/tsconfig.json",
+];
+const MEMORY_CORE_DTS_STAMP = "dist/plugin-sdk/extensions/memory-core/.boundary-dts.stamp";
+const MEMORY_CORE_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/memory-core/api.d.ts"];
 const MATRIX_DTS_INPUTS = [
   "extensions/matrix/test-api.ts",
   "extensions/matrix/src",
@@ -293,21 +318,18 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
-const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
-
 /**
  * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
  */
 export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
   const entries =
-    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
-  return [
-    ...entries.flatMap((entry) => [
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : productionPluginSdkEntrypoints;
+  return entries
+    .flatMap((entry) => [
       `dist/plugin-sdk/${entry}.d.ts`,
       `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-    ]),
-    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
-  ].toSorted((a, b) => a.localeCompare(b));
+    ])
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function isRelevantTypeInput(filePath) {
@@ -401,10 +423,11 @@ function hasMissingOutput(paths) {
   return paths.some((relativePath) => !fs.existsSync(resolve(repoRoot, relativePath)));
 }
 
-function removeIncrementalStateForMissingOutput(params) {
-  if (!hasMissingOutput(params.outputPaths)) {
-    return;
-  }
+// Stale inputs invalidate the whole incremental emit graph, not just missing
+// outputs: reused .tsbuildinfo can skip re-emitting declarations whose own
+// sources did not change even when the cached d.ts predates their current
+// exports (observed on sticky-disk CI runners).
+function removeStaleIncrementalState(params) {
   fs.rmSync(resolve(repoRoot, params.tsBuildInfoPath), { force: true });
 }
 
@@ -740,7 +763,10 @@ async function main(argv = process.argv.slice(2)) {
       ],
       outputPaths: [
         "dist/plugin-sdk/.boundary-entry-shims.stamp",
-        ...resolveBoundaryEntryShimRequiredOutputs(),
+        ...resolveBoundaryEntryShimRequiredOutputs({
+          ...process.env,
+          OPENCLAW_BUILD_PRIVATE_QA: "1",
+        }),
       ],
     });
     const qaChannelDtsFresh =
@@ -749,6 +775,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const memoryCoreDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: MEMORY_CORE_DTS_INPUTS,
+        outputPaths: [MEMORY_CORE_DTS_STAMP, ...MEMORY_CORE_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(MEMORY_CORE_DTS_REQUIRED_OUTPUTS);
     const matrixDtsFresh =
       isArtifactSetFresh({
         inputPaths: MATRIX_DTS_INPUTS,
@@ -784,8 +816,7 @@ async function main(argv = process.argv.slice(2)) {
     const dependentSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: ROOT_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
         });
         prerequisiteSteps.push({
@@ -800,8 +831,7 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
     if (!packageDtsFresh) {
-      removeIncrementalStateForMissingOutput({
-        outputPaths: PACKAGE_DTS_REQUIRED_OUTPUTS,
+      removeStaleIncrementalState({
         tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
       });
       prerequisiteSteps.push({
@@ -816,8 +846,7 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (mode === "all") {
       if (!qaChannelDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: QA_CHANNEL_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -846,9 +875,38 @@ async function main(argv = process.argv.slice(2)) {
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
       }
+      if (!memoryCoreDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "memory-core boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/memory-core/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/memory-core",
+            "--rootDir",
+            "extensions/memory-core",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: MEMORY_CORE_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[memory-core boundary dts] fresh; skipping\n");
+      }
       if (!matrixDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: MATRIX_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -878,8 +936,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[matrix boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: DISCORD_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -909,8 +966,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[discord boundary dts] fresh; skipping\n");
       }
       if (!slackDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: SLACK_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -940,8 +996,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[slack boundary dts] fresh; skipping\n");
       }
       if (!whatsappDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: WHATSAPP_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -971,8 +1026,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
       }
       if (!telegramDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: TELEGRAM_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -1015,9 +1069,18 @@ async function main(argv = process.argv.slice(2)) {
     if (mode === "all" && (!entryShimsFresh || prerequisiteSteps.length > 0)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
-        ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
+        [
+          "--import",
+          resolveTsxImportSpecifier(),
+          resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
+        ],
         ROOT_SHIMS_TIMEOUT_MS,
-        { env: { NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS } },
+        {
+          env: {
+            NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS,
+            OPENCLAW_BUILD_PRIVATE_QA: "1",
+          },
+        },
       );
     } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");

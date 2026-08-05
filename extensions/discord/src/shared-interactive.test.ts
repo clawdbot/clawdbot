@@ -109,7 +109,13 @@ describe("buildDiscordInteractiveComponents", () => {
               buttons: [
                 {
                   label: "Review",
-                  action: { type, url: "https://example.com/review" } as MessagePresentationAction,
+                  action: {
+                    type,
+                    url:
+                      type === "web-app"
+                        ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
+                        : "https://example.com/review",
+                  } as MessagePresentationAction,
                 },
               ],
             },
@@ -123,7 +129,10 @@ describe("buildDiscordInteractiveComponents", () => {
               {
                 label: "Review",
                 style: "link",
-                url: "https://example.com/review",
+                url:
+                  type === "web-app"
+                    ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
+                    : "https://example.com/review",
               },
             ],
           },

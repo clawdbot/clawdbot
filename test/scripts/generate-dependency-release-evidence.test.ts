@@ -206,12 +206,14 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it("reports CLI argument errors without a Node stack trace", () => {
-    const result = runCli("--wat");
+    for (const args of [["--wat"], ["wat", "--help"]]) {
+      const result = runCli(...args);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unsupported argument: --wat");
-    expectNoNodeStack(result.stderr);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(`Unsupported argument: ${args[0]}`);
+      expectNoNodeStack(result.stderr);
+    }
   });
 
   it("falls back to fetching tags when local previous-release resolution misses", () => {

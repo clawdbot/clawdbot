@@ -13,13 +13,13 @@ struct RuntimeLocatorTests {
         return path
     }
 
-    @Test func `resolve succeeds with valid node`() throws {
+    @Test func `resolve succeeds with valid node`() async throws {
         let script = """
         #!/bin/sh
         echo v22.22.3
         """
         let node = try self.makeTempExecutable(contents: script)
-        let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+        let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .success(res) = result else {
             Issue.record("Expected success, got \(result)")
             return
@@ -28,13 +28,13 @@ struct RuntimeLocatorTests {
         #expect(res.version == RuntimeVersion(major: 22, minor: 22, patch: 3))
     }
 
-    @Test func `resolve fails on boundary below minimum`() throws {
+    @Test func `resolve fails on boundary below minimum`() async throws {
         let script = """
         #!/bin/sh
         echo v22.22.2
         """
         let node = try self.makeTempExecutable(contents: script)
-        let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+        let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.unsupported(_, found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
             return
@@ -43,13 +43,13 @@ struct RuntimeLocatorTests {
         #expect(path == node.path)
     }
 
-    @Test func `resolve rejects node 23`() throws {
+    @Test func `resolve rejects node 23`() async throws {
         let script = """
         #!/bin/sh
         echo v23.11.0
         """
         let node = try self.makeTempExecutable(contents: script)
-        let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+        let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.unsupported(_, found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
             return
@@ -73,13 +73,13 @@ struct RuntimeLocatorTests {
         #expect(RuntimeLocator.isSupportedNodeVersion(parsed) == supported)
     }
 
-    @Test func `resolve fails when too old`() throws {
+    @Test func `resolve fails when too old`() async throws {
         let script = """
         #!/bin/sh
         echo v18.2.0
         """
         let node = try self.makeTempExecutable(contents: script)
-        let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+        let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.unsupported(_, found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
             return
@@ -88,13 +88,13 @@ struct RuntimeLocatorTests {
         #expect(path == node.path)
     }
 
-    @Test func `resolve fails when version unparsable`() throws {
+    @Test func `resolve fails when version unparsable`() async throws {
         let script = """
         #!/bin/sh
         echo node-version:unknown
         """
         let node = try self.makeTempExecutable(contents: script)
-        let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+        let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
         guard case let .failure(.versionParse(_, raw, path, _)) = result else {
             Issue.record("Expected versionParse error, got \(result)")
             return

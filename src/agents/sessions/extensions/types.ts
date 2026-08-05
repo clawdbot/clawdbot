@@ -34,8 +34,10 @@ import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type {
   AgentMessage,
+  AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
+  StreamFn,
   ThinkingLevel,
   ToolExecutionMode,
 } from "../../runtime/index.js";
@@ -495,6 +497,8 @@ export interface ToolDefinition<
   label: string;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
+  /** Tool results contain externally controlled network content. */
+  resultContentSource?: AgentTool["resultContentSource"];
   /** Description for LLM */
   description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
@@ -503,6 +507,8 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Parameter schema (TypeBox) */
   parameters: TParams;
+  /** Exact schema for the structured value returned in AgentToolResult.details. */
+  outputSchema?: TSchema;
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
 
@@ -612,6 +618,10 @@ interface SessionBeforeCompactEvent {
   branchEntries: SessionEntry[];
   customInstructions?: string;
   signal: AbortSignal;
+  /** Prepared reasoning level for extension-owned summarization. */
+  thinkingLevel?: ThinkingLevel;
+  /** Prepared provider stream for extension-owned summarization. */
+  streamFn?: StreamFn;
 }
 
 /** Fired after context compaction */

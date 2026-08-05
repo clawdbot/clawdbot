@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BROWSER_REF_MARKER_ATTRIBUTE,
   markBackendDomRefsOnPage,
+  readMainFrameDocumentIdentityForPage,
   withPageScopedCdpClient,
 } from "./pw-session.page-cdp.js";
 
@@ -35,6 +36,25 @@ describe("pw-session page-scoped CDP client", () => {
 
     expect(newCDPSession).toHaveBeenCalledWith(page);
     expect(sessionSend).toHaveBeenCalledWith("Emulation.setLocaleOverride", { locale: "en-US" });
+    expect(sessionDetach).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the main-frame loader identity through the existing page session", async () => {
+    const sessionSend = vi.fn(async (method: string) =>
+      method === "Page.getFrameTree"
+        ? { frameTree: { frame: { loaderId: "LOADER_SAME_URL" } } }
+        : {},
+    );
+    const sessionDetach = vi.fn(async () => {});
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({ send: sessionSend, detach: sessionDetach })),
+      }),
+    };
+
+    await expect(readMainFrameDocumentIdentityForPage(page as never)).resolves.toBe(
+      "cdp:LOADER_SAME_URL",
+    );
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 

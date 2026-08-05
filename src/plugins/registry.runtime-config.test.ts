@@ -2,6 +2,8 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { createPluginRecord } from "./loader-records.js";
@@ -103,8 +105,6 @@ describe("plugin registry runtime config scope", () => {
       replaceScope = getPluginRuntimeGatewayRequestScope();
       return replaceResult;
     };
-    const loadConfig: PluginRuntime["config"]["loadConfig"] = () => config;
-    const writeConfigFile: PluginRuntime["config"]["writeConfigFile"] = async () => {};
     const configRuntime = {
       current: vi.fn(() => {
         currentScope = getPluginRuntimeGatewayRequestScope();
@@ -112,8 +112,6 @@ describe("plugin registry runtime config scope", () => {
       }),
       mutateConfigFile,
       replaceConfigFile,
-      loadConfig,
-      writeConfigFile,
     } satisfies PluginRuntime["config"];
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
@@ -395,19 +393,87 @@ describe("plugin registry runtime config scope", () => {
     ).rejects.toThrow("requires exactly one runtime owner");
   });
 
+  it("limits ACP session creation to the calling plugin namespace", async () => {
+    const runtime = createPluginRuntime();
+    const createSessionEntry = vi.fn(async (params) => ({
+      key: params.key,
+      agentId: "main",
+      sessionId: "session-1",
+      entry: { sessionId: "session-1", updatedAt: 1 },
+    }));
+    runtime.agent.session.createSessionEntry = createSessionEntry;
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "opencode",
+      source: "/plugins/opencode/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const initialEntry = {
+      acpBackendId: "acpx",
+      acpSessionBinding: {
+        acpAgentId: "opencode",
+        agentSessionId: "source",
+      },
+    };
+
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "plugin:opencode:catalog-adopt:source",
+        initialEntry,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expect(createSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialEntry: expect.objectContaining({ pluginOwnerId: "opencode" }),
+      }),
+    );
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "agent:main:ordinary",
+        initialEntry,
+      }),
+    ).rejects.toThrow('must start with "plugin:opencode:"');
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "plugin:opencode:catalog-adopt:source",
+        initialEntry: { ...initialEntry, cliBackendId: "opencode" } as never,
+      }),
+    ).rejects.toThrow("requires exactly one runtime owner");
+  });
+
   it("limits locked harness session mutation and execution to the harness owner", async () => {
     const reservedKey = "agent:main:harness:codex:thread-1";
     const ordinaryKey = "agent:main:ordinary";
+    const ordinaryAliasKey = "agent:main:ordinary-alias";
+    const ordinaryNoIdKey = "agent:main:ordinary-no-id";
+    const lockedNoIdKey = "agent:main:locked-no-id";
     const lockedOrdinaryKey = "agent:main:ordinary-locked";
     const legacyPrefixedKey = "agent:main:harness:notes";
     const reservedEntry = {
       sessionId: "reserved-session",
-      sessionFile: "/tmp/reserved.jsonl",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "reserved-session",
+        storePath: "/tmp/sessions.json",
+      }),
       updatedAt: 1,
       agentHarnessId: "codex",
       modelSelectionLocked: true as const,
     };
     const ordinaryEntry = { sessionId: "ordinary-session", updatedAt: 1 };
+    const ordinaryAliasEntry = { sessionId: reservedEntry.sessionId, updatedAt: 1 };
+    const ordinaryNoIdEntry = { updatedAt: 1 };
+    const lockedNoIdEntry = {
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true as const,
+    };
     const lockedOrdinaryEntry = {
       sessionId: "locked-ordinary-session",
       updatedAt: 1,
@@ -420,26 +486,29 @@ describe("plugin registry runtime config scope", () => {
       agentHarnessId: "legacy-runtime",
     };
     const entries = {
+      [ordinaryAliasKey]: ordinaryAliasEntry,
+      [ordinaryNoIdKey]: ordinaryNoIdEntry,
+      [lockedNoIdKey]: lockedNoIdEntry,
       [reservedKey]: reservedEntry,
       [ordinaryKey]: ordinaryEntry,
       [lockedOrdinaryKey]: lockedOrdinaryEntry,
       [legacyPrefixedKey]: legacyPrefixedEntry,
     };
+    const typedEntries = entries as unknown as Record<string, SessionEntry>;
     const subagent = {
       run: vi.fn(async () => ({ runId: "subagent-run" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
-      getSession: vi.fn(async () => ({ messages: [] })),
       deleteSession: vi.fn(async () => {}),
     } satisfies PluginRuntime["subagent"];
     const runtime = createPluginRuntime({ subagent });
     const session = runtime.agent.session;
-    session.getSessionEntry = vi.fn((params) => entries[params.sessionKey as keyof typeof entries]);
+    session.getSessionEntry = vi.fn((params) => typedEntries[params.sessionKey]);
     session.listSessionEntries = vi.fn(() =>
-      Object.entries(entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+      Object.entries(typedEntries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
     );
     session.patchSessionEntry = vi.fn(async (params) => {
-      const entry = entries[params.sessionKey as keyof typeof entries];
+      const entry = typedEntries[params.sessionKey];
       if (!entry) {
         return null;
       }
@@ -450,7 +519,7 @@ describe("plugin registry runtime config scope", () => {
     });
     session.upsertSessionEntry = vi.fn(async () => {});
     session.updateSessionStoreEntry = vi.fn(
-      async (params) => entries[params.sessionKey as keyof typeof entries],
+      async (params) => typedEntries[params.sessionKey] ?? null,
     );
     let admissionScope = getPluginRuntimeGatewayRequestScope();
     session.runWithWorkAdmission = vi.fn(async (_params, run) => {
@@ -584,8 +653,36 @@ describe("plugin registry runtime config scope", () => {
       otherApi.runtime.agent.runEmbeddedAgent({
         ...runParams,
         sessionKey: undefined,
-      }),
+      } as never),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(
+      otherApi.runtime.agent.runEmbeddedAgent({
+        ...runParams,
+        sessionId: undefined,
+        sessionKey: undefined,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: reservedEntry.sessionId,
+          storePath: "/tmp/sessions.json",
+        }),
+      } as never),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(
+      otherApi.runtime.agent.runEmbeddedAgent({
+        ...runParams,
+        sessionId: undefined,
+        sessionKey: undefined,
+        sessionFile: ordinaryAliasKey,
+      } as never),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(
+      otherApi.runtime.agent.runEmbeddedAgent({
+        ...runParams,
+        sessionId: undefined,
+        sessionKey: undefined,
+        sessionFile: ordinaryNoIdKey,
+      } as never),
+    ).resolves.toEqual({ ok: true });
     await expect(
       otherApi.runtime.agent.runEmbeddedAgent({
         ...runParams,

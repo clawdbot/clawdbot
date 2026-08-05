@@ -1,3 +1,4 @@
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 // Policy plugin evidence types.
 import type { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 
@@ -31,6 +32,21 @@ export type PolicyEvidence = {
   readonly secrets?: readonly PolicySecretEvidence[];
   readonly authProfiles?: readonly PolicyAuthProfileEvidence[];
   readonly execApprovals?: readonly PolicyExecApprovalEvidence[];
+  readonly routing?: PolicyRoutingEvidence;
+};
+
+export type PolicyRoutingEvidence = {
+  readonly bindings: readonly {
+    readonly index: number;
+    readonly source: string;
+    readonly channel: string;
+  }[];
+  readonly probes: readonly {
+    readonly id: string;
+    readonly source: string;
+    readonly agentId: string;
+    readonly matchedBy: ResolvedAgentRoute["matchedBy"];
+  }[];
 };
 
 export type PolicyChannelEvidence = {

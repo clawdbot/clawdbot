@@ -65,9 +65,25 @@ updates:
           - patch
     open-pull-requests-limit: 5
 
-  # Swift Package Manager - shared MoltbotKit
+  # Swift Package Manager - shared OpenClawKit
   - package-ecosystem: swift
-    directory: /apps/shared/MoltbotKit
+    directory: /apps/shared/OpenClawKit
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 2
+    groups:
+      swift-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  # Swift Package Manager - isolated MLX TTS helper
+  - package-ecosystem: swift
+    directory: /apps/macos-mlx-tts
     schedule:
       interval: daily
     cooldown:

@@ -148,12 +148,28 @@ private struct OnboardingRecommendedInstallCard: View {
     }
 }
 
+struct GatewayAuthCard: Equatable {
+    let title: String
+    let message: String
+    let primaryTitle: String
+    let secondaryTitle: String
+}
+
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var systemAgentChat: SystemAgentOnboardingChatModel
     @Binding var showSystemAgentChat: Bool
+    var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
+
+    static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
+        GatewayAuthCard(
+            title: "Gateway authentication required",
+            message: issue.statusMessage,
+            primaryTitle: "Back to Gateway",
+            secondaryTitle: "Try again")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -212,7 +228,10 @@ struct OnboardingAISetupView: View {
                     self.candidateRow(candidate)
                 }
             }
-        } else if self.model.phase != .connected, self.model.detectError == nil {
+        } else if self.model.phase != .connected,
+                  self.model.detectError == nil,
+                  self.model.configuredGatewayAuthIssue == nil
+        {
             // A failed detect must not claim "nothing found" — the error card
             // below owns that state and the claim would be unproven.
             self.noCandidatesIntro
@@ -222,7 +241,17 @@ struct OnboardingAISetupView: View {
             self.unavailableCandidatesSection
         }
 
-        if let detectError = model.detectError {
+        if let authIssue = model.configuredGatewayAuthIssue {
+            let card = Self.gatewayAuthCard(for: authIssue)
+            OnboardingErrorCard(
+                title: card.title,
+                message: card.message,
+                docsSlug: "start/onboarding",
+                retryTitle: card.primaryTitle,
+                secondaryTitle: card.secondaryTitle,
+                secondary: self.retryConfiguredGatewayProbe,
+                retry: self.returnToGatewayAuthentication)
+        } else if let detectError = model.detectError {
             OnboardingErrorCard(
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
@@ -266,6 +295,7 @@ struct OnboardingAISetupView: View {
         }
 
         if !self.model.connected, self.model.providerCatalogLoaded {
+            self.providerPrepareSection
             self.providerAuthSection
             self.manualSection
         }
@@ -321,6 +351,14 @@ struct OnboardingAISetupView: View {
                 .buttonStyle(.link)
                 .font(.caption)
             }
+
+            Button {
+                self.model.chooseDifferentAI()
+            } label: {
+                Label("Choose a different AI…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -504,6 +542,54 @@ struct OnboardingAISetupView: View {
     }
 
     @ViewBuilder
+    private var providerPrepareSection: some View {
+        if !self.model.prepareOptions.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Set up a local model")
+                    .font(.headline)
+                Text("Connect a local model service, or prepare a model on this Gateway.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(self.model.prepareOptions) { option in
+                    Button {
+                        self.openedProviderAuthURL = nil
+                        self.model.startProviderPrepare(option)
+                    } label: {
+                        HStack(spacing: 10) {
+                            OnboardingProviderArtwork(
+                                icon: option.icon,
+                                fallbackKind: option.id,
+                                fallbackSymbol: "arrow.down.circle")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.label)
+                                    .font(.callout.weight(.semibold))
+                                if let hint = option.hint, !hint.isEmpty {
+                                    Text(hint)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Text(option.actionLabel ?? String(localized: "Connect / Set up"))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.model.isBusy)
+                    .openClawSelectableRowChrome(selected: false)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+
+    @ViewBuilder
     private var providerAuthSection: some View {
         if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -608,9 +694,11 @@ struct OnboardingAISetupView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.model.activeAuthOption?.label ?? "Provider sign-in")
+                    Text(self.model.activeAuthOption?.label ?? "Provider setup")
                         .font(.title3.weight(.semibold))
-                    Text("Credentials stay on this Gateway and are saved only after the live test succeeds.")
+                    Text(self.model.isPreparingModel
+                        ? "OpenClaw will detect and verify the prepared model before using it."
+                        : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -646,13 +734,17 @@ struct OnboardingAISetupView: View {
             } else if self.model.authBusy {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
-                    Text("Starting secure sign-in…")
+                    Text(self.model.isPreparingModel
+                        ? "Starting local model setup…"
+                        : "Starting secure sign-in…")
                 }
             }
 
             if let error = self.model.authError {
                 OnboardingErrorCard(
-                    title: "Sign-in didn’t complete",
+                    title: self.model.isPreparingModel
+                        ? "Model setup didn’t complete"
+                        : "Sign-in didn’t complete",
                     message: error.summary,
                     details: error.detail,
                     docsSlug: "concepts/model-providers",
@@ -803,7 +895,10 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.model.manualTesting ||
+                // isBusy, not just manualTesting: submitManualKey drops the tap
+                // while another test runs, so an enabled button would be a
+                // silent no-op.
+                .disabled(self.model.isBusy ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(self.manualProviderHelp)
@@ -862,6 +957,8 @@ struct OnboardingErrorCard: View {
     let docsSlug: String
     var retryTitle: String?
     var retry: (() -> Void)?
+    var secondaryTitle: String?
+    var secondary: (() -> Void)?
 
     init(
         title: String,
@@ -869,6 +966,8 @@ struct OnboardingErrorCard: View {
         details: String? = nil,
         docsSlug: String,
         retryTitle: String? = nil,
+        secondaryTitle: String? = nil,
+        secondary: (() -> Void)? = nil,
         retry: (() -> Void)? = nil)
     {
         self.title = title
@@ -877,6 +976,8 @@ struct OnboardingErrorCard: View {
         self.docsSlug = docsSlug
         self.retryTitle = retryTitle
         self.retry = retry
+        self.secondaryTitle = secondaryTitle
+        self.secondary = secondary
     }
 
     var body: some View {
@@ -899,6 +1000,11 @@ struct OnboardingErrorCard: View {
                     if let retryTitle, let retry {
                         Button(retryTitle, action: retry)
                             .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    if let secondaryTitle, let secondary {
+                        Button(secondaryTitle, action: secondary)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
                     Button("Open help…") {

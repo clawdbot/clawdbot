@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.test-support.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import { createDeferred } from "./deferred.js";
 import {

@@ -11,7 +11,26 @@ const CRON_RUN_LOG_RULE: LegacyConfigRule = {
     'cron.runLog is retired; run history now has fixed per-job retention. Run "openclaw doctor --fix".',
 };
 
+const CRON_WEBHOOK_RULE: LegacyConfigRule = {
+  path: ["cron", "webhook"],
+  message:
+    'cron.webhook was retired after per-job delivery migration. Run "openclaw doctor --fix".',
+};
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "cron.webhook-remove",
+    describe: "Remove retired global cron webhook fallback",
+    legacyRules: [CRON_WEBHOOK_RULE],
+    apply: (raw, changes) => {
+      const cron = getRecord(raw.cron);
+      if (!cron || !Object.hasOwn(cron, "webhook")) {
+        return;
+      }
+      delete cron.webhook;
+      changes.push("Removed retired cron.webhook after stored jobs migrated to per-job delivery.");
+    },
+  }),
   defineLegacyConfigMigration({
     id: "cron.runLog-remove",
     describe: "Remove retired cron run-log retention config",

@@ -24,6 +24,9 @@ const clearGatewayRestartIntentSync = vi.fn();
 const findInstalledSystemdGatewayScope = vi.fn();
 const probeGateway = vi.fn();
 const callGatewayCli = vi.fn();
+const isTerminalInteractive = vi.fn(() => true);
+const appendGatewayLifecycleAudit = vi.fn();
+const createGatewayLifecycleMutationAudit = vi.fn(() => vi.fn());
 
 const gatewayLockIdentity = {
   pid: 4200,
@@ -94,6 +97,16 @@ vi.mock("./lifecycle-core.js", () => ({
   runServiceUninstall,
 }));
 
+vi.mock("../terminal-interactivity.js", () => ({
+  isTerminalInteractive: () => isTerminalInteractive(),
+  NON_INTERACTIVE_GATEWAY_STOP_MESSAGE: "non-interactive gateway stop requires --force",
+}));
+
+vi.mock("./lifecycle-audit.js", () => ({
+  appendGatewayLifecycleAudit: (params: unknown) => appendGatewayLifecycleAudit(params),
+  createGatewayLifecycleMutationAudit: () => createGatewayLifecycleMutationAudit(),
+}));
+
 async function expectRestartError(promise: Promise<unknown>): Promise<Error> {
   try {
     await promise;
@@ -144,6 +157,9 @@ describe("external gateway supervision lifecycle", () => {
       findInstalledSystemdGatewayScope,
       probeGateway,
       callGatewayCli,
+      isTerminalInteractive,
+      appendGatewayLifecycleAudit,
+      createGatewayLifecycleMutationAudit,
     ]) {
       mock.mockReset();
     }
@@ -160,6 +176,7 @@ describe("external gateway supervision lifecycle", () => {
       portUsage: { port: 18_789, status: "busy", listeners: [], hints: [] },
     });
     callGatewayCli.mockResolvedValue({ ok: true, status: "emitted", pid: 4200 });
+    isTerminalInteractive.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -199,6 +216,12 @@ describe("external gateway supervision lifecycle", () => {
       intent: { force: true },
     });
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "restart",
+      source: "supervisor",
+      mode: "sigusr1",
+      pid: 4200,
+    });
     expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
       port: 19_455,
       attempts: 120,
@@ -254,20 +277,6 @@ describe("external gateway supervision lifecycle", () => {
       delayMs: 500,
       previousLockIdentity: gatewayLockIdentity,
       waitIndefinitelyForPreviousOwner: false,
-    });
-  });
-
-  it("waits indefinitely for owner release when drain timeout is zero", async () => {
-    loadConfig.mockReturnValue({ gateway: { reload: { deferralTimeoutMs: 0 } } });
-
-    await runDaemonRestart({ json: true });
-
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
-      port: 18_789,
-      attempts: 120,
-      delayMs: 500,
-      previousLockIdentity: gatewayLockIdentity,
-      waitIndefinitelyForPreviousOwner: true,
     });
   });
 

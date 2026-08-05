@@ -98,6 +98,59 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
+  it("auto-detects config-only providers that do not implement custom readiness", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        models: {
+          providers: {
+            "media-config-only": {
+              apiKey: "config-only-media-key",
+              baseUrl: "https://media.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "media-config-only",
+          defaultModel: "configured-video",
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "media-config-only", model: "configured-video" }]);
+  });
+
+  it("preserves an owner readiness veto even when generic config contains an API key", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        models: {
+          providers: {
+            "media-config-only": {
+              apiKey: "config-only-media-key",
+              baseUrl: "https://media.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "media-config-only",
+          defaultModel: "configured-video",
+          isConfigured: () => false,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
   it("orders auto-detected provider defaults by canonical aliases", () => {
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
@@ -132,7 +185,7 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
-  it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
+  it("keeps implicit provider expansion enabled when the retired opt-out is present", () => {
     let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
@@ -158,8 +211,11 @@ describe("media-generation runtime shared candidates", () => {
       },
     });
 
-    expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
-    expect(listProviderCalls).toBe(0);
+    expect(candidates).toEqual([
+      { provider: "google", model: "gemini-3.1-flash-image-preview" },
+      { provider: "openai", model: "gpt-image-1" },
+    ]);
+    expect(listProviderCalls).toBe(1);
   });
 
   it("treats an explicit model override as exact-only", () => {

@@ -7,11 +7,7 @@ import {
   trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
-export {
-  hasGatewayPasswordEnvCandidate,
-  hasGatewayTokenEnvCandidate,
-  trimToUndefined,
-} from "./credential-planner.js";
+export { trimToUndefined } from "./credential-planner.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -112,25 +108,33 @@ export function resolveGatewayCredentialsFromValues(params: {
 
 function resolveLocalGatewayCredentials(params: {
   plan: GatewayCredentialPlan;
-  env: NodeJS.ProcessEnv;
-  localTokenPrecedence: GatewayCredentialPrecedence;
-  localPasswordPrecedence: GatewayCredentialPrecedence;
+  localPrecedence: GatewayCredentialPrecedence;
 }): ResolvedGatewayCredentials {
-  const fallbackToken = params.plan.localToken.configured
+  const tokenConfigFallback = params.plan.localToken.configured
     ? params.plan.localToken.value
     : params.plan.remoteToken.value;
-  const fallbackPassword = params.plan.localPassword.configured
+  const passwordConfigFallback = params.plan.localPassword.configured
     ? params.plan.localPassword.value
     : params.plan.authMode === "trusted-proxy"
       ? undefined
       : params.plan.remotePassword.value;
-  const localResolved = resolveGatewayCredentialsFromValues({
-    configToken: fallbackToken,
-    configPassword: fallbackPassword,
-    env: params.env,
-    tokenPrecedence: params.localTokenPrecedence,
-    passwordPrecedence: params.localPasswordPrecedence,
-  });
+  const token =
+    params.localPrecedence === "config-first"
+      ? firstDefined([
+          params.plan.localToken.value,
+          params.plan.envToken,
+          params.plan.localToken.configured ? undefined : params.plan.remoteToken.value,
+        ])
+      : firstDefined([params.plan.envToken, tokenConfigFallback]);
+  const password =
+    params.localPrecedence === "config-first"
+      ? firstDefined([
+          params.plan.localPassword.value,
+          params.plan.envPassword,
+          params.plan.localPassword.configured ? undefined : passwordConfigFallback,
+        ])
+      : firstDefined([params.plan.envPassword, passwordConfigFallback]);
+  const localResolved = { token, password };
   const localPasswordCanWin =
     params.plan.authMode === "password" ||
     params.plan.authMode === "trusted-proxy" ||
@@ -146,7 +150,7 @@ function resolveLocalGatewayCredentials(params: {
   // unresolved secret ref that would otherwise be the active local credential.
   if (
     params.plan.localToken.refPath &&
-    params.localTokenPrecedence === "config-first" &&
+    params.localPrecedence === "config-first" &&
     !params.plan.localToken.value &&
     Boolean(params.plan.envToken) &&
     localTokenCanWin
@@ -155,7 +159,7 @@ function resolveLocalGatewayCredentials(params: {
   }
   if (
     params.plan.localPassword.refPath &&
-    params.localPasswordPrecedence === "config-first" && // pragma: allowlist secret
+    params.localPrecedence === "config-first" && // pragma: allowlist secret
     !params.plan.localPassword.value &&
     Boolean(params.plan.envPassword) &&
     localPasswordCanWin
@@ -265,8 +269,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
   modeOverride?: GatewayCredentialMode;
-  localTokenPrecedence?: GatewayCredentialPrecedence;
-  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  localPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
@@ -300,17 +303,10 @@ export function resolveGatewayCredentialsFromConfig(params: {
   });
   const mode: GatewayCredentialMode = params.modeOverride ?? plan.configuredMode;
 
-  const localTokenPrecedence =
-    params.localTokenPrecedence ??
-    (env.OPENCLAW_SERVICE_KIND === "gateway" ? "config-first" : "env-first");
-  const localPasswordPrecedence = params.localPasswordPrecedence ?? "env-first";
-
   if (mode === "local") {
     return resolveLocalGatewayCredentials({
       plan,
-      env,
-      localTokenPrecedence,
-      localPasswordPrecedence,
+      localPrecedence: params.localPrecedence ?? "config-first",
     });
   }
 

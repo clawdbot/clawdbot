@@ -1,3 +1,5 @@
+import type { ChildProcess } from "node:child_process";
+
 export function shouldUseDetachedVitestProcessGroup(
   platform?: NodeJS.Platform,
 ): platform is
@@ -26,6 +28,15 @@ export function forceKillVitestProcessGroup(
   child: unknown,
   kill?: (pid: number, signal?: string | number) => true,
 ): boolean;
+/**
+ * Resolves only after the child completion contract and any owned POSIX group are joined.
+ */
+export function createVitestProcessCompletion(params: {
+  child: ChildProcess;
+  detached: boolean;
+  kill?: (pid: number, signal?: string | number) => true;
+  platform?: NodeJS.Platform;
+}): Promise<{ code: number | null; signal: ChildProcess["signalCode"] }>;
 /**
  * Installs signal/exit cleanup handlers for a Vitest child process group.
  */

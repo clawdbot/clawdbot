@@ -65,7 +65,10 @@ export const mattermostConfigAdapter = createScopedChannelConfigAdapter<Resolved
 });
 
 export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
-  return Boolean(account.botToken && account.baseUrl);
+  const tokenConfigured = account.botTokenStatus
+    ? account.botTokenStatus !== "missing"
+    : Boolean(account.botToken);
+  return tokenConfigured && Boolean(account.baseUrl);
 }
 
 export function describeMattermostAccount(account: ResolvedMattermostAccount) {
@@ -74,6 +77,7 @@ export function describeMattermostAccount(account: ResolvedMattermostAccount) {
     configured: isMattermostConfigured(account),
     extra: {
       botTokenSource: account.botTokenSource,
+      botTokenStatus: account.botTokenStatus,
       baseUrl: account.baseUrl,
     },
   });

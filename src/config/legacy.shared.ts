@@ -8,10 +8,21 @@ export type LegacyConfigRule = {
   requireSourceLiteral?: boolean;
 };
 
+export type LegacyConfigMigrationContext = {
+  /** Parsed configuration exactly as authored in the root config file. */
+  authoredRaw: unknown;
+  /** Configuration after include and environment resolution. */
+  resolvedRaw: unknown;
+};
+
 type LegacyConfigMigration = {
   id: string;
   describe: string;
-  apply: (raw: Record<string, unknown>, changes: string[]) => void;
+  apply: (
+    raw: Record<string, unknown>,
+    changes: string[],
+    context?: LegacyConfigMigrationContext,
+  ) => void;
 };
 
 export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
@@ -74,7 +85,7 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
     return null;
   }
 
-  const args = command.slice(1).map((part) => part.replace(/\{input\}/g, "{{MediaPath}}"));
+  const args = command.slice(1).map((part) => part.replace(/\{input\}/g, "{{AttachmentPath}}"));
   const timeoutSeconds =
     typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
 

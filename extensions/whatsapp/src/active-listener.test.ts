@@ -12,7 +12,7 @@ vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
-  getOptionalWhatsAppRuntime: () => ({ channel: runtimeContextMocks.channelRuntime }),
+  getOptionalWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
 }));
 
 const WHATSAPP_ACTIVE_LISTENER_TEST_CFG = {

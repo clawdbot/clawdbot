@@ -93,7 +93,7 @@ async function resolveAccess(
     },
     accessGroups: params.cfg?.accessGroups,
     readStoreAllowFrom: async () => await readAllowFromStore(),
-    useAccessGroups: params.cfg?.commands?.useAccessGroups !== false,
+    useAccessGroups: true,
     subject: { stableId: params.senderId ?? "123" },
     conversation: {
       kind: isGroup ? "group" : "direct",

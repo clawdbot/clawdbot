@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isRecoverableTelegramNetworkError,
   isRetryableTelegramApiError,
+  isTelegramAuthenticationError,
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
@@ -57,6 +58,20 @@ describe("Telegram error_code predicate contracts", () => {
       expect(predicate(outer)).toBe(true);
     },
   );
+});
+
+describe("isTelegramAuthenticationError", () => {
+  it.each([
+    ["Unauthorized", 401, true],
+    ["Forbidden", 403, false],
+    ["Not Found", 404, true],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramAuthenticationError(errorWithTelegramCode(message, errorCode))).toBe(expected);
+  });
+
+  it("does not infer authentication failure from an unstructured message", () => {
+    expect(isTelegramAuthenticationError(new Error("Unauthorized"))).toBe(false);
+  });
 });
 
 describe("isRecoverableTelegramNetworkError", () => {

@@ -63,8 +63,8 @@ also prompts for:
 `tools.web.search.provider` is auto-detected from available API keys when omitted;
 set it to `kimi` explicitly if multiple search credentials are configured.
 
-Equivalent scoped form under `tools.web.search.kimi` (`apiKey`, `baseUrl`, `model`)
-also works; both shapes merge into the same resolved config.
+Configure Kimi-specific `apiKey`, `baseUrl`, and `model` values under
+`plugins.entries.moonshot.config.webSearch`.
 
 Defaults: `baseUrl` defaults to `https://api.moonshot.ai/v1` when omitted, `model`
 defaults to `kimi-k2.6`.

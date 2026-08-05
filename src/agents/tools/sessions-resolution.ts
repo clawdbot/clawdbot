@@ -13,10 +13,15 @@ import { callGateway } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  createSessionVisibilityChecker,
   listSpawnedSessionKeys,
   sessionVisibilityGatewayTesting,
 } from "../../plugin-sdk/session-visibility.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isIncognitoSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 
 type GatewayCaller = typeof callGateway;
@@ -443,6 +448,7 @@ export async function resolveSessionReference(params: {
 }
 
 export async function resolveVisibleSessionReference(params: {
+  action: "history" | "send" | "status" | "list";
   resolvedSession: Extract<SessionReferenceResolution, { ok: true }>;
   requesterSessionKey: string;
   restrictToSpawned: boolean;
@@ -450,11 +456,30 @@ export async function resolveVisibleSessionReference(params: {
 }): Promise<VisibleSessionReferenceResolution> {
   const resolvedKey = params.resolvedSession.key;
   const displayKey = params.resolvedSession.displayKey;
+  // Cross-session tools persist their results into the caller transcript; an
+  // incognito target must remain unreachable even from an incognito requester.
+  if (isIncognitoSessionKey(resolvedKey)) {
+    return {
+      ok: false,
+      status: "forbidden",
+      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
+      displayKey,
+    };
+  }
   const shouldVerifySpawnedVisibility =
     params.restrictToSpawned &&
     !params.resolvedSession.resolvedViaSessionId &&
     params.requesterSessionKey !== resolvedKey;
+  const scopedAccess =
+    params.action === "list"
+      ? undefined
+      : createSessionVisibilityChecker.resolveScopedAccess({
+          action: params.action,
+          requesterSessionKey: params.requesterSessionKey,
+          targetSessionKey: resolvedKey,
+        });
   const visible =
+    Boolean(scopedAccess) ||
     !shouldVerifySpawnedVisibility ||
     (await isRequesterSpawnedSessionVisible({
       requesterSessionKey: params.requesterSessionKey,

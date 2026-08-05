@@ -17,6 +17,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { minimatch } from "minimatch";
+import { isDefaultStateDir } from "../../config/paths.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
@@ -184,7 +185,9 @@ function collectFiles(
   }
 
   const root = rootDir ?? dir;
-  const ig = addIgnoreRules(dir, root, ignoreMatcher);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -243,7 +246,9 @@ function collectSkillEntries(
   }
 
   const root = rootDir ?? dir;
-  const ig = addIgnoreRules(dir, root, ignoreMatcher);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -1355,19 +1360,21 @@ export class DefaultPackageManager implements PackageManager {
       globalBaseDir,
     );
 
-    // User skills from ~/.agents/ (with its own baseDir)
-    const userAgentsBaseDir = dirname(userAgentsSkillsDir);
-    const userAgentsMetadata: PathMetadata = {
-      ...userMetadata,
-      baseDir: userAgentsBaseDir,
-    };
-    addResources(
-      "skills",
-      collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
-      userAgentsMetadata,
-      userOverrides.skills,
-      userAgentsBaseDir,
-    );
+    if (isDefaultStateDir()) {
+      // Home-scoped personal skills belong to the default install, not isolated state roots.
+      const userAgentsBaseDir = dirname(userAgentsSkillsDir);
+      const userAgentsMetadata: PathMetadata = {
+        ...userMetadata,
+        baseDir: userAgentsBaseDir,
+      };
+      addResources(
+        "skills",
+        collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
+        userAgentsMetadata,
+        userOverrides.skills,
+        userAgentsBaseDir,
+      );
+    }
 
     addResources(
       "prompts",

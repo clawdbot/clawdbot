@@ -3,6 +3,10 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  loadControlUiTranslationMemory,
+  materializeControlUiLocaleCatalog,
+} from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
@@ -46,10 +50,6 @@ async function loadLocaleMap(filePath: string, exportName: string): Promise<Tran
   }
   const mod = await importLocaleModule<Record<string, TranslationMap>>(filePath);
   return mod[exportName] ?? null;
-}
-
-function localeFilePath(fileName: string): string {
-  return path.join(LOCALES_DIR, fileName);
 }
 
 function extractPlaceholders(text: string): string[] {
@@ -144,11 +144,14 @@ async function buildCatalogFallbackBaseline(
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
   for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    const filePath = localeFilePath(entry.fileName);
-    const localeMap = await loadLocaleMap(filePath, entry.exportName);
-    if (!localeMap) {
-      throw new Error(`${toRepoPath(filePath)} does not export ${entry.exportName}`);
+    const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
+    if (!existsSync(memoryPath)) {
+      throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
     }
+    const localeMap = materializeControlUiLocaleCatalog(
+      sourceFlat,
+      loadControlUiTranslationMemory(memoryPath),
+    );
     localeFlats.set(entry.locale, flattenControlUiCatalog(localeMap, entry.locale));
   }
 

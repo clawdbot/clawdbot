@@ -34,4 +34,18 @@ describe("formatProviderError", () => {
 
     expect(formatProviderError(error)).toBe(body);
   });
+
+  it("preserves diagnostic fields when serializing a circular error object", () => {
+    const error: Record<string, unknown> = { code: "ECONNRESET" };
+    error.self = error;
+
+    expect(formatProviderError(error)).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
+  });
+
+  it("does not split surrogate pairs when truncating response bodies", () => {
+    const body = `${"x".repeat(3999)}😀tail`;
+    const error = Object.assign(new Error("502 status code (no body)"), { status: 502, body });
+
+    expect(formatProviderError(error)).toBe(`502: ${"x".repeat(3999)}... [truncated]`);
+  });
 });

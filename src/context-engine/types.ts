@@ -109,22 +109,6 @@ export type ContextEngineRuntimeSettings = {
   };
 };
 
-export class ContextEngineRuntimeSettingsUnavailableError extends Error {
-  readonly code = "context_engine_runtime_settings_unavailable";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnavailableError";
-  }
-}
-
-export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
-  readonly code = "context_engine_runtime_settings_unsupported";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnsupportedError";
-  }
-}
-
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -194,6 +178,7 @@ export type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
+  acceptedHostParams?: string[];
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
   /**
@@ -224,7 +209,9 @@ export type TranscriptRewriteReplacement = {
   message: AgentMessage;
 };
 
-export type TranscriptRewriteRequest = {
+// Local-only: engines consume this shape structurally via rewriteTranscriptEntries;
+// the last named importer was the deleted destructive rewrite path (#115271).
+type TranscriptRewriteRequest = {
   /** Message entry replacements to apply in one branch-and-reappend pass. */
   replacements: TranscriptRewriteReplacement[];
   /** Optional entry-id set that must cover every active-branch entry from the first replacement onward. */

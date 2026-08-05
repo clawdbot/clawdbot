@@ -27,13 +27,17 @@ vi.mock("./model-selection.js", async () => {
   };
 });
 
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: (scope: { sessionKey: string }) => {
+vi.mock("../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = (scope: { sessionKey: string }) => {
     const store = state.loadSessionStoreMock(scope) as Record<string, unknown> | undefined;
     return store?.[scope.sessionKey];
-  },
-  patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
-}));
+  };
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+    patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+  };
+});
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
@@ -489,6 +493,141 @@ describe("live model switch", () => {
       );
 
       expect(result).toBeUndefined();
+    });
+  });
+
+  describe("consolidateLiveModelSwitchAfterRun", () => {
+    const consolidateParams = {
+      cfg: { session: { store: "/tmp/custom-store.json" } },
+      sessionKey: "main",
+      agentId: "reply",
+    };
+
+    it("clears the pending flag when the run executed the persisted selection", async () => {
+      // CLI harness runs never pass the embedded attempt-recovery clear; the
+      // post-run consolidation is what stops /status reporting a stale switch.
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "claude-cli",
+        modelOverride: "claude-opus-4-6",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "claude-cli",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
+    it("keeps the pending flag when the run executed a different model", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "anthropic",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      expect(sessionEntry.liveModelSwitchPending).toBe(true);
+    });
+
+    it("clears via the openai runtime promotion when providers differ only by alias", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "OpenAI",
+        modelUsed: "gpt-5.5",
+      });
+
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
+    it("leaves the entry untouched when the flag is not set", async () => {
+      const sessionEntry = {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "openai",
+        modelUsed: "gpt-5.5",
+      });
+
+      expect(sessionEntry).toEqual({ providerOverride: "openai", modelOverride: "gpt-5.5" });
+    });
+
+    it("resolves the owning agent's default when the caller has no agent id", async () => {
+      // Without an explicit agentId the session key still identifies the
+      // owning agent; /model default must consolidate against that agent's
+      // configured default, not library-wide constants.
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        cfg: consolidateParams.cfg,
+        sessionKey: "main",
+        providerUsed: "anthropic",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      // The derived agent must also target the store so agent-scoped store
+      // templates resolve the row that actually holds the pending flag.
+      expect(state.resolveStorePathMock).toHaveBeenCalledWith("/tmp/custom-store.json", {
+        agentId: "main",
+      });
+      expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalled();
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
+    it("clears a pending default switch once the agent default actually ran", async () => {
+      // /model default clears the override and leaves only runtime fields; the
+      // selection then resolves to the agent default, which just ran.
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "anthropic",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
     });
   });
 

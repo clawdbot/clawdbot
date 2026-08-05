@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   sessionsCleanupCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
   sessionsCompactCommand: vi.fn(),
+  sessionsArchiveCommand: vi.fn(),
+  sessionsDeleteCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
   commitmentsDismissCommand: vi.fn(),
@@ -36,6 +38,8 @@ const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
 const sessionsCompactCommand = mocks.sessionsCompactCommand;
+const sessionsArchiveCommand = mocks.sessionsArchiveCommand;
+const sessionsDeleteCommand = mocks.sessionsDeleteCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
@@ -101,6 +105,11 @@ vi.mock("../../commands/sessions-compact.js", () => ({
   sessionsCompactCommand: mocks.sessionsCompactCommand,
 }));
 
+vi.mock("../../commands/sessions-lifecycle.js", () => ({
+  sessionsArchiveCommand: mocks.sessionsArchiveCommand,
+  sessionsDeleteCommand: mocks.sessionsDeleteCommand,
+}));
+
 vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
@@ -149,6 +158,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsCleanupCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
     sessionsCompactCommand.mockResolvedValue(undefined);
+    sessionsArchiveCommand.mockResolvedValue(undefined);
+    sessionsDeleteCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
     commitmentsDismissCommand.mockResolvedValue(undefined);
@@ -348,6 +359,87 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(sessionsCompactCommand).not.toHaveBeenCalled();
   });
 
+  it("forwards multi-key archive options and inherits parent sessions output options", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "work",
+      "--json",
+      "archive",
+      "agent:work:scratch-1",
+      "agent:work:scratch-2",
+      "--dry-run",
+      "--url",
+      "ws://gateway.test",
+      "--token",
+      "test-token",
+      "--password",
+      "test-password",
+      "--timeout",
+      "45000",
+    ]);
+
+    expectCommandOptions(sessionsArchiveCommand, {
+      keys: ["agent:work:scratch-1", "agent:work:scratch-2"],
+      agent: "work",
+      dryRun: true,
+      url: "ws://gateway.test",
+      token: "test-token",
+      password: "test-password",
+      timeout: "45000",
+      json: true,
+    });
+  });
+
+  it("forwards multi-key delete options and prefers the subcommand agent", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "main",
+      "delete",
+      "agent:work:scratch-1",
+      "agent:work:scratch-2",
+      "--agent",
+      "work",
+      "--yes",
+      "--json",
+    ]);
+
+    expectCommandOptions(sessionsDeleteCommand, {
+      keys: ["agent:work:scratch-1", "agent:work:scratch-2"],
+      agent: "work",
+      dryRun: false,
+      yes: true,
+      json: true,
+    });
+  });
+
+  it("rejects inherited session-list filters for lifecycle mutations", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/other-sessions.json",
+      "--all-agents",
+      "archive",
+      "agent:main:scratch-1",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsArchiveCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid lifecycle RPC timeouts", async () => {
+    await runCli(["sessions", "delete", "agent:main:scratch-1", "--timeout", "0", "--yes"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--timeout must be a positive integer (milliseconds).",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsDeleteCommand).not.toHaveBeenCalled();
+  });
+
   it("forwards sessions list-side options", async () => {
     await runCli([
       "sessions",
@@ -412,6 +504,17 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it.each([
+    { flag: "--active", value: "5" },
+    { flag: "--limit", value: "1" },
+  ])("rejects inherited $flag before running session cleanup", async ({ flag, value }) => {
+    await runCli(["sessions", flag, value, "cleanup", "--enforce"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(flag));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsCleanupCommand).not.toHaveBeenCalled();
+  });
+
   it("runs sessions tail with forwarded progress options", async () => {
     await runCli([
       "sessions",
@@ -435,6 +538,14 @@ describe("registerStatusHealthSessionsCommands", () => {
       follow: true,
       tail: "5",
     });
+  });
+
+  it("rejects inherited JSON mode for human-readable session tail", async () => {
+    await runCli(["sessions", "--json", "tail"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--json"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsTailCommand).not.toHaveBeenCalled();
   });
 
   it("runs sessions export-trajectory with owner-routable export options", async () => {
@@ -474,6 +585,20 @@ describe("registerStatusHealthSessionsCommands", () => {
       requestJsonBase64: "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
       json: true,
     });
+  });
+
+  it("rejects inherited all-agent scope for single-session trajectory exports", async () => {
+    await runCli([
+      "sessions",
+      "--all-agents",
+      "export-trajectory",
+      "--session-key",
+      "agent:main:main",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(exportTrajectoryCommand).not.toHaveBeenCalled();
   });
 
   it("runs tasks list from the parent command", async () => {

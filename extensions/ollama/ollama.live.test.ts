@@ -177,7 +177,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
         buildCliEnv(root),
       );
 
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr || result.stdout).toBe(0);
       expect(result.stderr).not.toContain("[agents/auth-profiles]");
       expect(result.stdout.trim(), result.stderr).not.toHaveLength(0);
       const payload = parseJsonEnvelope(result.stdout) as {

@@ -1,16 +1,10 @@
 // Feishu plugin module implements security audit shared behavior.
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import {
+  asOptionalRecord as asRecord,
+  hasNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
   const channels = asRecord(cfg.channels);

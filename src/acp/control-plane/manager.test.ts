@@ -678,7 +678,7 @@ describe("AcpSessionManager", () => {
     await first;
     await vi.waitFor(
       () => {
-        expect(manager.getObservabilitySnapshot(baseCfg).turns.queueDepth).toBe(0);
+        expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
       },
       { interval: 1 },
     );
@@ -768,7 +768,7 @@ describe("AcpSessionManager", () => {
         reason: "turn-timeout",
       });
       expect(runtimeState.close).not.toHaveBeenCalled();
-      const snapshot = manager.getObservabilitySnapshot(cfg);
+      const snapshot = manager.getObservabilitySnapshot();
       expect(snapshot.runtimeCache.activeSessions).toBe(1);
       expectRecordFields(snapshot.turns, {
         active: 0,
@@ -815,94 +815,6 @@ describe("AcpSessionManager", () => {
       expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
-    }
-  });
-
-  it("keeps timed-out runtime handles counted until timeout cleanup finishes", async () => {
-    vi.useFakeTimers();
-    try {
-      const runtimeState = createRuntime();
-      runtimeState.cancel.mockImplementation(() => new Promise(() => {}));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-        return {
-          sessionKey,
-          storeSessionKey: sessionKey,
-          acp: {
-            ...readySessionMeta(),
-            runtimeSessionName: `runtime:${sessionKey}`,
-          },
-        };
-      });
-
-      let firstTurnStarted = false;
-      runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
-        if (input.requestId === "r1") {
-          firstTurnStarted = true;
-          await new Promise(() => {});
-        }
-        yield { type: "done" as const };
-      });
-
-      const manager = new AcpSessionManager();
-      const cfg = {
-        ...baseCfg,
-        acp: {
-          ...baseCfg.acp,
-          maxConcurrentSessions: 1,
-        },
-        agents: {
-          defaults: {
-            timeoutSeconds: 1,
-          },
-        },
-      } as OpenClawConfig;
-
-      const first = manager.runTurn({
-        provenance: "system",
-        cfg,
-        sessionKey: "agent:codex:acp:session-a",
-        text: "first",
-        mode: "prompt",
-        requestId: "r1",
-      });
-      void first.catch(() => undefined);
-      await vi.waitFor(
-        () => {
-          expect(firstTurnStarted).toBe(true);
-        },
-        { interval: 1 },
-      );
-
-      await vi.advanceTimersByTimeAsync(4_500);
-
-      await expectRejectedRecord(first, {
-        code: "ACP_TURN_FAILED",
-        message: "ACP turn timed out after 1s.",
-      });
-      expect(manager.getObservabilitySnapshot(cfg).runtimeCache.activeSessions).toBe(1);
-
-      await expectRejectedRecord(
-        manager.runTurn({
-          provenance: "system",
-          cfg,
-          sessionKey: "agent:codex:acp:session-b",
-          text: "second",
-          mode: "prompt",
-          requestId: "r2",
-        }),
-        {
-          code: "ACP_SESSION_INIT_FAILED",
-          message: "ACP max concurrent sessions reached (1/1).",
-        },
-      );
-      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
     }
   });
 
@@ -967,57 +879,6 @@ describe("AcpSessionManager", () => {
     ]);
 
     expect(maxInFlight).toBe(2);
-  });
-
-  it("enforces acp.maxConcurrentSessions when opening new runtime handles", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        acp: {
-          ...readySessionMeta(),
-          runtimeSessionName: `runtime:${sessionKey}`,
-        },
-      };
-    });
-    const limitedCfg = {
-      acp: {
-        ...baseCfg.acp,
-        maxConcurrentSessions: 1,
-      },
-    } as OpenClawConfig;
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: limitedCfg,
-      sessionKey: "agent:codex:acp:session-a",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-
-    await expectRejectedRecord(
-      manager.runTurn({
-        provenance: "system",
-        cfg: limitedCfg,
-        sessionKey: "agent:codex:acp:session-b",
-        text: "second",
-        mode: "prompt",
-        requestId: "r2",
-      }),
-      {
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "ACP max concurrent sessions reached (1/1).",
-      },
-    );
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
   });
 
   it("uses metadata backend when global acp.backend is unset", async () => {
@@ -1101,17 +962,10 @@ describe("AcpSessionManager", () => {
           },
         };
       });
-      const limitedCfg = {
-        acp: {
-          ...baseCfg.acp,
-          maxConcurrentSessions: 1,
-        },
-      } as OpenClawConfig;
-
       const manager = new AcpSessionManager();
       await manager.runTurn({
         provenance: "system",
-        cfg: limitedCfg,
+        cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-a",
         text: "first",
         mode: "prompt",
@@ -1119,7 +973,7 @@ describe("AcpSessionManager", () => {
       });
 
       const closeResult = await manager.closeSession({
-        cfg: limitedCfg,
+        cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-a",
         reason: "manual-close",
         allowBackendUnavailable: true,
@@ -1130,7 +984,7 @@ describe("AcpSessionManager", () => {
       await expect(
         manager.runTurn({
           provenance: "system",
-          cfg: limitedCfg,
+          cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-b",
           text: "second",
           mode: "prompt",
@@ -1417,69 +1271,6 @@ describe("AcpSessionManager", () => {
     expect(entry.acp?.identity).not.toHaveProperty("agentSessionId");
   });
 
-  it("evicts idle cached runtimes before enforcing max concurrent limits", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-02-23T00:00:00.000Z"));
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-        return {
-          sessionKey,
-          storeSessionKey: sessionKey,
-          acp: {
-            ...readySessionMeta(),
-            runtimeSessionName: `runtime:${sessionKey}`,
-          },
-        };
-      });
-      const cfg = {
-        acp: {
-          ...baseCfg.acp,
-          maxConcurrentSessions: 1,
-          runtime: {
-            ttlMinutes: 0.01,
-          },
-        },
-      } as OpenClawConfig;
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg,
-        sessionKey: "agent:codex:acp:session-a",
-        text: "first",
-        mode: "prompt",
-        requestId: "r1",
-      });
-
-      vi.advanceTimersByTime(2_000);
-      await manager.runTurn({
-        provenance: "system",
-        cfg,
-        sessionKey: "agent:codex:acp:session-b",
-        text: "second",
-        mode: "prompt",
-        requestId: "r2",
-      });
-
-      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-      const closeInput = mockCallArg(runtimeState.close);
-      expectRecordFields(closeInput, {
-        reason: "idle-evicted",
-      });
-      expectRecordFields(closeInput.handle, {
-        sessionKey: "agent:codex:acp:session-a",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("tracks ACP turn latency and error-code observability", async () => {
     const runtimeState = createRuntime();
     runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
@@ -1525,7 +1316,7 @@ describe("AcpSessionManager", () => {
       { code: "ACP_TURN_FAILED" },
     );
 
-    const snapshot = manager.getObservabilitySnapshot(baseCfg);
+    const snapshot = manager.getObservabilitySnapshot();
     expect(snapshot.turns.completed).toBe(1);
     expect(snapshot.turns.failed).toBe(1);
     expect(snapshot.turns.active).toBe(0);

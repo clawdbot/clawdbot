@@ -12,6 +12,7 @@
 
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -282,10 +283,11 @@ export async function dispatchOutbound(
   // a longer configured ceiling (e.g. slow local ollama models) is not
   // silently undercut by a plugin-local 5-minute cap.
   const responseTimeoutMs = resolveResponseTimeoutMs(cfg);
+  const responseTimeoutError = new Error("Response timeout");
   const timeoutPromise = new Promise<void>((_, reject) => {
     timeoutId = setTimeout(() => {
       if (!hasResponse) {
-        reject(new Error("Response timeout"));
+        reject(responseTimeoutError);
       }
     }, responseTimeoutMs);
   });
@@ -437,7 +439,11 @@ export async function dispatchOutbound(
         cfg: openClawCfg,
         channel: "qqbot",
         accountId: inbound.route.accountId,
-        route: { agentId: routeAgentId, sessionKey: inbound.route.sessionKey },
+        route: {
+          agentId: routeAgentId,
+          dmScope: inbound.route.dmScope,
+          sessionKey: inbound.route.sessionKey,
+        },
         ctxPayload,
         record: {
           onRecordError: (err: unknown) => {
@@ -445,6 +451,16 @@ export async function dispatchOutbound(
               `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           },
+          ...(inbound.isGroupChat
+            ? {
+                updateLastRoute: {
+                  sessionKey: inbound.route.sessionKey,
+                  channel: "qqbot",
+                  to: qualifiedTarget,
+                  accountId: inbound.route.accountId,
+                },
+              }
+            : {}),
         },
         dispatcherOptions: {
           responsePrefix: messagesConfig.responsePrefix,
@@ -671,6 +687,9 @@ export async function dispatchOutbound(
           },
         },
         replyOptions: {
+          ...(event.turnAdoptionLifecycle
+            ? bindIngressLifecycleToReplyOptions(event.turnAdoptionLifecycle)
+            : {}),
           disableBlockStreaming: useOfficialC2cStream
             ? true
             : account.config?.streaming?.mode === "off",
@@ -694,10 +713,17 @@ export async function dispatchOutbound(
 
   try {
     await Promise.race([dispatchPromise, timeoutPromise]);
-  } catch {
+  } catch (error) {
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
+    }
+    if (error === responseTimeoutError && event.turnAdoptionLifecycle) {
+      // The watchdog cannot cancel a live agent turn. Keep durable settlement with that turn;
+      // releasing here would let a retry overlap its later replies and adoption callback.
+      await dispatchPromise;
+    } else if (event.turnAdoptionLifecycle) {
+      throw error;
     }
   } finally {
     if (timeoutId) {
@@ -757,7 +783,16 @@ async function buildCtxPayload(
 ): Promise<FinalizedMsgContext> {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
-  const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
+  // QQ inbound attachments are images only; remote URLs carry no MIME, so the
+  // explicit kind keeps image/vision gates from classifying them as generic files.
+  const imageMedia = [
+    ...inbound.localMediaPaths.map((path, index) => ({
+      path,
+      contentType: inbound.localMediaTypes[index],
+      kind: "image" as const,
+    })),
+    ...inbound.remoteMediaUrls.map((url) => ({ url, kind: "image" as const })),
+  ];
   return buildChannelInboundEventContext({
     channel: "qqbot",
     accountId: inbound.route.accountId,
@@ -774,6 +809,7 @@ async function buildCtxPayload(
     },
     route: {
       agentId: inbound.route.agentId ?? resolveDefaultAgentId(cfg as OpenClawConfig),
+      dmScope: inbound.route.dmScope,
       routeSessionKey: inbound.route.sessionKey,
       accountId: inbound.route.accountId,
     },
@@ -798,9 +834,10 @@ async function buildCtxPayload(
           authorized: inbound.commandAuthorized,
         }
       : undefined,
-    media: hasImageMedia
-      ? undefined
-      : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
+    media:
+      imageMedia.length > 0
+        ? imageMedia
+        : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
     supplemental: {
       quote: inbound.replyTo
         ? {
@@ -823,17 +860,6 @@ async function buildCtxPayload(
       QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
       QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
       ...(commandSource ? { CommandSource: commandSource } : {}),
-      ...(inbound.localMediaPaths.length > 0
-        ? {
-            MediaPaths: inbound.localMediaPaths,
-            MediaPath: inbound.localMediaPaths[0],
-            MediaTypes: inbound.localMediaTypes,
-            MediaType: inbound.localMediaTypes[0],
-          }
-        : {}),
-      ...(inbound.remoteMediaUrls.length > 0
-        ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
-        : {}),
     },
   });
 }

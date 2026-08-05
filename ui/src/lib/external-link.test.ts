@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover external link behavior.
 import { describe, expect, it } from "vitest";
 import { buildExternalLinkRel } from "./external-link.ts";

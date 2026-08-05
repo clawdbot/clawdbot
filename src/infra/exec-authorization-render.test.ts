@@ -157,6 +157,25 @@ describe("exec authorization renderer", () => {
     expect(command).toMatch(/^\/.+\/head -c 16$/);
   });
 
+  it("leaves POSIX safe builtins unrewritten in enforced mode", async () => {
+    const plan = await planShellAuthorization({
+      command: "cd .",
+      env: POSIX_ENV,
+    });
+
+    const command = renderOk(
+      buildAuthorizedShellCommandFromPlan({
+        plan,
+        mode: "enforced",
+        segmentSatisfiedBy: ["safeBuiltins"],
+      }),
+    );
+
+    // Builtins run in the shell, not via a filesystem executable, so enforced
+    // mode must not rewrite `cd` to a resolved path like /usr/bin/cd.
+    expect(command).toBe("cd .");
+  });
+
   it("rewrites quoted POSIX executable source spans", async () => {
     const plan = await planShellAuthorization({
       command: '"head" -c 16',

@@ -198,7 +198,7 @@ export function buildGatewayAuthConfig(params: {
   return base;
 }
 
-/** Prompt for model provider credentials and default model allowlist settings. */
+/** Prompt for model provider credentials and explicit default model policy settings. */
 export async function promptAuthConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,

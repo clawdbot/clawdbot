@@ -2,26 +2,23 @@
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { readConnectErrorDetailCode } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import {
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "../../infra/parse-finite-number.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
+import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { parseNodeList, parsePairingList } from "./format.js";
 import type { NodeListNode, NodesRpcOpts } from "./types.js";
-
-type NodesCliRpcRuntimeModule = typeof import("./rpc.runtime.js");
-
-const nodesCliRpcRuntimeLoader = createLazyImportLoader<NodesCliRpcRuntimeModule>(
-  () => import("./rpc.runtime.js"),
-);
-
-async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
-  return nodesCliRpcRuntimeLoader.load();
-}
 
 const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
   "AUTH_REQUIRED",
@@ -31,17 +28,29 @@ const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
   "AUTH_SCOPE_MISMATCH",
   "PAIRING_REQUIRED",
 ]);
+const NODE_PAIR_APPROVAL_GATEWAY_METHODS = new Set<string>(["node.pair.list", "node.pair.approve"]);
+const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
-function readGatewayClientRequestDetailCode(value: unknown): string | null {
-  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+function resolveNodesTransportTimeoutMs(
+  opts: NodesRpcOpts,
+  overrideMs?: number,
+  invokeTimeoutMs?: unknown,
+): number | null {
+  const transportTimeoutMs =
+    overrideMs ?? parseTimeoutMsWithFallback(opts.timeout, DEFAULT_NODES_RPC_TIMEOUT_MS);
+  if (invokeTimeoutMs === 0) {
+    // Zero disables the node deadline; null keeps Gateway startup bounded but the request unbounded.
     return null;
   }
-  const details = (value as Error & { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
+  if (
+    typeof invokeTimeoutMs !== "number" ||
+    !Number.isSafeInteger(invokeTimeoutMs) ||
+    invokeTimeoutMs <= 0
+  ) {
+    return transportTimeoutMs;
   }
-  const code = (details as { code?: unknown }).code;
-  return typeof code === "string" ? code : null;
+  // Gateway transport starts before the node timer; retain one normal RPC timeout for forwarding.
+  return Math.max(transportTimeoutMs, invokeTimeoutMs + DEFAULT_NODES_RPC_TIMEOUT_MS);
 }
 
 function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
@@ -53,16 +62,15 @@ function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
   ) {
     return true;
   }
-  const detailCode = readGatewayClientRequestDetailCode(value);
+  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const details = (value as Error & { details?: unknown }).details;
+  const detailCode = readConnectErrorDetailCode(details);
   if (detailCode !== null && STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES.has(detailCode)) {
     return true;
   }
-  return (
-    value instanceof Error &&
-    value.name === "GatewayClientRequestError" &&
-    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    value.message.includes("missing scope: operator.read")
-  );
+  return readMissingScopeError(value)?.missingScope === "operator.read";
 }
 
 function isUnknownGatewayMethodError(value: unknown, method: string): value is Error {
@@ -95,8 +103,26 @@ export const callGatewayCli = async (
     useLocalBackendSharedAuth?: boolean;
   },
 ) => {
-  const runtime = await loadNodesCliRpcRuntime();
-  return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
+  const invokeTimeoutMs =
+    method === "node.invoke" &&
+    params !== null &&
+    typeof params === "object" &&
+    !Array.isArray(params)
+      ? (params as { timeoutMs?: unknown }).timeoutMs
+      : undefined;
+  const useLocalBackendSharedAuth = callOpts?.useLocalBackendSharedAuth === true;
+  return await callGatewayFromCliWithTransport(method, opts, params, {
+    label: `Nodes ${method}`,
+    timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts?.transportTimeoutMs, invokeTimeoutMs),
+    scopes: callOpts?.scopes,
+    useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
+    requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
+    requireLocalBackendSharedAuth: useLocalBackendSharedAuth,
+    clientName: useLocalBackendSharedAuth
+      ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      : GATEWAY_CLIENT_NAMES.CLI,
+    mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+  });
 };
 
 /** Read node diagnostics with pairing details when authorized, otherwise keep read-only access. */
@@ -135,8 +161,16 @@ export const callNodePairApprovalGatewayCli = async (
   params: unknown,
   callOpts: { scopes: OperatorScope[]; transportTimeoutMs?: number },
 ) => {
-  const runtime = await loadNodesCliRpcRuntime();
-  return await runtime.callNodePairApprovalGatewayCliRuntime(method, opts, params, callOpts);
+  if (!NODE_PAIR_APPROVAL_GATEWAY_METHODS.has(method)) {
+    throw new Error(`unsupported node pair approval gateway method: ${method}`);
+  }
+  return await callGatewayFromCliWithTransport(method, opts, params, {
+    label: `Nodes ${method}`,
+    timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts.transportTimeoutMs),
+    scopes: callOpts.scopes,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+  });
 };
 
 /** Build a node.invoke payload with an idempotency key and optional timeout. */

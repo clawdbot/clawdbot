@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
@@ -25,10 +27,13 @@ export type McpAppViewLease = {
   serverName: string;
   toolName: string;
   uiResourceUri: string;
+  toolCallId?: string;
   html: string;
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
+  readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
   expiresAtMs: number;
@@ -40,6 +45,24 @@ export type McpAppViewLease = {
   expiryTimer?: ReturnType<typeof setTimeout>;
   releaseRuntimeLease?: () => void;
 };
+
+export type McpAppChannelView = {
+  viewId: string;
+};
+
+/** Retain only the bounded view identity needed for late channel materialization. */
+export function readMcpAppChannelView(result: unknown): McpAppChannelView | undefined {
+  const details = asRecord(asRecord(result)?.details);
+  const preview = asRecord(details?.mcpAppPreview);
+  const view = asRecord(preview?.view);
+  const descriptor = asRecord(preview?.mcpApp);
+  const viewId = typeof descriptor?.viewId === "string" ? descriptor.viewId.trim() : "";
+  const projectedViewId = typeof view?.id === "string" ? view.id.trim() : "";
+  if (!viewId || projectedViewId !== viewId) {
+    return undefined;
+  }
+  return { viewId };
+}
 
 type McpAppViewStore = Map<string, McpAppViewLease>;
 
@@ -61,6 +84,7 @@ function deleteView(viewId: string, expected?: McpAppViewLease): void {
     return;
   }
   clearTimeout(view.expiryTimer);
+  clearMcpAppModelContextForView(view.runtime, view);
   view.releaseRuntimeLease?.();
   store.delete(viewId);
   void completeDeferredSessionMcpRuntimeRetirement(view.runtime).catch((error: unknown) => {
@@ -124,12 +148,6 @@ function assertBoundedViewDescriptor(value: {
   ) {
     throw new Error("MCP App preview descriptor exceeds safe limits");
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function normalizePermissions(value: unknown): McpAppPermissions | undefined {
@@ -201,6 +219,8 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
+  readOnly?: true;
   viewId?: string;
 }): Promise<
   | {
@@ -254,12 +274,17 @@ export async function fetchMcpAppView(params: {
       serverName: params.serverName,
       toolName: params.toolName,
       uiResourceUri: params.uiResourceUri,
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       html,
       ...(csp ? { csp } : {}),
       ...(permissions ? { permissions } : {}),
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
         : {}),
+      ...(params.authorizeAppInteraction
+        ? { authorizeAppInteraction: params.authorizeAppInteraction }
+        : {}),
+      ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
@@ -302,6 +327,16 @@ export function getMcpAppViewLease(
   return view?.runtime === runtime ? view : undefined;
 }
 
+/** Resolve a live view owned by its originating session, including harness-native runtimes. */
+export function getMcpAppViewLeaseForSession(
+  viewId: string,
+  sessionKey: string,
+): McpAppViewLease | undefined {
+  pruneViewStore();
+  const view = getViewStore().get(viewId);
+  return view?.runtime.sessionKey === sessionKey ? view : undefined;
+}
+
 export function acquireMcpAppViewRequest(
   view: McpAppViewLease,
   kind: "read" | "tool",
@@ -339,6 +374,7 @@ export function buildMcpAppCanvasPayload(view: {
   toolName: string;
   uiResourceUri: string;
   toolCallId?: string;
+  originSessionKey?: string;
   resultMetaState?: "unavailable";
 }) {
   assertBoundedViewDescriptor(view);
@@ -357,6 +393,7 @@ export function buildMcpAppCanvasPayload(view: {
       toolName: view.toolName,
       uiResourceUri: view.uiResourceUri,
       ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
+      ...(view.originSessionKey ? { originSessionKey: view.originSessionKey } : {}),
       ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
     },
   };

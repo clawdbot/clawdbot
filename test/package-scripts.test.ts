@@ -121,7 +121,7 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 4 },
+    { scriptName: "build:docker", expectedCount: 3 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
@@ -137,6 +137,12 @@ describe("package scripts", () => {
   it("enables live cache validation in the package script", () => {
     expect(readPackageJson().scripts["test:live:cache"]).toBe(
       "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
+    );
+  });
+
+  it("runs browser copilot E2E against real Chromium", () => {
+    expect(readPackageJson().scripts["test:e2e:browser-copilot"]).toBe(
+      "node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node scripts/ensure-playwright-chromium.mjs --require-playwright-chromium && node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_COPILOT_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/browser/chrome-extension/page-share.e2e.test.ts extensions/browser/chrome-extension/sidepanel.e2e.test.ts",
     );
   });
 
@@ -163,15 +169,86 @@ describe("package scripts", () => {
     expect(script).not.toContain("name=iPhone");
   });
 
+  it("keeps the Wear app in the root Android contributor gates", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["android:assemble"]).toContain(":wear:assembleDebug");
+    expect(scripts["android:format"]).toContain(":wear:ktlintFormat");
+    expect(scripts["android:lint"]).toContain(":wear:ktlintCheck");
+    expect(scripts["android:lint:android"]).toContain(":wear:lintDebug");
+    expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
+  });
+
   it("runs generated module formatting coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/format-generated-module.test.ts",
     );
   });
 
-  it("runs SQLite transcript archive durability coverage in Windows CI", () => {
+  it("runs direct-run entrypoint coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "src/config/sessions/store.session-lifecycle-mutation.test.ts",
+      "test/scripts/direct-run-entrypoints.test.ts",
+    );
+  });
+
+  it("runs Docker package process-tree coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+    );
+  });
+
+  it("runs legacy session importer atomicity coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/state-migrations.legacy-session-store.test.ts",
+    );
+  });
+
+  it("runs SQLite snapshot path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/sqlite-snapshot.test.ts",
+    );
+  });
+
+  it("runs the native OpenSSH resolver proof in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/ssh-client.windows.test.ts",
+    );
+  });
+
+  it("keeps the native Scheduled Task lifecycle proof opt-in", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["test:windows:ci"]).not.toContain("schtasks.integration.e2e.test.ts");
+    expect(scripts["test:windows:schtasks:integration"]).toContain(
+      "CI_WINDOWS_SCHTASKS_INTEGRATION=1",
+    );
+    expect(scripts["test:windows:schtasks:integration"]).toContain(
+      "src/daemon/schtasks.integration.e2e.test.ts",
+    );
+  });
+
+  it("runs shared test-state cleanup coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/test-utils/openclaw-test-state.test.ts",
+    );
+  });
+
+  it("runs snapshot repository verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/snapshot/local-repository.windows.test.ts",
+    );
+  });
+
+  it("runs backup verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/commands/backup-verify.test.ts",
+    );
+  });
+
+  it("runs SQLite transcript archive worker coverage in Windows CI", () => {
+    const windowsCi = readPackageJson().scripts["test:windows:ci"];
+    expect(windowsCi).toContain(
+      "src/config/sessions/session-accessor.sqlite-archive.worker.test.ts",
     );
   });
 
@@ -190,6 +267,31 @@ describe("package scripts", () => {
   it("runs ts-topology entrypoint coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/ts-topology.test.ts",
+    );
+  });
+
+  it("runs Windows-only MXC backend coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("extensions/mxc/test/mxc-backend.test.ts");
+    expect(script).toContain("extensions/mxc/test/sandbox-policy-loader.test.ts");
+  });
+
+  it("runs Windows-only exec script preflight coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/agents/bash-tools.exec.script-preflight.test.ts",
+    );
+  });
+
+  it("runs Windows-only exec allowlist matching coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/exec-allowlist-pattern.test.ts",
+    );
+  });
+
+  it("runs Windows-only safe removal coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/fs-safe-remove.test.ts",
     );
   });
 });

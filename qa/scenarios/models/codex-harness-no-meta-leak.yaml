@@ -5,9 +5,9 @@ scenario:
   surface: dm
   coverage:
     primary:
-      - models.codex-cli
+      - openai.codex-harness-codex-cli
     secondary:
-      - runtime.no-meta-leak
+      - openai.codex-harness-no-meta-leak
   plugins:
     - codex
   objective: Verify the Codex app-server harness keeps coordination/meta chatter out of the visible reply.
@@ -65,10 +65,10 @@ flow:
             message:
               expr: "`expected live primary model ${config.requiredModel}, got ${env.primaryModel}`"
         - assert:
-            expr: "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === config.harnessRuntime"
+            expr: "env.runtimeId === config.harnessRuntime"
             message:
-              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
-      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
+              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.runtimeId}`"
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${env.runtimeId}`"
     - name: keeps codex coordination chatter out of the visible reply
       actions:
         - call: reset

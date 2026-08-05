@@ -910,6 +910,12 @@ export class ExtensionRunner {
   }
 
   async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+    // Cloning the full session history is expensive (it can carry image
+    // payloads) and runs every turn, so skip it unless a context handler
+    // is actually registered. Handlers still receive an isolated clone.
+    if (!this.hasHandlers("context")) {
+      return messages;
+    }
     const ctx = this.createContext();
     let currentMessages = structuredClone(messages);
 

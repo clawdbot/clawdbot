@@ -1,3 +1,4 @@
+import type { TurnAdoptionLifecycle } from "../auto-reply/get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -43,6 +44,7 @@ type DispatchInboundDirectDmParams = {
   messageId: string;
   timestamp?: number;
   commandAuthorized?: boolean;
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
   bodyForAgent?: string;
@@ -150,7 +152,12 @@ function buildDirectDmTurnPlan(
       onError: params.onDispatchError,
     },
     replyPipeline,
-    replyOptions: { onModelSelected },
+    replyOptions: {
+      onModelSelected,
+      ...(params.turnAdoptionLifecycle
+        ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+        : {}),
+    },
   };
 }
 

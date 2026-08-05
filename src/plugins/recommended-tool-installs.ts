@@ -4,6 +4,7 @@ import { isRecord } from "../utils.js";
 
 export type SetupRecommendedInstall = {
   id: string;
+  brandId?: string;
   label: string;
   hint: string;
   website: string;
@@ -42,6 +43,7 @@ export function listRecommendedToolInstalls(): SetupRecommendedInstall[] {
       continue;
     }
     const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    const brandId = typeof entry.brandId === "string" ? entry.brandId.trim() : "";
     const label = typeof entry.label === "string" ? entry.label.trim() : "";
     const hint = typeof entry.hint === "string" ? entry.hint.trim() : "";
     const website = normalizeHttpsUrl(entry.website);
@@ -50,7 +52,7 @@ export function listRecommendedToolInstalls(): SetupRecommendedInstall[] {
       continue;
     }
     seenIds.add(id);
-    installs.push({ id, label, hint, website, icon });
+    installs.push({ id, ...(brandId ? { brandId } : {}), label, hint, website, icon });
   }
   return installs;
 }

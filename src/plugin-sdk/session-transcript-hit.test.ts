@@ -1,15 +1,39 @@
 // Session transcript hit tests cover transcript match formatting and path resolution.
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
   formatSessionTranscriptMemoryHitKey,
+  loadCombinedSessionStoreForGateway,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
+
+const loadGatewaySessionStore = vi.hoisted(() => vi.fn());
+vi.mock("../config/sessions/combined-store-gateway.js", () => ({
+  loadCombinedSessionStoreForGateway: loadGatewaySessionStore,
+}));
+
+it("filters incognito rows from the plugin cross-session store view", () => {
+  loadGatewaySessionStore.mockReturnValue({
+    storePath: "(multiple)",
+    store: {
+      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+      "agent:main:dashboard:incognito-private": {
+        incognito: true,
+        sessionId: "private",
+        updatedAt: 2,
+      },
+    },
+  });
+
+  expect(loadCombinedSessionStoreForGateway({}).store).toEqual({
+    "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+  });
+});
 
 describe("extractTranscriptStemFromSessionsMemoryHit", () => {
   it("strips sessions/ and .jsonl for builtin paths", () => {
@@ -204,6 +228,25 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     };
     const keys = resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted();
     expect(keys).toEqual(["agent:main:s1", "agent:peer:s2"]);
+  });
+
+  it("never resolves incognito transcript hits", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-private";
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dashboard:visible": baseEntry(),
+      [incognitoKey]: baseEntry({ incognito: true }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" })).toEqual([
+      "agent:main:dashboard:visible",
+    ]);
+    const memoryKey = formatSessionTranscriptMemoryHitKey({
+      agentId: "main",
+      sessionId: "stem-a",
+    });
+    expect(resolveSessionTranscriptMemoryHitKeyToSessionKeys({ key: memoryKey, store })).toEqual([
+      "agent:main:dashboard:visible",
+    ]);
   });
 
   it("falls back to archived owner metadata when deleted archives are gone from the live store", () => {

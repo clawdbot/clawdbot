@@ -11,17 +11,20 @@ import { withLocalGatewayRequestScope } from "../gateway/local-request-context.j
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
-  clearAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
-import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
+import { executionIdentity } from "./agent-command-execution-identity.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
@@ -30,6 +33,7 @@ import {
 } from "./agent-command-restart-recovery.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
+import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import {
   emitIngressModelUsageDiagnostic,
   ingressDiagnosticChannel,
@@ -46,7 +50,11 @@ import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runt
 import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
-import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
+import type {
+  AgentCommandGatewayIngressOpts,
+  AgentCommandIngressOpts,
+  AgentCommandOpts,
+} from "./command/types.js";
 import {
   removeInternalSessionEffectsSession,
   resolveInternalSessionEffectsTarget,
@@ -55,12 +63,16 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { measureAgentStartup } from "./startup-timing.js";
+
+type AgentCommandAdmissionIngress = Parameters<typeof executionIdentity.record>[0]["ingress"];
 
 const log = createSubsystemLogger("agents/agent-command");
 
 async function agentCommandInternal(
   prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
   initialOpts: AgentCommandOpts,
+  admissionIngress: AgentCommandAdmissionIngress,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
@@ -124,6 +136,7 @@ async function agentCommandInternal(
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd,
     runId,
     isSubagentLane,
     acpManager,
@@ -218,12 +231,44 @@ async function agentCommandInternal(
       },
     });
     return await sessionWorkAdmission.run(async () => {
+      executionIdentity.record({
+        admission: opts.executionIdentityAdmission,
+        agentId: sessionAgentId,
+        cfg,
+        ingress: admissionIngress,
+        runId,
+        runtimeKind: !isRawModelRun && acpResolution?.kind === "ready" ? "acp" : "embedded",
+      });
+      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+        try {
+          await repairPendingAssistantTranscriptTurns({
+            context: {
+              sessionKey,
+              sessionEntry,
+              sessionStore,
+              storePath,
+              sessionAgentId,
+              config: cfg,
+            },
+          });
+          sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
+        } catch (error) {
+          if (!isNewSession) {
+            throw error;
+          }
+          // A reset starts a fresh transcript. Do not let predecessor repair
+          // state leak into it when the old transcript remains unavailable.
+          log.warn(
+            `Could not repair predecessor transcript before session reset for ${sessionKey}: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
       if (opts.deliver === true) {
         const sendPolicy = resolveSendPolicy({
           cfg,
           entry: sessionEntry,
           sessionKey,
-          channel: sessionEntry?.channel,
+          channel: sessionDeliveryChannel(sessionEntry),
           chatType: sessionEntry?.chatType,
         });
         if (sendPolicy === "deny") {
@@ -335,6 +380,26 @@ async function agentCommandInternal(
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
       }
+      if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
+        try {
+          sessionEntry = await ensureSessionDiffBaseline({
+            cwd: cwd ?? workspaceDir,
+            entry: sessionEntry,
+            isNewSession,
+            sessionKey,
+            storePath,
+          });
+          if (sessionStore) {
+            sessionStore[sessionKey] = sessionEntry;
+          }
+        } catch (error) {
+          log.warn(
+            `session diff baseline capture failed; continuing without attribution filtering: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
       await prepareDeliveryForRun(sessionEntry);
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
@@ -364,53 +429,63 @@ async function agentCommandInternal(
         });
       }
 
-      const embeddedSessionState = await prepareEmbeddedSessionState({
-        cfg,
-        opts,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        sessionAgentId,
-        lifecycleGeneration,
-        runId,
-        workspaceDir,
-        isNewSession,
-        isSubagentLaneTurn,
-        suppressVisibleSessionEffects,
-        thinkOnce,
-        thinkOverride,
-        persistedThinking,
-        verboseOverride,
-        persistedVerbose,
-        verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
-        sessionStateActor,
-      });
+      const embeddedSessionState = await measureAgentStartup(
+        "session-state",
+        () =>
+          prepareEmbeddedSessionState({
+            cfg,
+            opts,
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            sessionId,
+            storePath,
+            sessionAgentId,
+            lifecycleGeneration,
+            runId,
+            workspaceDir,
+            isNewSession,
+            isSubagentLaneTurn,
+            suppressVisibleSessionEffects,
+            thinkOnce,
+            thinkOverride,
+            persistedThinking,
+            verboseOverride,
+            persistedVerbose,
+            verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
+            sessionStateActor,
+          }),
+        { config: cfg },
+      );
       sessionEntry = embeddedSessionState.sessionEntry;
       const { requestedThinkLevel, runContext } = embeddedSessionState;
 
-      const modelSelection = await resolveEmbeddedModelSelection({
-        cfg,
-        opts,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        sessionAgentId,
-        workspaceDir,
-        pluginsEnabled,
-        manifestMetadataSnapshot,
-        modelManifestContext,
-        configuredThinkingCatalog,
-        requestedThinkLevel,
-        thinkOverride,
-        thinkOnce,
-        isSubagentLane,
-        suppressVisibleSessionEffects,
-        runContext,
-      });
+      const modelSelection = await measureAgentStartup(
+        "model-selection",
+        () =>
+          resolveEmbeddedModelSelection({
+            cfg,
+            opts,
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            sessionId,
+            storePath,
+            sessionAgentId,
+            workspaceDir,
+            pluginsEnabled,
+            manifestMetadataSnapshot,
+            modelManifestContext,
+            configuredThinkingCatalog,
+            requestedThinkLevel,
+            thinkOverride,
+            thinkOnce,
+            isSubagentLane,
+            suppressVisibleSessionEffects,
+            runContext,
+          }),
+        { config: cfg },
+      );
       sessionEntry = modelSelection.sessionEntry;
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared,
@@ -426,6 +501,9 @@ async function agentCommandInternal(
         embeddedSessionState,
         trackInternalModelRunTarget,
       });
+      if (embeddedAttempt.fallbackExhausted) {
+        opts.onModelFallbackExhausted?.();
+      }
       sessionEntry = embeddedAttempt.sessionEntry;
       lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
       const finalized = await finalizeEmbeddedAgentCommand({
@@ -515,13 +593,15 @@ async function agentCommandInternal(
   }
 }
 
-/** Runs an agent turn from CLI/runtime options against the resolved session and model policy. */
-export async function agentCommand(
+async function agentCommandWithAdmissionIngress(
   opts: AgentCommandOpts,
+  admissionIngress: AgentCommandAdmissionIngress,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const resolvedDeps = await resolveAgentCommandDeps(deps);
+  const resolvedDeps = await measureAgentStartup("command-dependencies", () =>
+    resolveAgentCommandDeps(deps),
+  );
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
@@ -537,24 +617,48 @@ export async function agentCommand(
           opts: {
             ...opts,
             lifecycleGeneration,
-            // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
-            // Ingress callers must opt into owner identity explicitly via
-            // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
+            // Only the local entrypoint may inherit trusted-operator defaults.
             senderIsOwner: opts.senderIsOwner ?? true,
-            // Local/CLI callers are trusted by default for per-run model overrides.
             allowModelOverride: opts.allowModelOverride ?? true,
           },
           prepare: async (preparedOpts) =>
-            await prepareAgentCommandExecution(preparedOpts, runtime),
+            await measureAgentStartup("command-prepare", () =>
+              prepareAgentCommandExecution(preparedOpts, runtime),
+            ),
           run: async (prepared) =>
-            await agentCommandInternal(prepared, prepared.opts, runtime, resolvedDeps),
+            await agentCommandInternal(
+              prepared,
+              prepared.opts,
+              admissionIngress,
+              runtime,
+              resolvedDeps,
+            ),
         }),
     ),
   );
 }
 
+export async function agentCommand(
+  opts: AgentCommandOpts,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps?: CliDeps,
+) {
+  const { localIngress } = executionIdentity;
+  return await agentCommandWithAdmissionIngress(opts, localIngress, runtime, deps);
+}
+
+export async function agentCommandFromSystem(
+  opts: AgentCommandOpts,
+  admission: { boundary: string },
+  runtime: RuntimeEnv = defaultRuntime,
+  deps?: CliDeps,
+) {
+  const ingress = executionIdentity.systemIngress(admission.boundary);
+  return await agentCommandWithAdmissionIngress(opts, ingress, runtime, deps);
+}
+
 async function agentCommandFromIngressInternal(
-  opts: AgentCommandIngressOpts,
+  opts: AgentCommandGatewayIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
   recovery?: {
@@ -577,7 +681,14 @@ async function agentCommandFromIngressInternal(
       },
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
-      run: async (prepared) => await agentCommandInternal(prepared, prepared.opts, runtime, deps),
+      run: async (prepared) =>
+        await agentCommandInternal(
+          prepared,
+          prepared.opts,
+          { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+          runtime,
+          deps,
+        ),
     });
 
     if (result) {
@@ -594,12 +705,18 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  return await agentCommandFromIngressInternal(opts, runtime, deps);
+  // Plugin SDK callers may be plain JavaScript. Enforce the private recovery
+  // boundary at runtime so extra or inherited properties cannot author audit identity.
+  return await agentCommandFromIngressInternal(
+    { ...opts, executionIdentityAdmission: undefined },
+    runtime,
+    deps,
+  );
 }
 
 /** Internal Gateway entrypoint that restores a rejected restart-recovery admission. */
 export async function agentCommandFromGatewayIngress(
-  opts: AgentCommandIngressOpts,
+  opts: AgentCommandGatewayIngressOpts,
   runtime: RuntimeEnv,
   deps: CliDeps | undefined,
   recovery: {

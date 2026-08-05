@@ -1,9 +1,11 @@
 /** Collects auth-profile and OAuth secret refs for runtime preparation. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "../agents/provider-auth-aliases.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { setSecretAssignmentSource } from "./runtime-assignment-provenance.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -25,6 +27,32 @@ type TokenCredentialLike = AuthProfileCredential & {
   tokenRef?: unknown;
 };
 
+function resolveAuthProfileOwnerContract(
+  profile: ApiKeyCredentialLike | TokenCredentialLike,
+  context: ResolverContext,
+): unknown {
+  const providerId = normalizeOptionalLowercaseString(profile.provider) ?? profile.provider;
+  const configuredProvider = Object.entries(context.sourceConfig.models?.providers ?? {}).find(
+    ([candidateId]) =>
+      (normalizeOptionalLowercaseString(candidateId) ?? candidateId) === providerId,
+  );
+  return {
+    profile: structuredClone(profile),
+    providerId,
+    configuredProvider,
+  };
+}
+
+function collectAuthStoreSecretInputAssignment(
+  params: Parameters<typeof collectRuntimeSecretInputAssignment>[0],
+): void {
+  const previousCount = params.context.assignments.length;
+  collectRuntimeSecretInputAssignment(params);
+  for (const assignment of params.context.assignments.slice(previousCount)) {
+    setSecretAssignmentSource(assignment, "auth-store");
+  }
+}
+
 function collectApiKeyProfileAssignment(params: {
   profile: ApiKeyCredentialLike;
   profileId: string;
@@ -34,6 +62,7 @@ function collectApiKeyProfileAssignment(params: {
   authAliasLookupParams: ProviderAuthAliasLookupParams;
   context: ResolverContext;
 }): void {
+  const ownerContract = resolveAuthProfileOwnerContract(params.profile, params.context);
   const {
     explicitRef: keyRef,
     inlineRef: inlineKeyRef,
@@ -67,7 +96,7 @@ function collectApiKeyProfileAssignment(params: {
     provider: params.profile.provider,
     profileId: params.profileId,
   });
-  collectRuntimeSecretInputAssignment({
+  collectAuthStoreSecretInputAssignment({
     value: resolvedKeyRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
     expected: "string",
@@ -80,9 +109,13 @@ function collectApiKeyProfileAssignment(params: {
       ownerId: resolveAuthProfileSecretOwnerId(params),
       requiredForGateway: false,
       disposition: "isolate",
+      contract: ownerContract,
     },
     apply: (value) => {
       params.profile.key = String(value);
+    },
+    applyUnavailable: () => {
+      params.profile.key = undefined;
     },
   });
 }
@@ -96,6 +129,7 @@ function collectTokenProfileAssignment(params: {
   authAliasLookupParams: ProviderAuthAliasLookupParams;
   context: ResolverContext;
 }): void {
+  const ownerContract = resolveAuthProfileOwnerContract(params.profile, params.context);
   const {
     explicitRef: tokenRef,
     inlineRef: inlineTokenRef,
@@ -129,7 +163,7 @@ function collectTokenProfileAssignment(params: {
     provider: params.profile.provider,
     profileId: params.profileId,
   });
-  collectRuntimeSecretInputAssignment({
+  collectAuthStoreSecretInputAssignment({
     value: resolvedTokenRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
     expected: "string",
@@ -142,9 +176,13 @@ function collectTokenProfileAssignment(params: {
       ownerId: resolveAuthProfileSecretOwnerId(params),
       requiredForGateway: false,
       disposition: "isolate",
+      contract: ownerContract,
     },
     apply: (value) => {
       params.profile.token = String(value);
+    },
+    applyUnavailable: () => {
+      params.profile.token = undefined;
     },
   });
 }

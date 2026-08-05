@@ -1,9 +1,11 @@
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 /** Session MCP runtime manager install path: static get-or-create + requester resolve/install. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { SessionMcpRuntimeManagerLifecycle } from "./agent-bundle-mcp-manager-lifecycle.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { allowMcpAppModelContext, revokeMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
   hashMcpResolvedConnections,
   resolveMcpConnectionRevalidateMs,
@@ -27,6 +29,7 @@ type RuntimeEntryParams = {
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
   configFingerprint?: string;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 };
 
 type SessionMcpRuntimeManagerInstall = {
@@ -48,6 +51,7 @@ type SessionMcpRuntimeManagerInstall = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     requesterScope: SessionMcpRequesterScope;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime | undefined>;
 };
 
@@ -65,12 +69,16 @@ export function createSessionMcpRuntimeManagerInstall(
   lifecycle: SessionMcpRuntimeManagerLifecycle,
 ): SessionMcpRuntimeManagerInstall {
   const { store } = lifecycle;
-  const cancelReusableRetirement = (sessionId: string) => {
+  const reconcileReusableRetirement = (sessionId: string, runtime: SessionMcpRuntime) => {
     if (store.requiredRetirementSessionIds.has(sessionId)) {
+      // Reset/delete retirement deliberately survives late creation and reuse;
+      // otherwise a racing run could escape the required session teardown.
       store.deferredRetirementSessionIds.add(sessionId);
+      revokeMcpAppModelContext(runtime);
       return;
     }
     store.deferredRetirementSessionIds.delete(sessionId);
+    allowMcpAppModelContext(runtime);
   };
 
   /** Static/session runtime get-or-create (createInFlight dedup for bare keys only). */
@@ -88,6 +96,7 @@ export function createSessionMcpRuntimeManagerInstall(
         excludeServerNames: params.excludeServerNames,
         redactConnectionServerNames: params.redactConnectionServerNames,
         safeServerNamesByServer: params.safeServerNamesByServer,
+        toolOverrides: params.toolOverrides,
       }).fingerprint;
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
     if (existing) {
@@ -104,7 +113,7 @@ export function createSessionMcpRuntimeManagerInstall(
         store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
         await existing.dispose();
       } else {
-        cancelReusableRetirement(params.sessionId);
+        reconcileReusableRetirement(params.sessionId, existing);
         existing.markUsed();
         store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
         return existing;
@@ -144,9 +153,10 @@ export function createSessionMcpRuntimeManagerInstall(
         redactConnectionServerNames: params.redactConnectionServerNames,
         requesterScope: params.requesterScope,
         configFingerprint: nextFingerprint,
+        toolOverrides: params.toolOverrides,
       }),
     ).then((runtime) => {
-      cancelReusableRetirement(params.sessionId);
+      reconcileReusableRetirement(params.sessionId, runtime);
       runtime.markUsed();
       store.runtimesBySessionId.set(params.runtimeKey, runtime);
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
@@ -182,6 +192,7 @@ export function createSessionMcpRuntimeManagerInstall(
     connectionOverrides: Map<string, McpServerConnectionResolved>;
     redactConnectionServerNames: ReadonlySet<string>;
     requesterScope: SessionMcpRequesterScope;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }): Promise<SessionMcpRuntime> => {
     const resolvedNameSet = new Set(params.connectionOverrides.keys());
     const { fingerprint: resolvedFingerprint } = loadSessionMcpConfig({
@@ -192,6 +203,7 @@ export function createSessionMcpRuntimeManagerInstall(
       includeServerNames: resolvedNameSet,
       redactConnectionServerNames: params.redactConnectionServerNames,
       safeServerNamesByServer: params.safeServerNamesByServer,
+      toolOverrides: params.toolOverrides,
     });
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
@@ -206,7 +218,7 @@ export function createSessionMcpRuntimeManagerInstall(
         candidate: existing,
       })
     ) {
-      cancelReusableRetirement(params.sessionId);
+      reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
@@ -236,6 +248,7 @@ export function createSessionMcpRuntimeManagerInstall(
       redactConnectionServerNames: params.redactConnectionServerNames,
       requesterScope: params.requesterScope,
       configFingerprint: resolvedFingerprint,
+      toolOverrides: params.toolOverrides,
     });
     store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
       connectionHash,
@@ -270,6 +283,7 @@ export function createSessionMcpRuntimeManagerInstall(
     agentAccountId?: string | null;
     messageChannel?: string | null;
     requesterScope: SessionMcpRequesterScope;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }): Promise<SessionMcpRuntime | undefined> => {
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
     const meta = store.connectionMetaByRuntimeKey.get(params.runtimeKey);
@@ -289,7 +303,7 @@ export function createSessionMcpRuntimeManagerInstall(
         candidate: existing,
       })
     ) {
-      cancelReusableRetirement(params.sessionId);
+      reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       return existing;
@@ -325,6 +339,7 @@ export function createSessionMcpRuntimeManagerInstall(
       connectionOverrides,
       redactConnectionServerNames: params.scopedNameSet,
       requesterScope: params.requesterScope,
+      toolOverrides: params.toolOverrides,
     });
   };
 

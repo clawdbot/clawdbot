@@ -2,9 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const rootDir = resolveRepoRoot(import.meta.url);
 const defaultManifestPath = path.join(rootDir, "apps", "ios", "Config", "AppStoreSigning.json");
 
 function validateAppGroupId(value, context) {
@@ -31,38 +31,41 @@ validates the checked-in manifest and renders local release xcconfig settings.
 }
 
 function parseArgs(argv) {
-  let mode = "";
-  let manifestPath = defaultManifestPath;
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--mode") {
-      mode = readOptionValue(argv, i, arg);
-      i += 1;
-    } else if (arg === "--manifest") {
-      manifestPath = path.resolve(readOptionValue(argv, i, arg));
-      i += 1;
-    } else if (arg === "-h" || arg === "--help") {
-      usage();
-      process.exit(0);
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
+  const options = { manifestPath: defaultManifestPath, mode: "" };
+  const helpIndex = argv.findIndex((arg) => arg === "-h" || arg === "--help");
+  parseFlagArgs(
+    helpIndex === -1 ? argv : argv.slice(0, helpIndex),
+    options,
+    [
+      stringFlag("--mode", "mode", {
+        allowInline: false,
+        missingValueMessage: "Missing value for --mode.",
+        rejectShortOptions: true,
+        repeatable: true,
+      }),
+      stringFlag("--manifest", "manifestPath", {
+        allowInline: false,
+        missingValueMessage: "Missing value for --manifest.",
+        rejectShortOptions: true,
+        repeatable: true,
+        transform: path.resolve,
+      }),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown argument: ${arg}`);
+      },
+    },
+  );
+  if (helpIndex !== -1) {
+    usage();
+    process.exit(0);
   }
-
-  if (!mode) {
+  if (!options.mode) {
     throw new Error("Missing required --mode.");
   }
-
-  return { mode, manifestPath };
-}
-
-function readOptionValue(argv, index, option) {
-  const value = argv[index + 1] ?? "";
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${option}.`);
-  }
-  return value;
+  return options;
 }
 
 function readManifest(manifestPath) {

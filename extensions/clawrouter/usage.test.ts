@@ -205,6 +205,39 @@ describe("ClawRouter usage", () => {
     expect(snapshot.billing).toEqual([{ type: "spend", amount: 0, unit: "USD" }]);
   });
 
+  it("does not coerce numeric strings from the usage boundary", async () => {
+    const snapshot = await fetchClawRouterUsage({
+      token: "proxy-key",
+      timeoutMs: 5000,
+      fetchGuard: mockFetchGuard(
+        Response.json({
+          budget: { configured: true, limitMicros: "1000000", spentMicros: "500000" },
+          usage: { summary: { requestCount: "2", totalTokens: "300", actualCostMicros: "500000" } },
+        }),
+      ),
+    });
+
+    expect(snapshot).toMatchObject({ windows: [], plan: "Managed monthly budget" });
+    expect(snapshot.billing).toBeUndefined();
+    expect(snapshot.summary).toBeUndefined();
+  });
+
+  it("rejects usage JSON containing invalid UTF-8", async () => {
+    const prefix = new TextEncoder().encode(
+      '{"budget":{"configured":true,"windowKey":"default/test-policy/2026-',
+    );
+    const suffix = new TextEncoder().encode('","limitMicros":1000000,"spentMicros":500000}}');
+    const body = new Uint8Array([...prefix, 0xff, ...suffix]);
+
+    await expect(
+      fetchClawRouterUsage({
+        token: "test-token",
+        timeoutMs: 5000,
+        fetchGuard: mockFetchGuard(new Response(body)),
+      }),
+    ).rejects.toThrow(TypeError);
+  });
+
   it("cancels non-OK usage response body before throwing", async () => {
     let cancelled = false;
     const response = new Response(

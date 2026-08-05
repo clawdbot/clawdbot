@@ -19,17 +19,12 @@ struct OpenClawApp: App {
     @State private var statusItem: NSStatusItem?
     @State private var statusItemMouseRouter = StatusItemMouseRouter()
     @State private var isMenuPresented = false
-    @State private var isPanelVisible = false
+    @State private var isChatWindowVisible = false
     @State private var tailscaleService = TailscaleService.shared
 
     @MainActor
     private func updateStatusHighlight() {
-        self.statusItem?.button?.highlight(self.isPanelVisible)
-    }
-
-    @MainActor
-    private func updateHoverHUDSuppression() {
-        HoverHUDController.shared.setSuppressed(self.isMenuPresented || self.isPanelVisible)
+        self.statusItem?.button?.highlight(self.isChatWindowVisible)
     }
 
     init() {
@@ -49,6 +44,8 @@ struct OpenClawApp: App {
                 blinkTick: self.state.blinkTick,
                 sendCelebrationTick: self.state.sendCelebrationTick,
                 gatewayStatus: self.gatewayManager.status,
+                connectionMode: self.state.connectionMode,
+                controlChannelState: self.controlChannel.state,
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
                 iconState: self.effectiveIconState,
                 voiceWakeMeterActive: self.state.voiceWakeMeterActive)
@@ -66,7 +63,6 @@ struct OpenClawApp: App {
             MenuSessionsInjector.shared.install(into: item)
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
             self.installStatusItemMouseHandler(for: item)
-            self.updateHoverHUDSuppression()
         }
         .menuBarExtraStyle(.menu)
         .onChange(of: self.state.isPaused) { _, paused in
@@ -88,7 +84,9 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            if AppLaunchPresentationPolicy.current.allowsAutomaticPresentation {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            }
             BrowserProfileImportModel.shared.handleConnectionModeChange()
         }
 
@@ -103,10 +101,15 @@ struct OpenClawApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Session") {
-                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                Button("New Gateway Window…") {
+                    WebChatManager.shared.newGatewayWindow()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                Button("New Thread") {
+                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
@@ -114,6 +117,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {
@@ -133,10 +137,6 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
             }
-        }
-        .onChange(of: self.isMenuPresented) { _, _ in
-            self.updateStatusHighlight()
-            self.updateHoverHUDSuppression()
         }
     }
 
@@ -187,10 +187,9 @@ struct OpenClawApp: App {
 
     @MainActor
     private func installStatusItemMouseHandler(for item: NSStatusItem) {
-        WebChatManager.shared.onPanelVisibilityChanged = { [self] visible in
-            self.isPanelVisible = visible
+        WebChatManager.shared.onChatWindowVisibilityChanged = { [self] visible in
+            self.isChatWindowVisible = visible
             self.updateStatusHighlight()
-            self.updateHoverHUDSuppression()
         }
         CanvasManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.state.canvasPanelVisible = visible
@@ -200,25 +199,15 @@ struct OpenClawApp: App {
         self.statusItemMouseRouter.install(
             on: item,
             onLeftClick: { [self] in
-                HoverHUDController.shared.dismiss()
                 self.openDashboardWindow()
             },
             onRightClick: { [self] in
-                HoverHUDController.shared.dismiss()
-                WebChatManager.shared.closePanel()
                 self.isMenuPresented = true
-                self.updateStatusHighlight()
-            },
-            onHoverChanged: { [self] inside in
-                HoverHUDController.shared.statusItemHoverChanged(
-                    inside: inside,
-                    anchorProvider: { [self] in self.statusButtonScreenFrame() })
             })
     }
 
     @MainActor
     private func openDashboardWindow() {
-        HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
         AppNavigationActions.openDashboard()
     }
@@ -255,10 +244,8 @@ final class StatusItemMouseRouter: NSResponder {
 
     private weak var button: NSView?
     private var eventMonitor: Any?
-    private var trackingArea: NSTrackingArea?
     private var onLeftClick: (() -> Void)?
     private var onRightClick: (() -> Void)?
-    private var onHoverChanged: ((Bool) -> Void)?
     private let eventMonitorInstaller: EventMonitorInstaller
     private let eventMonitorRemover: EventMonitorRemover
 
@@ -288,27 +275,23 @@ final class StatusItemMouseRouter: NSResponder {
     func install(
         on item: NSStatusItem,
         onLeftClick: @escaping () -> Void,
-        onRightClick: @escaping () -> Void,
-        onHoverChanged: @escaping (Bool) -> Void)
+        onRightClick: @escaping () -> Void)
     {
         guard let button = item.button else { return }
         self.install(
             on: button,
             onLeftClick: onLeftClick,
-            onRightClick: onRightClick,
-            onHoverChanged: onHoverChanged)
+            onRightClick: onRightClick)
     }
 
     func install(
         on button: NSView,
         onLeftClick: @escaping () -> Void,
-        onRightClick: @escaping () -> Void,
-        onHoverChanged: @escaping (Bool) -> Void)
+        onRightClick: @escaping () -> Void)
     {
         self.onLeftClick = onLeftClick
         self.onRightClick = onRightClick
-        self.onHoverChanged = onHoverChanged
-        self.track(button)
+        self.button = button
 
         guard self.eventMonitor == nil else { return }
         self.eventMonitor = Self.installMonitor(using: self.eventMonitorInstaller) { [weak self] event in
@@ -353,33 +336,10 @@ final class StatusItemMouseRouter: NSResponder {
         }
     }
 
-    private func track(_ button: NSView) {
-        guard self.button !== button else { return }
-        if let previousButton = self.button, let trackingArea {
-            previousButton.removeTrackingArea(trackingArea)
-        }
-        let trackingArea = NSTrackingArea(
-            rect: button.bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil)
-        button.addTrackingArea(trackingArea)
-        self.button = button
-        self.trackingArea = trackingArea
-    }
-
     private static func contains(_ event: NSEvent, in button: NSView) -> Bool {
         guard let window = button.window, event.windowNumber == window.windowNumber else { return false }
         let point = button.convert(event.locationInWindow, from: nil)
         return button.bounds.contains(point)
-    }
-
-    override func mouseEntered(with _: NSEvent) {
-        self.onHoverChanged?(true)
-    }
-
-    override func mouseExited(with _: NSEvent) {
-        self.onHoverChanged?(false)
     }
 
     @MainActor deinit {
@@ -504,7 +464,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_: Notification) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--swarm-chat-fixture") {
+            AppActivationPolicy.apply(showDockIcon: true)
+            WebChatManager.shared.showSwarmFixture()
+            return
+        }
+        #endif
         let environment = ProcessInfo.processInfo.environment
+        let launchPolicy = AppLaunchPresentationPolicy.current
         let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(
             environment: environment)
         let isReplacementHandoff = ApplicationRelocator.acceptReplacementHandoff(
@@ -516,7 +484,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Only a child whose signed parent and inherited readiness pipe authenticate
         // may overlap the old process during replacement handoff.
         if !isReplacementHandoff, self.isDuplicateInstance() {
-            NSWorkspace.shared.open(Self.dashboardURL)
+            if launchPolicy.allowsAutomaticPresentation {
+                NSWorkspace.shared.open(Self.dashboardURL)
+            }
             NSApp.terminate(nil)
             return
         }
@@ -540,7 +510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
-            if !shouldWaitForConnection {
+            if !shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation {
                 Task { @MainActor in
                     await self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
                 }
@@ -554,7 +524,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
-                guard shouldWaitForConnection else { return }
+                guard shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation else { return }
                 await self.scheduleFirstRunOnboardingIfNeeded(
                     gatewayConnected: ControlChannel.shared.state == .connected)
             }
@@ -571,9 +541,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         AppStateStore.shared.applyPeekabooBridgeHostState()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            if !PostUpdateController.shared.startIfNeeded() {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+        if launchPolicy.allowsAutomaticPresentation {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                if !PostUpdateController.shared.startIfNeeded() {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                }
             }
         }
         Task {
@@ -583,32 +555,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         #if DEBUG
         // Screenshot/demo helper: show the pairing panel with sample requests.
-        if ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1" {
+        if launchPolicy.allowsAutomaticPresentation,
+           ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1"
+        {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 DebugActions.showPairingPanelDemo()
             }
         }
         #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
-        if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
+        if launchPolicy.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             Task { @MainActor in
                 let sessionKey = await WebChatManager.shared.preferredSessionKey()
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
-        if CommandLine.arguments.contains("--dashboard") {
+        if launchPolicy.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
-            Task { @MainActor in
-                if DashboardManager.shared.showConfiguredWindowIfPossible() {
-                    return
-                }
-                do {
-                    try await DashboardManager.shared.show()
-                } catch {
-                    DashboardManager.shared.showFailure(error)
-                }
-            }
+            self.openDashboardAction()
         }
     }
 

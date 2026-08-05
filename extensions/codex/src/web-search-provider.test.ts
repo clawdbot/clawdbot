@@ -48,7 +48,7 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.125.0",
+      cliVersion: "0.146.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -242,6 +242,9 @@ describe("codex web search provider", () => {
             "--listen",
             "stdio://",
             "-c",
+            "openai_base_url=http://127.0.0.1:44080/v1",
+            "--config=model_catalog_json=/tmp/qa catalog/models.json",
+            "-c",
             "mcp_servers.external.command='unsafe'",
           ],
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
@@ -311,7 +314,15 @@ describe("codex web search provider", () => {
     const threadStartCwd = (requests[1]?.params as { cwd?: string } | undefined)?.cwd;
     const isolatedCodexHome = isolatedStartOptions?.env?.CODEX_HOME;
     expect(threadStartCwd).not.toBe("/tmp/openclaw-agent");
-    expect(isolatedStartOptions?.args).toEqual(["app-server", "--listen", "stdio://"]);
+    expect(isolatedStartOptions?.args).toEqual([
+      "app-server",
+      "-c",
+      "openai_base_url=http://127.0.0.1:44080/v1",
+      "-c",
+      "model_catalog_json=/tmp/qa catalog/models.json",
+      "--listen",
+      "stdio://",
+    ]);
     expect(isolatedStartOptions?.clearEnv).toEqual([
       "KEEP_CLEARED",
       "OPENCLAW_CODEX_APP_SERVER_ARGS",

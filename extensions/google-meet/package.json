@@ -10,7 +10,7 @@
   "dependencies": {
     "jszip": "3.10.1",
     "pretty-ms": "9.3.0",
-    "typebox": "1.3.3"
+    "typebox": "1.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

@@ -2,22 +2,27 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  chromium,
-  type BrowserContext,
-  type CDPSession,
-  type Page,
-  type Worker,
-} from "playwright-core";
+import { chromium, type CDPSession, type Worker } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
+import {
+  assertCopilotStaleRunIsolation,
+  countCopilotHistoryRequests,
+  copyCopilotSidepanelExtension,
+  openTabPanel,
+  rawDataText,
+  resolveChromiumExecutableOverride,
+  textValue,
+  type PanelTarget,
+  waitForContextExtensionId,
+  waitForLoadedExtensionId,
+} from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
   runtime: {
@@ -31,6 +36,15 @@ declare const chrome: {
       }>
     >;
   };
+  storage: {
+    local: {
+      set(values: Record<string, unknown>): Promise<void>;
+    };
+    session: {
+      get(keys: string[]): Promise<Record<string, unknown>>;
+      set(values: Record<string, unknown>): Promise<void>;
+    };
+  };
   sidePanel: {
     setOptions(options: { tabId: number; enabled: boolean }): Promise<void>;
   };
@@ -41,7 +55,6 @@ declare const chrome: {
 };
 
 const runE2E = process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1";
-const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 
 type RequestFrame = {
   id: string;
@@ -55,10 +68,12 @@ type GatewayHarness = {
   chatSends: Array<Record<string, unknown>>;
   connectParams: Array<Record<string, unknown>>;
   histories: Map<string, Array<Record<string, unknown>>>;
+  labels: Map<string, string>;
   port: number;
   requests: RequestFrame[];
   close: () => Promise<void>;
   disconnectClients: () => void;
+  emitEvent: (event: string, payload: Record<string, unknown>) => void;
   failNextAbort: () => void;
   holdNextSubscription: () => () => void;
 };
@@ -70,40 +85,6 @@ type RelayHarness = {
   close: () => Promise<void>;
   setAvailable: (available: boolean) => void;
 };
-
-type TargetInfo = { targetId: string; type: string; url: string };
-
-type PanelTarget = {
-  allText: (selector: string) => Promise<string[]>;
-  click: (selector: string) => Promise<void>;
-  disabled: (selector: string) => Promise<boolean>;
-  fill: (selector: string, value: string) => Promise<void>;
-  hidden: (selector: string) => Promise<boolean>;
-  screenshot: (targetPath: string) => Promise<void>;
-  text: (selector: string) => Promise<string>;
-  wakeBackground: () => Promise<void>;
-};
-
-function isSidePanelTarget(target: TargetInfo): boolean {
-  try {
-    return new URL(target.url).pathname.endsWith("/sidepanel.html");
-  } catch {
-    return false;
-  }
-}
-
-function textValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function rawDataText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return data instanceof ArrayBuffer
-    ? Buffer.from(new Uint8Array(data)).toString("utf8")
-    : data.toString("utf8");
-}
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -130,13 +111,18 @@ function sendResponse(socket: WebSocket, id: string, payload: unknown): void {
   socket.send(JSON.stringify({ type: "res", id, ok: true, payload }));
 }
 
-function sendError(socket: WebSocket, id: string, message: string): void {
+function sendError(
+  socket: WebSocket,
+  id: string,
+  message: string,
+  { code = "UNAVAILABLE", retryable = true } = {},
+): void {
   socket.send(
     JSON.stringify({
       type: "res",
       id,
       ok: false,
-      error: { code: "UNAVAILABLE", message, retryable: true },
+      error: { code, message, retryable },
     }),
   );
 }
@@ -204,6 +190,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
   const wss = new WebSocketServer({ server });
   const histories = new Map<string, Array<Record<string, unknown>>>();
   const archived = new Set<string>();
+  const labels = new Map<string, string>();
   const requests: RequestFrame[] = [];
   const connectParams: Array<Record<string, unknown>> = [];
   const chatSends: Array<Record<string, unknown>> = [];
@@ -215,7 +202,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       JSON.stringify({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "browser-copilot-e2e-nonce" },
+        payload: { nonce: "browser-copilot-e2e-nonce", ts: 1_777_777_777_000 },
       }),
     );
     socket.on("message", (data) => {
@@ -251,7 +238,21 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       }
       const key = textValue(params.key) || textValue(params.sessionKey);
       if (frame.method === "sessions.create") {
-        histories.set(key, []);
+        const label = textValue(params.label);
+        const existingKey = labels.get(label);
+        if (label && existingKey && existingKey !== key) {
+          sendError(socket, frame.id, `label already in use: ${label}`, {
+            code: "INVALID_REQUEST",
+            retryable: false,
+          });
+          return;
+        }
+        if (label) {
+          labels.set(label, key);
+        }
+        if (!histories.has(key)) {
+          histories.set(key, []);
+        }
         sendResponse(socket, frame.id, { ok: true, key, sessionId: `id-${histories.size}` });
         return;
       }
@@ -318,11 +319,17 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
     chatSends,
     connectParams,
     histories,
+    labels,
     port,
     requests,
     disconnectClients: () => {
       for (const client of wss.clients) {
         client.terminate();
+      }
+    },
+    emitEvent: (event, payload) => {
+      for (const client of wss.clients) {
+        client.send(JSON.stringify({ type: "event", event, payload }));
       }
     },
     failNextAbort: () => {
@@ -367,62 +374,13 @@ async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Pr
   };
 }
 
-async function copyExtension(): Promise<string> {
-  const target = tempDirs.make("openclaw-copilot-extension-");
-  await fs.cp(extensionDir, target, {
-    recursive: true,
-    filter: (source) => !source.endsWith(".test.ts"),
-  });
-  await fs.writeFile(
-    path.join(target, "e2e-launcher.html"),
-    '<!doctype html><button id="open">Open tab panel</button><script type="module" src="e2e-launcher.js"></script>',
-  );
-  await fs.writeFile(
-    path.join(target, "e2e-launcher.js"),
-    `const tab = await chrome.tabs.getCurrent();
-    const panel = await chrome.runtime.sendMessage({ type: "prepareCopilotPanel", tabId: tab.id });
-    if (!panel?.ok) throw new Error(panel?.error ?? "panel prepare failed");
-    document.body.dataset.ready = "true";
-    document.querySelector("#open").addEventListener("click", async () => {
-      try {
-        await chrome.sidePanel.setOptions({ tabId: tab.id, path: panel.path, enabled: true });
-        await chrome.sidePanel.open({ tabId: tab.id });
-        document.body.dataset.opened = "true";
-      } catch (error) {
-        document.body.dataset.error = error instanceof Error ? error.message : String(error);
-      }
-    });\n`,
-  );
-  return target;
-}
-
-async function resolveChromiumExecutable(): Promise<string | undefined> {
-  const override = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
-  const candidates = [override, "/usr/bin/chromium-browser", "/usr/bin/chromium"].filter(
-    (candidate): candidate is string => Boolean(candidate),
-  );
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // Continue to Playwright's managed Chromium.
-    }
-  }
-  return undefined;
-}
-
-async function waitForServiceWorker(context: BrowserContext): Promise<Worker> {
-  return context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-}
-
 async function restartServiceWorker(
   browserCdp: CDPSession,
   worker: Worker,
   panel: PanelTarget,
 ): Promise<void> {
   const targets = (await browserCdp.send("Target.getTargets")) as {
-    targetInfos: TargetInfo[];
+    targetInfos: Array<{ targetId: string; type: string; url: string }>;
   };
   const target = targets.targetInfos.find(
     (candidate) => candidate.type === "service_worker" && candidate.url === worker.url(),
@@ -439,155 +397,6 @@ async function restartServiceWorker(
   // A real extension message wakes the terminated worker. The panel must then
   // reconnect its long-lived port before it can become ready again.
   await panel.wakeBackground();
-}
-
-function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
-  let commandId = 0;
-  const pending = new Map<
-    number,
-    { reject: (error: Error) => void; resolve: (result: Record<string, unknown>) => void }
-  >();
-  root.on("Target.receivedMessageFromTarget", (event: { message: string; sessionId: string }) => {
-    if (event.sessionId !== sessionId) {
-      return;
-    }
-    const message = JSON.parse(event.message) as {
-      error?: { message?: string };
-      id?: number;
-      result?: Record<string, unknown>;
-    };
-    if (typeof message.id !== "number") {
-      return;
-    }
-    const waiter = pending.get(message.id);
-    if (!waiter) {
-      return;
-    }
-    pending.delete(message.id);
-    if (message.error) {
-      waiter.reject(new Error(message.error.message ?? "CDP panel command failed"));
-    } else {
-      waiter.resolve(message.result ?? {});
-    }
-  });
-
-  async function send(method: string, params: Record<string, unknown> = {}) {
-    const id = ++commandId;
-    const result = new Promise<Record<string, unknown>>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-    });
-    await root.send("Target.sendMessageToTarget", {
-      sessionId,
-      message: JSON.stringify({ id, method, params }),
-    });
-    return await result;
-  }
-
-  async function evaluate<T>(expression: string): Promise<T> {
-    const result = await send("Runtime.evaluate", {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    });
-    const exception = result.exceptionDetails as { text?: string } | undefined;
-    if (exception) {
-      throw new Error(exception.text ?? "side-panel evaluation failed");
-    }
-    return (result.result as { value?: T } | undefined)?.value as T;
-  }
-
-  const selectorExpression = (selector: string) => JSON.stringify(selector);
-  return {
-    allText: async (selector) =>
-      await evaluate<string[]>(
-        `[...document.querySelectorAll(${selectorExpression(selector)})].map((node) => node.textContent ?? "")`,
-      ),
-    click: async (selector) => {
-      await evaluate(`document.querySelector(${selectorExpression(selector)})?.click()`);
-    },
-    disabled: async (selector) =>
-      await evaluate<boolean>(
-        `Boolean(document.querySelector(${selectorExpression(selector)})?.disabled)`,
-      ),
-    fill: async (selector, value) => {
-      await evaluate(`(() => {
-        const input = document.querySelector(${selectorExpression(selector)});
-        input.value = ${JSON.stringify(value)};
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      })()`);
-    },
-    hidden: async (selector) =>
-      await evaluate<boolean>(
-        `document.querySelector(${selectorExpression(selector)})?.classList.contains("hidden") === true`,
-      ),
-    screenshot: async (targetPath) => {
-      await send("Page.enable");
-      const result = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
-      await fs.writeFile(targetPath, Buffer.from(String(result.data), "base64"));
-    },
-    text: async (selector) =>
-      await evaluate<string>(
-        `document.querySelector(${selectorExpression(selector)})?.textContent ?? ""`,
-      ),
-    wakeBackground: async () => {
-      await evaluate(
-        `chrome.runtime.sendMessage({ type: "copilot.e2e.wake" }).catch(() => undefined)`,
-      );
-    },
-  };
-}
-
-async function openTabPanel(params: {
-  browserCdp: CDPSession;
-  extensionId: string;
-  page: Page;
-}): Promise<PanelTarget> {
-  const prior = (await params.browserCdp.send("Target.getTargets")) as {
-    targetInfos: TargetInfo[];
-  };
-  const priorTargetIds = new Set(prior.targetInfos.map((target) => target.targetId));
-  await params.page.goto(`chrome-extension://${params.extensionId}/e2e-launcher.html`);
-  await expect
-    .poll(async () => await params.page.locator("body").getAttribute("data-ready"))
-    .toBe("true");
-  await params.page.locator("#open").click();
-  await expect
-    .poll(
-      async () =>
-        await params.page.locator("body").evaluate((body) => ({
-          error: body.dataset.error,
-          opened: body.dataset.opened,
-        })),
-      { timeout: 5_000 },
-    )
-    .toEqual({ error: undefined, opened: "true" });
-  await expect
-    .poll(
-      async () => {
-        const targets = (await params.browserCdp.send("Target.getTargets")) as {
-          targetInfos: TargetInfo[];
-        };
-        return targets.targetInfos.find(
-          (target) => !priorTargetIds.has(target.targetId) && isSidePanelTarget(target),
-        );
-      },
-      { timeout: 15_000 },
-    )
-    .toBeTruthy();
-  const targets = (await params.browserCdp.send("Target.getTargets")) as {
-    targetInfos: TargetInfo[];
-  };
-  const target = targets.targetInfos.find(
-    (candidate) => !priorTargetIds.has(candidate.targetId) && isSidePanelTarget(candidate),
-  );
-  if (!target) {
-    throw new Error("Chrome did not expose the tab-specific side-panel target");
-  }
-  const attached = (await params.browserCdp.send("Target.attachToTarget", {
-    targetId: target.targetId,
-    flatten: false,
-  })) as { sessionId: string };
-  return createPanelTarget(params.browserCdp, attached.sessionId);
 }
 
 async function disableTabPanel(worker: Worker, tabId: number): Promise<void> {
@@ -613,6 +422,191 @@ async function unshareTab(worker: Worker, tabId: number): Promise<void> {
 }
 
 describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
+  it("survives an unpacked-extension reload across a browser restart", async () => {
+    const gateway = await createGatewayHarness();
+    cleanups.push(gateway.close);
+    const relay = await createRelayHarness();
+    cleanups.push(relay.close);
+    const fixture = await createFixtureServer();
+    cleanups.push(fixture.close);
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-copilot-reload-profile-");
+    const executablePath = await resolveChromiumExecutableOverride();
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+      ...(executablePath ? { executablePath } : { channel: "chromium" }),
+      headless: true,
+      // Playwright disables extensions by default, which overrides the unpacked fixture below.
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: [
+        "--enable-unsafe-extension-debugging",
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    };
+    const initialContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await initialContext.close());
+    const browser = initialContext.browser();
+    if (!browser) {
+      throw new Error("Chromium browser connection unavailable");
+    }
+    const browserCdp = await browser.newBrowserCDPSession();
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
+    const launcher = initialContext.pages()[0] ?? (await initialContext.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    await launcher.evaluate(
+      async ({ gatewayPort, relayPort }) =>
+        await chrome.runtime.sendMessage({
+          type: "pair",
+          pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#relay-e2e-token`,
+          groupColor: "#ff7020",
+        }),
+      { gatewayPort: gateway.port, relayPort: relay.port },
+    );
+    await expect.poll(() => gateway.connectParams.length, { timeout: 10_000 }).toBe(1);
+
+    const tabId = await launcher.evaluate(async () => (await chrome.tabs.getCurrent()).id);
+    if (typeof tabId !== "number") {
+      throw new Error("Chrome did not expose the extension tab id");
+    }
+    const oldSessionKey =
+      "agent:main:main:thread:browser-copilot-11111111-1111-4111-8111-111111111111";
+    gateway.labels.set("Browser copilot", oldSessionKey);
+    gateway.histories.set(oldSessionKey, []);
+    await launcher.evaluate(
+      async ({ gatewayScope, archivedSessionKey, currentTabId }) => {
+        await chrome.storage.local.set({
+          copilotSessionRegistryV1: {
+            sessions: {
+              [currentTabId]: {
+                tabId: currentTabId,
+                browserInstanceId: "beta-5-browser-instance",
+                gatewayScope,
+                sessionKey: archivedSessionKey,
+                sessionId: "beta-5-session",
+              },
+            },
+            pendingArchives: [],
+          },
+        });
+        await chrome.storage.session.set({
+          copilotBrowserInstanceV1: "beta-5-browser-instance",
+        });
+      },
+      {
+        archivedSessionKey: oldSessionKey,
+        currentTabId: tabId,
+        gatewayScope: `ws://127.0.0.1:${gateway.port}/`,
+      },
+    );
+
+    await initialContext.close();
+    const reloadedContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await reloadedContext.close());
+    const reloadedBrowser = reloadedContext.browser();
+    if (!reloadedBrowser) {
+      throw new Error("Reloaded Chromium browser connection unavailable");
+    }
+    const reloadedBrowserCdp = await reloadedBrowser.newBrowserCDPSession();
+    const reloadedExtensionId = await waitForLoadedExtensionId(
+      reloadedBrowserCdp,
+      unpackedExtension,
+    );
+    expect(reloadedExtensionId).toBe(extensionId);
+    const reloadedLauncher = reloadedContext.pages()[0] ?? (await reloadedContext.newPage());
+    await reloadedLauncher.goto(`chrome-extension://${reloadedExtensionId}/e2e-launcher.html`);
+    await expect.poll(() => gateway.connectParams.length, { timeout: 15_000 }).toBe(2);
+    const browserInstanceId = await reloadedLauncher.evaluate(async () => {
+      const stored = await chrome.storage.session.get(["copilotBrowserInstanceV1"]);
+      return stored.copilotBrowserInstanceV1;
+    });
+    expect(browserInstanceId).not.toBe("beta-5-browser-instance");
+
+    const panel = await openTabPanel({
+      browserCdp: reloadedBrowserCdp,
+      expect,
+      extensionId: reloadedExtensionId,
+      page: reloadedLauncher,
+    });
+    await reloadedLauncher.goto(`${fixture.baseUrl}/reload`);
+    await panel.click("#gate-action");
+    await expect
+      .poll(async () => !(await panel.disabled("#message-input")), { timeout: 15_000 })
+      .toBe(true);
+    await expect.poll(() => gateway.archived.has(oldSessionKey), { timeout: 10_000 }).toBe(true);
+
+    const created = gateway.requests.filter((request) => request.method === "sessions.create");
+    const fresh = created.find((request) => request.params?.key !== oldSessionKey);
+    expect(fresh?.params).toEqual({
+      key: expect.stringMatching(/:thread:browser-copilot-[0-9a-f-]{36}$/),
+      label: expect.stringMatching(/^Browser copilot [0-9a-f-]{36}$/),
+    });
+    expect(fresh?.params?.label).not.toBe("Browser copilot");
+    expect(gateway.labels.get("Browser copilot")).toBe(oldSessionKey);
+
+    await panel.fill("#message-input", "reload recovery marker");
+    await panel.click("#send-button");
+    await expect
+      .poll(async () => await panel.allText(".message.assistant"), { timeout: 10_000 })
+      .toContain("Isolated reply: reload recovery marker");
+  }, 90_000);
+
+  it("returns one error response when a panel's tab disappears", async () => {
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-copilot-missing-tab-profile-");
+    const executablePath = await resolveChromiumExecutableOverride();
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      ...(executablePath ? { executablePath } : { channel: "chromium" }),
+      headless: true,
+      // Playwright disables extensions by default, which overrides the unpacked fixture below.
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: [
+        "--enable-unsafe-extension-debugging",
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    });
+    cleanups.push(async () => await context.close());
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
+    const popup = context.pages()[0] ?? (await context.newPage());
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    const outcome = await popup.evaluate(async () => {
+      const currentTab = await chrome.tabs.getCurrent();
+      if (typeof currentTab?.id !== "number") {
+        throw new Error("Chrome did not expose the extension tab");
+      }
+      const valid = await chrome.runtime.sendMessage({
+        type: "prepareCopilotPanel",
+        tabId: currentTab.id,
+      });
+      const missing = await Promise.race([
+        chrome.runtime.sendMessage({ type: "prepareCopilotPanel", tabId: 2_147_483_000 }).then(
+          (response) => ({ kind: "response", response }),
+          (error: unknown) => ({
+            kind: "rejection",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 1_200);
+        }),
+      ]);
+      return { valid, missing };
+    });
+
+    expect(outcome.valid).toEqual({
+      ok: true,
+      path: expect.stringMatching(/^sidepanel\.html\?binding=/),
+    });
+    expect(outcome.missing).toEqual({
+      kind: "response",
+      response: {
+        ok: false,
+        error: expect.stringMatching(/No tab with id: 2147483000/),
+      },
+    });
+  });
+
   it("isolates two tab sessions, enforces bindings, denies unshared use, and archives on close", async () => {
     const gateway = await createGatewayHarness();
     cleanups.push(gateway.close);
@@ -620,13 +614,16 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     cleanups.push(relay.close);
     const fixture = await createFixtureServer();
     cleanups.push(fixture.close);
-    const unpackedExtension = await copyExtension();
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-profile-");
-    const executablePath = await resolveChromiumExecutable();
+    const executablePath = await resolveChromiumExecutableOverride();
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
+      // Playwright disables extensions by default, which overrides the unpacked fixture below.
+      ignoreDefaultArgs: ["--disable-extensions"],
       args: [
+        "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
         `--load-extension=${unpackedExtension}`,
       ],
@@ -637,10 +634,10 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       throw new Error("Chromium browser connection unavailable");
     }
     const browserCdp = await browser.newBrowserCDPSession();
-    const worker = await waitForServiceWorker(context);
-    const extensionId = new URL(worker.url()).hostname;
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
     const alphaTab = context.pages()[0] ?? (await context.newPage());
     await alphaTab.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     await alphaTab.evaluate(
       async ({ gatewayPort, relayPort }) =>
         await chrome.runtime.sendMessage({
@@ -659,7 +656,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       path.join(os.tmpdir(), "openclaw-browser-copilot-artifacts");
     await fs.mkdir(artifactDir, { recursive: true });
 
-    const alphaPanel = await openTabPanel({ browserCdp, extensionId, page: alphaTab });
+    const alphaPanel = await openTabPanel({ browserCdp, expect, extensionId, page: alphaTab });
     const alphaContextProof = await alphaTab.evaluate(async () => {
       const tab = await chrome.tabs.getCurrent();
       const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
@@ -708,9 +705,19 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
+    await alphaPanel.fill("#message-input", "にほん");
+    expect(await alphaPanel.pressEnter("#message-input", true)).toEqual({
+      defaultPrevented: false,
+      value: "にほん",
+    });
+    expect(gateway.chatSends).toHaveLength(0);
+    expect(await alphaPanel.allText(".message.user")).toEqual([]);
     await alphaPanel.fill("#message-input", "alpha marker");
     await expect.poll(async () => !(await alphaPanel.disabled("#send-button"))).toBe(true);
-    await alphaPanel.click("#send-button");
+    expect(await alphaPanel.pressEnter("#message-input", false)).toEqual({
+      defaultPrevented: true,
+      value: "",
+    });
     await expect
       .poll(
         async () => ({
@@ -725,7 +732,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       .toContain("Isolated reply: alpha marker");
 
     const betaTab = await context.newPage();
-    const betaPanel = await openTabPanel({ browserCdp, extensionId, page: betaTab });
+    const betaPanel = await openTabPanel({ browserCdp, expect, extensionId, page: betaTab });
     const betaTabId = await betaTab.evaluate(async () => (await chrome.tabs.getCurrent()).id);
     if (typeof betaTabId !== "number") {
       throw new Error("Chrome did not expose the beta tab id");
@@ -828,6 +835,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
 
     let reopenedBetaPanel = await openTabPanel({
       browserCdp,
+      expect,
       extensionId,
       page: betaTab,
     });
@@ -893,6 +901,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     ).toBe(true);
     await reopenedBetaPanel.fill("#message-input", "after reconnect marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    const historiesBeforeReconnectTurn = countCopilotHistoryRequests(gateway);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(4);
     await expect
@@ -900,15 +909,16 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 10_000,
       })
       .toContain("Isolated reply: after reconnect marker");
+    await expect
+      .poll(() => countCopilotHistoryRequests(gateway), { timeout: 10_000 })
+      .toBeGreaterThan(historiesBeforeReconnectTurn);
 
     await reopenedBetaPanel.fill("#message-input", "panel linger marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(5);
     const panelRunId = textValue(gateway.chatSends[4]?.idempotencyKey);
-    const historiesBeforeNavigation = gateway.requests.filter(
-      (request) => request.method === "chat.history",
-    ).length;
+    const historiesBeforeNavigation = countCopilotHistoryRequests(gateway);
     await betaTab.goto(`${fixture.baseUrl}/beta?during-run=1`);
     await expect
       .poll(
@@ -922,9 +932,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
-    expect(gateway.requests.filter((request) => request.method === "chat.history")).toHaveLength(
-      historiesBeforeNavigation,
-    );
+    expect(countCopilotHistoryRequests(gateway)).toBe(historiesBeforeNavigation);
     gateway.failNextAbort();
     await disableTabPanel(worker, betaTabId);
     await expect
@@ -946,6 +954,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
 
     reopenedBetaPanel = await openTabPanel({
       browserCdp,
+      expect,
       extensionId,
       page: betaTab,
     });
@@ -1016,5 +1025,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
-  }, 75_000);
+
+    await assertCopilotStaleRunIsolation({ expect, gateway, panel: reopenedBetaPanel });
+  }, 120_000);
 });

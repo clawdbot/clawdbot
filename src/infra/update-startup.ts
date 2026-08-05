@@ -9,8 +9,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  refreshRemoteModelCatalog,
+  REMOTE_MODEL_CATALOG_TTL_MS,
+} from "../model-catalog/remote-refresh.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -116,24 +119,11 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
 
 function resolveAutoUpdatePolicy(cfg: OpenClawConfig): AutoUpdatePolicy {
   const auto = cfg.update?.auto;
-  const stableDelayHours =
-    typeof auto?.stableDelayHours === "number" && Number.isFinite(auto.stableDelayHours)
-      ? Math.max(0, auto.stableDelayHours)
-      : AUTO_STABLE_DELAY_HOURS_DEFAULT;
-  const stableJitterHours =
-    typeof auto?.stableJitterHours === "number" && Number.isFinite(auto.stableJitterHours)
-      ? Math.max(0, auto.stableJitterHours)
-      : AUTO_STABLE_JITTER_HOURS_DEFAULT;
-  const betaCheckIntervalHours =
-    typeof auto?.betaCheckIntervalHours === "number" && Number.isFinite(auto.betaCheckIntervalHours)
-      ? Math.max(0.25, auto.betaCheckIntervalHours)
-      : AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT;
-
   return {
     enabled: Boolean(auto?.enabled),
-    stableDelayHours,
-    stableJitterHours,
-    betaCheckIntervalHours,
+    stableDelayHours: AUTO_STABLE_DELAY_HOURS_DEFAULT,
+    stableJitterHours: AUTO_STABLE_JITTER_HOURS_DEFAULT,
+    betaCheckIntervalHours: AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT,
   };
 }
 
@@ -398,12 +388,14 @@ async function startManagedServiceAutoUpdateHandoff(params: {
     });
     // Pair helper creation with restart scheduling before any state persistence
     // can fail and leave an indefinite handoff waiting on a live parent.
-    scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "update.auto",
-      skipCooldown: true,
-      skipDeferral: true,
-    });
+    if (started.status === "started") {
+      scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "update.auto",
+        skipCooldown: true,
+        skipDeferral: true,
+      });
+    }
     return {
       ok: true,
       code: 0,
@@ -484,9 +476,6 @@ async function runAutoUpdateCommand(params: {
   try {
     const res = await runCommandWithTimeout(argv, {
       timeoutMs: params.timeoutMs,
-      env: {
-        OPENCLAW_AUTO_UPDATE: "1",
-      },
     });
     return {
       ok: res.code === 0,
@@ -732,9 +721,7 @@ export async function runGatewayUpdateCheck(params: {
         const outcome = await runAuto({
           channel,
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
-          restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(
-            getRuntimeConfig().gateway?.reload?.deferralTimeoutMs,
-          ),
+          restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
           root: root ?? status.root ?? undefined,
         });
         if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
@@ -789,9 +776,10 @@ export function scheduleGatewayUpdateCheck(params: {
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): () => void {
+  const stopRemoteCatalogRefresh = scheduleRemoteModelCatalogRefresh(params);
   const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   if (channel === "extended-stable" && params.cfg.update?.checkOnStart === false) {
-    return () => {};
+    return stopRemoteCatalogRefresh;
   }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -820,7 +808,60 @@ export function scheduleGatewayUpdateCheck(params: {
 
   void tick();
   return () => {
+    stopRemoteCatalogRefresh();
     stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
+
+function scheduleRemoteModelCatalogRefresh(params: {
+  cfg: OpenClawConfig;
+  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
+}): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let activeAbortController: AbortController | null = null;
+  const tick = async () => {
+    if (stopped || running) {
+      return;
+    }
+    running = true;
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+    const result = await refreshRemoteModelCatalog({
+      config: params.cfg,
+      signal: abortController.signal,
+    });
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
+    running = false;
+    if (stopped) {
+      return;
+    }
+    if (result.status === "error") {
+      params.log.info("remote model catalog refresh failed", { error: result.error });
+    } else if (result.status === "updated") {
+      params.log.info("remote model catalog updated; restart the Gateway to apply it", {
+        providers: result.providers,
+        models: result.models,
+        generatedAt: result.generatedAt,
+      });
+    }
+    const nextCheckInMs =
+      result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
+    timer = setTimeout(() => void tick(), nextCheckInMs);
+    timer.unref?.();
+  };
+  void tick();
+  return () => {
+    stopped = true;
+    activeAbortController?.abort();
+    activeAbortController = null;
     if (timer) {
       clearTimeout(timer);
       timer = null;

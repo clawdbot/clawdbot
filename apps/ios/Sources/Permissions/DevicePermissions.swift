@@ -170,8 +170,17 @@ enum DevicePermissionStatusMap {
 final class DevicePermissionsModel {
     private(set) var grants: [DevicePermissionKind: DevicePermissionGrant] = [:]
     private(set) var requesting: Set<DevicePermissionKind> = []
+    private let eventKitPermissions: EventKitPermissionRequester
+
     /// Owns its manager so authorization callbacks resolve without the app-wide service.
     private let locationService = LocationService()
+
+    init(eventKitPermissions: EventKitPermissionRequester = EventKitPermissionRequester()) {
+        self.eventKitPermissions = eventKitPermissions
+        self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
+            self?.grants[.location] = DevicePermissionStatusMap.location(snapshot.authorizationStatus)
+        }
+    }
 
     func grant(for kind: DevicePermissionKind) -> DevicePermissionGrant {
         self.grants[kind] ?? .notRequested
@@ -185,7 +194,7 @@ final class DevicePermissionsModel {
             .contacts: DevicePermissionStatusMap.contacts(CNContactStore.authorizationStatus(for: .contacts)),
             .calendar: DevicePermissionStatusMap.eventKitRead(EKEventStore.authorizationStatus(for: .event)),
             .reminders: DevicePermissionStatusMap.eventKitRead(EKEventStore.authorizationStatus(for: .reminder)),
-            .location: DevicePermissionStatusMap.location(self.locationService.locationManager.authorizationStatus),
+            .location: DevicePermissionStatusMap.location(self.locationService.authorizationStatus()),
         ]
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         next[.notifications] = DevicePermissionStatusMap.notifications(settings.authorizationStatus)
@@ -219,17 +228,9 @@ final class DevicePermissionsModel {
                 }
             }
         case .calendar:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
-                EKEventStore().requestFullAccessToEvents { granted, _ in
-                    completion(granted)
-                }
-            }
+            _ = await self.eventKitPermissions.requestFullAccessToEvents()
         case .reminders:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
-                EKEventStore().requestFullAccessToReminders { granted, _ in
-                    completion(granted)
-                }
-            }
+            _ = await self.eventKitPermissions.requestFullAccessToReminders()
         case .location:
             _ = await self.locationService.ensureAuthorization(mode: .whileUsing)
         }

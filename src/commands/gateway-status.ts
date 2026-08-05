@@ -3,6 +3,7 @@ import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -52,10 +53,16 @@ export async function gatewayStatusCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  ensureExplicitGatewayAuth({
+    urlOverride: opts.url?.trim(),
+    urlOverrideSource: "cli",
+    explicitAuth: resolveExplicitGatewayAuth(opts),
+    errorHint: "Fix: pass --token or --password with --url.",
+  });
   const startedAt = Date.now();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
-  const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
+  const defaultTimeoutMs = 3000;
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
   const portOverride = parseGatewayPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({

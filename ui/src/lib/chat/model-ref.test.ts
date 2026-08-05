@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover chat model ref behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
@@ -51,6 +52,39 @@ describe("chat-model-ref helpers", () => {
       "Kimi K2.5 (NVIDIA)",
     );
   });
+
+  it.each([
+    {
+      id: "claude-opus-4-8",
+      name: "Opus 4.8",
+      alias: "opus",
+      expected: "Opus 4.8 · opus",
+    },
+    {
+      id: "claude-sonnet-5",
+      name: "Sonnet 5",
+      alias: "sonnet",
+      expected: "Sonnet 5 · sonnet",
+    },
+    {
+      id: "claude-sonnet-5",
+      name: "Sonnet 5",
+      alias: "My preferred model",
+      expected: "Sonnet 5 · My preferred model",
+    },
+  ])(
+    "keeps the canonical model name visible beside the $alias selection alias",
+    ({ id, name, alias, expected }) => {
+      const entry = { id, name, alias, provider: "anthropic" };
+      const lookup = buildCatalogDisplayLookup([entry]);
+
+      expect(buildChatModelOptionFromLookup(entry, lookup)).toEqual({
+        value: `anthropic/${id}`,
+        label: expected,
+      });
+      expect(formatCatalogChatModelDisplayFromLookup(`anthropic/${id}`, lookup)).toBe(expected);
+    },
+  );
 
   it("disambiguates duplicate names by provider and model id", () => {
     const duplicateProviders = createModelCatalog(

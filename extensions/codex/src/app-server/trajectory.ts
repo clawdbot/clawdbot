@@ -2,12 +2,9 @@
  * Records optional Codex runtime trajectory events with bounded, redacted
  * context and completion payloads.
  */
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -23,7 +20,6 @@ type CodexTrajectoryInit = {
   developerInstructions?: string;
   prompt?: string;
   trajectoryRecorder?: CodexHostTrajectoryRecorder | null;
-  trajectorySessionFile?: string;
   tools?: CodexDynamicToolSpec[];
   env?: NodeJS.ProcessEnv;
   warn?: (message: string, fields: Record<string, unknown>) => void;
@@ -135,15 +131,10 @@ export function createCodexTrajectoryRecorder(
     return null;
   }
 
-  const sessionFile = params.trajectorySessionFile ?? params.attempt.sessionFile;
-  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-  if (!sqliteMarker || sqliteMarker.sessionId !== params.attempt.sessionId) {
-    params.warn?.("codex trajectory capture requires a matching SQLite session target", {
-      sessionId: params.attempt.sessionId,
-      reason: sqliteMarker ? "session-id-mismatch" : "non-sqlite-session-target",
-    });
-    return null;
-  }
+  // The host owns SQLite target resolution and identity validation; it hands
+  // back a recorder only for a committed session row. Re-deriving that here
+  // from a session-file string silently drops every capture once the host
+  // stops emitting the legacy `sqlite:` marker.
   if (!params.trajectoryRecorder) {
     params.warn?.("codex trajectory capture requires the SQLite host recorder", {
       sessionId: params.attempt.sessionId,
@@ -214,13 +205,14 @@ export function recordCodexTrajectoryCompletion(
   if (!recorder) {
     return;
   }
+  const terminal = attemptTerminal.project(params.result.terminal);
   recorder.recordEvent("model.completed", {
     threadId: params.threadId,
     turnId: params.turnId,
     timedOut: params.timedOut,
     yieldDetected: params.yieldDetected ?? false,
-    aborted: params.result.aborted,
-    promptError: normalizeCodexTrajectoryError(params.result.promptError),
+    aborted: terminal.aborted,
+    promptError: normalizeCodexTrajectoryError(terminal.promptError),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,

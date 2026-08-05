@@ -98,6 +98,19 @@ describe("defineChannelAliasMigration rule matching", () => {
     expect(migration.hasLegacyAliases({ streaming: "partial" })).toBe(false);
     expect(migration.hasLegacyAliases({ streaming: false })).toBe(false);
   });
+
+  it("matches nested DM aliases at root and account scope", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "googlechat",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+      dm: { root: true, accounts: true },
+    });
+    const [rootDmRule, accountDmRule] = migration.legacyConfigRules.slice(2);
+
+    expect(rootDmRule?.match?.({ dm: { policy: "open" } }, {})).toBe(true);
+    expect(accountDmRule?.match?.({ work: { dm: { allowFrom: ["users/1"] } } }, {})).toBe(true);
+    expect(rootDmRule?.match?.({ dmPolicy: "open" }, {})).toBe(false);
+  });
 });
 
 describe("defineChannelAliasMigration normalizeChannelConfig", () => {
@@ -193,6 +206,62 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
     });
     expect(result.changes).toEqual([
       "Moved channels.imessage.accounts.work.chunkMode → channels.imessage.accounts.work.streaming.chunkMode.",
+    ]);
+  });
+
+  it("migrates DM aliases even when a delivery-only channel has no streaming aliases", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "googlechat",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+      dm: { root: true, accounts: true },
+    });
+
+    const result = migration.normalizeChannelConfig({
+      cfg: cfgWith("googlechat", {
+        dm: { enabled: false, policy: "allowlist", allowFrom: ["users/root"] },
+        accounts: { work: { dm: { policy: "open", allowFrom: ["*"] } } },
+      }),
+    });
+
+    expect((result.config.channels as Record<string, unknown>).googlechat).toEqual({
+      dmPolicy: "allowlist",
+      allowFrom: ["users/root"],
+      dm: { enabled: false },
+      accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+  });
+
+  it("materializes root and default-account streaming inheritance", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "layered",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+      accountStreamingInheritsDefaultAccount: true,
+    });
+    const result = migration.normalizeChannelConfig({
+      cfg: cfgWith("layered", {
+        streaming: { block: { enabled: true } },
+        accounts: {
+          Default: { chunkMode: "newline" },
+          work: { blockStreamingCoalesce: { minChars: 20 } },
+        },
+      }),
+    });
+
+    expect((result.config.channels as Record<string, unknown>).layered).toEqual({
+      streaming: { block: { enabled: true } },
+      accounts: {
+        Default: { streaming: { block: { enabled: true }, chunkMode: "newline" } },
+        work: {
+          streaming: {
+            block: { enabled: true, coalesce: { minChars: 20 } },
+            chunkMode: "newline",
+          },
+        },
+      },
+    });
+    expect(result.changes.slice(-2)).toEqual([
+      "Copied channels.layered.streaming into channels.layered.accounts.Default.streaming to keep inherited settings while migrating flat streaming keys.",
+      "Copied channels.layered.accounts.Default.streaming into channels.layered.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 });

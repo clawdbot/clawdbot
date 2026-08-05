@@ -14,12 +14,17 @@ const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => void {
   let exited = false;
   let idleTimer: NodeJS.Timeout | undefined;
+  let idleReleaseImmediate: NodeJS.Immediate | undefined;
   let deadlineTimer: NodeJS.Timeout | undefined;
 
   const clearTimers = () => {
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = undefined;
+    }
+    if (idleReleaseImmediate) {
+      clearImmediate(idleReleaseImmediate);
+      idleReleaseImmediate = undefined;
     }
     if (deadlineTimer) {
       clearTimeout(deadlineTimer);
@@ -41,7 +46,20 @@ export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => v
     if (idleTimer) {
       clearTimeout(idleTimer);
     }
-    idleTimer = setTimeout(release, EXIT_STDIO_GRACE_MS);
+    if (idleReleaseImmediate) {
+      clearImmediate(idleReleaseImmediate);
+      idleReleaseImmediate = undefined;
+    }
+    idleTimer = setTimeout(() => {
+      idleTimer = undefined;
+      // A loaded event loop can observe the idle timer before already-buffered
+      // pipe data. Give the poll phase one turn so that data can rearm the grace.
+      idleReleaseImmediate = setImmediate(() => {
+        idleReleaseImmediate = undefined;
+        release();
+      });
+      idleReleaseImmediate.unref();
+    }, EXIT_STDIO_GRACE_MS);
     idleTimer.unref();
   };
   const onData = () => {

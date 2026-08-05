@@ -1,7 +1,12 @@
+import { WebAPIRateLimitedError } from "@slack/web-api";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
-import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
+import {
+  createSlackPresenceMonitor,
+  hasSlackPresenceEventsEnabled,
+  SLACK_PRESENCE_REQUEST_TIMEOUT_MS,
+} from "./presence-monitor.js";
 
 const AUTO_MAX_PARTICIPANTS = 8;
 
@@ -296,6 +301,120 @@ describe("Slack presence monitor", () => {
 
     expect(getPresence).toHaveBeenCalledTimes(2);
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("times out a stalled presence request and polls the next user", async () => {
+    vi.useFakeTimers();
+    let resolveStalled!: (value: { presence: string }) => void;
+    const stalled = new Promise<{ presence: string }>((resolve) => {
+      resolveStalled = resolve;
+    });
+    let polling: Promise<void> | undefined;
+    try {
+      const getPresence = vi
+        .fn()
+        .mockReturnValueOnce(stalled)
+        .mockResolvedValueOnce({ presence: "away" });
+      const monitor = createSlackPresenceMonitor({
+        accountId: "default",
+        accountConfig: { mode: "auto" },
+        client: { getPresence } as never,
+        cooldownStore: createCooldownStore(),
+        enqueue: vi.fn(() => true),
+        wake: vi.fn(),
+      });
+      monitor.observe(createPrepared({ userId: "U1", channelId: "D1" }));
+      monitor.observe(createPrepared({ userId: "U2", channelId: "D2" }));
+
+      polling = monitor.pollOnce();
+      let pollSettled = false;
+      void polling.then(() => {
+        pollSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
+      expect(pollSettled).toBe(true);
+      await polling;
+
+      expect(getPresence).toHaveBeenNthCalledWith(1, { user: "U1" });
+      expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U2" });
+    } finally {
+      resolveStalled({ presence: "away" });
+      await polling;
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors Slack Retry-After without skipping the unpolled page", async () => {
+    let now = 1_000;
+    const getPresence = vi
+      .fn()
+      .mockRejectedValueOnce(new WebAPIRateLimitedError(120))
+      .mockResolvedValue({ presence: "away" });
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "on" },
+      client: { getPresence } as never,
+      cooldownStore: createCooldownStore(),
+      enqueue: vi.fn(() => true),
+      wake: vi.fn(),
+      nowMs: () => now,
+    });
+    for (let index = 1; index <= 46; index += 1) {
+      monitor.observe(createPrepared({ userId: `U${String(index).padStart(4, "0")}` }));
+    }
+
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "U0001" });
+
+    now += 119_999;
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenCalledTimes(1);
+
+    now += 1;
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U0001" });
+    expect(getPresence).toHaveBeenNthCalledWith(3, { user: "U0002" });
+    expect(getPresence).toHaveBeenCalledTimes(46);
+
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenNthCalledWith(47, { user: "U0046" });
+  });
+
+  it("bounds stop while a presence request is stalled", async () => {
+    vi.useFakeTimers();
+    let resolveStalled!: (value: { presence: string }) => void;
+    const stalled = new Promise<{ presence: string }>((resolve) => {
+      resolveStalled = resolve;
+    });
+    let polling: Promise<void> | undefined;
+    try {
+      const getPresence = vi.fn(() => stalled);
+      const monitor = createSlackPresenceMonitor({
+        accountId: "default",
+        accountConfig: { mode: "auto" },
+        client: { getPresence } as never,
+        cooldownStore: createCooldownStore(),
+        enqueue: vi.fn(() => true),
+        wake: vi.fn(),
+      });
+      monitor.observe(createPrepared({ userId: "U1" }));
+
+      polling = monitor.pollOnce();
+      const stopping = monitor.stop();
+      let stopSettled = false;
+      void stopping.then(() => {
+        stopSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
+      expect(stopSettled).toBe(true);
+      await Promise.all([polling, stopping]);
+
+      expect(getPresence).toHaveBeenCalledOnce();
+    } finally {
+      resolveStalled({ presence: "away" });
+      await polling;
+      vi.useRealTimers();
+    }
   });
 
   it("quiesces an in-flight poll before stop returns", async () => {

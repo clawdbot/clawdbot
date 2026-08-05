@@ -4,19 +4,16 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
-export const AuditEventKindSchema = Type.Union([
-  Type.Literal("agent_run"),
-  Type.Literal("tool_action"),
-]);
+const AuditEventKindSchema = Type.Union([Type.Literal("agent_run"), Type.Literal("tool_action")]);
 
-export const AuditEventActionSchema = Type.Union([
+const AuditEventActionSchema = Type.Union([
   Type.Literal("agent.run.started"),
   Type.Literal("agent.run.finished"),
   Type.Literal("tool.action.started"),
   Type.Literal("tool.action.finished"),
 ]);
 
-export const AuditEventStatusSchema = Type.Union([
+const AuditEventStatusSchema = Type.Union([
   Type.Literal("started"),
   Type.Literal("succeeded"),
   Type.Literal("failed"),
@@ -26,7 +23,7 @@ export const AuditEventStatusSchema = Type.Union([
   Type.Literal("unknown"),
 ]);
 
-export const AuditEventErrorCodeSchema = Type.Union([
+const AuditEventErrorCodeSchema = Type.Union([
   Type.Literal("run_failed"),
   Type.Literal("run_cancelled"),
   Type.Literal("run_timed_out"),

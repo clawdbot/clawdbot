@@ -13,8 +13,16 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import {
+  assertRequiredParams,
+  REQUIRED_PARAM_GROUPS,
+  getToolParamsRecord,
+  normalizeFileToolPathParam,
+  wrapToolParamValidation,
+} from "./agent-tools.params.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { execSchema } from "./bash-tools.schemas.js";
 import {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
@@ -33,6 +41,26 @@ const TEST_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+describe("direct exec tool schema", () => {
+  it("keeps model-facing descriptions compact without hiding runtime constraints", () => {
+    const fields = execSchema.properties as Record<string, { description?: string }>;
+    const describeField = (name: string) => fields[name]?.description ?? "";
+    const descriptions = Object.values(fields).map((field) => field.description ?? "");
+
+    expect(descriptions.join("").length).toBeLessThan(550);
+    expect(describeField("workdir")).toContain("Blank/whitespace");
+    expect(describeField("yieldMs")).toContain("Milliseconds");
+    expect(describeField("timeout")).toContain("seconds");
+    expect(describeField("pty")).toContain("PTY");
+    expect(describeField("elevated")).toContain("if allowed");
+    expect(describeField("security")).toContain("tools.exec.security");
+    expect(describeField("security")).toContain("host approvals");
+    expect(describeField("ask")).toContain("tools.exec.ask");
+    expect(describeField("ask")).toContain("channel-origin");
+    expect(describeField("ask")).toContain("ask=off");
+  });
+});
 
 describe("normalizeToolParameterSchema", () => {
   it("reuses normalized schemas for the same schema object and provider options", () => {
@@ -110,6 +138,34 @@ describe("normalizeToolParameterSchema", () => {
       type: "object",
       properties: {
         sessionKey: { type: "string" },
+      },
+    });
+  });
+
+  it("applies llama.cpp cleaning only for the explicit tool-schema profile", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", pattern: "^\\S+$", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string", maxLength: 2000 },
+        script: { type: "string", minLength: 1, maxLength: 65_536 },
+      },
+    };
+
+    expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(schema);
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelProvider: "openai-compatible",
+        modelCompat: { toolSchemaProfile: "llamacpp" },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string" },
+        script: { type: "string", minLength: 1 },
       },
     });
   });
@@ -1331,3 +1387,290 @@ describe("normalizeToolParameters", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("assertRequiredParams", () => {
+  it("returns object params unchanged", () => {
+    const params = { path: "test.txt" };
+    expect(getToolParamsRecord(params)).toBe(params);
+  });
+
+  it("strips only the malformed terminal XML arg-value suffix", () => {
+    expect(normalizeFileToolPathParam("echo test</arg_value>>")).toBe("echo test");
+    expect(normalizeFileToolPathParam("echo test</arg_value>>>>>")).toBe("echo test");
+    expect(normalizeFileToolPathParam("echo test</arg_value>")).toBe("echo test</arg_value>");
+    expect(normalizeFileToolPathParam("echo </arg_value>> test")).toBe("echo </arg_value>> test");
+  });
+
+  it("normalizes known hallucinated Office/codex path extensions", () => {
+    expect(normalizeFileToolPathParam("reports/final.docodex")).toBe("reports/final.docx");
+    expect(normalizeFileToolPathParam("slides/plan.pptxodex")).toBe("slides/plan.pptx");
+    expect(normalizeFileToolPathParam("sheets/budget.XLSCODEX")).toBe("sheets/budget.xlsx");
+    expect(normalizeFileToolPathParam("notes/codex-report.txt")).toBe("notes/codex-report.txt");
+    expect(normalizeFileToolPathParam("archive.docodex/notes.txt")).toBe(
+      "archive.docodex/notes.txt",
+    );
+  });
+
+  it("normalizes file-tool paths after malformed XML suffix cleanup", () => {
+    expect(normalizeFileToolPathParam("reports/final.docodex</arg_value>>")).toBe(
+      "reports/final.docx",
+    );
+  });
+
+  it("strips malformed path suffixes without touching payload text", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "notes.txt</arg_value>>",
+      content: "keep literal payload</arg_value>>",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      {
+        path: "notes.txt",
+        content: "keep literal payload</arg_value>>",
+      },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("normalizes Office/codex path extensions without touching payload text", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "reports/final.docodex",
+      content: "keep literal payload.docodex",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      {
+        path: "reports/final.docx",
+        content: "keep literal payload.docodex",
+      },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("rejects paths that become empty after malformed XML arg-value suffix stripping", async () => {
+    const execute = vi.fn();
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await expect(tool.execute("id", { path: "</arg_value>>", content: "x" })).rejects.toThrow(
+      /Missing required parameter: path/,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("preserves edit replacement payloads while cleaning the path", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "edit",
+        label: "edit",
+        description: "edit a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.edit,
+    );
+
+    const edits = [
+      {
+        oldText: "literal old</arg_value>>",
+        newText: "literal new</arg_value>>",
+      },
+    ];
+    await tool.execute("id", { path: "notes.docxodex</arg_value>>>", edits });
+
+    expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);
+  });
+
+  it("includes received keys in error when some params are present but content is missing", () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "test.txt" },
+        [
+          { keys: ["path"], label: "path" },
+          { keys: ["content"], label: "content" },
+        ],
+        "write",
+      ),
+    ).toThrow(/\(received: path\)/);
+  });
+
+  it("does not normalize legacy aliases during validation", async () => {
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute: vi.fn(),
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+    await expect(
+      tool.execute("id", { file_path: "test.txt" }, new AbortController().signal, vi.fn()),
+    ).rejects.toThrow(/\(received: file_path\)/);
+  });
+
+  it("enforces canonical path/content at runtime", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "test",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("tool-1", { path: "foo.txt", content: "x" });
+    expect(execute).toHaveBeenCalledWith(
+      "tool-1",
+      { path: "foo.txt", content: "x" },
+      undefined,
+      undefined,
+    );
+
+    await expect(tool.execute("tool-2", { content: "x" })).rejects.toThrow(
+      /Missing required parameter/,
+    );
+    await expect(tool.execute("tool-2", { content: "x" })).rejects.toThrow(
+      /Supply correct parameters before retrying\./,
+    );
+    await expect(tool.execute("tool-3", { path: "   ", content: "x" })).rejects.toThrow(
+      /Missing required parameter/,
+    );
+    await expect(tool.execute("tool-3", { path: "   ", content: "x" })).rejects.toThrow(
+      /Supply correct parameters before retrying\./,
+    );
+    await expect(tool.execute("tool-4", {})).rejects.toThrow(
+      /Missing required parameters: path, content/,
+    );
+    await expect(tool.execute("tool-4", {})).rejects.toThrow(
+      /Supply correct parameters before retrying\./,
+    );
+  });
+
+  it("excludes null and undefined values from received hint", () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "test.txt", content: null },
+        [
+          { keys: ["path"], label: "path" },
+          { keys: ["content"], label: "content" },
+        ],
+        "write",
+      ),
+    ).toThrow(/\(received: path\)[^,]/);
+  });
+
+  it("shows empty-string values for present params that still fail validation", () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "/tmp/a.txt", content: "   " },
+        [
+          { keys: ["path"], label: "path" },
+          { keys: ["content"], label: "content" },
+        ],
+        "write",
+      ),
+    ).toThrow(/\(received: path, content=<empty-string>\)/);
+  });
+
+  it("shows wrong-type values for present params that still fail validation", async () => {
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute: vi.fn(),
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+    await expect(
+      tool.execute(
+        "id",
+        { path: "test.txt", content: { unexpected: true } },
+        new AbortController().signal,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(/\(received: (?:path, content=<object>|content=<object>, path)\)/);
+  });
+
+  it("includes multiple received keys when several params are present", () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "/tmp/a.txt", extra: "yes" },
+        [
+          { keys: ["path"], label: "path" },
+          { keys: ["content"], label: "content" },
+        ],
+        "write",
+      ),
+    ).toThrow(/\(received: path, extra\)/);
+  });
+
+  it("omits received hint when the record is empty", () => {
+    const err = (() => {
+      try {
+        assertRequiredParams({}, [{ keys: ["content"], label: "content" }], "write");
+      } catch (e) {
+        return e instanceof Error ? e.message : "";
+      }
+      return "";
+    })();
+    expect(err).not.toMatch(/received:/);
+    expect(err).toMatch(/Missing required parameter: content/);
+  });
+
+  it("returns undefined when all required params are present", () => {
+    expect(
+      assertRequiredParams(
+        { path: "a.txt", content: "hello" },
+        [
+          { keys: ["path"], label: "path" },
+          { keys: ["content"], label: "content" },
+        ],
+        "write",
+      ),
+    ).toBeUndefined();
+  });
+});

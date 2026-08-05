@@ -8,6 +8,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptsStartResult,
 } from "../../transcripts/provider-types.js";
+import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
 
 export type TranscriptsLogger = {
@@ -15,6 +16,7 @@ export type TranscriptsLogger = {
 };
 
 export type TranscriptsRuntimeContext = {
+  agentId?: string;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
@@ -146,16 +148,20 @@ export async function startTranscripts(params: {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
   }
-  const source = sourceFromParams(params.rawParams);
-  const provider = resolveSourceProvider(source.providerId, params.ctx);
+  const providerSource = {
+    ...sourceFromParams(params.rawParams),
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+  };
+  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
   if (!provider?.start) {
-    throw new Error(`transcripts provider ${source.providerId} cannot start live capture`);
+    throw new Error(`transcripts provider ${providerSource.providerId} cannot start live capture`);
   }
   const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
-    source,
+    source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
+    ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);
@@ -169,7 +175,7 @@ export async function startTranscripts(params: {
     try {
       result = await provider.start({
         cfg: params.ctx.config,
-        session,
+        session: { ...session, source: providerSource },
         abortSignal: startupAbort.signal,
         startupWaitMs: params.startupWaitMs,
         onUtterance: async (utterance) => {

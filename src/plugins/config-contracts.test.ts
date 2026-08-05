@@ -51,7 +51,6 @@ function createPluginRecord(
     rootDir: `/tmp/${overrides.id}`,
     manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
     channelConfigs: undefined,
-    providerAuthEnvVars: undefined,
     configUiHints: undefined,
     configSchema: undefined,
     configContracts: undefined,
@@ -70,7 +69,6 @@ function createPluginRecord(
     providers: [],
     modelSupport: undefined,
     cliBackends: [],
-    channelEnvVars: undefined,
     providerAuthAliases: undefined,
     providerAuthChoices: undefined,
     skills: [],
@@ -78,7 +76,6 @@ function createPluginRecord(
     hooks: [],
     source: `/tmp/${overrides.id}/openclaw.plugin.json`,
     setupSource: undefined,
-    startupDeferConfiguredChannelFullLoadUntilAfterListen: undefined,
     channelCatalogMeta: undefined,
     ...overrides,
   };

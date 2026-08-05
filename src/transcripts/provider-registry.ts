@@ -14,7 +14,7 @@ import type { TranscriptSourceProvider } from "./provider-types.js";
  * Transcript source provider registry.
  *
  * Transcript providers are plugin capability providers; this module exposes
- * canonical/alias lookup and keeps direct plugin resolution ahead of map fallback.
+ * canonical/alias lookup through the shared capability runtime.
  */
 /** Normalize transcript source provider ids for registry lookup. */
 export function normalizeTranscriptSourceProviderId(
@@ -23,23 +23,10 @@ export function normalizeTranscriptSourceProviderId(
   return normalizeCapabilityProviderId(providerId);
 }
 
-function resolveTranscriptsSourceProviderEntries(cfg?: OpenClawConfig): TranscriptSourceProvider[] {
-  return resolvePluginCapabilityProviders({
-    key: "transcriptSourceProviders",
-    cfg,
-  });
-}
-
-function buildProviderMaps(cfg?: OpenClawConfig): {
-  canonical: Map<string, TranscriptSourceProvider>;
-  aliases: Map<string, TranscriptSourceProvider>;
-} {
-  return buildCapabilityProviderMaps(resolveTranscriptsSourceProviderEntries(cfg));
-}
-
 /** List canonical transcript source providers for a config snapshot. */
 export function listTranscriptSourceProviders(cfg?: OpenClawConfig): TranscriptSourceProvider[] {
-  return [...buildProviderMaps(cfg).canonical.values()];
+  const providers = resolvePluginCapabilityProviders({ key: "transcriptSourceProviders", cfg });
+  return [...buildCapabilityProviderMaps(providers).canonical.values()];
 }
 
 /** Resolve a transcript provider by canonical id or alias. */
@@ -51,13 +38,9 @@ export function getTranscriptSourceProvider(
   if (!normalized) {
     return undefined;
   }
-  const directProvider = resolvePluginCapabilityProvider({
+  return resolvePluginCapabilityProvider({
     key: "transcriptSourceProviders",
     providerId: normalized,
     cfg,
   });
-  if (directProvider) {
-    return directProvider;
-  }
-  return buildProviderMaps(cfg).aliases.get(normalized);
 }

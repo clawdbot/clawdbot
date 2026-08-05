@@ -6,6 +6,7 @@ import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
 import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
@@ -13,20 +14,68 @@ import type { AgentRuntimeMessageActionContext } from "./message-action-turn-cap
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
 const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
 const MESSAGE_ACTION_TOKEN_TTL_MS = 60_000;
+const CRON_SELF_MANAGEMENT_TOKEN_TTL_MS = 60_000;
+
+type AgentRuntimeCronSelfManagementContext = {
+  jobId: string;
+  expiresAtMs: number;
+};
 
 export type AgentRuntimeIdentity = {
   kind: "agentRuntime";
   agentId: string;
   sessionKey: string;
+  turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
+  cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+};
+
+export type AgentRuntimeSessionSpawnContext = {
+  completionOwnerSessionKey?: string;
+  inheritedToolPolicy: {
+    version: 1;
+    allow: string[];
+    deny: string[];
+  };
 };
 
 type AgentRuntimeIdentityTokenPayload = {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
   agentId: string;
   sessionKey: string;
+  turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
+  cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
+
+function decodeStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    return undefined;
+  }
+  return value.map((entry) => entry.trim()).filter(Boolean);
+}
+
+function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnContext | undefined {
+  if (!isRecord(value) || !isRecord(value.inheritedToolPolicy)) {
+    return undefined;
+  }
+  const policy = value.inheritedToolPolicy;
+  const allow = decodeStringList(policy.allow);
+  const deny = decodeStringList(policy.deny);
+  if (policy.version !== 1 || !allow || !deny) {
+    return undefined;
+  }
+  const completionOwnerSessionKey = normalizeOptionalString(value.completionOwnerSessionKey);
+  if (value.completionOwnerSessionKey !== undefined && !completionOwnerSessionKey) {
+    return undefined;
+  }
+  return {
+    ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
+    inheritedToolPolicy: { version: 1, allow, deny },
+  };
+}
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
   return (await loadExecApprovalsAsync()).socket?.token?.trim() || null;
@@ -133,6 +182,7 @@ function decodeMessageActionContext(
   const context = {
     expiresAtMs: value.expiresAtMs,
     sessionId: normalizeOptionalString(value.sessionId),
+    sourceReplySessionKey: normalizeOptionalString(value.sourceReplySessionKey),
     requesterAccountId: normalizeOptionalString(value.requesterAccountId),
     requesterSenderId: normalizeOptionalString(value.requesterSenderId),
     toolContext,
@@ -160,7 +210,10 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       kind?: unknown;
       agentId?: unknown;
       sessionKey?: unknown;
+      turnSourceAccountId?: unknown;
       messageActionContext?: unknown;
+      cronSelfManagementContext?: unknown;
+      sessionSpawnContext?: unknown;
     };
     if (
       raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
@@ -171,6 +224,9 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     }
     const agentId = normalizeAgentId(raw.agentId);
     const sessionKey = raw.sessionKey.trim();
+    const turnSourceAccountId = normalizeOptionalAccountId(
+      typeof raw.turnSourceAccountId === "string" ? raw.turnSourceAccountId : undefined,
+    );
     if (!agentId || !sessionKey) {
       return undefined;
     }
@@ -181,11 +237,42 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (raw.messageActionContext !== undefined && !messageActionContext) {
       return undefined;
     }
+    const rawCronSelfManagement = raw.cronSelfManagementContext;
+    const cronSelfManagementJobId =
+      isRecord(rawCronSelfManagement) && typeof rawCronSelfManagement.jobId === "string"
+        ? rawCronSelfManagement.jobId.trim()
+        : "";
+    const cronSelfManagementExpiresAtMs = isRecord(rawCronSelfManagement)
+      ? rawCronSelfManagement.expiresAtMs
+      : undefined;
+    const cronSelfManagementContext =
+      cronSelfManagementJobId &&
+      typeof cronSelfManagementExpiresAtMs === "number" &&
+      Number.isFinite(cronSelfManagementExpiresAtMs) &&
+      nowMs < cronSelfManagementExpiresAtMs
+        ? {
+            jobId: cronSelfManagementJobId,
+            expiresAtMs: cronSelfManagementExpiresAtMs,
+          }
+        : undefined;
+    if (rawCronSelfManagement !== undefined && !cronSelfManagementContext) {
+      return undefined;
+    }
+    const sessionSpawnContext =
+      raw.sessionSpawnContext === undefined
+        ? undefined
+        : decodeSessionSpawnContext(raw.sessionSpawnContext);
+    if (raw.sessionSpawnContext !== undefined && !sessionSpawnContext) {
+      return undefined;
+    }
     return {
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
       sessionKey,
+      ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(messageActionContext ? { messageActionContext } : {}),
+      ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+      ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     };
   } catch {
     return undefined;
@@ -196,7 +283,10 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
 export async function mintAgentRuntimeIdentityToken(params: {
   agentId: string;
   sessionKey: string;
+  turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
+  cronSelfManagementJobId?: string;
+  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 }): Promise<string> {
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
@@ -215,11 +305,22 @@ export async function mintAgentRuntimeIdentityToken(params: {
         ),
       }
     : undefined;
+  const turnSourceAccountId = normalizeOptionalAccountId(params.turnSourceAccountId);
+  const cronSelfManagementJobId = normalizeOptionalString(params.cronSelfManagementJobId);
+  const cronSelfManagementContext = cronSelfManagementJobId
+    ? {
+        jobId: cronSelfManagementJobId,
+        expiresAtMs: Date.now() + CRON_SELF_MANAGEMENT_TOKEN_TTL_MS,
+      }
+    : undefined;
   const payload = encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
+    ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(messageActionContext ? { messageActionContext } : {}),
+    ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+    ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
@@ -250,6 +351,11 @@ export async function verifyAgentRuntimeIdentityToken(
     kind: "agentRuntime",
     agentId: payload.agentId,
     sessionKey: payload.sessionKey,
+    ...(payload.turnSourceAccountId ? { turnSourceAccountId: payload.turnSourceAccountId } : {}),
     ...(payload.messageActionContext ? { messageActionContext: payload.messageActionContext } : {}),
+    ...(payload.cronSelfManagementContext
+      ? { cronSelfManagementContext: payload.cronSelfManagementContext }
+      : {}),
+    ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
   };
 }

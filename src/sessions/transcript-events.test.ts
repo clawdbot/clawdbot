@@ -122,6 +122,61 @@ describe("transcript events", () => {
     });
   });
 
+  it("keeps normalized committed lifecycle and store ownership on internal events only", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+
+    emitSessionTranscriptUpdate({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: "  /tmp/custom-sessions.json  ",
+      },
+      lifecycleRevision: "  committed-revision  ",
+      messageId: "msg-1",
+    });
+
+    expect(internalListener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/custom-sessions.json",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      lifecycleRevision: "committed-revision",
+      messageId: "msg-1",
+    });
+    expect(publicListener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      messageId: "msg-1",
+    });
+  });
+
+  it("discards blank lifecycle ownership without changing legacy events", () => {
+    const listener = vi.fn();
+    cleanup.push(onInternalSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      lifecycleRevision: "  ",
+    });
+
+    expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
+  });
+
   it("derives public target identity from legacy-shaped internal updates", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));

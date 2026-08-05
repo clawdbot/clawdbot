@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -49,15 +50,17 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
-  canonicalizeManifestModelCatalogProviderAlias,
   createBundledProviderStaticCatalogContextResolver,
-  createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
   resolveManifestModelCatalogProviderAliasMetadata,
 } from "./model.static-catalog.js";
+
+const canonicalizeManifestModelCatalogProviderAlias = (
+  params: Parameters<typeof resolveManifestModelCatalogProviderAliasMetadata>[0],
+) => resolveManifestModelCatalogProviderAliasMetadata(params).provider;
 
 function setManifestPlugins(plugins: unknown[]) {
   // Static catalog resolution reads scan metadata first, then loads the manifest
@@ -614,8 +617,8 @@ describe("resolveBundledStaticCatalogModel", () => {
     }
   });
 
-  it("can include bundled runtime-discovery manifest catalog rows for configured fallbacks", () => {
-    setManifestPlugins([createMistralManifestPlugin({ discovery: "runtime" })]);
+  it("can include bundled refreshable manifest catalog rows for configured fallbacks", () => {
+    setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
 
     const model = resolveBundledStaticCatalogModel({
       provider: "mistral",
@@ -660,11 +663,9 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     manifestMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        {
-          id: "google",
-          origin: "bundled",
+        createManifestRecord("google", {
           providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
+        }),
       ],
     });
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
@@ -727,16 +728,12 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "minimax"]);
     manifestMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        {
-          id: "google",
-          origin: "bundled",
+        createManifestRecord("google", {
           providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
-        {
-          id: "minimax",
-          origin: "bundled",
+        }),
+        createManifestRecord("minimax", {
           providerDiscoverySource: "/fixtures/minimax/provider-discovery.ts",
-        },
+        }),
       ],
     });
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
@@ -839,12 +836,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       discoveryEntriesOnly: true,
       includeManifestModelCatalogProviders: false,
     });
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({
-      provider,
-      config: cfg,
-      workspaceDir: undefined,
-      env: process.env,
-    });
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider });
   });
 
   it("does not load bundled provider static catalogs when owner policy blocks the plugin", async () => {
@@ -882,10 +874,10 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       },
     });
 
-    const resolveModel = createBundledProviderStaticCatalogModelResolver();
+    const resolveModel = createBundledProviderStaticCatalogContextResolver();
     await expect(
       resolveModel({ provider: "google", modelId: "gemini-3.1-pro-preview" }),
-    ).resolves.toMatchObject({ contextWindow: 1_048_576 });
+    ).resolves.toEqual({ contextWindow: 1_048_576 });
     await expect(
       resolveModel({ provider: "google", modelId: "missing-model" }),
     ).resolves.toBeUndefined();
@@ -940,9 +932,8 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockClear();
     providerMocks.runProviderStaticCatalog.mockClear();
-    const resolveModel = createBundledProviderStaticCatalogModelResolver();
     await expect(
-      resolveModel({
+      resolveBundledProviderStaticCatalogModel({
         provider: "google-gemini-cli",
         modelId: "google/gemini-3.1-pro-preview",
       }),

@@ -15,6 +15,12 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
+export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
+  "No reply was generated for this message. This is usually a temporary model failure - please try again.";
+
+export const QUEUE_CAP_REJECTION_TEXT =
+  "This message was not queued because the session queue is full. Please try again after the current response finishes.";
+
 export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(payload);
   return JSON.stringify({

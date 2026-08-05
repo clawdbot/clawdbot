@@ -57,6 +57,13 @@ public func wizardStepType(_ step: WizardStep) -> String {
     (step.type.value as? String) ?? ""
 }
 
+/// `"gateway"` marks a step the Gateway runs itself (download/install progress).
+/// Those steps carry no answer, so clients must poll for the next frame instead
+/// of waiting for input that will never come.
+public func wizardStepExecutor(_ step: WizardStep) -> String {
+    (step.executor?.value as? String) ?? ""
+}
+
 public func anyCodableString(_ value: AnyCodable?) -> String {
     switch value?.value {
     case let string as String:

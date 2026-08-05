@@ -224,7 +224,41 @@ describe("mattermost websocket monitor", () => {
       seq: 1,
     });
     expect(countMatching(patches, (patch) => patch.connected === true)).toBe(1);
-    expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
+    expect(countMatching(patches, (patch) => patch.connected === false)).toBe(3);
+    expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "starting" }));
+    expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "recovering" }));
+  });
+
+  it("publishes ready only after the authentication challenge is acknowledged", async () => {
+    const socket = new FakeWebSocket();
+    const patches: Array<Record<string, unknown>> = [];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 7,
+      onPosted: async () => {},
+      statusSink: (patch) => patches.push(patch as Record<string, unknown>),
+      webSocketFactory: () => socket,
+    });
+    const connected = connectOnce();
+
+    socket.emitOpen();
+    expect(patches).toContainEqual({ connected: true, lifecycle: "starting" });
+    expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
+
+    socket.emitMessage(Buffer.from(JSON.stringify({ status: "OK", seq_reply: 7 })));
+    expect(patches).toContainEqual({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
+
+    socket.emitClose(1000);
+    await connected;
   });
 
   it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
@@ -284,14 +318,10 @@ describe("mattermost websocket monitor", () => {
       await once(server, "close");
     }
 
-    expect(onPosted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "post-1", message: "normal Mattermost post" }),
-      expect.any(Object),
-    );
-    expect(onPosted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "post-large", props: largeProps }),
-      expect.any(Object),
-    );
+    // onPosted now receives the raw envelope; the post rides inside it as a
+    // nested JSON string, so its fields appear escaped.
+    expect(onPosted).toHaveBeenCalledWith(expect.stringContaining('\\"id\\":\\"post-1\\"'));
+    expect(onPosted).toHaveBeenCalledWith(expect.stringContaining('\\"id\\":\\"post-large\\"'));
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Max payload size exceeded"),
     );
@@ -345,6 +375,52 @@ describe("mattermost websocket monitor", () => {
       event: "reaction_added",
       data: { reaction },
     });
+  });
+
+  it("hands posted envelopes to ingress raw and keeps post_edited out", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async () => {});
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+    const posted = {
+      event: "posted",
+      data: {
+        post: JSON.stringify({
+          id: "post-raw",
+          channel_id: "channel-raw",
+          unexpected_transport_field: true,
+        }),
+      },
+    };
+
+    const connected = connectOnce();
+    socket.emitOpen();
+    socket.emitMessage(
+      Buffer.from(
+        JSON.stringify({
+          ...posted,
+          event: "post_edited",
+        }),
+      ),
+    );
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+    expect(onPosted).not.toHaveBeenCalled();
+    socket.emitMessage(Buffer.from(JSON.stringify(posted)));
+    await vi.waitFor(() => {
+      expect(onPosted).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await connected;
+
+    expect(onPosted).toHaveBeenCalledWith(JSON.stringify(posted));
   });
 
   it("terminates when bot update_at changes (disable/enable cycle)", async () => {

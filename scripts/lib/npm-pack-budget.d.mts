@@ -3,8 +3,13 @@ export type NpmPackBudgetResult = {
   unpackedSize?: number;
 };
 
+export type NpmPackBudgetResults =
+  | Iterable<NpmPackBudgetResult>
+  | NpmPackBudgetResult
+  | Record<string, NpmPackBudgetResult>;
+
 export declare function collectPackUnpackedSizeErrors(
-  results: Iterable<NpmPackBudgetResult>,
+  results: NpmPackBudgetResults,
   options?: {
     budgetBytes?: number;
     missingDataMessage?: string;

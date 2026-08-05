@@ -1,5 +1,6 @@
 // Feishu plugin module implements comment handler behavior.
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -13,6 +14,7 @@ import {
 import { buildFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import {
   resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
@@ -27,6 +29,7 @@ type HandleFeishuCommentEventParams = {
   event: FeishuDriveCommentNoticeEvent;
   botOpenId?: string;
   abortSignal?: AbortSignal;
+  turnAdoptionLifecycle?: FeishuIngressLifecycle;
 };
 
 function buildCommentSessionKey(params: {
@@ -230,6 +233,7 @@ export async function handleFeishuCommentEvent(
     conversation: { kind: "direct", id: commentTarget, label: conversationLabel },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: commentSessionKey,
       dispatchSessionKey: commentSessionKey,
@@ -294,6 +298,9 @@ export async function handleFeishuCommentEvent(
           },
           dispatcherOptions,
           delivery,
+          ...(params.turnAdoptionLifecycle
+            ? { replyOptions: bindIngressLifecycleToReplyOptions(params.turnAdoptionLifecycle) }
+            : {}),
         }),
       },
     });

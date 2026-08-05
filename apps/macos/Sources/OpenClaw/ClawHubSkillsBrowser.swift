@@ -126,8 +126,8 @@ private struct ClawHubSkillResultRow: View {
 
     var body: some View {
         SettingsCardRow(
-            title: self.skill.displayName,
-            subtitle: self.skill.summary ?? self.skill.slug,
+            title: .verbatim(self.skill.displayName),
+            subtitle: .verbatim(self.skill.summary ?? self.skill.slug),
             showsDivider: self.showsDivider)
         {
             if let version = self.skill.version {

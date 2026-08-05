@@ -63,7 +63,6 @@ export {
 export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithCommandGate,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
   resolveOpenDmAllowlistAccess,

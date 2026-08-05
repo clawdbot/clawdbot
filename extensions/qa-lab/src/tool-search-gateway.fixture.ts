@@ -33,19 +33,26 @@ type LaneResult = {
   providerInputSnippet: string;
   providerToolOutputSnippet: string;
   providerDeclaredToolCount: number;
+  providerDirectoryContainsTarget: boolean;
   providerPlannedTools: string[];
   gatewayOutputToolNames: string[];
   gatewayOutputText: string;
   sessionLogToolMentions: Record<string, number>;
+  targetToolIdentity: {
+    source: string;
+    pluginId: string;
+  };
 };
 
 type LaneResultSummary = Pick<
   LaneResult,
   | "providerDeclaredToolCount"
+  | "providerDirectoryContainsTarget"
   | "providerPlannedTools"
   | "providerRawBytes"
   | "gatewayOutputText"
   | "sessionLogToolMentions"
+  | "targetToolIdentity"
 > & {
   providerInputSnippet?: string;
   providerToolOutputSnippet?: string;
@@ -252,32 +259,17 @@ function applyLaneConfig(
     },
   };
 
-  const agents = (cfg.agents && typeof cfg.agents === "object" ? cfg.agents : {}) as Record<
-    string,
-    unknown
-  >;
-  const defaults =
-    agents.defaults && typeof agents.defaults === "object"
-      ? (agents.defaults as Record<string, unknown>)
-      : {};
+  const memory =
+    cfg.memory && typeof cfg.memory === "object" ? (cfg.memory as Record<string, unknown>) : {};
   const memorySearch =
-    defaults.memorySearch && typeof defaults.memorySearch === "object"
-      ? (defaults.memorySearch as Record<string, unknown>)
+    memory.search && typeof memory.search === "object"
+      ? (memory.search as Record<string, unknown>)
       : {};
-  cfg.agents = {
-    ...agents,
-    defaults: {
-      ...defaults,
-      memorySearch: {
-        ...memorySearch,
-        enabled: false,
-        sync: {
-          ...(memorySearch.sync && typeof memorySearch.sync === "object" ? memorySearch.sync : {}),
-          onSearch: false,
-          onSessionStart: false,
-          watch: false,
-        },
-      },
+  cfg.memory = {
+    ...memory,
+    search: {
+      ...memorySearch,
+      enabled: false,
     },
   };
 
@@ -345,6 +337,33 @@ async function configureLane(params: {
   });
 }
 
+async function readTargetToolIdentity(params: {
+  env: QaSuiteRuntimeEnv;
+  sessionKey: string;
+  targetTool: string;
+}) {
+  const payload = (await params.env.gateway.call(
+    "tools.effective",
+    { sessionKey: params.sessionKey },
+    { timeoutMs: liveTurnTimeoutMs(params.env, 90_000) },
+  )) as {
+    groups?: Array<{
+      tools?: Array<{ id?: string; source?: string; pluginId?: string }>;
+    }>;
+  };
+  for (const group of payload.groups ?? []) {
+    for (const tool of group.tools ?? []) {
+      if (tool.id === params.targetTool) {
+        return {
+          source: tool.source?.trim() ?? "",
+          pluginId: tool.pluginId?.trim() ?? "",
+        };
+      }
+    }
+  }
+  throw new Error(`tools.effective did not report ${params.targetTool}`);
+}
+
 export async function stageToolSearchGatewayFixture(params: {
   env: QaSuiteRuntimeEnv;
   targetTool?: string;
@@ -379,6 +398,7 @@ export async function runToolSearchGatewayLane(params: {
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
+  const sessionKey = `tool-search-gateway-${params.lane}`;
   const response = await fetchJson(
     `${params.env.gateway.baseUrl}/v1/responses`,
     {
@@ -388,7 +408,7 @@ export async function runToolSearchGatewayLane(params: {
         "content-type": "application/json",
         "x-openclaw-scopes": "operator.write",
         "x-openclaw-agent": "qa",
-        "x-openclaw-session-key": `tool-search-gateway-${params.lane}`,
+        "x-openclaw-session-key": sessionKey,
       },
       body: JSON.stringify({
         model: "openclaw/qa",
@@ -422,7 +442,17 @@ export async function runToolSearchGatewayLane(params: {
     plannedToolName?: string;
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
+  // Responses providers may carry system text in instructions or input items;
+  // inspect the full recorded prompt so late directory entries are not lost.
+  const providerPromptText = [lastRequest.instructions, lastRequest.allInputText]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
   const responseStatus = (response as { status?: unknown }).status;
+  const targetToolIdentity = await readTargetToolIdentity({
+    env: params.env,
+    sessionKey,
+    targetTool: params.fixture.targetTool,
+  });
   const mentionCountsAfter = await countToolSearchSessionLogMentions({
     stateDir,
     targetTool: params.fixture.targetTool,
@@ -441,12 +471,16 @@ export async function runToolSearchGatewayLane(params: {
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
+    providerDirectoryContainsTarget:
+      providerPromptText.includes("### Deferred Tool Schemas") &&
+      providerPromptText.includes(`- ${params.fixture.targetTool}`),
     providerPlannedTools: laneRequests
       .map((request) => request.plannedToolName)
       .filter((name): name is string => typeof name === "string"),
     gatewayOutputToolNames: outputToolNames(response),
     gatewayOutputText: outputText(response),
     sessionLogToolMentions: subtractMentionCounts(mentionCountsAfter, mentionCountsBefore),
+    targetToolIdentity,
   };
 }
 
@@ -462,6 +496,7 @@ export function assertToolSearchLaneResults(params: {
         normal: {
           plannedTools: normal.providerPlannedTools,
           declaredToolCount: normal.providerDeclaredToolCount,
+          directoryContainsTarget: normal.providerDirectoryContainsTarget,
           input: normal.providerInputSnippet,
           toolOutput: normal.providerToolOutputSnippet,
           output: truncateUtf16Safe(normal.gatewayOutputText, 300),
@@ -470,6 +505,7 @@ export function assertToolSearchLaneResults(params: {
         code: {
           plannedTools: code.providerPlannedTools,
           declaredToolCount: code.providerDeclaredToolCount,
+          directoryContainsTarget: code.providerDirectoryContainsTarget,
           input: code.providerInputSnippet,
           toolOutput: code.providerToolOutputSnippet,
           output: truncateUtf16Safe(code.gatewayOutputText, 300),
@@ -494,6 +530,14 @@ export function assertToolSearchLaneResults(params: {
     `code lane did not bridge-call ${targetTool}: ${laneDebug()}`,
   );
   assert(
+    code.providerDirectoryContainsTarget,
+    `code lane did not advertise ${targetTool} in the capability directory: ${laneDebug()}`,
+  );
+  assert(
+    !normal.providerDirectoryContainsTarget,
+    `normal lane unexpectedly advertised a Tool Search capability directory: ${laneDebug()}`,
+  );
+  assert(
     !code.providerPlannedTools.includes(targetTool),
     `code lane exposed direct provider tool ${targetTool}: ${laneDebug()}`,
   );
@@ -514,4 +558,11 @@ export function assertToolSearchLaneResults(params: {
     !normal.providerPlannedTools.includes("tool_search_code"),
     "normal lane unexpectedly used Tool Search bridge",
   );
+  for (const lane of [normal, code]) {
+    assert(
+      lane.targetToolIdentity.source === "plugin" &&
+        lane.targetToolIdentity.pluginId === FAKE_PLUGIN_ID,
+      `tools.effective did not attribute ${targetTool} to plugin ${FAKE_PLUGIN_ID}: ${laneDebug()}`,
+    );
+  }
 }

@@ -11,6 +11,10 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+For the personal-agent default — one rolling conversation shared by all your
+DM channels, with group activity and background work flowing into it — see
+[The main session](/concepts/main-session).
+
 ## How messages are routed
 
 | Source          | Behavior                  |
@@ -42,12 +46,12 @@ visible to Bob.
 
 `session.dmScope` options:
 
-| Value                      | Behavior                                  |
-| -------------------------- | ----------------------------------------- |
-| `main` (default)           | All DMs share one session                 |
-| `per-peer`                 | Isolate by sender, across channels        |
-| `per-channel-peer`         | Isolate by channel + sender (recommended) |
-| `per-account-channel-peer` | Isolate by account + channel + sender     |
+| Value                      | Behavior                                                 |
+| -------------------------- | -------------------------------------------------------- |
+| `main` (default)           | All DMs share the [main session](/concepts/main-session) |
+| `per-peer`                 | Isolate by sender, across channels                       |
+| `per-channel-peer`         | Isolate by channel + sender (recommended)                |
+| `per-account-channel-peer` | Isolate by account + channel + sender                    |
 
 <Tip>
 If the same person contacts you from multiple channels, use
@@ -64,15 +68,48 @@ troubleshooting.
 
 Verify your setup with `openclaw security audit`.
 
+## Incognito sessions
+
+Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread disappears when the Gateway restarts, does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+
+The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
+
+Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send, diagnostic logging remains unchanged, and OpenClaw still records content-free audit metadata such as HMAC references.
+
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+
+## Remember across conversations
+
+Separate transcripts control each conversation's local history. For a personal
+or fully trusted agent, `memory.search.rememberAcrossConversations: true`
+adds an optional retrieval step across that agent's other private
+conversations; it does not combine their transcripts.
+
+Private direct and persistent explicit UI conversations can supply relevant
+context to one another. Groups and channels stay separate in both directions:
+their transcripts are not private recall sources, and replies in those
+conversations do not receive private transcript context. The current
+conversation is also excluded because its history is already loaded.
+
+This setting does not change session keys, DM scope, routing, delivery, or
+`tools.sessions.visibility`. Shared workspace memory in `MEMORY.md` and
+`memory/*.md` also keeps its existing behavior. The current memory provider
+must support protected private transcript recall; context engines such as
+Lossless Claw remain independent and can run alongside it. See
+[Active Memory](/concepts/active-memory#remember-across-conversations) for setup
+and runtime details.
+
 ## Session lifecycle
 
-Sessions are reused until they expire under `session.reset`:
+Sessions are reused until you reset them manually or opt into an automatic reset policy:
 
-- **Daily reset** (default `mode: "daily"`) - new session at a configured local
+- **No automatic reset** (default `mode: "none"`) - sessions keep the same
+  `sessionId`; compaction manages the active context as the conversation grows.
+- **Daily reset** (`mode: "daily"`) - opt into a new session at a configured local
   hour (`session.reset.atHour`, default `4`, 0-23) on the gateway host. Daily
   freshness is based on when the current `sessionId` started, not on later
   metadata writes.
-- **Idle reset** (`mode: "idle"`) - new session after `session.reset.idleMinutes`
+- **Idle reset** (`mode: "idle"`) - opt into a new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
   interaction, so heartbeat, cron, and exec system events do not keep the
   session alive.
@@ -86,11 +123,11 @@ rolls the session, queued system-event notices for the old session are
 discarded so stale background updates are not prepended to the first prompt in
 the new session.
 
-Sessions with an active provider-owned CLI session are not cut by the implicit
-daily default. Use `/reset` or configure `session.reset` explicitly when those
-sessions should expire on a timer.
+Sessions with an active provider-owned CLI session follow the same no-automatic-reset
+default. Use `/reset` or configure `session.reset` explicitly when those sessions
+should expire on a timer.
 
-Override the default per chat type or per channel:
+Opt into automatic resets globally, then override them per chat type or channel:
 
 ```json5
 {
@@ -107,9 +144,7 @@ Override the default per chat type or per channel:
 }
 ```
 
-`resetByType` supports `direct` (legacy alias `dm`), `group`, and `thread`.
-Legacy top-level `session.idleMinutes` still works as a compatibility alias for
-an idle-mode default when no `session.reset`/`resetByType` block is set.
+`resetByType` supports `direct`, `group`, and `thread`. Doctor migrates legacy `dm` entries to `direct` and `session.idleMinutes` to `session.reset.idleMinutes`; the schema rejects both retired forms.
 
 ## Where state lives
 
@@ -168,6 +203,11 @@ ACP, and sub-agent sessions do not inherit this 24h retention.
 Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
+
+Archived sessions are user-shelved and exempt from every automatic maintenance
+path, including age pruning, entry caps, model-run cleanup, and disk-budget
+eviction. They remain archived until you unarchive them or explicitly delete
+them.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

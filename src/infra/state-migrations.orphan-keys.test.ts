@@ -4,7 +4,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { migrateOrphanedSessionKeys } from "./state-migrations.js";
+import {
+  migrateOrphanedSessionKeys,
+  resolveSessionStoreOwnership,
+} from "./state-migrations.session-store.js";
 
 const listPluginDoctorSessionStoreAgentIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -15,6 +18,17 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
     listPluginDoctorSessionStoreAgentIds: listPluginDoctorSessionStoreAgentIdsMock,
   };
 });
+
+vi.mock(
+  "../channels/plugins/bundled.js",
+  () =>
+    ({
+      listBundledChannelLegacySessionSurfaces: () => [],
+    }) satisfies Pick<
+      typeof import("../channels/plugins/bundled.js"),
+      "listBundledChannelLegacySessionSurfaces"
+    >,
+);
 
 function writeStore(storePath: string, store: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -166,10 +180,79 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(store["agent:voice:metadata"]).toEqual({
         updatedAt: 1500,
         groupActivation: "always",
+        delivery: { kind: "none" },
       });
       expect(store["voice:15550001111"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  it("distinguishes large adjacent inodes before planning store aliases", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
+      const targetStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+      writeStore(configuredStorePath, {});
+      writeStore(targetStorePath, {});
+      const cfg = {
+        session: { store: configuredStorePath },
+        agents: { list: [{ id: "ops", default: true }] },
+      } as OpenClawConfig;
+      const realStatSync = fs.statSync.bind(fs);
+      const largeInodes = new Map([
+        [configuredStorePath, 72057594037932382n],
+        [targetStorePath, 72057594037932383n],
+      ]);
+      const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((
+        candidate: Parameters<typeof fs.statSync>[0],
+        options?: { bigint?: boolean },
+      ) => {
+        const resolvedPath = path.resolve(candidate.toString());
+        const inode = largeInodes.get(resolvedPath);
+        const useBigInt = options?.bigint === true;
+        const stat = useBigInt
+          ? realStatSync(candidate, { bigint: true })
+          : realStatSync(candidate);
+        if (inode === undefined) {
+          return stat;
+        }
+        return new Proxy(stat, {
+          get(target, property, receiver) {
+            if (property === "dev") {
+              return useBigInt ? 2n : 2;
+            }
+            if (property === "ino") {
+              return useBigInt ? inode : Number(inode);
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+      }) as typeof fs.statSync);
+
+      let ownership: ReturnType<typeof resolveSessionStoreOwnership>;
+      try {
+        ownership = resolveSessionStoreOwnership({
+          cfg,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          stateDir,
+          targetAgentId: "voice",
+          pluginSessionStoreAgentIds: ["voice"],
+        });
+        expect(statSpy).toHaveBeenCalledWith(configuredStorePath, { bigint: true });
+        expect(statSpy).toHaveBeenCalledWith(targetStorePath, { bigint: true });
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      expect(ownership).toEqual({
+        preserveAmbiguousKeys: false,
+        preserveForeignMainAliases: false,
+        targetStoreAliases: {
+          hasDistinctAliases: false,
+          hasFinalSymlink: false,
+          hasUnresolvedIdentity: false,
+        },
+      });
     });
   });
 
@@ -601,6 +684,44 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  it.each([
+    {
+      name: "commented JSON5 with trailing commas",
+      raw: `// operator-authored session history\n{\n  'agent:ops:work': { sessionId: 'abc-123', updatedAt: 1000, },\n}\n`,
+    },
+    {
+      name: "an escaped canonical session key",
+      raw: '{"agent:ops:w\\u006frk":{"sessionId":"abc-123","updatedAt":1000}}\n',
+    },
+  ])("preserves the exact bytes of $name", async ({ raw }) => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, raw);
+
+      expect(await migrateFixtureState(stateDir)).toEqual({ changes: [], warnings: [] });
+      expect(fs.readFileSync(storePath, "utf-8")).toBe(raw);
+    });
+  });
+
+  it("canonicalizes an escaped legacy session key using the shared JSON5 parser", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(
+        storePath,
+        '{"agent:main:m\\u0061in":{"sessionId":"escaped-legacy","updatedAt":1000}}\n',
+      );
+
+      const result = await migrateFixtureState(stateDir);
+
+      expect(result.changes).toHaveLength(1);
+      expect(requireStoreEntry(readStore(storePath), "agent:ops:work").sessionId).toBe(
+        "escaped-legacy",
+      );
     });
   });
 

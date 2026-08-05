@@ -7,10 +7,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
+import { readRegularFileSync } from "./regular-file.js";
 
 // Global dotenv loading imports operator-level gateway env files without
 // overriding variables already present in the process environment.
 const logger = createSubsystemLogger("infra:dotenv");
+
+/** Maximum bytes to read from any dotenv file. */
+const MAX_DOTENV_FILE_BYTES = 1024 * 1024;
 
 type DotEnvEntry = {
   key: string;
@@ -36,13 +40,27 @@ export function readDotEnvFile(params: {
 }): LoadedDotEnvFile | null {
   let content: Buffer;
   try {
-    content = fs.readFileSync(params.filePath);
+    // Resolve symlinks so a symlinked .env file works while the bounded
+    // read still rejects oversized targets.
+    const resolved = fs.realpathSync(params.filePath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolved,
+      maxBytes: MAX_DOTENV_FILE_BYTES,
+    });
+    content = buffer;
   } catch (error) {
     if (!params.quiet) {
       const code =
         error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
       if (code !== "ENOENT") {
         logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
+      }
+      // Surface oversized files so operators know a configured file was
+      // skipped rather than leaving them silently ignored.
+      if (error instanceof Error && error.message?.startsWith("File exceeds")) {
+        logger.warn(
+          `skipping oversized .env file (max ${MAX_DOTENV_FILE_BYTES} bytes): ${params.filePath}`,
+        );
       }
     }
     return null;

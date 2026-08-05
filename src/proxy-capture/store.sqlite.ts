@@ -7,7 +7,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
@@ -128,8 +128,7 @@ function openPathBasedDebugProxyCaptureStore(
       fs.closeSync(fs.openSync(fileBackedPath, "a", DEBUG_PROXY_CAPTURE_FILE_MODE));
     }
   }
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath);
+  const db = openNodeSqliteDatabase(dbPath);
   let walMaintenance: SqliteWalMaintenance | undefined;
   try {
     if (fileBackedPath) {
@@ -617,7 +616,9 @@ class DebugProxyCaptureStoreImpl {
       const eventCount =
         (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
           .count ?? 0;
-      this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
+      runSqliteImmediateTransactionSync(this.db, () => {
+        this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
+      });
       let blobs = 0;
       if (fs.existsSync(this.pathBased.blobDir)) {
         for (const entry of fs.readdirSync(this.pathBased.blobDir)) {
@@ -765,12 +766,14 @@ class DebugProxyCaptureStoreImpl {
           )
           .get(...sessionIds) as { count: number }
       ).count ?? 0;
-    this.db
-      .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
-      .run(...sessionIds);
-    this.db
-      .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
-      .run(...sessionIds);
+    runSqliteImmediateTransactionSync(this.db, () => {
+      this.db
+        .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
+        .run(...sessionIds);
+      this.db
+        .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
+        .run(...sessionIds);
+    });
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));

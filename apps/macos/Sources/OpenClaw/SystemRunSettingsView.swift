@@ -75,7 +75,8 @@ struct SystemRunSettingsView: View {
         SettingsCardGroup("Exec Approvals Unavailable") {
             SettingsCardRow(
                 title: "Settings could not be read",
-                subtitle: self.model.readErrorMessage ?? "Retry to load the persisted policy.",
+                subtitle: self.model.readErrorMessage.map(SettingsTextValue.verbatim) ??
+                    "Retry to load the persisted policy.",
                 showsDivider: false)
             {
                 Button("Retry") {
@@ -144,7 +145,7 @@ struct SystemRunSettingsView: View {
             SettingsCardGroup("Policy") {
                 SettingsCardRow(
                     title: "Command access",
-                    subtitle: self.model.security.policyDescription)
+                    subtitle: .localized(self.model.security.policyDescription))
                 {
                     Picker("Command access", selection: Binding(
                         get: { self.model.security },
@@ -161,7 +162,7 @@ struct SystemRunSettingsView: View {
 
                 SettingsCardRow(
                     title: "Prompt behavior",
-                    subtitle: self.model.ask.policyDescription)
+                    subtitle: .localized(self.model.ask.policyDescription))
                 {
                     Picker("Prompt behavior", selection: Binding(
                         get: { self.model.ask },
@@ -472,6 +473,11 @@ extension ExecAsk {
 @MainActor
 @Observable
 final class ExecApprovalsSettingsModel {
+    private enum SettingsReadAttempt {
+        case loaded
+        case failed(ExecApprovalsReadError)
+    }
+
     private static let defaultsScopeId = "__defaults__"
     private static let readUnavailableMessage = "Exec approval settings are unavailable. Retry to refresh."
     @ObservationIgnored private let resolveApprovalsAsync:
@@ -673,11 +679,18 @@ final class ExecApprovalsSettingsModel {
                 }
             }
             guard self.readGeneration == generation, self.selectedAgentId == agentId else { return }
-            if await self.loadSettingsOnceAsync(
+            let attemptResult = await self.loadSettingsOnceAsync(
                 for: agentId,
                 generation: generation)
-            {
+            switch attemptResult {
+            case .loaded:
                 return
+            case let .failed(.migrationRequired(error)):
+                self.policyLoadState = .unavailable(
+                    ExecApprovalsReadError.migrationRequired(error).message)
+                return
+            case .failed(.unavailable):
+                continue
             }
         }
         guard self.readGeneration == generation else { return }
@@ -686,21 +699,33 @@ final class ExecApprovalsSettingsModel {
 
     private func loadSettingsOnceAsync(
         for agentId: String,
-        generation: Int) async -> Bool
+        generation: Int) async -> SettingsReadAttempt
     {
         if agentId == Self.defaultsScopeId {
             let result = await self.resolveDefaultsAsync()
-            guard self.readGeneration == generation, self.selectedAgentId == agentId else { return false }
-            guard case let .success(defaults) = result else { return false }
-            self.apply(defaults: defaults)
-            return true
+            guard self.readGeneration == generation, self.selectedAgentId == agentId else {
+                return .failed(.unavailable)
+            }
+            switch result {
+            case let .success(defaults):
+                self.apply(defaults: defaults)
+                return .loaded
+            case let .failure(error):
+                return .failed(error)
+            }
         }
 
         let result = await self.resolveApprovalsAsync(agentId)
-        guard self.readGeneration == generation, self.selectedAgentId == agentId else { return false }
-        guard case let .success(resolved) = result else { return false }
-        self.apply(resolved: resolved)
-        return true
+        guard self.readGeneration == generation, self.selectedAgentId == agentId else {
+            return .failed(.unavailable)
+        }
+        switch result {
+        case let .success(resolved):
+            self.apply(resolved: resolved)
+            return .loaded
+        case let .failure(error):
+            return .failed(error)
+        }
     }
 
     func setSecurity(_ security: ExecSecurity) {

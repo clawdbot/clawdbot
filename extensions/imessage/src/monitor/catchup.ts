@@ -426,7 +426,7 @@ export async function performIMessageCatchup(
   // failure is held, the persisted cursor must NOT leapfrog it — otherwise
   // the next pass would filter the failed row out via `row.rowid <= sinceRowid`
   // and never retry. Already-successful rows above the held failure get
-  // re-replayed on the next pass and absorbed by the inbound-dedupe cache.
+  // re-replayed on the next pass and rejected by durable ingress tombstones.
   const cursorBeforeMs = cursor?.lastSeenMs ?? windowStartMs;
   const cursorBeforeRowid = cursor?.lastSeenRowid ?? 0;
   let highWatermarkMs = cursorBeforeMs;
@@ -526,8 +526,8 @@ export async function performIMessageCatchup(
   let lastSeenRowid: number;
   if (earliestHeldFailureRow !== null) {
     // Hold cursor strictly below the failed row. Already-successful rows
-    // above it get re-replayed next pass; the inbound-dedupe cache absorbs
-    // the duplicate dispatch.
+    // above it get re-replayed next pass; durable ingress tombstones reject
+    // the duplicate GUID before dispatch.
     lastSeenMs = Math.max(cursorBeforeMs, earliestHeldFailureRow.date - 1);
     lastSeenRowid = Math.max(cursorBeforeRowid, earliestHeldFailureRow.rowid - 1);
   } else {

@@ -15,7 +15,7 @@ function createCoreConfig(): OpenClawConfig {
       },
     },
   };
-  return { messages: { tts } };
+  return { tts };
 }
 
 const passthroughPreparation: TelephonyTtsRuntime["prepareTtsRequest"] = async ({ cfg, text }) => ({
@@ -38,7 +38,7 @@ function createRuntime(
 describe("createTelephonyTtsProvider", () => {
   it("uses shared preparation for the surface override and request text", async () => {
     const effectiveConfig: OpenClawConfig = {
-      messages: { tts: { provider: "openai", timeoutMs: 15_000 } },
+      tts: { provider: "openai", timeoutMs: 15_000 },
     };
     const prepareTtsRequest = vi.fn<TelephonyTtsRuntime["prepareTtsRequest"]>(
       async ({ cfg, override, text }) => ({
@@ -163,7 +163,7 @@ describe("createTelephonyTtsProvider", () => {
 
   it("exposes configured timeoutMs as synthesisTimeoutMs", async () => {
     const provider = await createTelephonyTtsProvider({
-      coreConfig: { messages: { tts: { provider: "openai", timeoutMs: 15000 } } },
+      coreConfig: { tts: { provider: "openai", timeoutMs: 15000 } },
       runtime: createRuntime(async () => ({
         success: true,
         audioBuffer: Buffer.alloc(2),
@@ -177,7 +177,7 @@ describe("createTelephonyTtsProvider", () => {
   it("clamps oversized configured timeoutMs", async () => {
     const provider = await createTelephonyTtsProvider({
       coreConfig: {
-        messages: { tts: { provider: "openai", timeoutMs: Number.MAX_SAFE_INTEGER } },
+        tts: { provider: "openai", timeoutMs: Number.MAX_SAFE_INTEGER },
       },
       runtime: createRuntime(async () => ({
         success: true,

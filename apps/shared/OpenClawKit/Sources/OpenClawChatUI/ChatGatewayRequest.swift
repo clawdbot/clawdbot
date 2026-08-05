@@ -80,6 +80,72 @@ public enum OpenClawChatGatewayRequests {
         OpenClawChatGatewayRequest(method: "models.list", timeoutMs: self.defaultTimeoutMs)
     }
 
+    public static func artifactDownload(
+        sessionKey: String,
+        agentID: String?,
+        artifactId: String) -> OpenClawChatGatewayRequest
+    {
+        var params: [String: AnyCodable] = [
+            "sessionKey": AnyCodable(sessionKey),
+            "artifactId": AnyCodable(artifactId),
+        ]
+        self.add(agentID, to: &params, key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "artifacts.download",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func chatMetadata(
+        sessionKey: String,
+        fallbackAgentID: String?) -> OpenClawChatGatewayRequest
+    {
+        var params: [String: AnyCodable] = [:]
+        self.add(
+            OpenClawChatSessionKey.agentID(from: sessionKey) ?? fallbackAgentID,
+            to: &params,
+            key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "chat.metadata",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func questionList() -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(method: "question.list", timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func questionGet(id: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "question.get",
+            params: ["id": AnyCodable(id)],
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func resolveQuestion(
+        id: String,
+        answers: [String: [String]]) -> OpenClawChatGatewayRequest
+    {
+        let values = answers.mapValues(AnyCodable.init)
+        return OpenClawChatGatewayRequest(
+            method: "question.resolve",
+            params: [
+                "id": AnyCodable(id),
+                "answers": AnyCodable(values),
+            ],
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func cancelQuestion(id: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "question.resolve",
+            params: [
+                "id": AnyCodable(id),
+                "cancel": AnyCodable(true),
+            ],
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
     public static func sessionsList(
         limit: Int?,
         search: String?,
@@ -87,6 +153,9 @@ public enum OpenClawChatGatewayRequests {
         includeGlobal: Bool = true,
         includeUnknown: Bool = false,
         activeMinutes: Int? = nil,
+        spawnedBy: String? = nil,
+        offset: Int? = nil,
+        configuredAgentsOnly: Bool? = nil,
         timeoutMs: Double = 15000) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
@@ -98,6 +167,15 @@ public enum OpenClawChatGatewayRequests {
         }
         if let activeMinutes {
             params["activeMinutes"] = AnyCodable(activeMinutes)
+        }
+        if let spawnedBy = normalized(spawnedBy) {
+            params["spawnedBy"] = AnyCodable(spawnedBy)
+        }
+        if let offset {
+            params["offset"] = AnyCodable(offset)
+        }
+        if let configuredAgentsOnly {
+            params["configuredAgentsOnly"] = AnyCodable(configuredAgentsOnly)
         }
         let normalizedSearch = self.normalized(search)
         if let normalizedSearch {
@@ -112,12 +190,46 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: timeoutMs)
     }
 
+    public static func sessionGroupsList() -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.groups.list",
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func sessionGroupsPut(names: [String]) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.groups.put",
+            params: ["names": AnyCodable(names)],
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func sessionGroupsRename(
+        name: String,
+        to: String) -> OpenClawChatGatewayRequest
+    {
+        OpenClawChatGatewayRequest(
+            method: "sessions.groups.rename",
+            params: [
+                "name": AnyCodable(name),
+                "to": AnyCodable(to),
+            ],
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func sessionGroupsDelete(name: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.groups.delete",
+            params: ["name": AnyCodable(name)],
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
     public static func createSession(
         key: String,
         agentID: String?,
         label: String?,
         parentSessionKey: String?,
-        worktree: Bool?) -> OpenClawChatGatewayRequest
+        worktree: Bool?,
+        worktreeBaseRef: String? = nil) -> OpenClawChatGatewayRequest
     {
         var params = ["key": AnyCodable(key)]
         self.add(agentID, to: &params, key: "agentId")
@@ -126,6 +238,7 @@ public enum OpenClawChatGatewayRequests {
         if let worktree {
             params["worktree"] = AnyCodable(worktree)
         }
+        self.add(worktreeBaseRef, to: &params, key: "worktreeBaseRef")
         return OpenClawChatGatewayRequest(
             method: "sessions.create",
             params: params,
@@ -153,12 +266,14 @@ public enum OpenClawChatGatewayRequests {
         sessionKey: String,
         agentID: String?,
         thinkingLevel: String?? = nil,
+        fastMode: OpenClawChatFastMode?? = nil,
         verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
     {
         self.patchSessionSettings(
             sessionKey: sessionKey,
             agentID: agentID,
             thinkingLevel: thinkingLevel,
+            fastMode: fastMode,
             verboseLevel: verboseLevel)
     }
 
@@ -167,6 +282,7 @@ public enum OpenClawChatGatewayRequests {
         agentID: String?,
         model: String?? = nil,
         thinkingLevel: String?? = nil,
+        fastMode: OpenClawChatFastMode?? = nil,
         verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
@@ -176,6 +292,9 @@ public enum OpenClawChatGatewayRequests {
         if let thinkingLevel {
             params["thinkingLevel"] = thinkingLevel.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
+        if let fastMode {
+            params["fastMode"] = fastMode.map(self.fastModeValue) ?? AnyCodable(NSNull())
+        }
         if let verboseLevel {
             params["verboseLevel"] = verboseLevel.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
@@ -183,6 +302,14 @@ public enum OpenClawChatGatewayRequests {
             method: "sessions.patch",
             params: params,
             timeoutMs: self.mutationTimeoutMs)
+    }
+
+    private static func fastModeValue(_ mode: OpenClawChatFastMode) -> AnyCodable {
+        switch mode {
+        case .off: AnyCodable(false)
+        case .on: AnyCodable(true)
+        case .automatic: AnyCodable("auto")
+        }
     }
 
     public static func patchSession(
@@ -241,6 +368,84 @@ public enum OpenClawChatGatewayRequests {
             method: "sessions.create",
             params: params,
             timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func rewindSession(
+        sessionKey: String,
+        agentID: String?,
+        entryId: String) -> OpenClawChatGatewayRequest
+    {
+        var params = self.sessionParams(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            key: "sessionKey")
+        self.add(entryId, to: &params, key: "entryId")
+        return OpenClawChatGatewayRequest(
+            method: "sessions.rewind",
+            params: params,
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func forkAtMessage(
+        sessionKey: String,
+        agentID: String?,
+        entryId: String) -> OpenClawChatGatewayRequest
+    {
+        var params = self.sessionParams(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            key: "sessionKey")
+        self.add(entryId, to: &params, key: "entryId")
+        return OpenClawChatGatewayRequest(
+            method: "sessions.fork",
+            params: params,
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) -> OpenClawChatGatewayRequest
+    {
+        let params = self.sessionParams(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            key: "sessionKey")
+        return OpenClawChatGatewayRequest(
+            method: "sessions.branches.list",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func switchSessionBranch(
+        sessionKey: String,
+        agentID: String?,
+        leafEntryId: String) -> OpenClawChatGatewayRequest
+    {
+        var params = self.sessionParams(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            key: "sessionKey")
+        self.add(leafEntryId, to: &params, key: "leafEntryId")
+        return OpenClawChatGatewayRequest(
+            method: "sessions.branches.switch",
+            params: params,
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func subscribeSessions(timeoutMs: Double = 10000) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.subscribe",
+            timeoutMs: timeoutMs)
+    }
+
+    public static func setSessionObserverVisibility(
+        _ visible: Bool,
+        timeoutMs: Double = 10000) -> OpenClawChatGatewayRequest
+    {
+        OpenClawChatGatewayRequest(
+            method: "sessions.observer.visibility",
+            params: ["visible": AnyCodable(visible)],
+            timeoutMs: timeoutMs)
     }
 
     public static func subscribeSessionMessages(
@@ -381,9 +586,10 @@ public enum OpenClawChatGatewayRequests {
 
     private static func sessionParams(
         sessionKey: String,
-        agentID: String?) -> [String: AnyCodable]
+        agentID: String?,
+        key: String = "key") -> [String: AnyCodable]
     {
-        var params = ["key": AnyCodable(sessionKey)]
+        var params = [key: AnyCodable(sessionKey)]
         self.add(agentID, to: &params, key: "agentId")
         return params
     }

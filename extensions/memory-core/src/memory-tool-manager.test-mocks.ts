@@ -1,4 +1,5 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { vi } from "vitest";
@@ -8,9 +9,11 @@ type SearchImpl = (opts?: {
   maxResults?: number;
   minScore?: number;
   sessionKey?: string;
+  activeProjectKeys?: string[];
   qmdSearchModeOverride?: "query" | "search" | "vsearch";
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
   signal?: AbortSignal;
+  sources?: MemorySource[];
   [key: symbol]: ((action: "pause" | "resume" | "handoff") => void) | undefined;
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
@@ -35,6 +38,7 @@ type MemoryManagerParams = {
 let backend: MemoryBackend = "builtin";
 let resolvedBackend: MemoryBackend | undefined;
 let workspaceDir = "/workspace";
+let statusDirty = false;
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
 let closeImpl: () => Promise<void> = async () => {};
@@ -59,7 +63,7 @@ const stubManager = {
     backend,
     files: 1,
     chunks: 1,
-    dirty: false,
+    dirty: statusDirty,
     workspaceDir,
     dbPath: "/workspace/.memory/index.sqlite",
     provider: "builtin",
@@ -110,6 +114,10 @@ export function setMemoryCustomStatus(next: Record<string, unknown> | undefined)
   customStatus = next;
 }
 
+export function setMemoryStatusDirty(next: boolean): void {
+  statusDirty = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -142,6 +150,7 @@ export function resetMemoryToolMockState(overrides?: {
   backend = overrides?.backend ?? "builtin";
   resolvedBackend = undefined;
   workspaceDir = "/workspace";
+  statusDirty = false;
   customStatus = undefined;
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);

@@ -143,7 +143,7 @@ Disable with:
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). `channels.defaults.groupPolicy` can override the shared default when `channels.msteams.groupPolicy` is unset.
-- `channels.msteams.groupAllowFrom` controls which senders or static sender access groups can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
+- `channels.msteams.groupAllowFrom` controls which senders, static sender access groups, or group/channel conversation IDs can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`). Conversation IDs can use `19:...@thread.tacv2`, `19:...@thread.v2`, or `19:...@thread.skype`; preserve the exact ID casing. OpenClaw ignores `;messageid=...` suffixes. Conversation IDs never grant personal-DM access.
 - Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To block **all** channels, set `channels.msteams.groupPolicy: "disabled"`.
 
@@ -647,12 +647,13 @@ This applies to channels and group chats only. It adds one Graph message lookup 
 
 ### Webhook timeouts
 
-Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server timeouts to that webhook listener: 30s inactivity, 30s total request, 15s to receive headers. Optional inbound media and context enrichment has a shared 10-second budget, but the Teams SDK still waits for the agent turn before returning the webhook response. If the full turn exceeds Teams' retry window, you may see:
-
-- Teams retrying the message (causing duplicates).
-- Dropped replies.
-
-Replies are sent proactively once the agent responds, but slow agent runs can still surface retries or duplicates on the Teams side.
+Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server
+timeouts to that webhook listener: 30s inactivity, 30s total request, and 15s
+to receive headers. Optional inbound media and context enrichment has a shared
+10-second budget. The SDK returns after the raw activity is durably appended;
+the agent turn drains independently and replies proactively. If request
+handling or durable admission misses the transport window, Teams may retry the
+activity, and the ingress tombstone rejects a repeated event ID.
 
 ### Teams cloud and service URL support
 

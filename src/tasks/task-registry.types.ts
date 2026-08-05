@@ -27,6 +27,7 @@ export type TaskDeliveryStatus =
   | "delivered"
   | "session_queued"
   | "failed"
+  | "dismissed"
   | "parent_missing"
   | "not_applicable";
 
@@ -54,6 +55,7 @@ const TASK_DELIVERY_STATUSES = new Set<TaskDeliveryStatus>([
   "delivered",
   "session_queued",
   "failed",
+  "dismissed",
   "parent_missing",
   "not_applicable",
 ]);

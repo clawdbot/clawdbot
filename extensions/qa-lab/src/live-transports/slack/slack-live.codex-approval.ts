@@ -12,7 +12,7 @@ import {
   type SlackQaCodexApprovalMethod,
   type SlackQaCodexApprovalScenarioRun,
   type SlackQaScenarioContext,
-  type SlackQaScenarioDefinition,
+  type SlackQaScenarioMetadata,
 } from "./slack-live.contracts.js";
 
 export function resolveCodexFileApprovalTargetPath(token: string) {
@@ -224,7 +224,7 @@ export async function startCodexApprovalAgentRun(params: {
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   runId: string;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sessionKey: string;
   sutAccountId: string;
 }) {
@@ -258,7 +258,7 @@ export async function startCodexApprovalAgentRun(params: {
 }
 
 export function buildCodexApprovalSessionKey(params: {
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   token: string;
 }) {
   return `agent:qa:${params.scenario.id}-${params.token.toLowerCase()}`;

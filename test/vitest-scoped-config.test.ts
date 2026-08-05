@@ -9,7 +9,7 @@ import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-conf
 import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
-import { agentsCoreIsolatedTestFiles } from "./vitest/vitest.agents-paths.mjs";
+import { agentVitestProjectOwners } from "./vitest/vitest.agents-paths.mjs";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
 import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
@@ -17,6 +17,8 @@ import { createAutoReplyTopLevelVitestConfig } from "./vitest/vitest.auto-reply-
 import { createAutoReplyVitestConfig } from "./vitest/vitest.auto-reply.config.ts";
 import bundledVitestConfig from "./vitest/vitest.bundled.config.ts";
 import { createChannelsVitestConfig } from "./vitest/vitest.channels.config.ts";
+import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
+import { createCliProcessVitestConfig } from "./vitest/vitest.cli-process.config.ts";
 import { createCliVitestConfig } from "./vitest/vitest.cli.config.ts";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
@@ -245,13 +247,13 @@ describe("createScopedVitestConfig", () => {
 
   it("keeps broad package scoped cli directory filters aligned with repo-root include patterns", () => {
     const config = createScopedVitestConfig(["packages/**/*.test.ts"], {
-      argv: ["vitest", "run", "packages/speech-core"],
+      argv: ["vitest", "run", "packages/normalization-core"],
       dir: "packages",
       env: {},
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["speech-core/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["normalization-core/**/*.test.*"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {
@@ -521,6 +523,7 @@ describe("createScopedVitestConfig", () => {
 describe("scoped vitest configs", () => {
   const defaultChannelsConfig = createChannelsVitestConfig({});
   const defaultAcpConfig = createAcpVitestConfig({});
+  const defaultCliProcessConfig = createCliProcessVitestConfig({});
   const defaultCliConfig = createCliVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultExtensionAcpxConfig = createExtensionAcpxVitestConfig({});
@@ -611,6 +614,22 @@ describe("scoped vitest configs", () => {
     expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
     expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
     expectForkedIsolatedRunner(defaultInfraConfig);
+    expectForkedIsolatedRunner(defaultCliProcessConfig);
+  });
+
+  it("keeps process-launching CLI files out of the shared CLI graph", () => {
+    expect(requireTestConfig(defaultCliConfig).exclude).toEqual(
+      expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
+    );
+    expect(requireTestConfig(defaultCliProcessConfig).include).toEqual(cliProcessTestFiles);
+    expect(requireTestConfig(defaultCliProcessConfig).fileParallelism).toBe(false);
+    expect(requireTestConfig(defaultCliProcessConfig).env).toMatchObject({
+      ESBUILD_WORKER_THREADS: "0",
+    });
+  });
+
+  it("keeps native SQLite runtime config tests in forked workers", () => {
+    expectForkedNonIsolatedRunner(defaultRuntimeConfig);
   });
 
   it("keeps process, runtime config, and tooling lanes off the openclaw runtime setup", () => {
@@ -647,7 +666,7 @@ describe("scoped vitest configs", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
 
-    const scopedIsolatedFiles = agentsCoreIsolatedTestFiles.map((file) =>
+    const scopedIsolatedFiles = agentVitestProjectOwners.coreIsolated.include.map((file) =>
       file.replace("src/agents/", ""),
     );
     expect(sharedConfig.exclude).toEqual(expect.arrayContaining(scopedIsolatedFiles));
@@ -714,8 +733,8 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
-  it("serializes Telegram extension files that share process globals", () => {
-    expectThreadedNonIsolatedRunner(defaultExtensionTelegramConfig);
+  it("serializes and isolates Telegram extension files with conflicting mocks", () => {
+    expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
     expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
   });
 
@@ -737,29 +756,25 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("normalizes acpx extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionAcpxConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["acpx/**/*.test.ts"]);
-  });
-
-  it("normalizes diffs extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionDiffsConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["diffs/**/*.test.ts"]);
-  });
-
-  it("normalizes feishu extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionFeishuConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["feishu/**/*.test.ts"]);
-  });
-
-  it("normalizes irc extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionIrcConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["irc/**/*.test.ts"]);
-  });
+  it.each([
+    ["acpx", defaultExtensionAcpxConfig],
+    ["diffs", defaultExtensionDiffsConfig],
+    ["feishu", defaultExtensionFeishuConfig],
+    ["irc", defaultExtensionIrcConfig],
+    ["matrix", defaultExtensionMatrixConfig],
+    ["mattermost", defaultExtensionMattermostConfig],
+    ["msteams", defaultExtensionMsTeamsConfig],
+    ["telegram", defaultExtensionTelegramConfig],
+    ["voice-call", defaultExtensionVoiceCallConfig],
+    ["whatsapp", defaultExtensionWhatsAppConfig],
+  ] as const)(
+    "normalizes %s extension include patterns relative to the scoped dir",
+    (name, config) => {
+      const testConfig = requireTestConfig(config);
+      expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+      expect(testConfig.include).toEqual([`${name}/**/*.test.ts`]);
+    },
+  );
 
   it("normalizes extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionsConfig);
@@ -821,46 +836,10 @@ describe("scoped vitest configs", () => {
     ]);
   });
 
-  it("normalizes matrix extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionMatrixConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["matrix/**/*.test.ts"]);
-  });
-
-  it("normalizes mattermost extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionMattermostConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["mattermost/**/*.test.ts"]);
-  });
-
-  it("normalizes msteams extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionMsTeamsConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["msteams/**/*.test.ts"]);
-  });
-
-  it("normalizes telegram extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionTelegramConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["telegram/**/*.test.ts"]);
-  });
-
-  it("normalizes whatsapp extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionWhatsAppConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["whatsapp/**/*.test.ts"]);
-  });
-
   it("normalizes zalo extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionZaloConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
     expect(testConfig.include).toEqual(["zalo/**/*.test.ts", "zalouser/**/*.test.ts"]);
-  });
-
-  it("normalizes voice-call extension include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultExtensionVoiceCallConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["voice-call/**/*.test.ts"]);
   });
 
   it("normalizes memory extension include patterns relative to the scoped dir", () => {

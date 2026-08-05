@@ -2,7 +2,6 @@
 import type { IncomingMessage } from "node:http";
 import {
   GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
@@ -30,6 +29,7 @@ import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin
 import { parseGatewayRole } from "../../role-policy.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
+import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
 
 export function resolveTrustedProxyControlUiScopes(params: {
@@ -187,11 +187,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const isControlUi = isOperatorUiClient(connectParams.client) && !isBrowserCopilot;
   const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
   const isWebchat = isWebchatConnect(connectParams);
-  const isNativeAppUi =
-    connectParams.client.mode === GATEWAY_CLIENT_MODES.UI &&
-    (connectParams.client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
-      connectParams.client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
-      connectParams.client.id === GATEWAY_CLIENT_IDS.ANDROID_APP);
+  const isNativeAppUi = isNativeAppUiClient(connectParams.client);
   // Extension origins cannot match the gateway host. Admission validates their
   // canonical shape; device approval binds the exact origin before token issue.
   const hasCopilotExtensionOrigin = Boolean(browserCopilotOrigin);

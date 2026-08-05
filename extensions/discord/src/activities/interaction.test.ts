@@ -67,20 +67,18 @@ describe("Discord Activity interaction", () => {
     });
   });
 
-  it("launches for an authorized component click", async () => {
+  it("launches for a channel member outside the agent allowlist", async () => {
     const runtime = createActivityTestRuntime();
     setDiscordActivitiesRuntime(runtime);
-    const authorize = vi.fn(async () => ({ commandAuthorized: true }));
     const reply = vi.fn(async () => undefined);
     const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
-      authorize: authorize as never,
       reply: reply as never,
     });
     const launchActivity = vi.fn(async () => undefined);
     const interaction = {
       launchActivity,
       rawData: { channel_id: "777" },
-      userId: "42",
+      userId: "99",
     } as unknown as ButtonInteraction;
     const rendered = buildDiscordPresentationComponents({
       blocks: [
@@ -102,10 +100,9 @@ describe("Discord Activity interaction", () => {
 
     await button?.run(interaction, data);
 
-    expect(authorize).toHaveBeenCalledOnce();
     expect(launchActivity).toHaveBeenCalledOnce();
     expect(reply).not.toHaveBeenCalled();
-    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
+    await expect(runtime.store.consumePendingLaunch("default", "777", "99")).resolves.toMatchObject(
       { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
     );
   });
@@ -115,7 +112,6 @@ describe("Discord Activity interaction", () => {
     setDiscordActivitiesRuntime(runtime);
     const recordPendingLaunch = vi.spyOn(runtime.store, "recordPendingLaunch");
     const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
-      authorize: vi.fn(async () => ({ commandAuthorized: true })) as never,
       reply: vi.fn(async () => undefined) as never,
     });
     if (!button) {
@@ -143,14 +139,69 @@ describe("Discord Activity interaction", () => {
     expect(writeOrder).toBeLessThan(launchOrder);
   });
 
+  it("clears the exact watchdog handle when the pending launch write wins", async () => {
+    const runtime = createActivityTestRuntime();
+    setDiscordActivitiesRuntime(runtime);
+    const nativeSetTimeout = globalThis.setTimeout;
+    let watchdogHandle: ReturnType<typeof setTimeout> | undefined;
+    let watchdogFired = false;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      delay?: number,
+      ...args: unknown[]
+    ): ReturnType<typeof setTimeout> => {
+      const handle = nativeSetTimeout(() => {
+        if (delay === 250) {
+          watchdogFired = true;
+        }
+        callback(...args);
+      }, delay);
+      if (delay === 250) {
+        watchdogHandle = handle;
+      }
+      return handle;
+    }) as typeof setTimeout);
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
+      reply: vi.fn(async () => undefined) as never,
+    });
+    if (!button) {
+      throw new Error("expected activity button");
+    }
+    const launchActivity = vi.fn(async () => undefined);
+    const interaction = {
+      launchActivity,
+      rawData: { channel_id: "777" },
+      userId: "42",
+    } as unknown as ButtonInteraction;
+
+    try {
+      await button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+
+      expect(watchdogHandle).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(watchdogHandle);
+      await new Promise<void>((resolve) => {
+        nativeSetTimeout(resolve, 275);
+      });
+      expect(watchdogFired).toBe(false);
+      expect(launchActivity).toHaveBeenCalledOnce();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
   it("launches after the write budget when the store stalls and logs once", async () => {
     const runtime = createActivityTestRuntime();
     setDiscordActivitiesRuntime(runtime);
     const pendingWrite = createDeferred<void>();
-    vi.spyOn(runtime.store, "recordPendingLaunch").mockReturnValue(pendingWrite.promise);
+    let backgroundSettled = false;
+    const stalledWrite = pendingWrite.promise.then(() => {
+      backgroundSettled = true;
+    });
+    vi.spyOn(runtime.store, "recordPendingLaunch").mockReturnValue(stalledWrite);
     const logError = vi.fn();
     const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
-      authorize: vi.fn(async () => ({ commandAuthorized: true })) as never,
       reply: vi.fn(async () => undefined) as never,
       logError,
     });
@@ -163,14 +214,21 @@ describe("Discord Activity interaction", () => {
       rawData: { channel_id: "777" },
       userId: "42",
     } as unknown as ButtonInteraction;
+    const startedAt = performance.now();
     try {
       await button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+      const elapsedMs = performance.now() - startedAt;
       expect(launchActivity).toHaveBeenCalledOnce();
       expect(logError).toHaveBeenCalledTimes(1);
       expect(String(logError.mock.calls[0]?.[0])).toContain("exceeded");
+      expect(elapsedMs).toBeGreaterThanOrEqual(240);
+      expect(backgroundSettled).toBe(false);
     } finally {
       pendingWrite.resolve();
+      await stalledWrite;
     }
+    expect(backgroundSettled).toBe(true);
+    expect(logError).toHaveBeenCalledTimes(1);
   });
 
   it("still launches when recording the pending launch fails and logs once", async () => {
@@ -181,7 +239,6 @@ describe("Discord Activity interaction", () => {
       .mockRejectedValue(new Error("store offline"));
     const logError = vi.fn();
     const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
-      authorize: vi.fn(async () => ({ commandAuthorized: true })) as never,
       reply: vi.fn(async () => undefined) as never,
       logError,
     });
@@ -200,19 +257,21 @@ describe("Discord Activity interaction", () => {
     await vi.waitFor(() => expect(logError).toHaveBeenCalledOnce());
   });
 
-  it("replies ephemerally and does not launch when unauthorized", async () => {
+  it("replies ephemerally and does not launch for invalid widget data", async () => {
     setDiscordActivitiesRuntime(createActivityTestRuntime());
     const reply = vi.fn(async () => undefined);
     const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
-      authorize: vi.fn(async () => ({ commandAuthorized: false })) as never,
       reply: reply as never,
     });
     const launchActivity = vi.fn(async () => undefined);
     const interaction = { launchActivity } as unknown as ButtonInteraction;
 
-    await button?.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+    await button?.run(interaction, {});
 
-    expect(reply).toHaveBeenCalledWith(interaction, { content: "not allowed", ephemeral: true });
+    expect(reply).toHaveBeenCalledWith(interaction, {
+      content: "This widget is no longer valid.",
+      ephemeral: true,
+    });
     expect(launchActivity).not.toHaveBeenCalled();
   });
 });

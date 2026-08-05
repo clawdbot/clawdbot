@@ -9,8 +9,9 @@ import {
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import { deliveryContextFromSession, type DeliveryContext } from "../../utils/delivery-context.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
+import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
 import type { AcpSessionManagerDeps } from "./manager.types.js";
 import { normalizeText } from "./runtime-options.js";
 
@@ -55,7 +56,7 @@ export function appendBackgroundTaskProgressSummary(current: string, chunk: stri
 
 /** Maps ACP runtime failures to detached-task terminal states. */
 export function resolveBackgroundTaskFailureStatus(error: AcpRuntimeError): "failed" | "timed_out" {
-  return /\btimed out\b/i.test(error.message) ? "timed_out" : "failed";
+  return error.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timed_out" : "failed";
 }
 
 /** Infers blocked terminal outcomes from final progress text when the child turn reports one. */
@@ -117,7 +118,8 @@ export function resolveBackgroundTaskContext(params: {
   })?.entry;
   return {
     requesterSessionKey,
-    requesterOrigin: parentEntry?.deliveryContext ?? childEntry?.deliveryContext,
+    requesterOrigin:
+      deliveryContextFromSession(parentEntry) ?? deliveryContextFromSession(childEntry),
     childSessionKey: params.sessionKey,
     runId: params.requestId,
     label: normalizeText(childEntry?.label),

@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { HealthSummary } from "../commands/health.types.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
@@ -20,6 +19,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
+import type { HealthSummary } from "./health/types.js";
 
 vi.mock("../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: vi.fn(async () => ({
@@ -339,9 +339,12 @@ async function respondToInvoke(
 }
 
 function createDeviceIdentityForTest(prefix: string) {
-  return loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`),
-  );
+  return loadOrCreateDeviceIdentity({
+    path: path.join(
+      os.tmpdir(),
+      `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
+    ),
+  });
 }
 
 describe("gateway role enforcement", () => {
@@ -486,17 +489,20 @@ describe("gateway node command allowlist", () => {
     const invokeCapture = createInvokeCapture();
 
     try {
-      const systemDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-system-run-${Date.now()}-${Math.random()}.json`),
-      );
-      const emptyDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.json`),
-      );
-      const allowedDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.json`),
-      );
+      const systemDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(
+          os.tmpdir(),
+          `openclaw-node-system-run-${Date.now()}-${Math.random()}.sqlite`,
+        ),
+      });
+      const emptyDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.sqlite`),
+      });
+      const allowedDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.sqlite`),
+      });
 
-      systemClient = await connectNodeClientWithPairing({
+      systemClient = await connectNodeClientWithNodePairing({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
@@ -515,7 +521,7 @@ describe("gateway node command allowlist", () => {
       await systemClient.stopAndWait();
       await waitForConnectedCount(0);
 
-      emptyClient = await connectNodeClientWithPairing({
+      emptyClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-empty",
@@ -605,7 +611,9 @@ describe("gateway node command allowlist", () => {
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
-      await expectCanvasSnapshotDenied(nodeId, "pending-node-canvas");
+      const denied = await invokeCanvasSnapshot(nodeId, "pending-node-canvas");
+      expect(denied.ok).toBe(false);
+      expect(denied.error?.details).toMatchObject({ code: "PAIRING_CHANGED" });
     } finally {
       await nodeClient?.stopAndWait();
     }
@@ -672,7 +680,11 @@ describe("gateway node command allowlist", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify({ gateway: { nodes: { denyCommands: ["canvas.snapshot"] } } }, null, 2),
+        JSON.stringify(
+          { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
+          null,
+          2,
+        ),
       );
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);

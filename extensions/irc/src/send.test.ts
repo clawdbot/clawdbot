@@ -10,11 +10,13 @@ const hoisted = vi.hoisted(() => {
   const loadConfig = vi.fn();
   const resolveMarkdownTableMode = vi.fn(() => "preserve");
   const convertMarkdownTables = vi.fn((text: string) => text);
+  const stripMarkdown = vi.fn((text: string) => text);
   const record = vi.fn();
   return {
     loadConfig,
     resolveMarkdownTableMode,
     convertMarkdownTables,
+    stripMarkdown,
     record,
     normalizeIrcMessagingTarget: vi.fn((value: string) => value.trim()),
     connectIrcClient: vi.fn(),
@@ -47,6 +49,14 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
     string,
     unknown
   >;
+  return original;
+});
+
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/markdown-table-runtime")) as Record<
+    string,
+    unknown
+  >;
   return {
     ...original,
     resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
@@ -61,6 +71,7 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async () => {
   return {
     ...original,
     convertMarkdownTables: hoisted.convertMarkdownTables,
+    stripMarkdown: hoisted.stripMarkdown,
   };
 });
 
@@ -71,6 +82,7 @@ function resetHoistedMocks() {
   hoisted.loadConfig.mockReset();
   hoisted.resolveMarkdownTableMode.mockReset().mockReturnValue("preserve");
   hoisted.convertMarkdownTables.mockReset().mockImplementation((text: string) => text);
+  hoisted.stripMarkdown.mockReset().mockImplementation((text: string) => text);
   hoisted.record.mockReset();
   hoisted.normalizeIrcMessagingTarget
     .mockReset()
@@ -85,6 +97,7 @@ afterAll(() => {
   vi.doUnmock("./connect-options.js");
   vi.doUnmock("./protocol.js");
   vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
   vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.resetModules();
 });
@@ -157,6 +170,39 @@ describe("sendMessageIrc cfg threading", () => {
         },
       ],
     });
+  });
+
+  it("strips markdown after table conversion before sending to IRC", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    const client = {
+      isReady: vi.fn(() => true),
+      sendPrivmsg: vi.fn(),
+    } as unknown as IrcClient;
+    hoisted.resolveMarkdownTableMode.mockReturnValue("bullets");
+    hoisted.convertMarkdownTables.mockReturnValue("**Status**\n- [docs](https://example.com)");
+    hoisted.stripMarkdown.mockReturnValue("Status\n- docs (https://example.com)");
+
+    await sendMessageIrc("#room", "  | a |\n| - |\n| **docs** |  ", {
+      cfg: providedCfg,
+      client,
+    });
+
+    expect(hoisted.convertMarkdownTables).toHaveBeenCalledWith(
+      "| a |\n| - |\n| **docs** |",
+      "bullets",
+    );
+    expect(hoisted.stripMarkdown).toHaveBeenCalledWith("**Status**\n- [docs](https://example.com)");
+    expect(client.sendPrivmsg).toHaveBeenCalledWith(
+      "#room",
+      "Status\n- docs (https://example.com)",
+    );
   });
 
   it("fails hard when cfg is omitted", async () => {
@@ -252,6 +298,33 @@ describe("sendMessageIrc cfg threading", () => {
         },
       ],
     });
+  });
+
+  it("rejects stripped-empty replies before adding reply metadata", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    const client = {
+      isReady: vi.fn(() => true),
+      sendPrivmsg: vi.fn(),
+    } as unknown as IrcClient;
+    hoisted.stripMarkdown.mockReturnValue("");
+
+    await expect(
+      sendMessageIrc("#room", "#", {
+        cfg: providedCfg,
+        client,
+        replyTo: "irc-parent-1",
+      }),
+    ).rejects.toThrow("Message must be non-empty for IRC sends");
+
+    expect(client.sendPrivmsg).not.toHaveBeenCalled();
+    expect(hoisted.record).not.toHaveBeenCalled();
   });
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {

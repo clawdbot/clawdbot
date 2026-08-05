@@ -4,9 +4,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.media-rich-content
+      - matrix.encrypted-media-upload-download
   execution:
-    profiles: { "matrix:all": 57, "matrix:media": 6 }
     kind: flow
     channel: matrix
     timeoutMs: 180000

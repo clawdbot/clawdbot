@@ -13,7 +13,6 @@ type ResolvedDiscordActivityAccount = {
   applicationId: string;
   botAuth: string;
   clientSecret: string;
-  config: ReturnType<typeof resolveDiscordAccount>["config"];
   proxyFetch?: typeof fetch;
 };
 
@@ -64,7 +63,6 @@ export class DiscordActivitiesRuntime {
       applicationId,
       botAuth: bot,
       clientSecret,
-      config: account.config,
       proxyFetch: resolveDiscordProxyFetchForAccount(account, cfg),
     };
   }

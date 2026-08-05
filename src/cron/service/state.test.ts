@@ -65,6 +65,7 @@ describe("cron service state seam coverage", () => {
     });
 
     expect(state.deps.nowMs()).toBe(789_000);
+    expect(state.deps.defaultAgentId).toBe("main");
 
     nowSpy.mockRestore();
   });

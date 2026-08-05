@@ -4,12 +4,13 @@ import { describe, expect, it } from "vitest";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
 describe("collectZalouserStatusIssues", () => {
-  it("flags missing auth when configured is false", () => {
+  it("flags missing auth when a configured profile is not linked", () => {
     const issues = collectZalouserStatusIssues([
       {
         accountId: "default",
         enabled: true,
-        configured: false,
+        configured: true,
+        linked: false,
         lastError: "not authenticated",
       },
     ]);

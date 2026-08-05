@@ -121,8 +121,6 @@ type HostedMediaOptions = {
 type HostedMediaSuiteDefinition = {
   codeRefs: string[];
   docsRefs: string[];
-  primaryCoverageIds: string[];
-  secondaryCoverageIds?: string[];
   scenarioId: string;
   title: string;
   videoFullModes?: boolean;
@@ -139,7 +137,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   image: {
     scenarioId: "hosted-image-generation-providers-live",
     title: "Hosted image generation providers live",
-    primaryCoverageIds: ["hosted-providers.image-generation-providers"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/image-generation.md",
@@ -154,11 +151,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   video: {
     scenarioId: "hosted-video-generation-providers-live",
     title: "Hosted video generation providers live",
-    primaryCoverageIds: [
-      "hosted-providers.video-generation-providers",
-      "media.reference-image-video-and-audio-inputs",
-    ],
-    secondaryCoverageIds: ["media.video-generation-tool-invocation"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/video-generation.md",
@@ -414,7 +406,7 @@ async function selectProviders(params: {
   const candidates = explicit
     ? params.suite.providers
     : (params.suite.defaultProviders ?? params.suite.providers);
-  let providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
+  const providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
   if (!params.requireAuth) {
     return providers;
   }
@@ -728,8 +720,6 @@ function createHostedMediaEvidenceWriter(options: HostedMediaOptions) {
       id: definition.scenarioId,
       title: definition.title,
       sourcePath: SOURCE_PATH,
-      primaryCoverageIds: definition.primaryCoverageIds,
-      secondaryCoverageIds: definition.secondaryCoverageIds,
       docsRefs: definition.docsRefs,
       codeRefs: definition.codeRefs,
     },

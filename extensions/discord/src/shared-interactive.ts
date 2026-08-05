@@ -1,6 +1,7 @@
 // Discord plugin module implements shared interactive behavior.
 import {
   reduceLegacyInteractiveReply,
+  resolveMessagePresentationActionValue,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -10,6 +11,7 @@ import type {
   MessagePresentation,
   MessagePresentationButton,
   MessagePresentationOption,
+  MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { buildDiscordApprovalCustomId } from "./approval-custom-id.js";
 import {
@@ -30,30 +32,20 @@ function resolveDiscordInteractiveButtonStyle(
 }
 
 function resolveDiscordSelectOptionValue(option: MessagePresentationOption): string | undefined {
-  const action = resolveMessagePresentationOptionAction(option);
-  if (action?.type === "command") {
-    return action.command;
-  }
-  if (action?.type === "callback") {
-    return action.value;
-  }
-  return undefined;
+  return resolveMessagePresentationActionValue(resolveMessagePresentationOptionAction(option));
 }
 
 function resolveDiscordSelectCallbackDataKind(
   options: MessagePresentationOption[],
 ): "command" | "callback" | "mixed" | undefined {
   const renderableOptions = options.filter((option) => resolveDiscordSelectOptionValue(option));
-  if (
-    renderableOptions.length > 0 &&
-    renderableOptions.every((option) => option.action?.type === "command")
-  ) {
+  if (renderableOptions.length === 0) {
+    return undefined;
+  }
+  if (renderableOptions.every((option) => option.action?.type === "command")) {
     return "command";
   }
-  if (
-    renderableOptions.length > 0 &&
-    renderableOptions.every((option) => option.action?.type === "callback")
-  ) {
+  if (renderableOptions.every((option) => option.action?.type === "callback")) {
     return "callback";
   }
   if (renderableOptions.some((option) => option.action)) {
@@ -142,6 +134,7 @@ function appendDiscordButtonBlocks(
   blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
   buttons: readonly MessagePresentationButton[],
 ): void {
+  // Index is position in the question's options; core emits one buttons block in option order.
   const components = buttons
     .map((button, optionIndex) => buildDiscordButtonComponent(button, optionIndex))
     .filter((button): button is DiscordComponentButtonSpec => Boolean(button));
@@ -151,6 +144,34 @@ function appendDiscordButtonBlocks(
       buttons: components.slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE),
     });
   }
+}
+
+function appendDiscordSelectBlock(
+  blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
+  block: MessagePresentationSelectBlock,
+): void {
+  const options = block.options
+    .map((option) => ({
+      label: option.label,
+      value: resolveDiscordSelectOptionValue(option),
+    }))
+    .filter((option): option is { label: string; value: string } => Boolean(option.value));
+  if (options.length === 0) {
+    return;
+  }
+  const callbackDataKind = resolveDiscordSelectCallbackDataKind(block.options);
+  if (callbackDataKind === "mixed") {
+    return;
+  }
+  blocks.push({
+    type: "actions",
+    select: {
+      type: "string",
+      placeholder: block.placeholder,
+      options,
+      callbackDataKind,
+    },
+  });
 }
 
 /**
@@ -174,29 +195,8 @@ export function buildDiscordInteractiveComponents(
         appendDiscordButtonBlocks(state, block.buttons);
         return state;
       }
-      if (block.type === "select" && block.options.length > 0) {
-        const options = block.options
-          .map((option) => ({
-            label: option.label,
-            value: resolveDiscordSelectOptionValue(option),
-          }))
-          .filter((option): option is { label: string; value: string } => Boolean(option.value));
-        if (options.length === 0) {
-          return state;
-        }
-        const callbackDataKind = resolveDiscordSelectCallbackDataKind(block.options);
-        if (callbackDataKind === "mixed") {
-          return state;
-        }
-        state.push({
-          type: "actions",
-          select: {
-            type: "string",
-            placeholder: block.placeholder,
-            options,
-            callbackDataKind,
-          },
-        });
+      if (block.type === "select") {
+        appendDiscordSelectBlock(state, block);
       }
       return state;
     },
@@ -210,15 +210,15 @@ export function buildDiscordPresentationComponents(
   if (!presentation) {
     return undefined;
   }
-  const spec: DiscordComponentMessageSpec = { blocks: [] };
+  const blocks: NonNullable<DiscordComponentMessageSpec["blocks"]> = [];
   if (presentation.title) {
-    spec.blocks?.push({ type: "text", text: presentation.title });
+    blocks.push({ type: "text", text: presentation.title });
   }
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
       const text = block.text.trim();
       if (text) {
-        spec.blocks?.push({
+        blocks.push({
           type: "text",
           text: block.type === "context" ? `-# ${text}` : text,
         });
@@ -226,48 +226,18 @@ export function buildDiscordPresentationComponents(
       continue;
     }
     if (block.type === "divider") {
-      spec.blocks?.push({ type: "separator" });
+      blocks.push({ type: "separator" });
       continue;
     }
   }
   for (const block of presentation.blocks) {
     if (block.type === "buttons") {
-      appendDiscordPresentationButtonBlocks(spec, block.buttons);
+      appendDiscordButtonBlocks(blocks, block.buttons);
       continue;
     }
-    if (block.type === "select" && block.options.length > 0) {
-      const options = block.options
-        .map((option) => ({
-          label: option.label,
-          value: resolveDiscordSelectOptionValue(option),
-        }))
-        .filter((option): option is { label: string; value: string } => Boolean(option.value));
-      if (options.length === 0) {
-        continue;
-      }
-      const callbackDataKind = resolveDiscordSelectCallbackDataKind(block.options);
-      if (callbackDataKind === "mixed") {
-        continue;
-      }
-      spec.blocks?.push({
-        type: "actions",
-        select: {
-          type: "string",
-          placeholder: block.placeholder,
-          options,
-          callbackDataKind,
-        },
-      });
+    if (block.type === "select") {
+      appendDiscordSelectBlock(blocks, block);
     }
   }
-  return spec.blocks?.length ? spec : undefined;
-}
-
-function appendDiscordPresentationButtonBlocks(
-  spec: DiscordComponentMessageSpec,
-  buttons: readonly MessagePresentationButton[],
-) {
-  if (spec.blocks) {
-    appendDiscordButtonBlocks(spec.blocks, buttons);
-  }
+  return blocks.length ? { blocks } : undefined;
 }

@@ -11,6 +11,7 @@ import {
 describe("event session routing", () => {
   it("routes single-owner dmScope=main direct event keys to the agent main session", () => {
     const cfg: OpenClawConfig = {
+      agents: { entries: { main: { default: true } } },
       session: { dmScope: "main" },
       channels: {
         telegram: {
@@ -45,6 +46,7 @@ describe("event session routing", () => {
 
   it("does not route multi-owner or wildcard direct sessions to main", () => {
     const baseCfg: OpenClawConfig = {
+      agents: { entries: { main: { default: true } } },
       session: { dmScope: "main" },
       channels: {
         telegram: { allowFrom: ["123", "456"] },
@@ -70,6 +72,7 @@ describe("event session routing", () => {
 
   it("preserves route-binding direct session overrides under global dmScope=main", () => {
     const cfg: OpenClawConfig = {
+      agents: { entries: { main: { default: true } } },
       session: { dmScope: "main" },
       channels: {
         telegram: {

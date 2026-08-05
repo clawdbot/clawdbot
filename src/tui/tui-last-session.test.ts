@@ -26,6 +26,15 @@ afterEach(async () => {
 });
 
 describe("tui last session state", () => {
+  it("returns no remembered session without creating state on a fresh install", async () => {
+    const stateDir = await makeTempStateDir();
+
+    await expect(readTuiLastSessionKey({ scopeKey: "missing", stateDir })).resolves.toBeNull();
+    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("persists the last session under a scoped hashed key", async () => {
     const stateDir = await makeTempStateDir();
     const scopeKey = buildTuiLastSessionScopeKey({

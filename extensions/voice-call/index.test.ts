@@ -696,6 +696,47 @@ describe("voice-call plugin", () => {
     ]);
   });
 
+  it("routes tool speech through the active realtime bridge", async () => {
+    runtimeStub.config.realtime.enabled = true;
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() =>
+      createCallRecord({ callId: "call-1", providerCallId: "CA123" }),
+    );
+    runtimeStub.webhookServer.speakRealtime = vi.fn(() => ({ success: true }));
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    const result = (await tool.execute("id", {
+      action: "speak_to_user",
+      callId: "CA123",
+      message: "hello",
+    })) as { details: { success?: boolean } };
+
+    expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).not.toHaveBeenCalled();
+    expect(result.details.success).toBe(true);
+  });
+
+  it("keeps the tool's classic speech fallback when no realtime bridge is active", async () => {
+    runtimeStub.config.realtime.enabled = true;
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    const result = (await tool.execute("id", {
+      action: "speak_to_user",
+      callId: "call-1",
+      message: "hello",
+    })) as { details: { success?: boolean } };
+
+    expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(result.details.success).toBe(true);
+  });
+
   it("reports ended call history when speaking to a stale call", async () => {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
@@ -758,23 +799,41 @@ describe("voice-call plugin", () => {
     expect(error?.message).not.toContain("endedAt=");
   });
 
-  it("freezes the invoking agent on tool-created calls", async () => {
-    const { tools } = setup({ provider: "mock" }, { agentId: "support" });
-    const tool = tools[0] as {
-      execute: (id: string, params: unknown) => Promise<unknown>;
-    };
+  it.each([{ action: "initiate_call", message: "Hello" }, { message: "Hello" }])(
+    "freezes invocation context for tool-created calls ($action)",
+    async (params) => {
+      const { tools } = setup(
+        { provider: "mock" },
+        { agentId: "support", sessionKey: "agent:support:discord:channel:general" },
+      );
+      const tool = tools[0] as {
+        execute: (id: string, params: unknown) => Promise<unknown>;
+      };
 
-    await tool.execute("id", {
-      action: "initiate_call",
-      to: "+15550001234",
-      message: "Hello",
-    });
+      await tool.execute("id", {
+        ...params,
+        to: "+15550001234",
+        requesterSessionKey: "agent:spoofed:requester",
+        sessionKey: "agent:support:voice:call-1",
+      });
 
-    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
-      "+15550001234",
-      undefined,
-      expect.objectContaining({ agentId: "support", message: "Hello" }),
-    );
+      expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
+        "+15550001234",
+        "agent:support:voice:call-1",
+        expect.objectContaining({
+          agentId: "support",
+          message: "Hello",
+          requesterSessionKey: "agent:support:discord:channel:general",
+        }),
+      );
+    },
+  );
+
+  it("does not expose requester session identity to the model", () => {
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as { parameters: unknown };
+
+    expect(JSON.stringify(tool.parameters)).not.toContain("requesterSessionKey");
   });
 
   it("tool get_status returns json payload", async () => {
@@ -1041,7 +1100,7 @@ describe("voice-call plugin", () => {
     }
   });
 
-  it("gateway continue operations return pending then completed results", async () => {
+  it("gateway continue operations return pending, completed, and failed results", async () => {
     let finishContinue: ((value: { success: true; transcript: string }) => void) | undefined;
     const continuePromise = new Promise<{ success: true; transcript: string }>((resolve) => {
       finishContinue = resolve;
@@ -1093,18 +1152,41 @@ describe("voice-call plugin", () => {
 
     finishContinue?.({ success: true, transcript: "gateway hello" });
     await continuePromise;
-    await Promise.resolve();
-
-    const completedRespond = vi.fn();
-    await result?.({
-      params: { operationId: startPayload?.operationId },
-      respond: completedRespond,
+    const completedCall = await vi.waitFor(async () => {
+      const respond = vi.fn();
+      await result?.({ params: { operationId: startPayload?.operationId }, respond });
+      const call = firstRespondCall(respond);
+      const payload = call[1] as { status?: unknown } | undefined;
+      expect(payload?.status).toBe("completed");
+      return call;
     });
-    const completedCall = firstRespondCall(completedRespond);
     const completedPayload = completedCall[1] as { status?: unknown; result?: unknown } | undefined;
     expect(completedCall[0]).toBe(true);
-    expect(completedPayload?.status).toBe("completed");
     expect(completedPayload?.result).toEqual({ success: true, transcript: "gateway hello" });
+
+    runtimeStub.manager.continueCall = vi.fn(async () => ({
+      success: false,
+      error: "turn failed",
+    })) as VoiceCallRuntime["manager"]["continueCall"];
+    const failedStartRespond = vi.fn();
+    await start?.({
+      params: { callId: "call-1", message: "Try again" },
+      respond: failedStartRespond,
+    });
+    const failedOperationId = (
+      firstRespondCall(failedStartRespond)[1] as { operationId?: string } | undefined
+    )?.operationId;
+
+    const failedCall = await vi.waitFor(async () => {
+      const respond = vi.fn();
+      await result?.({ params: { operationId: failedOperationId }, respond });
+      const call = firstRespondCall(respond);
+      const payload = call[1] as { status?: unknown } | undefined;
+      expect(payload?.status).toBe("failed");
+      return call;
+    });
+    expect(failedCall[0]).toBe(true);
+    expect(failedCall[1]).toMatchObject({ status: "failed", error: "turn failed" });
   });
 
   it("CLI setup prints human-readable checks by default", async () => {

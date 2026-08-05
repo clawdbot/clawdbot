@@ -1,6 +1,7 @@
 // Extracts web provider public artifacts from plugin entrypoints.
 import path from "node:path";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -36,7 +37,7 @@ function filterAllowlistedBundledPluginIds(
 ) {
   // Deprecated shipped compat marker: old allowlist configs used this to keep
   // bundled web provider discovery available while plugin IDs were tightened.
-  if (config?.plugins?.bundledDiscovery === "compat") {
+  if (readBundledDiscoveryMode() === "compat") {
     return [...pluginIds];
   }
   const allow = config?.plugins?.allow;

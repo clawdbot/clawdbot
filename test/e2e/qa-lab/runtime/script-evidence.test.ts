@@ -29,7 +29,6 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
         id: "script-evidence-test",
         title: "Script evidence test",
         sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
-        primaryCoverageIds: ["qa.script-evidence"],
       },
     }),
   };
@@ -91,6 +90,16 @@ describe("QA script evidence writer", () => {
     expect(log).toContain("recent-tail");
     expect(log).not.toContain("discard-me");
     expect(Buffer.byteLength(log, "utf8")).toBeLessThanOrEqual(24);
+  });
+
+  it("writes the bounded log independently for multi-target summaries", async () => {
+    const { artifactBase, writer } = await makeWriter();
+    writer.appendLog("producer output\n");
+
+    await expect(writer.writeLog()).resolves.toEqual({ kind: "log", path: "producer.log" });
+    await expect(fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).resolves.toBe(
+      "producer output\n",
+    );
   });
 
   it("keeps only the bounded failure detail tail", async () => {

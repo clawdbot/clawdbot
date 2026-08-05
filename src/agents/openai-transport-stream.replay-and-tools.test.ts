@@ -13,6 +13,98 @@ import {
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 
+type ReplayContextSpec = {
+  source?: Pick<Model, "api" | "id" | "provider">;
+  api?: string;
+  provider?: string;
+  model?: string;
+  stopReason?: "stop" | "toolUse";
+  thinking?: {
+    signature: string | Record<string, unknown>;
+    replayMetadata?: unknown;
+    text?: string;
+  };
+  text?: true | { id: string; phase: "commentary" | "final_answer"; text: string };
+  toolCalls?: ReadonlyArray<{ id: string; name: string; arguments: unknown }>;
+  results?: ReadonlyArray<{
+    id: string;
+    name: string;
+    content: readonly unknown[];
+    timestamp?: number;
+  }>;
+  before?: readonly unknown[];
+  after?: readonly unknown[];
+};
+
+function replayContext(spec: ReplayContextSpec) {
+  const content: Array<Record<string, unknown>> = [];
+  if (spec.thinking) {
+    content.push({
+      type: "thinking",
+      thinking: spec.thinking.text ?? "Need a tool.",
+      thinkingSignature:
+        typeof spec.thinking.signature === "string"
+          ? spec.thinking.signature
+          : JSON.stringify(spec.thinking.signature),
+      ...(spec.thinking.replayMetadata === undefined
+        ? {}
+        : { openclawReasoningReplay: spec.thinking.replayMetadata }),
+    });
+  }
+  if (spec.text) {
+    const text =
+      spec.text === true
+        ? { id: "msg_prior", phase: "commentary" as const, text: "Checking the price." }
+        : spec.text;
+    content.push({
+      type: "text",
+      text: text.text,
+      textSignature: JSON.stringify({ v: 1, id: text.id, phase: text.phase }),
+    });
+  }
+  for (const toolCall of spec.toolCalls ?? []) {
+    content.push({ type: "toolCall", ...toolCall });
+  }
+  const messages = [
+    ...(spec.before ?? []),
+    {
+      role: "assistant",
+      api: spec.source?.api ?? spec.api ?? "openai-responses",
+      provider: spec.source?.provider ?? spec.provider ?? "openai",
+      model: spec.source?.id ?? spec.model ?? "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: spec.stopReason ?? "toolUse",
+      timestamp: 1,
+      content,
+    },
+    ...(spec.results ?? []).map(({ id, name, content: resultContent, timestamp = 2 }) => ({
+      role: "toolResult",
+      toolCallId: id,
+      toolName: name,
+      content: resultContent,
+      isError: false,
+      timestamp,
+    })),
+    ...(spec.after ?? []),
+  ];
+  return { systemPrompt: "system", messages, tools: [] } as never;
+}
+
+function responsesModelFixture(id: string, name: string) {
+  return makeResponsesModel({ id, name });
+}
+
+function emptyResponsesContext() {
+  return { systemPrompt: "system", messages: [], tools: [] } as never;
+}
+
 describe("openai transport stream", () => {
   it("omits Responses replay item ids when OpenAI Responses requests disable store", () => {
     const params = buildOpenAIResponsesParams(
@@ -24,62 +116,23 @@ describe("openai transport stream", () => {
         contextWindow: 1_000_000,
         maxTokens: 128_000,
       }),
-      {
-        systemPrompt: "system",
-        messages: [
+      replayContext({
+        provider: "mycodex",
+        thinking: {
+          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+        },
+        text: true,
+        toolCalls: [
+          { id: "call_abc|fc_prior", name: "price_lookup", arguments: { symbol: "SOL" } },
+        ],
+        results: [
           {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "mycodex",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  encrypted_content: "ciphertext",
-                }),
-              },
-              {
-                type: "text",
-                text: "Checking the price.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_prior",
-                  phase: "commentary",
-                }),
-              },
-              {
-                type: "toolCall",
-                id: "call_abc|fc_prior",
-                name: "price_lookup",
-                arguments: { symbol: "SOL" },
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_abc|fc_prior",
-            toolName: "price_lookup",
+            id: "call_abc|fc_prior",
+            name: "price_lookup",
             content: [{ type: "text", text: "$83.95" }],
-            isError: false,
-            timestamp: 2,
           },
         ],
-        tools: [],
-      } as never,
+      }),
       { sessionId: "session-123" },
     ) as {
       store?: boolean;
@@ -123,66 +176,24 @@ describe("openai transport stream", () => {
 
   it("preserves Responses replay item ids when a store-enabled wrapper requests replay", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
+      replayContext({
+        model: "gpt-5.4",
+        thinking: {
+          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+        },
+        text: true,
+        toolCalls: [
+          { id: "call_abc|fc_prior", name: "price_lookup", arguments: { symbol: "SOL" } },
+        ],
+        results: [
           {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  encrypted_content: "ciphertext",
-                }),
-              },
-              {
-                type: "text",
-                text: "Checking the price.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_prior",
-                  phase: "commentary",
-                }),
-              },
-              {
-                type: "toolCall",
-                id: "call_abc|fc_prior",
-                name: "price_lookup",
-                arguments: { symbol: "SOL" },
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_abc|fc_prior",
-            toolName: "price_lookup",
+            id: "call_abc|fc_prior",
+            name: "price_lookup",
             content: [{ type: "text", text: "$83.95" }],
-            isError: false,
-            timestamp: 2,
           },
         ],
-        tools: [],
-      } as never,
+      }),
       { replayResponsesItemIds: true, sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -230,54 +241,15 @@ describe("openai transport stream", () => {
         baseUrl: "https://custom.example.com/v1",
         compat: { supportsStore: true } as never,
       }),
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "custom-openai-responses",
-            model: "store-capable-model",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  summary: [],
-                }),
-              },
-              {
-                type: "text",
-                text: "Checking the price.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_prior",
-                  phase: "commentary",
-                }),
-              },
-              {
-                type: "toolCall",
-                id: "call_abc|fc_prior",
-                name: "price_lookup",
-                arguments: { symbol: "SOL" },
-              },
-            ],
-          },
+      replayContext({
+        provider: "custom-openai-responses",
+        model: "store-capable-model",
+        thinking: { signature: { type: "reasoning", id: "rs_prior", summary: [] } },
+        text: true,
+        toolCalls: [
+          { id: "call_abc|fc_prior", name: "price_lookup", arguments: { symbol: "SOL" } },
         ],
-        tools: [],
-      } as never,
+      }),
       { replayResponsesItemIds: true, sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -323,61 +295,20 @@ describe("openai transport stream", () => {
 
     const params = buildOpenAIResponsesParams(
       model,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-chatgpt-responses",
-            provider: "openai",
-            model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  encrypted_content: "ciphertext",
-                }),
-                openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
-                  model,
-                  {
-                    authProfileId: "openai:oauth",
-                    sessionId: "session-123",
-                  },
-                ),
-              },
-              {
-                type: "text",
-                text: "Checking the price.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_prior",
-                  phase: "commentary",
-                }),
-              },
-              {
-                type: "toolCall",
-                id: "call_abc|fc_prior",
-                name: "price_lookup",
-                arguments: { symbol: "SOL" },
-              },
-            ],
-          },
+      replayContext({
+        source: model,
+        thinking: {
+          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+          replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+            authProfileId: "openai:oauth",
+            sessionId: "session-123",
+          }),
+        },
+        text: true,
+        toolCalls: [
+          { id: "call_abc|fc_prior", name: "price_lookup", arguments: { symbol: "SOL" } },
         ],
-        tools: [],
-      } as never,
+      }),
       { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -428,39 +359,10 @@ describe("openai transport stream", () => {
 
     const params = buildOpenAIResponsesParams(
       model,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "github-copilot",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: longReasoningId,
-                  summary: [],
-                }),
-              },
-            ],
-          },
-        ],
-        tools: [],
-      } as never,
+      replayContext({
+        source: model,
+        thinking: { signature: { type: "reasoning", id: longReasoningId, summary: [] } },
+      }),
       { sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -490,39 +392,10 @@ describe("openai transport stream", () => {
 
     const params = buildOpenAIResponsesParams(
       model,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "github-copilot",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: longReasoningId,
-                  summary: [],
-                }),
-              },
-            ],
-          },
-        ],
-        tools: [],
-      } as never,
+      replayContext({
+        source: model,
+        thinking: { signature: { type: "reasoning", id: longReasoningId, summary: [] } },
+      }),
       { replayResponsesItemIds: true, sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -544,46 +417,16 @@ describe("openai transport stream", () => {
 
     const params = buildOpenAIResponsesParams(
       model,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-chatgpt-responses",
-            provider: "openai",
-            model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  encrypted_content: "ciphertext",
-                }),
-                openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
-                  model,
-                  {
-                    authProfileId: "openai:oauth",
-                    sessionId: "different-session",
-                  },
-                ),
-              },
-            ],
-          },
-        ],
-        tools: [],
-      } as never,
+      replayContext({
+        source: model,
+        thinking: {
+          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+          replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+            authProfileId: "openai:oauth",
+            sessionId: "different-session",
+          }),
+        },
+      }),
       { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -613,46 +456,16 @@ describe("openai transport stream", () => {
 
     const params = buildOpenAIResponsesParams(
       model,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-chatgpt-responses",
-            provider: "openai",
-            model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  encrypted_content: "ciphertext",
-                }),
-                openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
-                  model,
-                  {
-                    authProfileId: "openai:old-oauth",
-                    sessionId: "session-123",
-                  },
-                ),
-              },
-            ],
-          },
-        ],
-        tools: [],
-      } as never,
+      replayContext({
+        source: model,
+        thinking: {
+          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+          replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+            authProfileId: "openai:old-oauth",
+            sessionId: "session-123",
+          }),
+        },
+      }),
       { authProfileId: "openai:new-oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -682,48 +495,16 @@ describe("openai transport stream", () => {
 
     const params = buildOpenAIResponsesParams(
       model,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-chatgpt-responses",
-            provider: "openai",
-            model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify(
-                  testing.tagOpenAIResponsesReasoningReplayItem(
-                    {
-                      type: "reasoning",
-                      id: "rs_prior",
-                      encrypted_content: "ciphertext",
-                    },
-                    model,
-                    {
-                      authProfileId: "openai:oauth",
-                      sessionId: "session-123",
-                    },
-                  ),
-                ),
-              },
-            ],
-          },
-        ],
-        tools: [],
-      } as never,
+      replayContext({
+        source: model,
+        thinking: {
+          signature: testing.tagOpenAIResponsesReasoningReplayItem(
+            { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+            model,
+            { authProfileId: "openai:oauth", sessionId: "session-123" },
+          ) as Record<string, unknown>,
+        },
+      }),
       { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
@@ -811,22 +592,31 @@ describe("openai transport stream", () => {
       ],
     };
     const recoveredStream = streamChunks([]);
+    const recoveredResponse = new Response(null, { status: 200 });
     const create = vi
       .fn()
-      .mockRejectedValueOnce(
-        new OpenAI.BadRequestError(
-          400,
-          {
-            code: "thinking_signature_invalid",
-            message:
-              "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
-            type: "invalid_request_error",
-          },
-          undefined,
-          new Headers(),
+      .mockReturnValueOnce({
+        withResponse: vi.fn().mockRejectedValue(
+          new OpenAI.BadRequestError(
+            400,
+            {
+              code: "thinking_signature_invalid",
+              message:
+                "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+              type: "invalid_request_error",
+            },
+            undefined,
+            new Headers(),
+          ),
         ),
-      )
-      .mockResolvedValueOnce(recoveredStream);
+      })
+      .mockReturnValueOnce({
+        withResponse: vi.fn().mockResolvedValue({
+          data: recoveredStream,
+          response: recoveredResponse,
+          request_id: null,
+        }),
+      });
 
     await expect(
       testing.createResponsesStreamWithEncryptedContentRetry({
@@ -846,7 +636,7 @@ describe("openai transport stream", () => {
           maxTokens: 8192,
         },
       }),
-    ).resolves.toBe(recoveredStream);
+    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[0]?.[0]).toBe(request);
@@ -862,6 +652,47 @@ describe("openai transport stream", () => {
         request.input[2],
       ],
     });
+  });
+
+  it("preserves HTTP status when a managed Responses request rejects", async () => {
+    const failure = new OpenAI.RateLimitError(
+      429,
+      {
+        code: "rate_limit_exceeded",
+        message: "rate limited",
+        type: "rate_limit_error",
+      },
+      undefined,
+      new Headers(),
+    );
+    const withResponse = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: {
+          responses: {
+            create: vi.fn().mockReturnValue({ withResponse }),
+          },
+        } as never,
+        request: { model: "gpt-5.5", stream: true, input: [] } as never,
+        requestOptions: undefined,
+        model: {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(failure.status).toBe(429);
+    expect(withResponse).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -900,46 +731,19 @@ describe("openai transport stream", () => {
         provider: "github-copilot",
         baseUrl: "https://api.githubcopilot.com",
       }),
-      {
-        systemPrompt: "system",
-        messages: [
-          { role: "user", content: "read the queue", timestamp: 0 },
+      replayContext({
+        provider: "github-copilot",
+        before: [{ role: "user", content: "read the queue", timestamp: 0 }],
+        toolCalls: [
           {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "github-copilot",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "toolCall",
-                id: longToolCallId,
-                name: "exec",
-                arguments: { command: "gh pr list --limit 1" },
-              },
-            ],
+            id: longToolCallId,
+            name: "exec",
+            arguments: { command: "gh pr list --limit 1" },
           },
-          {
-            role: "toolResult",
-            toolCallId: longToolCallId,
-            toolName: "exec",
-            content: [{ type: "text", text: "[]" }],
-            isError: false,
-            timestamp: 2,
-          },
-          { role: "user", content: "continue", timestamp: 3 },
         ],
-        tools: [],
-      } as never,
+        results: [{ id: longToolCallId, name: "exec", content: [{ type: "text", text: "[]" }] }],
+        after: [{ role: "user", content: "continue", timestamp: 3 }],
+      }),
       { sessionId: "session-123" },
     ) as {
       input?: Array<{ type?: string; id?: string; call_id?: string }>;
@@ -964,41 +768,11 @@ describe("openai transport stream", () => {
 
   it("replays update_plan-style empty non-image Responses tool results as no output", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
+      responsesModelFixture("gpt-5.5", "GPT-5.5"),
+      replayContext({
+        toolCalls: [{ id: "call_plan", name: "update_plan", arguments: {} }],
+        results: [{ id: "call_plan", name: "update_plan", content: [] }],
       }),
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_plan",
-            toolName: "update_plan",
-            content: [],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-        tools: [],
-      } as never,
       { sessionId: "session-123" },
     ) as {
       input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
@@ -1018,37 +792,16 @@ describe("openai transport stream", () => {
         name: "GPT-5.5",
         input: ["text", "image"],
       }),
-      {
-        systemPrompt: "system",
-        messages: [
+      replayContext({
+        toolCalls: [{ id: "call_husk", name: "screenshot", arguments: {} }],
+        results: [
           {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_husk",
-            toolName: "screenshot",
+            id: "call_husk",
+            name: "screenshot",
             content: [{ type: "image", mimeType: "image/png", data: "" }],
-            isError: false,
-            timestamp: 2,
           },
         ],
-        tools: [],
-      } as never,
+      }),
       { sessionId: "session-123" },
     ) as {
       input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
@@ -1067,37 +820,16 @@ describe("openai transport stream", () => {
         name: "GPT-5.5",
         input: ["text", "image"],
       }),
-      {
-        systemPrompt: "system",
-        messages: [
+      replayContext({
+        toolCalls: [{ id: "call_shot", name: "screenshot", arguments: {} }],
+        results: [
           {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_shot",
-            toolName: "screenshot",
+            id: "call_shot",
+            name: "screenshot",
             content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
-            isError: false,
-            timestamp: 2,
           },
         ],
-        tools: [],
-      } as never,
+      }),
       { sessionId: "session-123" },
     ) as {
       input?: Array<{ type?: string; output?: unknown }>;
@@ -1114,49 +846,18 @@ describe("openai transport stream", () => {
 
   it("serializes structured tool result content (e.g. json blocks) into Responses function_call_output text", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [
+      responsesModelFixture("gpt-5.5", "GPT-5.5"),
+      replayContext({
+        toolCalls: [{ id: "call_lookup", name: "lookup", arguments: { query: "price" } }],
+        results: [
           {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "toolCall",
-                id: "call_lookup",
-                name: "lookup",
-                arguments: { query: "price" },
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_lookup",
-            toolName: "lookup",
+            id: "call_lookup",
+            name: "lookup",
             content: [{ type: "json", payload: { price: 42, currency: "USD" } }],
-            isError: false,
-            timestamp: 2,
           },
-          { role: "user", content: "continue", timestamp: 3 },
         ],
-        tools: [],
-      } as never,
+        after: [{ role: "user", content: "continue", timestamp: 3 }],
+      }),
       undefined,
     ) as {
       input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
@@ -1183,49 +884,23 @@ describe("openai transport stream", () => {
         provider: "github-copilot",
         baseUrl: "https://api.githubcopilot.com",
       }),
-      {
-        systemPrompt: "system",
-        messages: [
+      replayContext({
+        provider: "github-copilot",
+        toolCalls: [
+          { id: firstToolCallId, name: "read", arguments: { path: "a" } },
+          { id: secondToolCallId, name: "read", arguments: { path: "b" } },
+        ],
+        results: [
+          { id: firstToolCallId, name: "read", content: [{ type: "text", text: "a" }] },
           {
-            role: "assistant",
-            api: "openai-responses",
-            provider: "github-copilot",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              { type: "toolCall", id: firstToolCallId, name: "read", arguments: { path: "a" } },
-              { type: "toolCall", id: secondToolCallId, name: "read", arguments: { path: "b" } },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: firstToolCallId,
-            toolName: "read",
-            content: [{ type: "text", text: "a" }],
-            isError: false,
-            timestamp: 2,
-          },
-          {
-            role: "toolResult",
-            toolCallId: secondToolCallId,
-            toolName: "read",
+            id: secondToolCallId,
+            name: "read",
             content: [{ type: "text", text: "b" }],
-            isError: false,
             timestamp: 3,
           },
-          { role: "user", content: "continue", timestamp: 4 },
         ],
-        tools: [],
-      } as never,
+        after: [{ role: "user", content: "continue", timestamp: 4 }],
+      }),
       { sessionId: "session-123" },
     ) as {
       input?: Array<{ type?: string; id?: string; call_id?: string }>;
@@ -1271,15 +946,8 @@ describe("openai transport stream", () => {
 
   it("does not infer high reasoning when the runtime passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
+      emptyResponsesContext(),
       undefined,
     ) as { reasoning?: unknown; include?: string[] };
 
@@ -1289,15 +957,8 @@ describe("openai transport stream", () => {
 
   it("uses shared stream reasoning as OpenAI Responses effort", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
+      emptyResponsesContext(),
       {
         reasoning: "high",
       } as never,
@@ -1307,11 +968,7 @@ describe("openai transport stream", () => {
   });
 
   it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
-    const context = {
-      systemPrompt: "system",
-      messages: [],
-      tools: [],
-    } as never;
+    const context = emptyResponsesContext();
     const baseModel = {
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -1345,15 +1002,8 @@ describe("openai transport stream", () => {
 
   it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
+      emptyResponsesContext(),
       {
         reasoningEffort: "none",
       } as never,
@@ -1365,15 +1015,8 @@ describe("openai transport stream", () => {
 
   it("omits disabled OpenAI Responses reasoning when the model does not support none", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5",
-        name: "GPT-5",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      responsesModelFixture("gpt-5", "GPT-5"),
+      emptyResponsesContext(),
       {
         reasoningEffort: "none",
       } as never,
@@ -1385,15 +1028,8 @@ describe("openai transport stream", () => {
 
   it("maps minimal shared reasoning to low for OpenAI Responses", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
+      emptyResponsesContext(),
       {
         reasoning: "minimal",
       } as never,
@@ -1486,11 +1122,7 @@ describe("openai transport stream", () => {
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyResponsesContext(),
       {
         reasoning: "low",
       } as never,
@@ -1550,44 +1182,14 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 8192,
       } as Model<"openai-responses">,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: 1,
-            content: [
-              {
-                type: "text",
-                text: "Working...",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_commentary",
-                  phase: "commentary",
-                }),
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: "Continue",
-            timestamp: 2,
-          },
-        ],
-        tools: [],
-      } as never,
+      replayContext({
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        stopReason: "stop",
+        text: { id: "msg_commentary", phase: "commentary", text: "Working..." },
+        after: [{ role: "user", content: "Continue", timestamp: 2 }],
+      }),
       undefined,
     ) as {
       input?: Array<{ role?: string; id?: string; phase?: string }>;
@@ -1603,10 +1205,7 @@ describe("openai transport stream", () => {
 
   it("strips the internal cache boundary from OpenAI system prompts", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [],
@@ -1622,10 +1221,7 @@ describe("openai transport stream", () => {
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
       {
         systemPrompt: "system",
         messages: [],
@@ -1653,10 +1249,7 @@ describe("openai transport stream", () => {
 
   it("passes explicit Responses tool_choice when tools are present", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
       {
         systemPrompt: "system",
         messages: [],
@@ -1676,10 +1269,7 @@ describe("openai transport stream", () => {
 
   it("keeps healthy Responses tools when a sibling schema is unreadable", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      }),
+      responsesModelFixture("gpt-5.5", "GPT-5.5"),
       {
         systemPrompt: "system",
         messages: [],
@@ -1711,10 +1301,7 @@ describe("openai transport stream", () => {
   it("fails locally when a pinned Responses tool is unreadable", () => {
     expect(() =>
       buildOpenAIResponsesParams(
-        makeResponsesModel({
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-        }),
+        responsesModelFixture("gpt-5.5", "GPT-5.5"),
         {
           systemPrompt: "system",
           messages: [],
@@ -1734,10 +1321,7 @@ describe("openai transport stream", () => {
 
   it("filters official Responses allowed_tools against projected functions", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      }),
+      responsesModelFixture("gpt-5.5", "GPT-5.5"),
       {
         systemPrompt: "system",
         messages: [],
@@ -1846,10 +1430,7 @@ describe("openai transport stream", () => {
         return Reflect.get(target, property, receiver);
       },
     });
-    const responsesModel = makeResponsesModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-    });
+    const responsesModel = responsesModelFixture("gpt-5.5", "GPT-5.5");
     const completionsModel = makeCompletionsModel({
       ...responsesModel,
       api: "openai-completions",
@@ -1870,10 +1451,7 @@ describe("openai transport stream", () => {
   });
 
   it("sorts Responses tools by name for stable prompt-cache payloads", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-    });
+    const model = responsesModelFixture("gpt-5.4", "GPT-5.4");
     const zetaTool = {
       name: "zeta",
       description: "Z",
@@ -1910,10 +1488,7 @@ describe("openai transport stream", () => {
 
   it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
+      responsesModelFixture("gpt-5.4", "GPT-5.4"),
       {
         systemPrompt: "system",
         messages: [],
@@ -1962,10 +1537,7 @@ describe("openai transport stream", () => {
       const { testing: isolatedTesting } =
         await import("./openai-transport-stream.test-support.js");
       const isolatedBuildOpenAIResponsesParams = isolatedTesting.buildOpenAIResponsesParams;
-      const model = makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      });
+      const model = responsesModelFixture("gpt-5.4", "GPT-5.4");
       const context = {
         systemPrompt: "system",
         messages: [],

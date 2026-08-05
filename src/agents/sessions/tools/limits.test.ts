@@ -29,7 +29,7 @@ describe("session tool limits", () => {
   });
 
   it("clips oversized chunks to the configured tail bytes", () => {
-    const output = appendBoundedTextTail("ignored", Buffer.from("x".repeat(128)), 16);
+    const output = appendBoundedTextTail("ignored", "x".repeat(128), 16);
 
     expect(output).toBe("x".repeat(16));
     expect(Buffer.byteLength(output, "utf8")).toBe(16);
@@ -48,6 +48,17 @@ describe("session tool limits", () => {
 
     expect(output).toBe("é");
     expect(Buffer.byteLength(output, "utf8")).toBe(2);
+  });
+
+  it("drops orphan continuation bytes when the byte window splits a character", () => {
+    // "aaaa😀ccccccc" is 15 bytes; a 6-byte chunk under a 16-byte cap keeps a
+    // 10-byte tail whose cut lands inside the 4-byte emoji. The orphan
+    // continuation bytes must not surface as U+FFFD at the head of the tail.
+    const output = appendBoundedTextTail("aaaa😀ccccccc", "dddddd", 16);
+
+    expect(output).toBe("cccccccdddddd");
+    expect(output).not.toContain("�");
+    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(16);
   });
 
   it("uses the session stderr tail limit by default", () => {

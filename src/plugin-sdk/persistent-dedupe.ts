@@ -505,6 +505,31 @@ function createReleasedClaimError(scopedKey: string): Error {
   return new Error(`claim released before commit: ${scopedKey}`);
 }
 
+type ClaimLoopInflight = { kind: "inflight"; pending: Promise<boolean> };
+type ClaimLoopSettled = { kind: "claimed" } | { kind: "duplicate" } | { kind: "invalid" };
+
+/** Resolve a claim, waiting on an active owner and retrying only when its release allows it. */
+export async function runClaimableDedupeClaimLoop<TClaim extends ClaimLoopSettled>(
+  claimNext: () => Promise<TClaim | ClaimLoopInflight>,
+  retryAfterRejection: (error: unknown, rejectionCount: number) => boolean,
+): Promise<TClaim | { kind: "duplicate" }> {
+  let rejectionCount = 0;
+  while (true) {
+    const claim = await claimNext();
+    if (claim.kind !== "inflight") {
+      return claim;
+    }
+    try {
+      await claim.pending;
+      return { kind: "duplicate" };
+    } catch (error) {
+      if (!retryAfterRejection(error, ++rejectionCount)) {
+        return { kind: "duplicate" };
+      }
+    }
+  }
+}
+
 /** Create a claim/commit/release dedupe guard backed by memory and optional persistent storage. */
 export function createClaimableDedupe(
   options: ClaimableDedupeOptions,

@@ -26,6 +26,26 @@ export function parseArgs(
       repo: string;
     };
 /**
+ * Runs a GitHub CLI command with the workflow timeout policy.
+ */
+export function defaultRunGh(
+  args: string[],
+  options?: { input?: string },
+  params?: {
+    execFileSyncImpl?: (
+      command: string,
+      args: string[],
+      options: {
+        encoding: "utf8";
+        input?: string;
+        killSignal: "SIGKILL";
+        stdio: ["ignore", "pipe", "inherit"] | ["pipe", "pipe", "inherit"];
+        timeout: number;
+      },
+    ) => string;
+  },
+): string;
+/**
  * Parses changed hunk ranges from unified diff text.
  */
 export function parseUnifiedDiffRanges(diffText: unknown): Map<unknown, unknown>;

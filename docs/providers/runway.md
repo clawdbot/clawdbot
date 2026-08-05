@@ -29,7 +29,7 @@ OpenClaw ships a bundled `runway` provider for hosted video generation, enabled 
   </Step>
   <Step title="Set Runway as the default video provider">
     ```bash
-    openclaw config set agents.defaults.videoGenerationModel.primary "runway/gen4.5"
+    openclaw config set agents.defaults.mediaModels.video.primary "runway/gen4.5"
     ```
   </Step>
   <Step title="Generate a video">

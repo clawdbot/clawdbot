@@ -1,5 +1,5 @@
-import "./openai-completions-transport.js";
-import "./openai-responses-transport.js";
+import "./ai-transport-runtime-host.js";
+import "@openclaw/ai/transports";
 
 const completionsTesting = globalThis.openclawOpenAICompletionsTransportTestApi;
 const responsesTesting = globalThis.openclawOpenAIResponsesTransportTestApi;

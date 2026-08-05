@@ -242,6 +242,41 @@ describe("Feishu app registration", () => {
     await expect(poll).resolves.toEqual({ status: "timeout" });
   });
 
+  it("stops polling promptly when abortSignal fires during the poll interval", async () => {
+    let requestCount = 0;
+    await withRegistrationServer(
+      (_req, res) => {
+        requestCount += 1;
+        writeJson(res, { error: "authorization_pending" });
+      },
+      async ({ fetchImpl, lookupFn }) => {
+        const controller = new AbortController();
+        const started = Date.now();
+
+        const poll = pollAppRegistration({
+          deviceCode: "device-code",
+          interval: 30,
+          expireIn: 600,
+          abortSignal: controller.signal,
+          fetchImpl,
+          lookupFn,
+        });
+        // Let the first poll resolve and the loop enter its 30s interval sleep.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        controller.abort();
+
+        await expect(poll).resolves.toEqual({ status: "timeout" });
+        expect(Date.now() - started).toBeLessThan(10_000);
+        expect(requestCount).toBe(1);
+        console.log(
+          `[feishu pollAppRegistration abort proof] interval=30s aborted_after=200ms elapsed=${Date.now() - started}ms requests=${requestCount} outcome=timeout`,
+        );
+      },
+    );
+  });
+
   it("prints scan-to-create QR codes with compact terminal rendering", async () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 

@@ -37,6 +37,7 @@ export type AgentRunRequest = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   acpTurnSource?: "manual_spawn";
   internalRuntimeHandoffId?: string;
+  internalExecutionIdentityRetry?: boolean;
   execApprovalFollowupExpectedSessionId?: string;
   internalEvents?: AgentInternalEvent[];
   suppressPromptPersistence?: boolean;
@@ -44,7 +45,10 @@ export type AgentRunRequest = {
   idempotencyKey: string;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
   forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   timeout?: number;
   bestEffortDeliver?: boolean;
   cleanupBundleMcpOnRunEnd?: boolean;

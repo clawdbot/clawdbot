@@ -12,7 +12,7 @@ import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
@@ -76,6 +76,43 @@ function mockSuccessfulSpawn(stdout = "ok\n") {
     })),
     cancel: vi.fn(),
   }));
+}
+
+function createBackendSandboxTool(params: {
+  workspaceDir: string;
+  validateWorkdir?: BashSandboxConfig["validateWorkdir"];
+  finalizeExec?: BashSandboxConfig["finalizeExec"];
+  discardPreparedWorkdir?: BashSandboxConfig["discardPreparedWorkdir"];
+  finalizeToken?: unknown;
+}) {
+  const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(async (input) => ({
+    argv: ["remote-shell", input.command],
+    env: {},
+    stdinMode: "pipe-open" as const,
+    ...(params.finalizeToken === undefined ? {} : { finalizeToken: params.finalizeToken }),
+  }));
+  const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
+    params.validateWorkdir ?? (async (workdir) => workdir),
+  );
+  const tool = createExecTool({
+    host: "sandbox",
+    security: "full",
+    ask: "off",
+    allowBackground: false,
+    sandbox: {
+      containerName: "remote-sandbox-workdir-test",
+      workspaceDir: params.workspaceDir,
+      containerWorkdir: "/remote/workspace",
+      workdirValidation: "backend",
+      validateWorkdir,
+      buildExecSpec,
+      ...(params.finalizeExec ? { finalizeExec: params.finalizeExec } : {}),
+      ...(params.discardPreparedWorkdir
+        ? { discardPreparedWorkdir: params.discardPreparedWorkdir }
+        : {}),
+    },
+  });
+  return { buildExecSpec, tool, validateWorkdir };
 }
 
 async function expectUnavailableWorkdir(params: {
@@ -196,7 +233,10 @@ describe("exec foreground failures", () => {
     expect(supervisorMock.spawn.mock.calls[0]?.[0]?.timeoutMs).toBe(1_000);
     const text = requireTextContent(result);
     expect(text).toMatch(/timed out/i);
-    expect(text).toMatch(/re-run with a higher timeout/i);
+    expect(text).toContain("external side effects may already have completed");
+    expect(text).toContain("Verify the resulting state before retrying");
+    expect(text).toContain("Do not automatically rerun non-idempotent commands");
+    expect(text).toContain("known to be safe to retry");
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.exitSignal).toBe("SIGKILL");
@@ -347,32 +387,8 @@ describe("exec foreground failures", () => {
 
   it("lets backend-validated sandbox workdirs reach the backend without host stat fallback", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
-      async (params) => ({
-        argv: ["remote-shell", params.command],
-        env: {},
-        stdinMode: "pipe-open" as const,
-      }),
-    );
-    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
-      async (workdir) => workdir,
-    );
+    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
     mockSuccessfulSpawn();
-
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      allowBackground: false,
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-        buildExecSpec,
-      },
-    });
 
     try {
       const result = await tool.execute("call-remote-sandbox-workdir", {
@@ -395,35 +411,13 @@ describe("exec foreground failures", () => {
   it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const finalizeToken = { session: "remote-session" };
-    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
-      async (params) => ({
-        argv: ["remote-shell", params.command],
-        env: {},
-        stdinMode: "pipe-open" as const,
-        finalizeToken,
-      }),
-    );
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
-    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
-      async (workdir) => workdir,
-    );
-    supervisorMock.spawn.mockRejectedValueOnce(new Error("spawn failed"));
-
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      allowBackground: false,
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-        buildExecSpec,
-        finalizeExec,
-      },
+    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({
+      workspaceDir,
+      finalizeExec,
+      finalizeToken,
     });
+    supervisorMock.spawn.mockRejectedValueOnce(new Error("spawn failed"));
 
     try {
       await expect(
@@ -450,33 +444,11 @@ describe("exec foreground failures", () => {
 
   it("rejects unsafe commands before backend workdir validation", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
-      async (params) => ({
-        argv: ["remote-shell", params.command],
-        env: {},
-        stdinMode: "pipe-open" as const,
-      }),
-    );
-    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
-      async (workdir) => workdir,
-    );
     const discardPreparedWorkdir =
       vi.fn<NonNullable<BashSandboxConfig["discardPreparedWorkdir"]>>();
-
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      allowBackground: false,
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-        discardPreparedWorkdir,
-        buildExecSpec,
-      },
+    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({
+      workspaceDir,
+      discardPreparedWorkdir,
     });
 
     try {
@@ -499,32 +471,8 @@ describe("exec foreground failures", () => {
   it("does not preflight remote-only backend workdirs from the local workspace root", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     fs.writeFileSync(path.join(workspaceDir, "script.py"), "print($TOKEN)\n");
-    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
-      async (params) => ({
-        argv: ["remote-shell", params.command],
-        env: {},
-        stdinMode: "pipe-open" as const,
-      }),
-    );
-    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
-      async (workdir) => workdir,
-    );
+    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
     mockSuccessfulSpawn();
-
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      allowBackground: false,
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-        buildExecSpec,
-      },
-    });
 
     try {
       const result = await tool.execute("call-remote-only-script", {
@@ -546,32 +494,8 @@ describe("exec foreground failures", () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const srcDir = path.join(workspaceDir, "src");
     fs.mkdirSync(srcDir);
-    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
-      async (params) => ({
-        argv: ["remote-shell", params.command],
-        env: {},
-        stdinMode: "pipe-open" as const,
-      }),
-    );
-    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
-      async (workdir) => workdir,
-    );
+    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
     mockSuccessfulSpawn();
-
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      allowBackground: false,
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-        buildExecSpec,
-      },
-    });
 
     try {
       const result = await tool.execute("call-relative-remote-sandbox-workdir", {
@@ -593,30 +517,9 @@ describe("exec foreground failures", () => {
 
   it("fails backend-validated sandbox workdirs before launch when backend validation rejects", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
-      async () => null,
-    );
-    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
-      async (params) => ({
-        argv: ["remote-shell", params.command],
-        env: {},
-        stdinMode: "pipe-open" as const,
-      }),
-    );
-
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      allowBackground: false,
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-        buildExecSpec,
-      },
+    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({
+      workspaceDir,
+      validateWorkdir: async () => null,
     });
 
     try {

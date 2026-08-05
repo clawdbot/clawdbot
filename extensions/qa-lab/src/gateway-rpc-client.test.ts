@@ -226,4 +226,24 @@ describe("startQaGatewayRpcClient", () => {
     );
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves the structured gateway request failure as the cause", async () => {
+    const gatewayError = Object.assign(new Error("history temporarily unavailable"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { method: "chat.history" },
+    });
+    gatewayRpcMock.callGatewayFromCli.mockRejectedValueOnce(gatewayError);
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "fixture",
+      logs: () => "qa gateway diagnostics",
+    });
+
+    await expect(client.request("chat.history")).rejects.toMatchObject({
+      message: "history temporarily unavailable\nGateway logs:\nqa gateway diagnostics",
+      cause: gatewayError,
+    });
+  });
 });

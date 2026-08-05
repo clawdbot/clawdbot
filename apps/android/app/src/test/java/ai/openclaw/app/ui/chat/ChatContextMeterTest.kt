@@ -18,7 +18,7 @@ class ChatContextMeterTest {
     assertTrue(starterPrompts.all { it.subtitle is NativeText.Resource })
     assertTrue(starterPrompts.all { it.message is NativeText.Resource })
     assertEquals(
-      "Catch me up on my recent OpenClaw sessions and suggest next steps.",
+      "Catch me up on my recent OpenClaw threads and suggest next steps.",
       starterPrompts.first().message.resolveNativeText(),
     )
   }

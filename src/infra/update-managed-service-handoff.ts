@@ -11,6 +11,7 @@ import {
 } from "../daemon/constants.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
@@ -123,7 +124,7 @@ function openStateDatabase() {
   try {
     const sqlite = require("node:sqlite");
     fs.mkdirSync(path.dirname(params.stateDatabasePath), { recursive: true, mode: 0o700 });
-    const db = new sqlite.DatabaseSync(params.stateDatabasePath);
+    const db = new sqlite.DatabaseSync(params.nodeSqliteLocation);
     db.exec("PRAGMA busy_timeout = ${HANDOFF_STATE_DATABASE_BUSY_TIMEOUT_MS};");
     db.exec([
       "CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (",
@@ -573,12 +574,37 @@ function startGatewayServiceBestEffort() {
 });
 `;
 
-type ManagedServiceUpdateHandoffResult = {
+type ManagedServiceUpdateHandoffParams = {
+  root: string;
+  timeoutMs?: number;
+  restartDrainTimeoutMs: number | undefined;
+  channel?: UpdateChannel;
+  restartDelayMs?: number;
+  meta: UpdateRestartSentinelMeta;
+  handoffId?: string;
+  supervisor?: RespawnSupervisor | null;
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+  argv1?: string;
+  parentPid?: number;
+};
+
+type StartedManagedServiceUpdateHandoff = {
   status: "started";
   pid?: number;
   command: string;
   logPath: string;
+  handoffId?: string;
 };
+
+type ManagedServiceUpdateHandoffResult = Omit<StartedManagedServiceUpdateHandoff, "status"> & {
+  status: "started" | "joined";
+};
+
+// Keep one helper per Gateway process through its lifetime. Readiness only
+// means it loaded its parameters; spawning another helper before it exits races
+// update mutation, service recovery, and restart sentinel ownership.
+let activeManagedServiceUpdateHandoff: Promise<StartedManagedServiceUpdateHandoff> | null = null;
 
 function isNodeLikeRuntime(execPath: string | undefined): boolean {
   if (!execPath?.trim()) {
@@ -839,20 +865,10 @@ async function resolveHandoffSpawn(params: {
   };
 }
 
-export async function startManagedServiceUpdateHandoff(params: {
-  root: string;
-  timeoutMs?: number;
-  restartDrainTimeoutMs: number | undefined;
-  channel?: UpdateChannel;
-  restartDelayMs?: number;
-  meta: UpdateRestartSentinelMeta;
-  handoffId?: string;
-  supervisor?: RespawnSupervisor | null;
-  env?: NodeJS.ProcessEnv;
-  execPath?: string;
-  argv1?: string;
-  parentPid?: number;
-}): Promise<ManagedServiceUpdateHandoffResult> {
+async function spawnManagedServiceUpdateHandoff(
+  params: ManagedServiceUpdateHandoffParams,
+  onExit: () => void,
+): Promise<StartedManagedServiceUpdateHandoff> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
   const scriptPath = path.join(dir, "handoff.cjs");
   const paramsPath = path.join(dir, "handoff.json");
@@ -873,6 +889,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     version: 1,
     meta: params.meta,
   };
+  const stateDatabasePath = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
     // An undefined drain timeout is the configured indefinite-wait contract.
@@ -888,12 +905,13 @@ export async function startManagedServiceUpdateHandoff(params: {
     handoffId: params.handoffId,
     logPath,
     metaPath,
-    stateDatabasePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
+    stateDatabasePath,
+    nodeSqliteLocation: resolveNodeSqliteLocation(stateDatabasePath),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };
 
-  let child: HandoffChild;
+  let child!: HandoffChild;
   try {
     await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
@@ -918,10 +936,13 @@ export async function startManagedServiceUpdateHandoff(params: {
       detached: true,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    // systemd-run can spawn before the user manager accepts the scope. Only let
-    // callers terminate the Gateway after the helper itself loads its params.
+    child.once("exit", onExit);
+    // systemd-run --scope remains synchronous until the helper exits, so this
+    // child's exit owns the full handoff lifetime. Readiness still must wait
+    // until the helper loads its params before callers terminate the Gateway.
     await waitForHandoffReady(child);
   } catch (err) {
+    child?.removeListener("exit", onExit);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
@@ -932,7 +953,32 @@ export async function startManagedServiceUpdateHandoff(params: {
     ...(child.pid ? { pid: child.pid } : {}),
     command: commandLabel,
     logPath,
+    ...(params.handoffId ? { handoffId: params.handoffId } : {}),
   };
+}
+
+export async function startManagedServiceUpdateHandoff(
+  params: ManagedServiceUpdateHandoffParams,
+): Promise<ManagedServiceUpdateHandoffResult> {
+  const active = activeManagedServiceUpdateHandoff;
+  if (active) {
+    return { ...(await active), status: "joined" };
+  }
+
+  const flight = spawnManagedServiceUpdateHandoff(params, () => {
+    if (activeManagedServiceUpdateHandoff === flight) {
+      activeManagedServiceUpdateHandoff = null;
+    }
+  });
+  activeManagedServiceUpdateHandoff = flight;
+  try {
+    return await flight;
+  } catch (err) {
+    if (activeManagedServiceUpdateHandoff === flight) {
+      activeManagedServiceUpdateHandoff = null;
+    }
+    throw err;
+  }
 }
 
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {

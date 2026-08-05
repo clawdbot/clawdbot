@@ -103,6 +103,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const spacer = () => defaultRuntime.log("");
 
   const { service, rpc, extraServices } = status;
+  const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
   const serviceStatus = service.loaded
     ? okText(service.loadedText)
     : warnText(service.notLoadedText);
@@ -269,7 +270,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
 
-  if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
+  if (
+    rpc &&
+    !rpc.ok &&
+    serviceTargetsProbe &&
+    service.loaded &&
+    service.runtime?.status === "running"
+  ) {
     // The RPC probe failed while the service is loaded and running. Only the case where
     // the gateway process is up and owns the listening port (health.healthy === true with
     // no stale gateway PIDs, deep status only) is an unambiguous "not warm-up" signal, so it
@@ -475,6 +482,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (
+    serviceTargetsProbe &&
     service.loaded &&
     service.runtime?.status === "running" &&
     status.port &&
@@ -508,7 +516,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     for (const svc of extraServices) {
       defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
-    for (const hint of renderGatewayServiceCleanupHints()) {
+    for (const hint of renderGatewayServiceCleanupHints(extraServices)) {
       defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
     }
     spacer();

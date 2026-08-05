@@ -1,6 +1,7 @@
 // Voice Call plugin module implements cli behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -193,11 +194,17 @@ async function pollVoiceCallContinueGateway(params: {
 }): Promise<unknown> {
   const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);
 
-  while (Date.now() <= deadlineMs) {
+  for (;;) {
+    // Sleep already clamps to remaining budget; the gateway RPC must too.
+    // Otherwise the final poll can overrun the continue deadline by a full RPC timeout.
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
     const gateway = await callVoiceCallGateway(
       "voicecall.continue.result",
       { operationId: params.operationId },
-      { timeoutMs: VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS },
+      { timeoutMs: Math.min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs) },
     );
     if (!gateway.ok) {
       throw new Error(
@@ -213,9 +220,11 @@ async function pollVoiceCallContinueGateway(params: {
     if (result.status === "failed") {
       throw new Error(result.error);
     }
-    await sleep(
-      Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())),
-    );
+    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - Date.now());
+    if (sleepMs <= 0) {
+      break;
+    }
+    await sleep(sleepMs);
   }
 
   throw new Error("voicecall continue timed out waiting for gateway operation");
@@ -758,27 +767,38 @@ export function registerVoiceCallCli(params: {
       };
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const initial = fs.readFileSync(file, "utf8");
-        const lines = initial.split("\n").filter(Boolean);
+        const initial = fs.readFileSync(file);
+        let decoder = new StringDecoder("utf8");
+        const initialLines = decoder.write(initial).split("\n");
+        let pendingLine = initialLines.pop() ?? "";
+        const lines = initialLines.filter(Boolean);
         for (const line of lines.slice(Math.max(0, lines.length - since))) {
           writeStdoutLine(line);
         }
 
-        let offset = Buffer.byteLength(initial, "utf8");
+        let offset = initial.length;
+        let lastObservedSize = initial.length;
         for (;;) {
           try {
             const stat = fs.statSync(file);
-            if (stat.size < offset) {
+            // A short read can leave the cursor behind the observed file size;
+            // compare observed sizes so copytruncate also clears buffered text.
+            if (stat.size < lastObservedSize) {
               offset = 0;
+              decoder = new StringDecoder("utf8");
+              pendingLine = "";
             }
+            lastObservedSize = stat.size;
             if (stat.size > offset) {
               const fd = fs.openSync(file, "r");
               try {
                 const buf = Buffer.alloc(stat.size - offset);
-                fs.readSync(fd, buf, 0, buf.length, offset);
-                offset = stat.size;
-                const text = buf.toString("utf8");
-                for (const line of text.split("\n").filter(Boolean)) {
+                const bytesRead = fs.readSync(fd, buf, 0, buf.length, offset);
+                offset += bytesRead;
+                const text = decoder.write(buf.subarray(0, bytesRead));
+                const completeLines = `${pendingLine}${text}`.split("\n");
+                pendingLine = completeLines.pop() ?? "";
+                for (const line of completeLines.filter(Boolean)) {
                   writeStdoutLine(line);
                 }
               } finally {

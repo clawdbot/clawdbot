@@ -8,8 +8,8 @@ inputs:
   contents-private-key:
     description: GitHub App private key with contents write access.
     required: true
-  pull-request-app-id:
-    description: GitHub App id with pull-request write access.
+  pull-request-client-id:
+    description: GitHub App client id with pull-request write access.
     required: true
   pull-request-private-key:
     description: GitHub App private key with pull-request write access.
@@ -57,8 +57,9 @@ runs:
       with:
         contents-client-id: ${{ inputs.contents-client-id }}
         contents-private-key: ${{ inputs.contents-private-key }}
-        pull-request-app-id: ${{ inputs.pull-request-app-id }}
+        pull-request-client-id: ${{ inputs.pull-request-client-id }}
         pull-request-private-key: ${{ inputs.pull-request-private-key }}
+        pull-request-contents-permission: ${{ inputs.auto-merge == 'true' && 'write' || '' }}
 
     - name: Publish generated pull request
       shell: bash

@@ -5,6 +5,10 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import type { SecretAssignmentDisposition, SecretOwnerKind } from "./runtime-degraded-state.js";
+import {
+  canonicalizeSecretRefsForOwnerContract,
+  digestSecretOwnerContract,
+} from "./runtime-owner-contract.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
@@ -35,13 +39,47 @@ export type SecretAssignment = {
   ownerId: string;
   requiredForGateway: boolean;
   disposition: SecretAssignmentDisposition;
+  /** Digest of the complete owner config captured before secret materialization. */
+  ownerContractDigest?: string;
   apply: (value: unknown) => void;
+  /** Applies the canonical unavailable state when this owner must start cold. */
+  applyUnavailable?: () => void;
 };
+
+type SecretAssignmentValidationFailure = Pick<
+  SecretAssignment,
+  "ownerKind" | "ownerId" | "expected"
+> & {
+  refKey: string;
+};
+
+class SecretAssignmentValidationError extends Error {
+  readonly failures: SecretAssignmentValidationFailure[];
+
+  constructor(params: { failures: SecretAssignmentValidationFailure[]; error: Error }) {
+    super(params.error.message, { cause: params.error });
+    this.name = "SecretAssignmentValidationError";
+    this.failures = params.failures.map((failure) => ({ ...failure }));
+  }
+}
+
+/** Returns every assignment whose resolved value failed its target shape contract. */
+export function getSecretAssignmentValidationFailures(
+  error: unknown,
+): SecretAssignmentValidationFailure[] {
+  if (!(error instanceof SecretAssignmentValidationError)) {
+    return [];
+  }
+  return error.failures.map((failure) => ({ ...failure }));
+}
 
 export type SecretAssignmentOwner = Pick<
   SecretAssignment,
   "ownerKind" | "ownerId" | "requiredForGateway" | "disposition"
->;
+> & {
+  /** Complete config that controls where/how this owner uses the credential. */
+  contract?: unknown;
+};
 
 export type ResolverContext = {
   sourceConfig: OpenClawConfig;
@@ -124,6 +162,7 @@ export function collectSecretInputAssignment(params: {
   inactiveReason?: string;
   owner?: SecretAssignmentOwner;
   apply: (value: unknown) => void;
+  applyUnavailable?: () => void;
 }): void {
   collectRuntimeSecretInputAssignment(params);
 }
@@ -139,6 +178,7 @@ export function collectRuntimeSecretInputAssignment(params: {
   inactiveReason?: string;
   owner?: SecretAssignmentOwner;
   apply: (value: unknown) => void;
+  applyUnavailable?: () => void;
 }): void {
   const ref = coerceSecretRef(params.value, params.defaults);
   if (!ref) {
@@ -160,7 +200,15 @@ export function collectRuntimeSecretInputAssignment(params: {
     ownerId: params.owner?.ownerId ?? params.path,
     requiredForGateway: params.owner?.requiredForGateway ?? false,
     disposition: params.owner?.disposition ?? "isolate",
+    ...(params.owner?.contract !== undefined
+      ? {
+          ownerContractDigest: digestSecretOwnerContract(
+            canonicalizeSecretRefsForOwnerContract(params.owner.contract, params.defaults),
+          ),
+        }
+      : {}),
     apply: params.apply,
+    ...(params.applyUnavailable ? { applyUnavailable: params.applyUnavailable } : {}),
   });
 }
 
@@ -172,21 +220,37 @@ export function applyResolvedAssignments(params: {
   resolved: Map<string, unknown>;
 }): void {
   const values: unknown[] = [];
+  const failures: SecretAssignmentValidationFailure[] = [];
+  let firstValidationError: Error | undefined;
   for (const assignment of params.assignments) {
     const key = secretRefKey(assignment.ref);
     if (!params.resolved.has(key)) {
       throw new Error(`Secret reference "${key}" resolved to no value.`);
     }
     const value = params.resolved.get(key);
-    assertExpectedResolvedSecretValue({
-      value,
-      expected: assignment.expected,
-      errorMessage:
-        assignment.expected === "string"
-          ? `${assignment.path} resolved to a non-string or empty value.`
-          : `${assignment.path} resolved to an unsupported value type.`,
-    });
+    try {
+      assertExpectedResolvedSecretValue({
+        value,
+        expected: assignment.expected,
+        errorMessage:
+          assignment.expected === "string"
+            ? `${assignment.path} resolved to a non-string or empty value.`
+            : `${assignment.path} resolved to an unsupported value type.`,
+      });
+    } catch (error) {
+      const validationError = error instanceof Error ? error : new Error(String(error));
+      firstValidationError ??= validationError;
+      failures.push({
+        ownerKind: assignment.ownerKind,
+        ownerId: assignment.ownerId,
+        expected: assignment.expected,
+        refKey: key,
+      });
+    }
     values.push(value);
+  }
+  if (firstValidationError) {
+    throw new SecretAssignmentValidationError({ error: firstValidationError, failures });
   }
   for (const [index, assignment] of params.assignments.entries()) {
     assignment.apply(values[index]);

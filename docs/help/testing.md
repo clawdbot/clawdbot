@@ -15,7 +15,7 @@ regressions for real-world provider/model bugs.
 <Note>
 **QA stack (qa-lab, qa-channel, live transport lanes)** is documented separately:
 
-- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and Matrix profiles.
+- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and the Matrix live lane.
 - [Maturity scorecard](/maturity/scorecard) - how release QA evidence supports stability and LTS decisions.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
@@ -173,12 +173,9 @@ checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
 `full` profile forces soak on. `QA-Lab - All Lanes` runs nightly on `main` and
 from manual dispatch with the mock parity lane, live Matrix lane,
 Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks run the Matrix release profile
-through the shared live adapter. The Matrix CLI and manual workflow input
-default remain `all`; manual `all` dispatches fan out the transport, media, and
-E2EE profiles, while focused dispatches can select `fast`, `release`, or
-`transport`. `OpenClaw Release Checks` runs parity plus the reusable Matrix
-live-adapter profile and Telegram lane before release approval. Release
+parallel jobs. Scheduled QA and release checks run the catalog-derived Matrix
+selection through the shared live adapter. `OpenClaw Release Checks` runs parity plus the
+reusable Matrix live-adapter lane and Telegram lane before release approval. Release
 transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
 avoid normal provider-plugin startup. These live transport gateways
 disable memory search; memory behavior stays covered by the QA parity suites.
@@ -403,6 +400,18 @@ gh workflow run package-acceptance.yml --ref main \
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
+- `pnpm openclaw qa buzz`
+  - Runs the Buzz live QA lane against a real relay room using dedicated driver
+    and SUT identities.
+  - Local runs use `--credential-file <path>` with `relayUrl`, `roomId`,
+    `driverPrivateKey`, and `sutPrivateKey`. Closed relays may also need
+    `driverAuthTag` and `sutAuthTag`. Hosted relays require `wss://`; `ws://` is
+    accepted only for loopback development relays.
+  - Defaults to `mock-openai` and runs canary and mention-gating scenarios
+    through the real Buzz plugin path.
+  - Supports `--credential-source convex` with a pooled `kind: "buzz"` row.
+    Both public keys must be relay/room members, and the SUT must have the
+    **Bot** room role. Never use a human owner or admin private key.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel
     homeserver. Source-checkout only - packaged installs do not ship
@@ -491,8 +500,8 @@ drift; the per-lane coverage matrix lives in
 When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`)
 is enabled for live transport QA, QA lab acquires an exclusive lease from a
 Convex-backed pool, heartbeats that lease while the lane is running, and
-releases the lease on shutdown. The section name predates Discord, Slack, and
-WhatsApp support; the lease contract is shared across kinds.
+releases the lease on shutdown. The section name predates Buzz, Discord, Slack,
+and WhatsApp support; the lease contract is shared across kinds.
 
 Reference Convex project scaffold: `qa/convex-credential-broker/`
 
@@ -578,6 +587,7 @@ Payload shape for Telegram real-user kind:
 
 Broker-validated multi-channel payloads:
 
+- Buzz: `{ relayUrl: string, roomId: string, driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string, sutAuthTag?: string }`
 - Discord: `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string, voiceChannelId?: string }`
 - WhatsApp: `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }`
 

@@ -7,6 +7,7 @@ import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { buildCodexHookRequester } from "./hook-requester.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
@@ -21,8 +22,8 @@ import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   retainSharedCodexAppServerClientIfCurrent,
-  retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import { createCodexTrajectoryRecorder, type CodexHostTrajectoryRecorder } from "./trajectory.js";
@@ -53,7 +54,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
     trajectoryRecorder: hostTrajectoryRecorder,
-    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
     warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
@@ -75,6 +75,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       | CodexNativePreToolUseFailure["disposition"]
       | undefined,
     releaseSharedClientLease: undefined as (() => void) | undefined,
+    startupClientUnsafe: false,
     sharedCodexClientRetiredForOneShotCleanup: false,
     sandboxExecEnvironmentAcquired: false,
     codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,
@@ -132,16 +133,17 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       return;
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
-    const retired = retireSharedCodexAppServerClientIfCurrent(state.client);
-    embeddedAgentLog.info("codex app-server one-shot cleanup retired shared client", {
+    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
+    embeddedAgentLog.info("codex app-server one-shot cleanup checked shared client retirement", {
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      activeLeases: retired?.activeLeases ?? null,
-      closed: retired?.closed ?? false,
-      matchedSharedClient: Boolean(retired),
+      activeLeases: retired.activeLeases,
+      pendingAcquires: retired.pendingAcquires,
+      closed: retired.closed,
+      matchedSharedClient: retired.found,
     });
-    if (retired?.closed) {
+    if (retired.closed) {
       await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     }
   };
@@ -182,6 +184,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
+  const requesterChannel = params.messageChannel ?? params.messageProvider;
+  const requester = buildCodexHookRequester(params);
   const buildNativeHookRelayFinalConfigPatch = (
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
@@ -201,6 +205,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       config: params.config,
       runId: params.runId,
       channelId: hookChannelId,
+      ...(requester ? { requester } : {}),
+      approvalContext: {
+        trigger: params.trigger,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+        turnSourceChannel: requesterChannel,
+        turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+        turnSourceAccountId: params.agentAccountId,
+        turnSourceThreadId: params.currentThreadTs,
+      },
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,

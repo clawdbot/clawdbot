@@ -19,6 +19,7 @@ type WorkflowStep = {
   run?: string;
   uses?: string;
   with?: Record<string, unknown>;
+  "working-directory"?: string;
 };
 
 type WorkflowJob = {
@@ -61,10 +62,34 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain("TSX_VERSION");
   });
 
-  it("bounds npm baseline packing during prepare", () => {
-    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+  it("retries only an interrupted Windows dashboard probe", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const consumer = job(workflow, "cross_os_release_checks");
+    const run = step(consumer, "Run cross-OS release checks").run;
 
-    expect(workflow).toContain("timeout --preserve-status 300s npm pack --ignore-scripts");
+    expect(run).toContain("run_cross_os_release_checks() {");
+    expect(run).toContain("if run_cross_os_release_checks; then");
+    expect(run).toContain('"${OPENCLAW_RELEASE_CHECK_OS}" != "windows"');
+    expect(run).toContain('"$status" -ne 127');
+    expect(run).toContain('dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"');
+    expect(run).toContain('-f "${OUTPUT_DIR}/summary.json"');
+    expect(run).toContain("attempt=.*url=http://127.0.0.1:");
+    expect(run).toContain("retrying Windows release checks after the outer process exited 127");
+    expect(run).toContain("run_cross_os_release_checks\n");
+  });
+
+  it("bounds npm baseline packing during prepare", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const baselineMetadata = step(job(workflow, "prepare"), "Capture baseline metadata");
+
+    expect(readFileSync(WORKFLOW_PATH, "utf8")).toContain(
+      "timeout --preserve-status 300s npm pack --ignore-scripts",
+    );
+    expect(baselineMetadata["working-directory"]).toBe("workflow");
+    expect(baselineMetadata.run).toContain(
+      'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";',
+    );
+    expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
 
   it("keeps release artifact tarball filenames local before upload paths use them", () => {
@@ -261,6 +286,10 @@ describe("cross-OS release checks workflow", () => {
     );
 
     const resolve = step(prepare, "Resolve provided candidate package");
+    expect(step(prepare, "Install workflow validation dependencies")).toMatchObject({
+      if: "inputs.candidate_artifact_name != ''",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    });
     expect(resolve.run).toContain("resolve-openclaw-package-candidate.mjs");
     expect(resolve.run).toContain("--source artifact");
     expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');

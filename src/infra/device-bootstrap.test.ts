@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { flushLogger } from "../logging/logger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -64,7 +65,13 @@ describe("device bootstrap tokens", () => {
       issuedAtMs: Date.now(),
       profile: {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     });
   });
@@ -154,7 +161,13 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
@@ -426,6 +439,8 @@ describe("device bootstrap tokens", () => {
       },
     });
 
+    // The file transport appends asynchronously; drain it before reading.
+    await flushLogger();
     const content = await fs.readFile(logPath, "utf8");
     expect(content).toContain("bootstrap_token_scopes_stripped");
     expect(content).toContain("node.exec");
@@ -499,7 +514,7 @@ describe("device bootstrap tokens", () => {
 
   it("accepts equivalent public key encodings after binding the bootstrap token", async () => {
     const baseDir = await createTempDir();
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "device.json"));
+    const identity = loadOrCreateDeviceIdentity({ path: path.join(baseDir, "device.sqlite") });
     const issued = await issueDeviceBootstrapToken({ baseDir });
     const rawPublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
 
@@ -524,7 +539,13 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      scopes: [
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
     });
   });
 

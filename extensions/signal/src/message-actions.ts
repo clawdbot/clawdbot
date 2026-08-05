@@ -116,9 +116,17 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "react") {
+      const account = resolveSignalAccount({ cfg, accountId });
+      if (!account.enabled) {
+        throw new Error(`Signal account "${account.accountId}" is disabled.`);
+      }
+      if (!account.configured) {
+        throw new Error(`Signal account "${account.accountId}" is not configured.`);
+      }
+
       const reactionLevelInfo = resolveSignalReactionLevel({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId: account.accountId,
       });
       if (!reactionLevelInfo.agentReactionsEnabled) {
         throw new Error(
@@ -127,18 +135,15 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         );
       }
 
-      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
-      const isActionEnabled = createActionGate(actionConfig);
+      const isActionEnabled = createActionGate(account.config.actions);
       if (!isActionEnabled("reactions")) {
         throw new Error("Signal reactions are disabled via actions.reactions.");
       }
 
-      const recipientRaw =
-        readStringParam(params, "recipient") ??
-        readStringParam(params, "to", {
-          required: true,
-          label: "recipient (UUID, phone number, or group)",
-        });
+      const recipientRaw = readStringParam(params, "to", {
+        required: true,
+        label: "recipient (UUID, phone number, or group)",
+      });
       const target = resolveSignalReactionTarget(recipientRaw);
       if (!target.recipient && !target.groupId) {
         throw new Error("recipient or group required");
@@ -171,7 +176,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         }
         return await mutateSignalReaction({
           cfg,
-          accountId: accountId ?? undefined,
+          accountId: account.accountId,
           target,
           timestamp,
           emoji,
@@ -186,7 +191,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
       return await mutateSignalReaction({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId: account.accountId,
         target,
         timestamp,
         emoji,

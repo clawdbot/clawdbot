@@ -39,6 +39,7 @@ describe("minimax model definitions", () => {
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
     expect(model).toEqual({
+      compat: { codeMode: "preferred" },
       contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
       cost: MINIMAX_API_COST,
       id: "MiniMax-M3",

@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -41,6 +42,7 @@ import {
   readQaChildOutput,
 } from "./child-output.js";
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
+import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
@@ -68,6 +70,7 @@ import {
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
 import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -79,9 +82,13 @@ const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
-const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
+// The Gateway owns a 25s shutdown watchdog. Let it flush provider state before
+// the QA parent escalates to a process-tree kill.
+const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
 // Loaded Docker runners can take several seconds to reap a force-killed process group.
 const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
+const QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS = 5_000;
+const QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS = 2_048;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
@@ -130,6 +137,18 @@ function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   return env;
 }
 
+function scrubQaGatewayChildTestRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // The Gateway is a product child, not a nested Vitest worker. Leaking runner
+  // markers makes the dist launcher select test-only startup behavior.
+  delete env.VITEST;
+  delete env.VITEST_POOL_ID;
+  delete env.VITEST_WORKER_ID;
+  if (env.NODE_ENV === "test") {
+    delete env.NODE_ENV;
+  }
+  return env;
+}
+
 function createQaGatewayEmptyTransport() {
   return {
     requiredPluginIds: [] as const,
@@ -138,7 +157,7 @@ function createQaGatewayEmptyTransport() {
 }
 
 function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
-  for (const relativePath of ["dist/index.mjs", "dist/index.js"]) {
+  for (const relativePath of ["scripts/run-node.mjs", "dist/index.mjs", "dist/index.js"]) {
     const entryPath = path.join(repoRoot, relativePath);
     if (existsSync(entryPath)) {
       return {
@@ -150,16 +169,9 @@ function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
     }
   }
 
-  const sourceEntryPath = path.join(repoRoot, "src/entry.ts");
-  if (existsSync(sourceEntryPath)) {
-    return {
-      executablePath: process.execPath,
-      argsPrefix: ["--import", "tsx", sourceEntryPath],
-      cwd: repoRoot,
-    };
-  }
-
-  throw new Error("OpenClaw CLI entry not found: expected dist/index.(m)js or src/entry.ts");
+  throw new Error(
+    "OpenClaw CLI entry not found: expected scripts/run-node.mjs or dist/index.(m)js",
+  );
 }
 
 async function runQaGatewayCliCommand(params: {
@@ -246,10 +258,29 @@ async function getFreePort() {
   });
 }
 
-async function closeWriteStream(stream: WriteStream) {
-  await new Promise<void>((resolve) => {
-    stream.end(() => resolve());
-  });
+async function closeWriteStream(
+  stream: WriteStream,
+  label: "stderr" | "stdout",
+  timeoutMs = QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS,
+) {
+  if (stream.destroyed) {
+    return;
+  }
+  stream.end();
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    await finished(stream, { cleanup: true, signal });
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+    // Gateway logs are diagnostic only. Never let a stuck filesystem flush
+    // retain the stopped child runtime and its live transport credentials.
+    process.stderr.write(
+      `[qa-suite] ${label} gateway log flush exceeded ${timeoutMs}ms; forcing close\n`,
+    );
+    stream.destroy();
+  }
 }
 
 async function writeSanitizedQaGatewayDebugLog(params: { sourcePath: string; targetPath: string }) {
@@ -425,15 +456,40 @@ export function buildQaRuntimeEnv(params: {
   };
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  return scrubQaGatewayChildSecretEnv(normalizedEnv);
+  return scrubQaGatewayChildSecretEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
+}
+
+async function stageQaCodexMockModelCatalog(params: {
+  tempRoot: string;
+  forcedRuntime?: RuntimeId;
+  providerMode: QaProviderMode;
+  primaryModel?: string;
+  alternateModel?: string;
+}): Promise<string | undefined> {
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return undefined;
+  }
+  const modelCatalogPath = path.join(params.tempRoot, "codex-model-catalog.json");
+  const selectedModelRefs = [params.primaryModel, params.alternateModel].filter(
+    (model): model is string => typeof model === "string" && model.length > 0,
+  );
+  await fs.writeFile(
+    modelCatalogPath,
+    `${JSON.stringify({ models: listMockCodexModelInfos(selectedModelRefs) }, null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  return modelCatalogPath;
 }
 
 function buildQaForcedRuntimeEnvPatch(params: {
   forcedRuntime?: RuntimeId;
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
+  codexModelCatalogPath?: string;
+  nativeAppServerArgs?: string;
 }): NodeJS.ProcessEnv | undefined {
   if (!params.forcedRuntime) {
     return undefined;
@@ -442,14 +498,26 @@ function buildQaForcedRuntimeEnvPatch(params: {
     OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
   };
-  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+  if (params.forcedRuntime !== "codex") {
+    return patch;
+  }
+  if (params.providerMode !== "mock-openai") {
+    patch.OPENCLAW_CODEX_APP_SERVER_ARGS = buildQaCodexAppServerArgs({
+      existingArgs: params.nativeAppServerArgs,
+    });
     return patch;
   }
   const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
   if (!providerBaseUrl) {
     throw new Error("forced Codex mock QA requires the managed mock provider URL");
   }
-  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
+  if (!params.codexModelCatalogPath) {
+    throw new Error("forced Codex mock QA requires the staged native model catalog");
+  }
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = buildQaCodexAppServerArgs({
+    providerBaseUrl,
+    modelCatalogPath: params.codexModelCatalogPath,
+  });
   patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
   patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
   return patch;
@@ -591,6 +659,7 @@ async function waitForQaGatewayRestartBoundary(params: {
 
 export const testing = {
   assertQaArtifactDirWithinRepo,
+  buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
   cleanupQaGatewayTempRoots,
   fetchLocalGatewayHealth,
@@ -603,10 +672,12 @@ export const testing = {
   resolveQaGatewayChildProviderMode,
   resolveQaGatewayChildCommand,
   createQaGatewayEmptyTransport,
+  waitForGatewayReady,
   assertQaLiveCodexAuthAvailable,
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
+  stageQaCodexMockModelCatalog,
   resolveQaLiveCliAuthEnv,
   waitForQaGatewayRestartBoundary,
   resolveQaOwnerPluginIdsForProviderIds,
@@ -622,7 +693,9 @@ export const testing = {
   signalQaGatewayChildProcessTree,
   resolveQaGatewayChildStopTimeouts,
   stopQaGatewayChildProcessTree,
-  classifyLinuxProcessGroupStats,
+  inspectLinuxProcessGroupStats,
+  isQaGatewayChildProcessTreeAlive,
+  closeWriteStream,
 };
 
 function hasChildExited(child: ChildProcess) {
@@ -634,36 +707,73 @@ function isProcessAlreadyExitedError(error: unknown): boolean {
 }
 
 function parseLinuxProcessStat(raw: string) {
+  const commandStart = raw.indexOf("(");
   const commandEnd = raw.lastIndexOf(")");
-  if (commandEnd < 0) {
+  if (commandStart <= 0 || commandEnd <= commandStart) {
     return null;
   }
+  const pid = Number.parseInt(raw.slice(0, commandStart).trim(), 10);
   const fields = raw
     .slice(commandEnd + 1)
     .trim()
     .split(/\s+/u);
   const state = fields[0];
   const processGroupId = Number.parseInt(fields[2] ?? "", 10);
-  if (!state || !Number.isSafeInteger(processGroupId) || processGroupId <= 0) {
+  if (
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    !state ||
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 0
+  ) {
     return null;
   }
-  return { processGroupId, state };
+  return {
+    command: raw.slice(commandStart + 1, commandEnd),
+    pid,
+    processGroupId,
+    state,
+  };
 }
 
-function classifyLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
+function boundQaGatewayProcessTreeDiagnostics(details: string) {
+  if (details.length <= QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS) {
+    return details;
+  }
+  return `${sliceUtf16Safe(details, 0, QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS - 3)}...`;
+}
+
+function inspectLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
   const members = stats
     .map((raw) => parseLinuxProcessStat(raw))
     .filter(
       (entry): entry is NonNullable<ReturnType<typeof parseLinuxProcessStat>> =>
         entry?.processGroupId === processGroupId,
-    );
-  if (members.length === 0) {
-    return null;
-  }
-  return members.some((entry) => entry.state !== "Z" && entry.state !== "X");
+    )
+    .toSorted((left, right) => left.pid - right.pid);
+  const diagnostics = members
+    .map(
+      (member) =>
+        `pid=${member.pid} state=${member.state} command=${JSON.stringify(member.command)}`,
+    )
+    .join(", ");
+  return {
+    alive:
+      members.length === 0
+        ? null
+        : members.some((entry) => entry.state !== "Z" && entry.state !== "X"),
+    diagnostics: boundQaGatewayProcessTreeDiagnostics(
+      `pgid=${processGroupId} members=[${diagnostics}]`,
+    ),
+  };
 }
 
-function inspectLinuxProcessGroupLiveness(processGroupId: number) {
+type QaLinuxProcessGroupInspection = ReturnType<typeof inspectLinuxProcessGroupStats>;
+type QaLinuxProcessGroupInspector = (
+  processGroupId: number,
+) => QaLinuxProcessGroupInspection | null;
+
+function inspectLinuxProcessGroup(processGroupId: number): QaLinuxProcessGroupInspection | null {
   if (process.platform !== "linux") {
     return null;
   }
@@ -680,14 +790,20 @@ function inspectLinuxProcessGroupLiveness(processGroupId: number) {
     }
     try {
       stats.push(readFileSync(path.join("/proc", entry.name, "stat"), "utf8"));
-    } catch {
+    } catch (error) {
       // Processes can exit while /proc is being scanned.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return null;
+      }
     }
   }
-  return classifyLinuxProcessGroupStats(processGroupId, stats);
+  return inspectLinuxProcessGroupStats(processGroupId, stats);
 }
 
-function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
+function isQaGatewayChildProcessTreeAlive(
+  child: ChildProcess,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector = inspectLinuxProcessGroup,
+) {
   if (!child.pid) {
     return false;
   }
@@ -696,12 +812,12 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
   }
   try {
     process.kill(-child.pid, 0);
-    if (!hasChildExited(child)) {
-      return true;
+    if (process.platform === "linux") {
+      // Linux can retain zombie-only process groups after SIGKILL while Node's
+      // child metadata is still unsettled. Runnable /proc members are the owner.
+      return inspectLinuxProcessGroupFn(child.pid)?.alive ?? true;
     }
-    // Container PID 1 can leave killed descendants as zombies. They cannot
-    // retain ports or execute work, so do not make release QA wait forever.
-    return inspectLinuxProcessGroupLiveness(child.pid) ?? true;
+    return true;
   } catch (error) {
     if (!isProcessAlreadyExitedError(error) && !hasChildExited(child)) {
       return true;
@@ -767,43 +883,78 @@ function signalQaGatewayChildProcessTree(
   }
 }
 
-async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number) {
+async function waitForQaGatewayChildExit(
+  child: ChildProcess,
+  timeoutMs: number,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
-    if (!isQaGatewayChildProcessTreeAlive(child)) {
+    if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
       return true;
     }
     await sleep(Math.min(25, Math.max(0, deadline - Date.now())));
   }
-  return !isQaGatewayChildProcessTreeAlive(child);
+  return !isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn);
 }
 
-function resolveQaGatewayChildStopTimeouts(opts?: {
+type QaGatewayChildStopOptions = {
   gracefulTimeoutMs?: number;
   forceTimeoutMs?: number;
-}) {
+  inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
+};
+
+function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
   return {
     gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
     forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
   };
 }
 
+function formatQaGatewayProcessTreeDiagnostics(
+  child: ChildProcess,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
+) {
+  const childExitRecorded = hasChildExited(child);
+  if (process.platform !== "linux" || !child.pid) {
+    return `pid=${child.pid ?? "unknown"} childExitRecorded=${childExitRecorded}`;
+  }
+  const inspection = inspectLinuxProcessGroupFn(child.pid);
+  const processGroupDetails =
+    inspection?.diagnostics ?? `pgid=${child.pid} members=unknown (/proc unavailable)`;
+  return boundQaGatewayProcessTreeDiagnostics(
+    `${processGroupDetails} childExitRecorded=${childExitRecorded}`,
+  );
+}
+
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+  opts?: QaGatewayChildStopOptions,
 ) {
-  if (!isQaGatewayChildProcessTreeAlive(child)) {
+  const inspectLinuxProcessGroupFn = opts?.inspectLinuxProcessGroup ?? inspectLinuxProcessGroup;
+  if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
     return;
   }
   const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
-  if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
+  if (
+    await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)
+  ) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
+  const stopped = await waitForQaGatewayChildExit(
+    child,
+    timeouts.forceTimeoutMs,
+    inspectLinuxProcessGroupFn,
+  );
   if (!stopped) {
-    throw new Error("qa gateway process tree remained alive after forced shutdown");
+    throw new Error(
+      `qa gateway process tree remained alive after forced shutdown: ${formatQaGatewayProcessTreeDiagnostics(
+        child,
+        inspectLinuxProcessGroupFn,
+      )}`,
+    );
   }
 }
 
@@ -915,14 +1066,13 @@ async function waitForGatewayReady(params: {
         `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
-    for (const healthPath of ["/readyz", "/healthz"] as const) {
-      try {
-        if (await fetchLocalGatewayHealth({ baseUrl: params.baseUrl, healthPath })) {
-          return;
-        }
-      } catch {
-        // retry until timeout
+    // Listener liveness can turn green before the Gateway can admit startup or restart work.
+    try {
+      if (await fetchLocalGatewayHealth({ baseUrl: params.baseUrl, healthPath: "/readyz" })) {
+        return;
       }
+    } catch {
+      // retry until timeout
     }
     await sleep(250);
   }
@@ -1005,6 +1155,7 @@ export async function startQaGatewayChild(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
+  allowUnhealthyStartup?: boolean;
   forwardHostHome?: boolean;
   mockAuthAgentIds?: readonly string[];
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
@@ -1045,6 +1196,13 @@ export async function startQaGatewayChild(params: {
     fs.mkdir(xdgCacheHome, { recursive: true }),
   ]);
   const providerMode = resolveQaGatewayChildProviderMode(params.providerMode);
+  const codexModelCatalogPath = await stageQaCodexMockModelCatalog({
+    tempRoot,
+    forcedRuntime: params.forcedRuntime,
+    providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+  });
   const resolvedProvider = getQaProvider(providerMode);
   const liveProviderIds = resolvedProvider.usesModelProviderPlugins
     ? [params.primaryModel, params.alternateModel]
@@ -1307,6 +1465,10 @@ export async function startQaGatewayChild(params: {
               forcedRuntime: params.forcedRuntime,
               providerMode,
               providerBaseUrl: params.providerBaseUrl,
+              codexModelCatalogPath,
+              nativeAppServerArgs:
+                params.runtimeEnvPatch?.OPENCLAW_CODEX_APP_SERVER_ARGS ??
+                process.env.OPENCLAW_CODEX_APP_SERVER_ARGS,
             }),
           },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
@@ -1348,13 +1510,15 @@ export async function startQaGatewayChild(params: {
           configPath,
           runtimeEnv: env,
         });
-        await waitForGatewayReady({
-          baseUrl,
-          logs,
-          child: attemptChild,
-          getChildFailure: getAttemptChildFailure,
-          timeoutMs: 120_000,
-        });
+        if (!params.allowUnhealthyStartup) {
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: attemptChild,
+            getChildFailure: getAttemptChildFailure,
+            timeoutMs: 120_000,
+          });
+        }
         const attemptRpcClient = await startQaGatewayRpcClient({
           wsUrl,
           token: gatewayToken,
@@ -1665,9 +1829,12 @@ export async function startQaGatewayChild(params: {
           processStopped = false;
           cleanupErrors.push(error);
         }
-        for (const stream of [stdoutLog, stderrLog]) {
+        for (const [label, stream] of [
+          ["stdout", stdoutLog],
+          ["stderr", stderrLog],
+        ] as const) {
           try {
-            await closeWriteStream(stream);
+            await closeWriteStream(stream, label);
           } catch (error) {
             cleanupErrors.push(error);
           }
@@ -1733,9 +1900,12 @@ export async function startQaGatewayChild(params: {
         cleanupErrors.push(cleanupError);
       }
     }
-    for (const stream of [stdoutLog, stderrLog]) {
+    for (const [label, stream] of [
+      ["stdout", stdoutLog],
+      ["stderr", stderrLog],
+    ] as const) {
       try {
-        await closeWriteStream(stream);
+        await closeWriteStream(stream, label);
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }

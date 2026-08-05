@@ -4,15 +4,15 @@ import {
   drainStoreWriterQueuesForTest,
   type StoreWriterQueue,
 } from "../../shared/store-writer-queue.js";
-import { clearSessionStoreCaches } from "./store-cache.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 
 type SessionStoreWriterQueue = StoreWriterQueue;
 
 export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
 
-/** Clears session store writer queues and cache for tests. */
+/** Clears legacy session writer queues and prompt-blob caches for tests. */
 export function clearSessionStoreCacheForTest(): void {
-  clearSessionStoreCaches();
+  clearSessionSkillPromptRefCache();
   clearStoreWriterQueuesForTest(WRITER_QUEUES, "session store queue cleared for test");
 }
 

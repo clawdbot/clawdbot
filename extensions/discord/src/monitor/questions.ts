@@ -1,9 +1,6 @@
 // Discord ask_user component dispatch and ephemeral feedback.
 import { ButtonStyle } from "discord-api-types/v10";
-import {
-  resolveQuestionOverGateway,
-  type ResolveQuestionOverGatewayParams,
-} from "openclaw/plugin-sdk/question-gateway-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { Button, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 import { parseDiscordQuestionData } from "../question-custom-id.js";
 import {
@@ -11,9 +8,10 @@ import {
   resolveAuthorizedComponentInteraction,
 } from "./agent-components-helpers.js";
 
+type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
 type QuestionResolver = (
-  params: ResolveQuestionOverGatewayParams,
-) => ReturnType<typeof resolveQuestionOverGateway>;
+  params: ResolveQuestionParams,
+) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
 
 class QuestionButton extends Button {
   override label = "question";
@@ -22,7 +20,7 @@ class QuestionButton extends Button {
 
   constructor(
     private readonly ctx: {
-      cfg: ResolveQuestionOverGatewayParams["cfg"];
+      cfg: ResolveQuestionParams["cfg"];
       accountId: string;
       resolveQuestion: QuestionResolver;
       authorizeQuestion: (interaction: ButtonInteraction) => Promise<boolean>;
@@ -73,7 +71,7 @@ class QuestionButton extends Button {
 }
 
 export function createDiscordQuestionButton(params: {
-  cfg: ResolveQuestionOverGatewayParams["cfg"];
+  cfg: ResolveQuestionParams["cfg"];
   accountId: string;
   authContext?: AgentComponentContext;
   authorizeQuestion?: (interaction: ButtonInteraction) => Promise<boolean>;
@@ -83,7 +81,7 @@ export function createDiscordQuestionButton(params: {
   return new QuestionButton({
     cfg: params.cfg,
     accountId: params.accountId,
-    resolveQuestion: params.resolveQuestion ?? resolveQuestionOverGateway,
+    resolveQuestion: params.resolveQuestion ?? questionGatewayRuntime.resolveOption,
     authorizeQuestion:
       params.authorizeQuestion ??
       (async (interaction) =>

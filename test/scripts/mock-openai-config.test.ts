@@ -8,16 +8,19 @@ import {
 type MockConfig = {
   agents: {
     defaults: {
-      imageGenerationModel?: unknown;
       imageModel?: unknown;
+      mediaModels?: { image?: unknown; video?: unknown };
       model?: unknown;
       models: Record<string, unknown>;
     };
-    list: Array<{
-      id: string;
-      model: { primary: string };
-      models: Record<string, { agentRuntime?: unknown; params: Record<string, unknown> }>;
-    }>;
+    entries: Record<
+      string,
+      {
+        model?: string | { primary: string };
+        models?: Record<string, { agentRuntime?: unknown; params: Record<string, unknown> }>;
+        workspace?: string;
+      }
+    >;
   };
   models: {
     providers: {
@@ -49,21 +52,22 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
     const cfg: MockConfig = {
       agents: {
         defaults: {
+          mediaModels: { video: { primary: "example/video" } },
           models: {
             "openai/gpt-5.4": { params: { preserved: true } },
           },
         },
-        list: [
-          {
-            id: "release-agent",
+        entries: {
+          "release-agent": {
             model: { primary: "openai/gpt-5.4" },
+            workspace: "/tmp/release-agent",
             models: {
               "openai/gpt-5.5": {
                 params: { existing: true },
               },
             },
           },
-        ],
+        },
       },
       models: {
         providers: {
@@ -95,8 +99,11 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
       }),
     ]);
     expect(cfg.agents.defaults).toMatchObject({
-      imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
       imageModel: { primary: "openai/gpt-5.5", timeoutMs: 30_000 },
+      mediaModels: {
+        image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+        video: { primary: "example/video" },
+      },
       model: { primary: "openai/gpt-5.5" },
       models: {
         "openai/gpt-5.4": { params: { preserved: true } },
@@ -106,14 +113,44 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
         },
       },
     });
-    expect(cfg.agents.list[0]).toMatchObject({
+    expect(cfg.agents.defaults).not.toHaveProperty("imageGenerationModel");
+    expect(cfg.agents.entries["release-agent"]).toMatchObject({
       model: { primary: "openai/gpt-5.5" },
+      workspace: "/tmp/release-agent",
       models: {
         "openai/gpt-5.5": {
+          agentRuntime: { id: "openclaw" },
           params: { existing: true, transport: "sse", openaiWsWarmup: false },
         },
       },
     });
     expect(cfg.plugins).toEqual({ enabled: true });
+  });
+
+  it.each([
+    ["string model", "openai/gpt-5.4"],
+    ["missing model", undefined],
+  ])("rewrites a canonical agent with a %s", (_label, model) => {
+    const cfg = {
+      agents: {
+        defaults: { models: {} },
+        entries: {
+          main: model === undefined ? {} : { model },
+        },
+      },
+      models: { providers: {} },
+    };
+
+    applyMockOpenAiModelConfig(cfg, { mockPort: 18181 });
+
+    expect(cfg.agents.entries.main).toEqual({
+      model: { primary: "openai/gpt-5.6-luna" },
+      models: {
+        "openai/gpt-5.6-luna": {
+          agentRuntime: { id: "openclaw" },
+          params: { transport: "sse", openaiWsWarmup: false },
+        },
+      },
+    });
   });
 });

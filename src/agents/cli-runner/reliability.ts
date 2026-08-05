@@ -3,8 +3,8 @@
  */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
@@ -57,11 +57,7 @@ function pickWatchdogProfile(
   })();
 
   return {
-    noOutputTimeoutMs:
-      typeof configured?.noOutputTimeoutMs === "number" &&
-      Number.isFinite(configured.noOutputTimeoutMs)
-        ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(configured.noOutputTimeoutMs))
-        : undefined,
+    noOutputTimeoutMs: undefined,
     noOutputTimeoutRatio: ratio,
     minMs: Math.min(minMs, maxMs),
     maxMs: Math.max(minMs, maxMs),

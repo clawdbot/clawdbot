@@ -22,6 +22,11 @@ const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = 256 * 1024;
 const MAX_MANIFEST_JSON_BYTES = 128 * 1024;
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
+// Release evidence lookups run during full release validation, so keep enough
+// headroom for GitHub latency while preventing one stalled read from consuming
+// the workflow budget.
+const GH_COMMAND_TIMEOUT_MS = 60_000;
+const SUCCESSFUL_PARENT_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 
 const CHILD_DISPATCHES = [
   {
@@ -89,13 +94,22 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
   ["performance", ["productPerformance"]],
 ]);
 
-function gh(args) {
-  return execFileSync(resolvePlainGhBin(), args, {
+export function runReleaseCiGh(args, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
+  const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
+  return execFileSyncImpl(resolvePlainGhBin(), args, {
     encoding: "utf8",
     env: plainGhEnv(),
+    killSignal: "SIGKILL",
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio,
+    timeout: timeoutMs,
   });
+}
+
+function gh(args) {
+  return runReleaseCiGh(args);
 }
 
 function jsonGh(args) {
@@ -117,8 +131,7 @@ export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
 function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
   const output = openSync(destination, "w");
   try {
-    execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
-      env: plainGhEnv(),
+    runReleaseCiGh(artifactDownloadArgs(artifactId, repository), {
       stdio: ["ignore", output, "pipe"],
     });
   } finally {
@@ -167,12 +180,22 @@ export function expectedChildDispatches(parentRunId, parentRunAttempt, parentWor
   }));
 }
 
-export function requiredChildKeysForRerunGroup(rerunGroup) {
+export function requiredChildKeysForRerunGroup(rerunGroup, validationInputs = {}) {
   const childKeys = RERUN_GROUP_CHILD_KEYS.get(rerunGroup);
   if (!childKeys) {
     throw new Error(`release validation manifest rerun group is invalid: ${rerunGroup}`);
   }
-  return new Set(childKeys);
+  const selectedKeys = new Set(childKeys);
+  if (
+    rerunGroup === "all" &&
+    ((typeof validationInputs.npmTelegramPackageSpec === "string" &&
+      validationInputs.npmTelegramPackageSpec.length > 0) ||
+      (typeof validationInputs.releasePackageSpec === "string" &&
+        validationInputs.releasePackageSpec.length > 0))
+  ) {
+    selectedKeys.add("npmTelegram");
+  }
+  return selectedKeys;
 }
 
 export function expectedSelectedChildDispatches(
@@ -1343,7 +1366,10 @@ export function validateReleaseRunEvidence(
       );
     }
   }
-  const selectedKeys = requiredChildKeysForRerunGroup(rootEvidence.manifest.rerunGroup);
+  const selectedKeys = requiredChildKeysForRerunGroup(
+    rootEvidence.manifest.rerunGroup,
+    rootEvidence.manifest.validationInputs,
+  );
   const expectedChildren = expectedSelectedChildDispatches(
     rootEvidence.manifest.runId,
     rootEvidence.manifest.runAttempt,
@@ -1494,6 +1520,16 @@ export function releaseCiWatchFingerprint(parent) {
   });
 }
 
+export function terminalParentJobFailures(parent) {
+  return (parent.jobs ?? [])
+    .filter(
+      (job) =>
+        job.status === "completed" &&
+        !SUCCESSFUL_PARENT_JOB_CONCLUSIONS.has(String(job.conclusion ?? "")),
+    )
+    .map((job) => String(job.name || "unnamed parent job"));
+}
+
 function summarizeReleaseCiRun(options) {
   execFileSync(
     process.execPath,
@@ -1536,6 +1572,12 @@ export async function watchReleaseCiRun(options, overrides = {}) {
     if (fingerprint !== previousFingerprint) {
       summarize();
       previousFingerprint = fingerprint;
+    }
+    const failedJobs = terminalParentJobFailures(parent);
+    if (failedJobs.length > 0) {
+      throw new Error(
+        `full release run ${options.runId} has terminal parent job failure(s): ${failedJobs.join(", ")}`,
+      );
     }
     if (parent.status === "completed") {
       if (parent.conclusion !== "success") {
@@ -1721,51 +1763,53 @@ async function main() {
       );
     }
 
+    const selectedKeys = requiredChildKeysForRerunGroup(
+      sourceManifest.rerunGroup,
+      sourceManifest.validationInputs,
+    );
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
       sourceManifest.runAttempt,
       sourceManifest.workflowRef,
-      requiredChildKeysForRerunGroup(sourceManifest.rerunGroup),
+      selectedKeys,
     );
     const sourceParentJobs = findParentJobsAll(sourceManifest.runId, repository);
-    children = manifestChildEntries(
-      sourceManifest,
-      expectedChildren,
-      requiredChildKeysForRerunGroup(sourceManifest.rerunGroup),
-    ).map(({ child, runId: childRunId }) => {
-      const run = githubRestJson(`actions/runs/${childRunId}`, repository);
-      const originAttempt = resolveManifestChildOriginAttempt(
-        run,
-        child,
-        sourceManifest,
-        sourceParentJobs,
-      );
-      if (originAttempt === undefined) {
-        throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
-      }
-      const parentJob = selectManifestParentJob(
-        sourceParentJobs,
-        child,
-        sourceManifest,
-        originAttempt,
-      );
-      const validatedRun = validateManifestChildRun(
-        run,
-        child,
-        childRunId,
-        { ...sourceManifest, workflowSha: sourceParent.headSha },
-        sourceParentJobs,
-        parentJobLog(parentJob.id, repository),
-        repository,
-      );
-      if (child.manifestKey === "productPerformance") {
-        validatePerformanceArtifactOnlyJobs(
-          findParentJobsAll(childRunId, repository),
-          run.run_attempt,
+    children = manifestChildEntries(sourceManifest, expectedChildren, selectedKeys).map(
+      ({ child, runId: childRunId }) => {
+        const run = githubRestJson(`actions/runs/${childRunId}`, repository);
+        const originAttempt = resolveManifestChildOriginAttempt(
+          run,
+          child,
+          sourceManifest,
+          sourceParentJobs,
         );
-      }
-      return { child, run: validatedRun };
-    });
+        if (originAttempt === undefined) {
+          throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
+        }
+        const parentJob = selectManifestParentJob(
+          sourceParentJobs,
+          child,
+          sourceManifest,
+          originAttempt,
+        );
+        const validatedRun = validateManifestChildRun(
+          run,
+          child,
+          childRunId,
+          { ...sourceManifest, workflowSha: sourceParent.headSha },
+          sourceParentJobs,
+          parentJobLog(parentJob.id, repository),
+          repository,
+        );
+        if (child.manifestKey === "productPerformance") {
+          validatePerformanceArtifactOnlyJobs(
+            findParentJobsAll(childRunId, repository),
+            run.run_attempt,
+          );
+        }
+        return { child, run: validatedRun };
+      },
+    );
   } else {
     console.log("candidate-sha: unavailable (release validation manifest not uploaded)");
     if (parent.status === "completed" && parent.conclusion === "success") {

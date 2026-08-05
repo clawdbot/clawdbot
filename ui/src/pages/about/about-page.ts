@@ -75,9 +75,10 @@ class AboutPage extends OpenClawLightDomElement {
 
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
-    const gatewayVersion = gatewaySnapshot.connected
-      ? gatewaySnapshot.hello?.server?.version?.trim() || null
-      : null;
+    const gatewayVersion =
+      gatewaySnapshot.phase === "connected"
+        ? gatewaySnapshot.hello?.server?.version?.trim() || null
+        : null;
     const body = renderAbout({
       buildInfo: CONTROL_UI_BUILD_INFO,
       gatewayVersion,

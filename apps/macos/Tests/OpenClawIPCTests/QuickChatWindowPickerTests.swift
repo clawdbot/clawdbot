@@ -49,6 +49,43 @@ struct QuickChatWindowPickerTests {
         #expect(QuickChatWindowPickerLogic.labelText(appName: "Safari", title: "Safari") == "Safari")
     }
 
+    @Test func `area selection normalizes drags from every corner`() throws {
+        let expected = CGRect(x: 20, y: 30, width: 80, height: 60)
+        let corners = [
+            (CGPoint(x: 20, y: 30), CGPoint(x: 100, y: 90)),
+            (CGPoint(x: 100, y: 30), CGPoint(x: 20, y: 90)),
+            (CGPoint(x: 20, y: 90), CGPoint(x: 100, y: 30)),
+            (CGPoint(x: 100, y: 90), CGPoint(x: 20, y: 30)),
+        ]
+
+        for (start, end) in corners {
+            #expect(try #require(QuickChatAreaPickerLogic.normalizedSelection(from: start, to: end)) == expected)
+        }
+    }
+
+    @Test func `area selection rejects either tiny dimension`() {
+        #expect(QuickChatAreaPickerLogic.normalizedSelection(
+            from: CGPoint(x: 0, y: 0),
+            to: CGPoint(x: 7.9, y: 40)) == nil)
+        #expect(QuickChatAreaPickerLogic.normalizedSelection(
+            from: CGPoint(x: 0, y: 0),
+            to: CGPoint(x: 40, y: 7.9)) == nil)
+        #expect(QuickChatAreaPickerLogic.normalizedSelection(
+            from: CGPoint(x: 0, y: 0),
+            to: CGPoint(x: 8, y: 8)) != nil)
+    }
+
+    @Test func `area coordinates convert between appkit and global display spaces`() {
+        let screenFrame = CGRect(x: -1440, y: 200, width: 1440, height: 900)
+        let displayBounds = CGRect(x: -1440, y: -200, width: 1440, height: 900)
+        let appKitSelection = CGRect(x: -1400, y: 900, width: 400, height: 100)
+
+        #expect(QuickChatAreaPickerLogic.globalDisplayRect(
+            appKitRect: appKitSelection,
+            screenFrame: screenFrame,
+            displayBounds: displayBounds) == CGRect(x: -1400, y: -100, width: 400, height: 100))
+    }
+
     private func input(
         id: Int,
         processID: Int32,

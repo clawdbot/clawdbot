@@ -126,6 +126,57 @@ describe("Slack durable ingress", () => {
     });
   });
 
+  it("acknowledges a durable event before dispatch starts", async () => {
+    await withQueue(async (queue) => {
+      let releaseAck = () => {};
+      const ackGate = new Promise<void>((resolve) => {
+        releaseAck = resolve;
+      });
+      const order: string[] = [];
+      const processEvent = vi.fn(async (event: ReceiverEvent) => {
+        order.push("dispatch");
+        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      const ack = vi.fn(async () => {
+        order.push("ack-start");
+        await ackGate;
+        order.push("ack-complete");
+      });
+      ingress.start();
+
+      const receiving = receive(createReceiverEvent("Ev-ack-order", ack));
+      await vi.waitFor(() => expect(ack).toHaveBeenCalledTimes(1));
+      expect(processEvent).not.toHaveBeenCalled();
+
+      releaseAck();
+      await receiving;
+      await ingress.waitForIdle();
+
+      expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
+      await ingress.stop();
+    });
+  });
+
+  it("drains a durable event when its acknowledgement fails", async () => {
+    await withQueue(async (queue) => {
+      const processEvent = vi.fn(async (event: ReceiverEvent) => {
+        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      const ackError = new Error("connection closed");
+      ingress.start();
+
+      await expect(
+        receive(createReceiverEvent("Ev-ack-failure", vi.fn().mockRejectedValue(ackError))),
+      ).rejects.toBe(ackError);
+      await ingress.waitForIdle();
+
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      await ingress.stop();
+    });
+  });
+
   it("recovers an uncompleted event with a fresh drain and dispatches once", async () => {
     await withQueue(async (queue) => {
       const first = attachIngress(
@@ -147,6 +198,34 @@ describe("Slack durable ingress", () => {
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect((await queue.enqueue("Ev-restart", {} as SlackIngressPayload)).kind).toBe("completed");
       await restarted.ingress.stop();
+    });
+  });
+
+  it("recovers a shipped row whose lane was derived only at drain time", async () => {
+    await withQueue(async (queue) => {
+      const body = createSlackEnvelope("Ev-legacy-lane");
+      await queue.enqueue(
+        "Ev-legacy-lane",
+        {
+          version: 1,
+          receivedAt: 1_700_000_000_000,
+          kind: "events-api",
+          body,
+        },
+        { receivedAt: 1_700_000_000_000 },
+      );
+      const dispatch = vi.fn(async (event: ReceiverEvent) => {
+        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
+      });
+      const recovered = attachIngress(queue, dispatch);
+      recovered.ingress.start();
+      await recovered.ingress.waitForIdle();
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect((await queue.enqueue("Ev-legacy-lane", {} as SlackIngressPayload)).kind).toBe(
+        "completed",
+      );
+      await recovered.ingress.stop();
     });
   });
 

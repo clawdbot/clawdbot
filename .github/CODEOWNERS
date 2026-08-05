@@ -21,11 +21,9 @@
 /scripts/github/security-sensitive-guard.mjs @openclaw/openclaw-secops
 /.gitignore @openclaw/openclaw-secops
 /package-lock.json @openclaw/openclaw-secops
-/npm-shrinkwrap.json @openclaw/openclaw-secops
 /extensions/*/package-lock.json @openclaw/openclaw-secops
-/extensions/*/npm-shrinkwrap.json @openclaw/openclaw-secops
 /pnpm-lock.yaml @openclaw/openclaw-secops
-/scripts/generate-npm-shrinkwrap.mjs @openclaw/openclaw-secops
+/scripts/generate-npm-package-lock.mjs @openclaw/openclaw-secops
 /src/security/ @openclaw/openclaw-secops
 /src/secrets/ @openclaw/openclaw-secops
 /src/config/*secret*.ts @openclaw/openclaw-secops

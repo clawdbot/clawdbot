@@ -284,6 +284,34 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
   });
 
+  it("projects run.execution_phase into the dedicated phase fields", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "run.execution_phase",
+      runId: "run-1",
+      sessionId: "sid-1",
+      sessionKey: "sk-1",
+      phase: "model_call_started",
+      provider: "anthropic",
+      model: "claude",
+      tool: "read",
+      firstModelCallStarted: true,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.events[0], {
+      type: "run.execution_phase",
+      phase: "model_call_started",
+      provider: "anthropic",
+      model: "claude",
+      toolName: "read",
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("reason");
+  });
+
   it("sanitizes tool and model diagnostic error categories", async () => {
     startDiagnosticStabilityRecorder();
 

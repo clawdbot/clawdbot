@@ -8,7 +8,7 @@ import {
 import {
   listAgentEntries,
   listAgentIds,
-  resolveDefaultAgentDir,
+  resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
@@ -18,13 +18,10 @@ import { resolveConversationCapabilityProfile } from "../agents/conversation-cap
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import {
-  findModelInCatalog,
-  loadModelCatalog,
-  type ModelCatalogEntry,
-} from "../agents/model-catalog.js";
+import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
+import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { collectExplicitAllowlist, normalizeToolName } from "../agents/tool-policy.js";
 import {
@@ -85,7 +82,7 @@ export async function collectLocalAudioAccelerationFindings(): Promise<readonly 
         checkId: "core/doctor/local-audio-acceleration",
         severity: "info",
         message: `Local STT auto-selection: ${summary}.`,
-        path: "tools.media.audio.models",
+        path: "tools.media.models",
       },
     ];
   }
@@ -97,9 +94,9 @@ export async function collectLocalAudioAccelerationFindings(): Promise<readonly 
       checkId: "core/doctor/local-audio-acceleration",
       severity: "info",
       message: `Local STT commands were found but none are ready for auto-selection: ${blockers}.`,
-      path: "tools.media.audio.models",
+      path: "tools.media.models",
       fixHint:
-        "Install the matching local model/runtime, or configure an explicit tools.media.audio.models CLI entry.",
+        "Install the matching local model/runtime, or configure an audio-capable tools.media.models CLI entry.",
     },
   ];
 }
@@ -608,7 +605,6 @@ export async function collectProviderCatalogProjectionFindings(
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
   const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  const agentDir = resolveDefaultAgentDir(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   let providers: Awaited<ReturnType<typeof resolvePluginProviders>>;
   try {
@@ -667,13 +663,7 @@ export async function collectProviderCatalogProjectionFindings(
       }
       let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
       try {
-        result = await runProviderStaticCatalog({
-          provider,
-          config: cfg,
-          agentDir,
-          workspaceDir,
-          env,
-        });
+        result = await runProviderStaticCatalog({ provider });
       } catch (error) {
         findings.push(
           providerCatalogProjectionFinding({
@@ -1080,7 +1070,6 @@ function isAcpRuntimeAgent(cfg: OpenClawConfig, agentId: string): boolean {
 export async function collectRuntimeToolSchemaFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
-  const catalog = await loadModelCatalog({ config: cfg });
   const findings: HealthFinding[] = [];
   const bundleRuntimeByWorkspace = new Map<string, BundleMcpToolRuntime>();
   const bundleRuntimeLoadErrorsByWorkspace = new Map<string, HealthFinding>();
@@ -1090,6 +1079,11 @@ export async function collectRuntimeToolSchemaFindings(
       if (isAcpRuntimeAgent(cfg, agentId)) {
         continue;
       }
+      const catalog = await loadPreparedModelCatalog({
+        config: cfg,
+        agentId,
+        agentDir: resolveAgentDir(cfg, agentId),
+      });
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const modelRef = resolveDefaultModelForAgent({
         cfg,

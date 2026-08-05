@@ -69,7 +69,10 @@ export function isSkillSecretOwnerUnavailable(skillKey: string): boolean {
 /** Returns whether cold startup isolated any configured skill secret. */
 export function hasUnavailableSkillSecretOwners(): boolean {
   return listActiveDegradedSecretOwners().some(
-    (owner) => owner.ownerKind === "capability" && owner.ownerId.startsWith("skill:"),
+    (owner) =>
+      owner.degradationState !== "stale" &&
+      owner.ownerKind === "capability" &&
+      owner.ownerId.startsWith("skill:"),
   );
 }
 

@@ -76,12 +76,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
       assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+      assistantMessageIndex: 1,
     });
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Attached image");
     expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
     expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
+    });
   });
 
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
@@ -119,11 +124,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Already persisted."],
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
 
     expect(payloads).toHaveLength(1);
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
   });
 
@@ -595,7 +602,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         toolName: "exec",
         timedOut: true,
         error:
-          "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+          "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
       },
       sessionKey: "agent:main:cron:job-1",
       verboseLevel: "off",
@@ -604,7 +611,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
       detail:
-        "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+        "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
     });
   });
 

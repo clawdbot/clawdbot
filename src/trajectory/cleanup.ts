@@ -2,11 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { readFileWindowFullySync } from "../infra/file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import {
+  TRAJECTORY_POINTER_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   safeTrajectorySessionFileName,
@@ -52,11 +54,12 @@ function readTrajectoryPointerFile(
   pointerPath: string,
   sessionId: string,
 ): TrajectoryPointer | null {
-  if (!isRegularNonSymlinkFile(pointerPath)) {
-    return null;
-  }
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(pointerPath, "utf8"));
+    const { buffer } = readRegularFileSync({
+      filePath: pointerPath,
+      maxBytes: TRAJECTORY_POINTER_FILE_MAX_BYTES,
+    });
+    const parsed: unknown = JSON.parse(buffer.toString("utf8"));
     if (!isRecord(parsed)) {
       return null;
     }

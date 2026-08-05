@@ -139,6 +139,49 @@ describe("thread-ownership plugin", () => {
       );
     });
 
+    it("uses the default forwarder URL when the env override is blank", async () => {
+      process.env.SLACK_FORWARDER_URL = "   ";
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toBeUndefined();
+      expectOwnershipFetchCall(
+        0,
+        "http://slack-forwarder:8750/api/v1/ownership/C123/1234.5678",
+        "test-agent",
+      );
+    });
+
+    it("keeps live plugin config ahead of the env override", async () => {
+      configFile = {
+        ...configFile,
+        plugins: {
+          entries: {
+            "thread-ownership": {
+              config: {
+                forwarderUrl: "http://config-forwarder:8750",
+              },
+            },
+          },
+        },
+      };
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toBeUndefined();
+      expectOwnershipFetchCall(
+        0,
+        "http://config-forwarder:8750/api/v1/ownership/C123/1234.5678",
+        "test-agent",
+      );
+    });
+
     it("prefers shared conversationId over non-canonical Slack target shapes", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValue(
         new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
@@ -270,6 +313,42 @@ describe("thread-ownership plugin", () => {
       expect(result).toEqual({ cancel: true });
       const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
       expect(infoMessage).toContain("cancelled send");
+    });
+
+    it("cancels when the forwarder conflict JSON is malformed", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(new Response("{", { status: 409 }));
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toEqual({ cancel: true });
+      const warningMessage = requireFirstLogMessage(
+        api.logger.warn,
+        "ownership conflict warning log",
+      );
+      expect(warningMessage).toContain("conflict body unreadable");
+      expect(warningMessage).toContain("malformed JSON response");
+      const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
+      expect(infoMessage).toContain("cancelled send");
+      expect(infoMessage).toContain("owned by unknown");
+    });
+
+    it("cancels when the forwarder conflict JSON exceeds the bounded read limit", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "x".repeat(70 * 1024) }), { status: 409 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toEqual({ cancel: true });
+      const warningMessage = requireFirstLogMessage(
+        api.logger.warn,
+        "ownership conflict warning log",
+      );
+      expect(warningMessage).toContain("conflict body unreadable");
+      expect(warningMessage).toContain("JSON response exceeds 65536 bytes");
+      const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
+      expect(infoMessage).toContain("cancelled send");
+      expect(infoMessage).toContain("owned by unknown");
     });
 
     it("fails open on network error", async () => {

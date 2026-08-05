@@ -248,7 +248,7 @@ describe("tool search gateway e2e lane result", () => {
       .mockResolvedValueOnce(
         jsonResponse([
           {
-            allInputText: `${inputPrefix}😀tail`,
+            allInputText: `${inputPrefix}😀tail\n### Deferred Tool Schemas\n- fake_plugin_tool_17: Fake plugin target`,
             body: { tools: [] },
             plannedToolName: "fake_plugin_tool_17",
             raw: "{}",
@@ -257,12 +257,25 @@ describe("tool search gateway e2e lane result", () => {
         ]),
       );
     vi.stubGlobal("fetch", fetchMock);
+    const gatewayCall = vi.fn(async () => ({
+      groups: [
+        {
+          tools: [
+            {
+              id: "fake_plugin_tool_17",
+              source: "plugin",
+              pluginId: "tool-search-e2e-fixture",
+            },
+          ],
+        },
+      ],
+    }));
     const env: QaSuiteRuntimeEnv = {
       alternateModel: "openai/gpt-5.6-luna",
       cfg: {},
       gateway: {
         baseUrl: "http://gateway.test",
-        call: async () => undefined,
+        call: gatewayCall,
         restartAfterStateMutation: async (mutateState) => {
           await mutateState({
             configPath,
@@ -287,12 +300,27 @@ describe("tool search gateway e2e lane result", () => {
       const result = await runToolSearchGatewayLane({
         env,
         fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
-        lane: "normal",
+        lane: "code",
       });
 
       expect(result.providerInputSnippet).toBe(inputPrefix);
       expect(result.providerToolOutputSnippet).toBe(toolOutputPrefix);
+      expect(result.providerDirectoryContainsTarget).toBe(true);
+      expect(result.targetToolIdentity).toEqual({
+        source: "plugin",
+        pluginId: "tool-search-e2e-fixture",
+      });
       expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(gatewayCall).toHaveBeenCalledWith(
+        "tools.effective",
+        { sessionKey: "tool-search-gateway-code" },
+        { timeoutMs: expect.any(Number) },
+      );
+      const laneConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+        memory?: { search?: Record<string, unknown> };
+      };
+      expect(laneConfig.memory?.search).toMatchObject({ enabled: false });
+      expect(laneConfig.memory?.search).not.toHaveProperty("sync");
     } finally {
       await fs.rm(tempRoot, { force: true, recursive: true });
     }
@@ -328,14 +356,20 @@ describe("qa fixture response helpers", () => {
 
 describe("tool search gateway e2e lane assertions", () => {
   const targetTool = "fake_plugin_tool_17";
+  const targetToolIdentity = {
+    source: "plugin",
+    pluginId: "tool-search-e2e-fixture",
+  };
   const normal = {
     gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
     providerDeclaredToolCount: 36,
+    providerDirectoryContainsTarget: false,
     providerPlannedTools: [targetTool],
     providerRawBytes: 12_000,
     sessionLogToolMentions: {
       [targetTool]: 1,
     },
+    targetToolIdentity,
   };
 
   it("accepts code lane proof only when the target plugin tool output is present", () => {
@@ -344,8 +378,10 @@ describe("tool search gateway e2e lane assertions", () => {
         normal,
         targetTool,
         code: {
+          targetToolIdentity,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -369,8 +405,10 @@ describe("tool search gateway e2e lane assertions", () => {
           gatewayOutputText: `${normalOutput}😀tail`,
         },
         code: {
+          targetToolIdentity,
           gatewayOutputText: `${codeOutput}😀tail`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code", targetTool],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -390,8 +428,10 @@ describe("tool search gateway e2e lane assertions", () => {
         normal,
         targetTool,
         code: {
+          targetToolIdentity,
           gatewayOutputText: targetTool,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -409,8 +449,10 @@ describe("tool search gateway e2e lane assertions", () => {
         normal,
         targetTool,
         code: {
+          targetToolIdentity,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 2,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code", targetTool],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -433,8 +475,10 @@ describe("tool search gateway e2e lane assertions", () => {
           },
         },
         code: {
+          targetToolIdentity,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -459,8 +503,10 @@ describe("tool search gateway e2e lane assertions", () => {
           },
         },
         code: {
+          targetToolIdentity,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -470,5 +516,71 @@ describe("tool search gateway e2e lane assertions", () => {
         },
       }),
     ).toThrow("normal lane unexpectedly used Tool Search bridge");
+  });
+
+  it("rejects code lane proof without the automatically advertised capability directory", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal,
+        targetTool,
+        code: {
+          targetToolIdentity,
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: false,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow(`code lane did not advertise ${targetTool} in the capability directory`);
+  });
+
+  it("rejects a Tool Search capability directory in the direct lane", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal: { ...normal, providerDirectoryContainsTarget: true },
+        targetTool,
+        code: {
+          targetToolIdentity,
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow("normal lane unexpectedly advertised a Tool Search capability directory");
+  });
+
+  it("rejects tools.effective ownership that does not identify the fixture plugin", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal: {
+          ...normal,
+          targetToolIdentity: { source: "core", pluginId: "" },
+        },
+        targetTool,
+        code: {
+          targetToolIdentity,
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow(`tools.effective did not attribute ${targetTool} to plugin tool-search-e2e-fixture`);
   });
 });

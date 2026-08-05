@@ -1,7 +1,9 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
 } from "../plugins/plugin-registration.types.js";
+import { isMeetingAudioBase64 } from "./audio-base64.js";
 
 export type MeetingBrowserNodeStartConfig = {
   launch: boolean;
@@ -9,6 +11,7 @@ export type MeetingBrowserNodeStartConfig = {
   joinTimeoutMs: number;
   audioInputCommand?: string[];
   audioOutputCommand?: string[];
+  bargeInInputCommand?: string[];
   audioBridgeCommand?: string[];
   audioBridgeHealthCommand?: string[];
 };
@@ -19,6 +22,7 @@ export type MeetingBrowserNodePolicyOptions = {
   deniedCode: string;
   supportedModes: ReadonlySet<string>;
   normalizeUrl(input: unknown): string;
+  useConfiguredSetupCommands?: boolean;
   start: MeetingBrowserNodeStartConfig;
 };
 
@@ -26,18 +30,16 @@ type PolicyDecision =
   | { approved: true; params: Record<string, unknown> }
   | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function readPositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function readOutputGeneration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function copyCommand(command: string[] | undefined): string[] | undefined {
@@ -194,13 +196,43 @@ function buildForwardParams(
       if (!base64) {
         return denyMissing(options, action, "base64");
       }
+      if (!isMeetingAudioBase64(base64)) {
+        return {
+          approved: false,
+          result: denied(options, "base64 must be a valid audio payload"),
+        };
+      }
       forwarded.bridgeId = bridgeId;
       forwarded.base64 = base64;
+      const outputGeneration = readOutputGeneration(params.outputGeneration);
+      if (params.outputGeneration !== undefined && outputGeneration === undefined) {
+        return {
+          approved: false,
+          result: denied(options, "outputGeneration must be a non-negative safe integer"),
+        };
+      }
+      if (outputGeneration !== undefined) {
+        forwarded.outputGeneration = outputGeneration;
+      }
       return approved(forwarded);
     }
     case "clearAudio": {
       const bridgeId = readString(params.bridgeId);
-      return bridgeId ? approved({ action, bridgeId }) : denyMissing(options, action, "bridgeId");
+      if (!bridgeId) {
+        return denyMissing(options, action, "bridgeId");
+      }
+      const outputGeneration = readOutputGeneration(params.outputGeneration);
+      if (params.outputGeneration !== undefined && outputGeneration === undefined) {
+        return {
+          approved: false,
+          result: denied(options, "outputGeneration must be a non-negative safe integer"),
+        };
+      }
+      return approved({
+        action,
+        bridgeId,
+        ...(outputGeneration !== undefined ? { outputGeneration } : {}),
+      });
     }
     case "stop": {
       const bridgeId = readString(params.bridgeId);
@@ -221,8 +253,22 @@ export function createMeetingBrowserNodeInvokePolicy(
       if (ctx.command !== options.commandName) {
         return denied(options, `unsupported ${options.displayName} node command: ${ctx.command}`);
       }
-      const params = asRecord(ctx.params);
+      const params = asOptionalRecord(ctx.params) ?? {};
       const action = readString(params.action);
+      if (action === "setup" && options.useConfiguredSetupCommands) {
+        const setupParams: Record<string, unknown> = { action };
+        for (const key of [
+          "audioInputCommand",
+          "audioOutputCommand",
+          "bargeInInputCommand",
+        ] as const) {
+          const command = copyCommand(options.start[key]);
+          if (command) {
+            setupParams[key] = command;
+          }
+        }
+        return await ctx.invokeNode({ params: setupParams });
+      }
       const decision =
         action === "start"
           ? buildStartParams(params, options)

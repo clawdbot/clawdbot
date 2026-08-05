@@ -188,8 +188,12 @@ export function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 
-export function stampConfigVersion(cfg: OpenClawConfig, version?: string): OpenClawConfig {
-  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version);
+export function stampConfigVersion(
+  cfg: OpenClawConfig,
+  version?: string,
+  previousConfig?: unknown,
+): OpenClawConfig {
+  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version, previousConfig);
 }
 
 export function resolveConfigSizeBaselineBytes(params: {

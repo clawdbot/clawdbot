@@ -161,14 +161,12 @@ describe("createOpenClawTools TTS config wiring", () => {
 
   it("passes the resolved shared config into the tts tool", async () => {
     const injectedConfig = {
-      messages: {
-        tts: {
-          auto: "always",
-          provider: "microsoft",
-          providers: {
-            microsoft: {
-              voice: "en-US-AvaNeural",
-            },
+      tts: {
+        auto: "always",
+        provider: "microsoft",
+        providers: {
+          microsoft: {
+            voice: "en-US-AvaNeural",
           },
         },
       },
@@ -279,9 +277,11 @@ describe("createOpenClawTools media generation session wiring", () => {
     const config = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
-          videoGenerationModel: { primary: "video-owner/model" },
-          musicGenerationModel: { primary: "music-owner/model" },
+          mediaModels: {
+            image: { primary: "image-owner/model" },
+            video: { primary: "video-owner/model" },
+            music: { primary: "music-owner/model" },
+          },
         },
       },
     } satisfies OpenClawConfig;
@@ -317,7 +317,7 @@ describe("createOpenClawTools media generation session wiring", () => {
     const config = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
+          mediaModels: { image: { primary: "image-owner/model" } },
         },
       },
     } satisfies OpenClawConfig;
@@ -377,6 +377,24 @@ describe("createOpenClawTools cron context wiring", () => {
     mocks.createCronToolOptions.mockClear();
   });
 
+  it.each([
+    ["prefers the durable run session key", "agent:main:main"],
+    ["falls back to the policy session key", undefined],
+  ])("%s for cron bindings", (_label, runSessionKey) => {
+    createOpenClawTools({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: runSessionKey ?? "agent:main:telegram:default:direct:1234",
+      }),
+    );
+  });
+
   it("passes preserved channel delivery context into the cron tool", async () => {
     createOpenClawTools({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
@@ -392,12 +410,15 @@ describe("createOpenClawTools cron context wiring", () => {
 
     expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      agentAccountId: "bot-a",
+      creatorToolAllowlist: undefined,
       currentDeliveryContext: {
         channel: "matrix",
         to: "room:!AbCdEf1234567890:example.org",
         accountId: "bot-a",
         threadId: "$RootEvent:Example.Org",
       },
+      runId: undefined,
     });
   });
 
@@ -414,12 +435,15 @@ describe("createOpenClawTools cron context wiring", () => {
 
     expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      agentAccountId: "bot-a",
+      creatorToolAllowlist: undefined,
       currentDeliveryContext: {
         channel: "matrix",
         to: "room:!FallbackRoom:Example.Org",
         accountId: "bot-a",
         threadId: "$FallbackThread:Example.Org",
       },
+      runId: undefined,
     });
   });
 

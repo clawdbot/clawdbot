@@ -2,13 +2,11 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  clearAgentRunContext,
-  onAgentAuditEvent,
-  onAgentRuntimeEvent,
-} from "../infra/agent-events.js";
+import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -29,6 +27,8 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { createSessionCompanion } from "./session-companion.js";
+import { createSessionObserver } from "./session-observer.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -71,6 +71,19 @@ export function startGatewayEventSubscriptions(params: {
   const auditMessageMode = resolveAuditMessageMode(runtimeConfig);
   const auditRecorder = createAuditEventRecorder({
     messageMode: auditEnabled ? auditMessageMode : "off",
+  });
+  const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
+    auditRecorder.recordExecutionIdentity,
+  );
+  const sessionObserver = createSessionObserver({
+    getConfig: getRuntimeConfig,
+    subscribers: params.sessionMessageSubscribers,
+    sessionEventSubscribers: params.sessionEventSubscribers,
+    broadcastToConnIds: params.broadcastToConnIds,
+  });
+  const sessionCompanion = createSessionCompanion({
+    getConfig: getRuntimeConfig,
+    sessionObserver,
   });
   const unsubscribePrivateAuditEvents = auditEnabled
     ? onAgentAuditEvent(auditRecorder.record)
@@ -248,6 +261,7 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+    sessionObserver.handleEvent(evt);
     if (auditEnabled) {
       auditRecorder.record(evt);
     }
@@ -307,9 +321,12 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     unsubscribeAgentEvents();
+    sessionCompanion.dispose();
+    sessionObserver.dispose();
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
+    clearExecutionIdentityAdmissionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())
@@ -384,6 +401,8 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   return {
+    sessionCompanion,
+    sessionObserver,
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,

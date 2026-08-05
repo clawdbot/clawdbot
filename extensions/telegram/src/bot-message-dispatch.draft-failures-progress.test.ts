@@ -1,9 +1,11 @@
-import { expect, it } from "vitest";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
   createDirectSessionPayload,
   createReasoningStreamContext,
+  createTelegramDraftStream,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
@@ -11,12 +13,48 @@ import {
   expectDeliveredReply,
   expectDeliverRepliesParams,
   expectWindowCollapsedTo,
+  mockCallArg,
   requireInvocationOrder,
   setupDraftStreams,
   telegramProgressPreview,
 } from "./bot-message-dispatch.test-harness.js";
 
+const draftWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "telegram/draft-stream" ? { ...logger, warn: draftWarn } : logger;
+    },
+  };
+});
+
 describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () => {
+  it("routes draft stream failures to the warn-level telegram logger with lane context", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const draftParams = mockCallArg(createTelegramDraftStream) as {
+      warn?: (message: string) => void;
+    };
+    expect(typeof draftParams.warn).toBe("function");
+    draftWarn.mockClear();
+    draftParams.warn?.("telegram stream preview failed: 400: Bad Request: chat not found");
+
+    expect(draftWarn).toHaveBeenCalledWith(
+      "telegram stream preview failed: 400: Bad Request: chat not found",
+      { lane: "answer", chatId: 123, threadId: 777 },
+    );
+  });
+
   it("sends an error fallback when dispatch fails after only partial output", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
@@ -40,6 +78,49 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       1,
     );
   });
+
+  it.each([
+    { label: "direct chat", createSessionPayload: createDirectSessionPayload },
+    {
+      label: "group chat",
+      createSessionPayload: () => ({
+        ...createDirectSessionPayload(),
+        SessionKey: "agent:test:telegram:group:-100123",
+        ChatType: "group" as const,
+      }),
+    },
+  ])(
+    "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
+    async ({ createSessionPayload }) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
+        expect(params.replyOptions?.disableBlockStreaming).toBe(true);
+        return await dispatchReplyWithBufferedBlockDispatcherRuntime({
+          ...params,
+          replyResolver: async (_ctx, opts) => {
+            await opts?.onPartialReply?.({ text: "partial answer" });
+            throw new Error("unexpected model failure");
+          },
+        });
+      });
+
+      await dispatchWithContext({
+        context: createContext({ ctxPayload: createSessionPayload() }),
+        streamMode: "partial",
+        telegramCfg: { streaming: { mode: "partial" } },
+      });
+
+      expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "partial answer");
+      expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
+      expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+        expect.stringMatching(
+          /^partial answer\n\n.*Something went wrong while processing your request\. Please try again, or use \/new to start a fresh session\.$/,
+        ),
+      );
+      expect(answerDraftStream.clear).not.toHaveBeenCalled();
+      expect(deliverReplies).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns retryable when dispatch fails after partial output and the fallback is not delivered", async () => {
     deliverReplies.mockResolvedValueOnce({ delivered: true });

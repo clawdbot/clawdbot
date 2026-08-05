@@ -4,13 +4,7 @@ import { z } from "zod";
 const AllowDenyActionSchema = z.union([z.literal("allow"), z.literal("deny")]);
 
 const AllowDenyChatTypeSchema = z
-  .union([
-    z.literal("direct"),
-    z.literal("group"),
-    z.literal("channel"),
-    /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-    z.literal("dm"),
-  ])
+  .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
   .optional();
 
 export function createAllowDenyChannelRulesSchema() {

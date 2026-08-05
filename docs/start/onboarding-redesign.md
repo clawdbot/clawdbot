@@ -43,7 +43,7 @@ Design principles (decided, do not relitigate casually):
 - **Configured installs are sacred**: re-running onboarding is a verification
   pass. It never re-applies setup and never restarts the Gateway service.
 - **The terminal is the fallback, not a question**: prefer the browser
-  dashboard when a gateway is reachable; never ask "terminal or browser?".
+  dashboard when the Gateway can serve it; never ask "terminal or browser?".
 - **Weak models get a trimmed surface** (auto `localModelLean`), explained in
   plain words — never in terms of tools, code mode, or context windows.
 
@@ -62,36 +62,37 @@ Design principles (decided, do not relitigate casually):
    options"). The first working route is announced as a default with a
    one-keystroke path to the full picker; exploring and skipping keeps the
    working route.
-4. Memory-import offer (Claude Code / Codex / Hermes), skipped when discovery
-   was declined.
-5. Fresh installs only: the standard setup plan applies automatically
+4. Fresh installs only: the standard setup plan applies automatically
    (workspace, Gateway service, sessions — the same plan the conversational
    "yes" runs). Configured installs print "already set up" and never touch the
    service.
+5. Memory-import offer (Claude Code / Codex / Hermes), skipped when discovery
+   was declined. Imports use the final workspace persisted by setup.
 6. **App recommendations**: installed apps matched by the verified model
    against official catalogs + ClawHub; official channel plugins arrive
    pre-checked, third-party skills opt-in with a warning label. Skippable;
    kill switch `wizard.appRecommendations`.
-7. **Hatch**: when a gateway is reachable, the browser handoff opens (GUI) or
-   prints (headless/SSH) the dashboard URL and waits for the Control UI to
-   connect — "Dashboard connected — continuing in your browser." Otherwise, or
-   with `--tui`, the terminal TUI opens seeded with the bootstrap hatch
-   message and the agent introduces itself.
+7. **Hatch**: the Gateway builds missing Control UI assets in the background.
+   Once it serves the dashboard, the browser handoff opens it (GUI) or prints
+   a URL without authentication secrets (headless/SSH) and waits for the
+   Control UI to connect — "Dashboard connected — continuing in your browser."
+   Otherwise, or with `--tui`, the terminal TUI opens seeded with the bootstrap
+   hatch message and the agent introduces itself.
 
 Remote-gateway onboarding keeps its legacy conversational handoff
 (`handoffMode: "chat"`); setup must apply on the remote gateway.
 
 ## Phases
 
-| #   | Phase                                                                                                                                                                     | Surface              | Status                                                                                                          |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                                              | classic + guided CLI | merged ([#109668](https://github.com/openclaw/openclaw/pull/109668))                                            |
-| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                                | guided CLI           | merged ([`a83ed13204f1`](https://github.com/openclaw/openclaw/commit/a83ed13204f118adf1009e5ac88d5afe1905b86c)) |
-| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                                | CLI → web            | merged ([#110054](https://github.com/openclaw/openclaw/pull/110054))                                            |
-| 4   | Web custodian surface (option-card renderer shared with the question tool, scripted pre-AI states over `openclaw.chat`, post-wizard chat handoff)                         | Control UI           | planned                                                                                                         |
-| 5   | Hatch and bootstrap (blank-agent creation, self-naming, self-drawn avatar via image-gen when available, recommendations as the last bootstrap step, self-learning opt-in) | agent bootstrap      | planned                                                                                                         |
-| 6   | Custodian presence (pinned sidebar entry, Settings dock with event-reactive commentary, channel summon and agent-down recovery, weak-model script)                        | web + channels       | planned                                                                                                         |
-| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                                   | gateway              | follow-up                                                                                                       |
+| #   | Phase                                                                                                                                                     | Surface              | Status                                                                                                                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                              | classic + guided CLI | merged ([#109668](https://github.com/openclaw/openclaw/pull/109668))                                                              |
+| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                | guided CLI           | merged ([`a83ed13204f1`](https://github.com/openclaw/openclaw/commit/a83ed13204f118adf1009e5ac88d5afe1905b86c))                   |
+| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                | CLI → web            | merged ([#110054](https://github.com/openclaw/openclaw/pull/110054))                                                              |
+| 4   | Web custodian surface (option cards, typed `question` field on `openclaw.chat`, wizard-step mirroring, first-run handoff)                                 | Control UI           | merged ([#110141](https://github.com/openclaw/openclaw/pull/110141), [#110242](https://github.com/openclaw/openclaw/pull/110242)) |
+| 5   | Hatch and bootstrap (recommendations store with once-semantics, self-naming birth sequence, auto-hatch handoff after fresh setup; avatar ladder deferred) | agent bootstrap      | merged ([#110173](https://github.com/openclaw/openclaw/pull/110173), [#110331](https://github.com/openclaw/openclaw/pull/110331)) |
+| 6   | Custodian presence PR1 (pinned sidebar entry, Ask OpenClaw in Settings, normal-chrome caretaker greeting; event commentary and channel summon are PR2)    | web + channels       | merged ([#110269](https://github.com/openclaw/openclaw/pull/110269))                                                              |
+| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                   | gateway              | follow-up                                                                                                                         |
 
 ## Implementation notes per phase
 
@@ -140,50 +141,58 @@ Remote-gateway onboarding keeps its legacy conversational handoff
   counts in the quip are deferred (qualitative only) until a cheap
   session-count seam exists.
 - Fresh installs: `applySystemAgentSetup` (the deterministic conversational
-  "yes"), then hatch via `launchTuiCli` seeded with the bootstrap message.
+  "yes") persists the workspace and starts the Gateway before memory import;
+  the terminal hatch uses `launchTuiCli` seeded with the bootstrap message.
   Configured installs (pre-existing model or gateway config — wizard
   timestamps prove nothing, they are shared with configure/doctor):
-  verification only — no apply, no Gateway service restart. Apply failure
-  falls back to the conversational chat.
+  verification only — no apply, no Gateway service restart. Only a pending
+  onboarding receipt allows an interrupted fresh setup to resume. Apply
+  failure falls back to the conversational chat.
 
 ### Phase 3 — browser-first handoff (PR #110054, merged)
 
 - `src/commands/onboard-browser-handoff.ts` owns pure graphical-session
   detection (`SSH_CONNECTION`/`SSH_TTY`; `DISPLAY`/`WAYLAND_DISPLAY` on Linux)
-  and the 60-second GUI / 300-second SSH wait. Guided onboarding currently
-  enables the handoff only on macOS; `--tui` and other platforms keep the
-  terminal hatch. Linux/Windows enablement is a follow-up.
-- Dashboard links use the same `resolveAdvertisedControlUiLinks`,
-  `resolveLocalControlUiProbeLinks`, and `buildOnboardingControlUiUrl` helpers
-  as classic finalize. Browser launch uses the shared `openUrl` helper.
-- Readiness polls the existing `system-presence` RPC as a **CLI-mode loopback
-  client presenting the configured shared secret** — the trusted path every
-  `openclaw` command uses. A raw shared-auth Control UI client is rejected
-  with "device identity required" on SecretRef gateways. The reachability
-  preflight resolves the same target (and secret) as the wait loop, so the
-  gate and the wait can never disagree on auth. The handoff completes only
-  when a connected `openclaw-control-ui`/`webchat` presence row is new
-  relative to the pre-launch baseline (an already-open dashboard cannot
-  complete it).
+  and the 60-second GUI / 300-second SSH wait. Guided onboarding supports
+  graphical desktop sessions on macOS, Linux, and Windows; headless/SSH
+  sessions print the dashboard URL, and `--tui` forces the terminal hatch.
+- `src/commands/control-ui-handoff.ts` owns dashboard targets, served-document
+  readiness, and one-time browser pairing for onboarding and
+  `openclaw dashboard`. GUI launches receive a one-time bootstrap link; headless/SSH
+  output prints a clean URL with manual authentication guidance. Browser
+  launch uses the shared `openUrl` helper.
+- One resolved target confirms that the Gateway serves the dashboard document,
+  captures the pre-launch presence baseline, and waits for a new connection.
+  Missing Control UI assets build asynchronously without blocking Gateway
+  startup. Connection tracking polls the existing `system-presence` RPC as a
+  **CLI-mode loopback client presenting the configured shared secret** — the
+  trusted path every `openclaw` command uses. A raw shared-auth Control UI
+  client is rejected with "device identity required" on SecretRef gateways.
+  The handoff completes only when a connected `openclaw-control-ui`/`webchat`
+  presence row is new relative to the baseline (an already-open dashboard
+  cannot complete it).
 - `gateway.controlUi.enabled: false` short-circuits before any URL is shown.
 - Proven end-to-end against an isolated same-config gateway: URL print → real
   browser connect → "Dashboard connected — continuing in your browser" → no
   terminal hatch. An earlier "token mismatch" hold was a test-harness
   artifact — see the testing playbook below.
 
-### Phase 4 — web custodian surface (planned)
+### Phase 4 — web custodian surface (merged: #110141, #110242)
 
-- One option-card component (header, question, 2-4 cards, one recommended,
-  always skippable) shared by scripted onboarding and the agent question tool
-  (`src/agents/harness/user-input-bridge.ts` shapes).
-- Scripted pre-AI dialogue as a small state machine consumed by CLI and web;
-  the web page runs over the existing `openclaw.chat` RPC in the chrome-hiding
-  onboarding mode. The model-setup wizard pages remain as the "More options"
-  fallback, embedded as cards.
-- Browser handoff should deep-link into the onboarding-mode custodian chat
-  once this exists (today it lands on the normal dashboard).
+- `/custodian` page over `openclaw.chat` with the option-card component
+  (2-4 cards, one recommended max, always skippable); onboarding chrome via
+  `?onboarding=1`; model-setup first-run completion hands off into it.
+- Structured questions are a typed additive `question` field on
+  `SystemAgentChatResult` (per-option `reply` text; prose always stands alone
+  for the macOS app/TUI). Producers: both onboarding welcome variants and
+  hosted wizard select/confirm steps with 2-4 closed options — real channel
+  wizards render as cards. The PR1 string-marker stopgap was deleted.
+- Session ownership is scoped to gateway URL + every presented credential
+  (token, password, bootstrap token, stored device token — sticky across
+  transient hello drops); failed user turns are never replayable; sensitive
+  input is sent verbatim and masked in the transcript.
 
-### Phase 5 — hatch and bootstrap (planned)
+### Phase 5 — hatch and bootstrap (merged: #110173, #110331)
 
 - Custodian creates a nameless agent (tool call); the agent's bootstrap opens
   with self-naming. PR1 ships the ceremony capped at three beats (name → soul
@@ -204,14 +213,20 @@ Remote-gateway onboarding keeps its legacy conversational handoff
 - Self-learning is asked, not announced, and doubles as skill-workshop
   consent; describe ClawHub's release-trust, scan, verification, and integrity
   checks plus the publisher-code warning — never imply every release is signed.
-- Zero agents on first run auto-hatches with the announcement; zero agents
-  after deletion offers instead (the emptiness was intentional).
+- Auto-hatch shipped: a fresh-install setup apply announces the hatch and
+  hands off (terminal TUI / `open-agent` for gateway clients); the web page
+  lands in agent chat with the "Wake up, my friend!" draft prefilled. The
+  handoff fires only on clean post-write verification. Zero agents after
+  deletion offering (instead of auto) remains follow-up polish.
 
-### Phase 6 — custodian presence (planned)
+### Phase 6 — custodian presence (PR1 merged: #110269; commentary/summon are PR2)
 
-- Pinned sidebar entry (permanent session — it is the config audit trail) and
-  Settings landing pane docked with the same session; replies deep-link into
-  settings sections. The surface keeps the name "Settings".
+- Shipped in PR1: default-pinned "OpenClaw" sidebar entry (fresh profiles;
+  existing users keep saved pins and reach it via customize/More), "Ask
+  OpenClaw" as the first Settings entry, and normal-chrome `/custodian` visits
+  that request the caretaker greeting (no onboarding welcome variant), with
+  Exit setup rendered only in onboarding mode. A docked inline Settings pane
+  needs shared conversation-view extraction (follow-up).
 - Event-reactive commentary with anti-Clippy guardrails: consequential or
   failed changes only, at most once per settings visit unless asked. The same
   event seam makes the custodian the voice for degraded auth or broken
@@ -224,11 +239,38 @@ Remote-gateway onboarding keeps its legacy conversational handoff
 - The custodian knows its internal nickname ("some folks call me the
   custodian — OpenClaw's fine") and always refers to the agent by name.
 
-### Phase 7 — resilience (follow-up)
+### Phase 7 — resilience (needs an owner decision before building)
 
-- The custodian must be reachable no matter how broken the config is: salvage
-  working surfaces (per the gateway's degraded-start SecretRef rules), say
-  plainly what is broken, and run `openclaw doctor` automatically.
+The original sketch — "the custodian must be reachable no matter how broken
+the config is" — collides with the repo's security policy: the root guide
+states the Gateway **refuses startup** when config is structurally invalid,
+and only SecretRef-owner failures degrade into configured-unavailable
+capabilities. Serving any surface from an invalid config is a policy change,
+not an implementation detail. Two scopes, pick one:
+
+- **Option A (recommended, policy-compliant): CLI-side auto-doctor.** When a
+  gateway or CLI start fails with a known-shape invalid config, the CLI offers
+  (or with consent runs) `openclaw doctor --fix`, then retries once and
+  reports plainly. No gateway behavior changes; the custodian stays reachable
+  through the existing degraded-SecretRef path and the terminal.
+- **Option B (needs explicit owner sign-off + security review): gateway
+  minimal-surface mode.** On structurally invalid config, start a locked-down
+  surface serving only the custodian conversation and doctor actions. This
+  rewrites the fail-closed startup contract and must define its own ingress
+  protection story before any code.
+
+Remaining follow-ups from phases 4-6 (tracked, unscheduled): avatar/image-gen
+ladder for the hatch; macOS app rendering of the typed `question` field; a
+docked inline Settings pane for the custodian (needs shared conversation-view
+extraction); event-reactive commentary and channel summon/agent-down recovery
+(phase 6 PR2); automatic `localModelLean` for weak models; whether existing
+users' saved sidebar pins should adopt the OpenClaw entry.
+
+The macOS app now follows the same browser-first principle: native onboarding
+ends once inference verifies (install + AI setup pages), and Finish opens the
+dashboard at `/custodian?onboarding=1`. The native memory-import and
+permissions pages left the first-run flow (Settings → Permissions remains);
+deleting the now-unreachable native memory-import module is a follow-up.
 
 ## Testing and landing playbook (hard-won; read before phases 4-6)
 
@@ -270,8 +312,8 @@ restart` from the real environment and verify the plist. Product follow-up:
   `CI release gate <sha>`, which `scripts/verify-pr-hosted-gates.mjs`
   accepts. Then `scripts/pr` prepare/merge as usual.
 
-- **Gates that CI enforces beyond focused tests**: docs map
-  (`pnpm docs:map:gen` after adding any docs page), oxlint (`no-map-spread`,
+- **Gates that CI enforces beyond focused tests**: docs consistency
+  (`pnpm check:docs` after changing docs), oxlint (`no-map-spread`,
   `max-lines` — split files, never suppress), `check:test-types`, knip
   deadcode (export only what prod consumes; route tests through public APIs),
   and the live-test shard classifier
@@ -279,8 +321,8 @@ restart` from the real environment and verify the plist. Product follow-up:
 
 ## Decision log
 
-- Magical scan with kill switch, not consent-first (phase 1; disclosure lives
-  in the scanning progress line and results note).
+- Magical scan with kill switch, not consent-first (phase 1; persistent output
+  discloses model and ClawHub use before scanning, and the results note repeats it).
 - Full vertical including the node `device.apps` command (phase 1).
 - Third-party ClawHub skills are never pre-selected and are labeled as
   installing the publisher's code; official entries may be pre-checked
@@ -309,7 +351,6 @@ restart` from the real environment and verify the plist. Product follow-up:
   real multi-instance product gap).
 - Recommendations once-semantics and the stored scan (phase 5); reruns
   currently re-offer.
-- Browser handoff is macOS-only; Linux/Windows enablement pending.
 - Session-count quip is qualitative; counts need a cheap session-count seam.
 - Browser handoff lands on the normal dashboard; onboarding-mode custodian
   deep-link arrives with phase 4.
