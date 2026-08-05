@@ -3752,7 +3752,7 @@ Update and merge these partial structured summaries.`,
       ],
     });
     expect(memoryText).toContain('"name":"memory_search"');
-    expect(memoryText).toContain('\\"corpus\\":\\"sessions\\"');
+    expect(memoryText).not.toContain('\\"corpus\\"');
 
     const threadMemorySearchText = await expectStreamingResponsesText(server, {
       instructions:

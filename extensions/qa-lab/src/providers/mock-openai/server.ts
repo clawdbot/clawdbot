@@ -1946,9 +1946,8 @@ async function buildResponsesPayload(
   if (/session memory ranking check/i.test(prompt)) {
     if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
-        query: "current Project Nebula codename ORBIT-10",
-        maxResults: 3,
-        corpus: "sessions",
+        query: "current Project Nebula codename",
+        maxResults: 6,
       });
     }
     if (memoryToolUnavailable) {
