@@ -28,7 +28,7 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./type
 
 type PersistGatewaySessionLifecycleEvent = typeof persistGatewaySessionLifecycleEvent;
 
-export async function persistAgentRunTerminalSession(params: {
+async function persistAgentRunTerminalSession(params: {
   agentId?: string;
   persist?: PersistGatewaySessionLifecycleEvent;
   runId: string;
@@ -67,6 +67,9 @@ export async function persistAgentRunTerminalSession(params: {
     },
   });
 }
+
+const testing = { persistAgentRunTerminalSession };
+export { testing as __testing };
 
 function resolveResolvedAgentTimeoutStopReason(
   meta: unknown,

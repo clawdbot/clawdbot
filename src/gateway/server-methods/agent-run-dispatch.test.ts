@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { persistAgentRunTerminalSession } from "./agent-run-dispatch.js";
+import { __testing } from "./agent-run-dispatch.js";
+
+const { persistAgentRunTerminalSession } = __testing;
 
 describe("persistAgentRunTerminalSession", () => {
   it("projects a successful suppressed agent RPC into its owned session", async () => {

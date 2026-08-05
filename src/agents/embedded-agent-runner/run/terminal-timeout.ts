@@ -10,7 +10,7 @@ import {
 import { copyAttemptDeliveryState } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-export function buildPromptTimeoutPayloads(params: {
+function buildPromptTimeoutPayloads(params: {
   hasPartialAssistantTextAfterPromptTimeout: boolean;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   timeoutText: string;
@@ -20,6 +20,9 @@ export function buildPromptTimeoutPayloads(params: {
     : (params.payloadsWithToolMedia ?? []).filter((payload) => payload.isError !== true);
   return [...preservedPayloads, { text: params.timeoutText, isError: true }];
 }
+
+const testing = { buildPromptTimeoutPayloads };
+export { testing as __testing };
 
 export function resolveEmbeddedRunTerminalTimeout(input: {
   timedOutDuringPrompt: boolean;

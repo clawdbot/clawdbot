@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildPromptTimeoutPayloads } from "./terminal-timeout.js";
+import { __testing } from "./terminal-timeout.js";
+
+const { buildPromptTimeoutPayloads } = __testing;
 
 describe("buildPromptTimeoutPayloads", () => {
   it("replaces an earlier generic timeout error with one actionable final error", () => {
