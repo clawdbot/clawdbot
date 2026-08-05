@@ -14,6 +14,23 @@ type CommandPromptSurface = {
 
 const MAX_DYNAMIC_PROMPT_SURFACES = 32;
 const PROMPT_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const BLOCKED_GENERIC_NODE_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+const DEDICATED_NODE_TOOL_COMMANDS = new Set([
+  "computer.act",
+  "mobile.ui.observe",
+  "mobile.ui.act",
+]);
+const DEFAULT_BLOCKED_MEDIA_NODE_COMMANDS = new Set([
+  "camera.snap",
+  "camera.clip",
+  "photos.latest",
+  "screen.record",
+  "screen.snapshot",
+  "file.fetch",
+  "dir.list",
+  "dir.fetch",
+  "file.write",
+]);
 
 function openClawCommand(path: readonly string[]): string {
   return `openclaw ${path.join(" ")}`;
@@ -33,6 +50,14 @@ function isSafePromptIdentifier(value: string | undefined): value is string {
 
 function safeArgumentHints(hints: readonly string[]): readonly string[] {
   return hints.filter(isSafePromptIdentifier);
+}
+
+function isDefaultGenericNodeInvokeCommand(command: string): boolean {
+  return (
+    !BLOCKED_GENERIC_NODE_INVOKE_COMMANDS.has(command) &&
+    !DEDICATED_NODE_TOOL_COMMANDS.has(command) &&
+    !DEFAULT_BLOCKED_MEDIA_NODE_COMMANDS.has(command)
+  );
 }
 
 function listRoutedCommandSurfaces(
@@ -80,6 +105,7 @@ export function listCommandPromptSurfaces(
             (command) =>
               isSafePromptIdentifier(command.command) &&
               isSafePromptIdentifier(command.nodeId) &&
+              isDefaultGenericNodeInvokeCommand(command.command) &&
               command.visibility.includes("prompt") &&
               (command.availability === "approved" || command.availability === "available"),
           )

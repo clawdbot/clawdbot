@@ -725,13 +725,13 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes run-scoped node commands only for node-operator prompts", () => {
     const nodeCommand = {
-      id: "node:desk:camera.snap",
-      command: "camera.snap",
-      title: "camera.snap",
+      id: "node:desk:filesystem.read",
+      command: "filesystem.read",
+      title: "filesystem.read",
       nodeId: "desk",
       description: "Live command advertised by paired node Desk.",
-      argumentHints: [],
-      invocationHint: "openclaw nodes invoke --node desk --command camera.snap",
+      argumentHints: ["path"],
+      invocationHint: "openclaw nodes invoke --node desk --command filesystem.read",
       availability: "available" as const,
       approvalKind: "gateway-allowlist" as const,
       risk: "high" as const,
@@ -740,7 +740,7 @@ describe("buildAgentSystemPrompt", () => {
       effects: [],
       trustBoundary: "paired-node" as const,
       sourceKind: "node-runtime" as const,
-      sourceId: "desk:camera.snap",
+      sourceId: "desk:filesystem.read",
       discoveryMode: "runtime-node-query" as const,
       visibility: ["prompt", "audit", "operator"] as const,
     };
@@ -753,9 +753,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("node:desk:camera.snap->camera.snap");
+    expect(prompt).toContain("node:desk:filesystem.read->filesystem.read");
     expect(prompt).not.toContain("gateway-status->openclaw gateway status");
-    expect(prompt.indexOf("node:desk:camera.snap")).toBeGreaterThan(
+    expect(prompt.indexOf("node:desk:filesystem.read")).toBeGreaterThan(
       prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
     );
 
@@ -764,13 +764,13 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["nodes"],
       commandInventory: {
         scope: "node-operator",
-        nodeCommands: [{ ...nodeCommand, id: "node:laptop:camera.snap", nodeId: "laptop" }],
+        nodeCommands: [{ ...nodeCommand, id: "node:laptop:filesystem.read", nodeId: "laptop" }],
       },
     });
     expect(prompt.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0]).toBe(
       otherNodePrompt.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0],
     );
-    expect(otherNodePrompt).toContain("node:laptop:camera.snap");
+    expect(otherNodePrompt).toContain("node:laptop:filesystem.read");
   });
 
   it("preserves tool casing in the prompt", () => {

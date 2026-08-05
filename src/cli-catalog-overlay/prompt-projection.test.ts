@@ -125,6 +125,33 @@ describe("command prompt projection", () => {
     expect(projected).toEqual([]);
   });
 
+  it("advertises only commands the generic node invoke action can execute by default", () => {
+    const projected = listCommandPromptSurfaces({
+      includeHostCli: false,
+      scope: "node-operator",
+      nodeCommands: [
+        { ...nodeCommand, id: "node:demo:filesystem.read", command: "filesystem.read" },
+        { ...nodeCommand, id: "node:demo:camera.snap", command: "camera.snap" },
+        { ...nodeCommand, id: "node:demo:system.run", command: "system.run" },
+        { ...nodeCommand, id: "node:demo:computer.act", command: "computer.act" },
+        { ...nodeCommand, id: "node:demo:file.fetch", command: "file.fetch" },
+      ],
+    });
+
+    expect(projected).toContainEqual(
+      expect.objectContaining({
+        commandHints: expect.arrayContaining([
+          expect.stringContaining("invokeCommand=filesystem.read"),
+        ]),
+      }),
+    );
+    const hints = projected.map((surface) => surface.commandHints.join(" "));
+    expect(hints).not.toEqual(expect.arrayContaining([expect.stringContaining("camera.snap")]));
+    expect(hints).not.toEqual(expect.arrayContaining([expect.stringContaining("system.run")]));
+    expect(hints).not.toEqual(expect.arrayContaining([expect.stringContaining("computer.act")]));
+    expect(hints).not.toEqual(expect.arrayContaining([expect.stringContaining("file.fetch")]));
+  });
+
   it("rejects node-controlled command identifiers that are not safe prompt literals", () => {
     const projected = listCommandPromptSurfaces({
       includeHostCli: false,

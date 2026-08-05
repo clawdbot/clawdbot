@@ -3,13 +3,13 @@ import type { CliCatalogNodeCommand } from "../cli-catalog-overlay/node-commands
 import { buildCommandInventoryPromptSection } from "./command-inventory-prompt.js";
 
 const nodeCommand: CliCatalogNodeCommand = {
-  id: "node:desk:camera.snap",
-  command: "camera.snap",
-  title: "camera.snap",
+  id: "node:desk:filesystem.read",
+  command: "filesystem.read",
+  title: "filesystem.read",
   nodeId: "desk",
   description: "Live command advertised by paired node Desk.",
-  argumentHints: [],
-  invocationHint: "openclaw nodes invoke --node desk --command camera.snap",
+  argumentHints: ["path"],
+  invocationHint: "openclaw nodes invoke --node desk --command filesystem.read",
   availability: "available",
   approvalKind: "gateway-allowlist",
   risk: "high",
@@ -18,7 +18,7 @@ const nodeCommand: CliCatalogNodeCommand = {
   effects: [],
   trustBoundary: "paired-node",
   sourceKind: "node-runtime",
-  sourceId: "desk:camera.snap",
+  sourceId: "desk:filesystem.read",
   discoveryMode: "runtime-node-query",
   visibility: ["prompt", "audit", "operator"],
 };
@@ -62,10 +62,31 @@ describe("buildCommandInventoryPromptSection", () => {
       nodeCommands: [nodeCommand],
     }).join("\n");
 
-    expect(section).toContain("node:desk:camera.snap->camera.snap");
-    expect(section).toContain("via=nodes action=invoke node=desk invokeCommand=camera.snap");
+    expect(section).toContain("node:desk:filesystem.read->filesystem.read");
+    expect(section).toContain("via=nodes action=invoke node=desk invokeCommand=filesystem.read");
     expect(section).toContain("risk=high confirmation=user");
     expect(section).not.toContain("gateway-status->openclaw gateway status");
+  });
+
+  it("caps the fully rendered prompt section after formatting maximum-size node rows", () => {
+    const nodeCommands = Array.from({ length: 32 }, (_, index) => ({
+      ...nodeCommand,
+      id: `node:${"n".repeat(120 - String(index).length)}${index}:command-${index}`,
+      nodeId: `${"n".repeat(120 - String(index).length)}${index}`,
+      command: `command-${index}`,
+      argumentHints: ["path", "safe_name", "workspaceRoot", "outputFormat"],
+    }));
+
+    const section = buildCommandInventoryPromptSection({
+      availableTools: new Set(["nodes"]),
+      hostCliAvailable: false,
+      scope: "node-operator",
+      nodeCommands,
+    }).join("\n");
+
+    expect(section.length).toBeLessThanOrEqual(1800);
+    expect(section).toContain("## OpenClaw Commands");
+    expect(section).toContain("node:");
   });
 
   it("omits node commands when the nodes tool is unavailable", () => {

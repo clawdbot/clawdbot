@@ -823,13 +823,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         scope: "node-operator",
         nodeCommands: [
           {
-            id: "node:desk:camera.snap",
-            command: "camera.snap",
-            title: "camera.snap",
+            id: "node:desk:filesystem.read",
+            command: "filesystem.read",
+            title: "filesystem.read",
             nodeId: "desk",
             description: "Live command advertised by paired node Desk.",
-            argumentHints: [],
-            invocationHint: "openclaw nodes invoke --node desk --command camera.snap",
+            argumentHints: ["path"],
+            invocationHint: "openclaw nodes invoke --node desk --command filesystem.read",
             availability: "available",
             approvalKind: "gateway-allowlist",
             risk: "high",
@@ -838,7 +838,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             effects: [],
             trustBoundary: "paired-node",
             sourceKind: "node-runtime",
-            sourceId: "desk:camera.snap",
+            sourceId: "desk:filesystem.read",
             discoveryMode: "runtime-node-query",
             visibility: ["prompt", "audit", "operator"],
           },
@@ -850,7 +850,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect.objectContaining({
         commandInventory: expect.objectContaining({
           scope: "node-operator",
-          nodeCommands: [expect.objectContaining({ id: "node:desk:camera.snap" })],
+          nodeCommands: [expect.objectContaining({ id: "node:desk:filesystem.read" })],
         }),
       }),
     );
