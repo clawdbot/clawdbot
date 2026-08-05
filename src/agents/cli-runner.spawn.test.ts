@@ -5325,6 +5325,35 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("collapses Windows AI agent aliases when applying backend env overrides", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    process.env.AI_AGENT = "inherited";
+    try {
+      mockSuccessfulCliRun();
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          backend: {
+            env: { ai_agent: "backend" },
+            clearEnv: ["AI_AGENT"],
+          },
+        }),
+        "thread-123",
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as {
+        env?: Record<string, string | undefined>;
+      };
+      expect(input.env?.AI_AGENT).toBe("backend");
+      expect(
+        Object.keys(input.env ?? {}).filter((key) => key.toUpperCase() === "AI_AGENT"),
+      ).toEqual(["AI_AGENT"]);
+    } finally {
+      delete process.env.AI_AGENT;
+    }
+  });
+
   it("keeps selected Claude auth authoritative over ambient and configured credentials", async () => {
     vi.stubEnv("OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV", '["ANTHROPIC_API_KEY"]');
     vi.stubEnv("ANTHROPIC_API_KEY", "ambient-api-key");

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
+  canonicalizeAiAgentEnvOverrides,
   ensureOpenClawExecMarkerOnProcess,
   markOpenClawExecEnv,
   OPENCLAW_CLI_ENV_VAR,
@@ -42,6 +43,24 @@ describe("markOpenClawExecEnv", () => {
     expect(markOpenClawExecEnv({ ai_agent: value }, "win32")).toEqual({
       AI_AGENT: expected,
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
+  });
+});
+
+describe("canonicalizeAiAgentEnvOverrides", () => {
+  it.each([
+    { value: "wrapper", expected: "wrapper" },
+    { value: "   ", expected: AI_AGENT_ENV_VALUE },
+  ])("collapses a Windows marker alias with value %j", ({ value, expected }) => {
+    expect(canonicalizeAiAgentEnvOverrides({ ai_agent: value, SAFE_KEY: "ok" }, "win32")).toEqual({
+      AI_AGENT: expected,
+      SAFE_KEY: "ok",
+    });
+  });
+
+  it("does not add a marker when the overrides do not contain one", () => {
+    expect(canonicalizeAiAgentEnvOverrides({ SAFE_KEY: "ok" }, "win32")).toEqual({
+      SAFE_KEY: "ok",
     });
   });
 });

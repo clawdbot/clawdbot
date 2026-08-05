@@ -7,21 +7,47 @@ const OPENCLAW_CLI_ENV_VALUE = "1";
 const AI_AGENT_ENV_VAR = "AI_AGENT";
 const AI_AGENT_ENV_VALUE = "openclaw";
 
+function normalizeAiAgentEnvValue(value: string | undefined): string {
+  return value?.trim() ? value : AI_AGENT_ENV_VALUE;
+}
+
+function listAiAgentEnvKeys(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+): string[] {
+  return platform === "win32"
+    ? Object.keys(env)
+        .filter((key) => key.toUpperCase() === AI_AGENT_ENV_VAR)
+        .toSorted()
+    : [AI_AGENT_ENV_VAR];
+}
+
 function normalizeAiAgentEnv(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
+  defaultWhenMissing = true,
 ): void {
-  const agentKeys =
-    platform === "win32"
-      ? Object.keys(env)
-          .filter((key) => key.toUpperCase() === AI_AGENT_ENV_VAR)
-          .toSorted()
-      : [AI_AGENT_ENV_VAR];
+  const agentKeys = listAiAgentEnvKeys(env, platform);
+  if (!defaultWhenMissing && !agentKeys.some((key) => Object.hasOwn(env, key))) {
+    return;
+  }
   const explicitAgent = env[agentKeys[0] ?? AI_AGENT_ENV_VAR];
   for (const key of platform === "win32" ? agentKeys : []) {
     delete env[key];
   }
-  env[AI_AGENT_ENV_VAR] = explicitAgent?.trim() ? explicitAgent : AI_AGENT_ENV_VALUE;
+  env[AI_AGENT_ENV_VAR] = normalizeAiAgentEnvValue(explicitAgent);
+}
+
+/** Returns cloned overrides with Windows AI agent aliases collapsed to the canonical key. */
+export function canonicalizeAiAgentEnvOverrides<T extends Record<string, string | undefined>>(
+  env: T,
+  platform: NodeJS.Platform = process.platform,
+): T {
+  const canonical = { ...env };
+  if (platform === "win32") {
+    normalizeAiAgentEnv(canonical, platform, false);
+  }
+  return canonical;
 }
 
 /** Returns a cloned env object with OpenClaw-specific and universal execution markers. */

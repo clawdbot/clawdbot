@@ -8,6 +8,7 @@ import {
   sanitizeHostExecEnv,
   sanitizeHostExecEnvOverrides,
 } from "../../infra/host-env-security.js";
+import { canonicalizeAiAgentEnvOverrides } from "../../infra/openclaw-exec-env.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
@@ -428,10 +429,12 @@ export async function executePreparedCliRun(
       if (Object.keys(backendEnv).length > 0) {
         Object.assign(
           env,
-          sanitizeHostExecEnvOverrides({
-            overrides: backendEnv,
-            blockPathOverrides: true,
-          }),
+          canonicalizeAiAgentEnvOverrides(
+            sanitizeHostExecEnvOverrides({
+              overrides: backendEnv,
+              blockPathOverrides: true,
+            }),
+          ),
         );
       }
       Object.assign(env, mcpCaptureAttempt.env);
