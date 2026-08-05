@@ -1,10 +1,10 @@
 /** Ensures configured channel-to-ACP bindings have live sessions and matching runtime options. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentExplicitModelPrimary } from "../agents/agent-scope.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveAgentExplicitModelPrimary } from "../agents/agent-scope.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
 import {
   buildConfiguredAcpSessionKey,
@@ -51,6 +51,15 @@ function sessionMatchesConfiguredBinding(params: {
       return false;
     }
   }
+
+  // Reconcile model metadata so a ready session created before a model edit
+  // (or before this patch existed) is not silently reused with the wrong model.
+  const desiredModel = resolveAgentExplicitModelPrimary(params.cfg, params.spec.agentId);
+  const currentModel = params.meta.runtimeOptions?.model;
+  if (desiredModel !== currentModel) {
+    return false;
+  }
+
   return true;
 }
 
@@ -91,13 +100,14 @@ export async function ensureConfiguredAcpBindingSession(params: {
       });
     }
 
-    const agentId = params.spec.acpAgentId ?? params.spec.agentId;
-    const resolvedModel = resolveAgentExplicitModelPrimary(params.cfg, agentId);
+    // Model is resolved from the owning OpenClaw agent, not the ACP harness override.
+    const sessionAgentId = params.spec.acpAgentId ?? params.spec.agentId;
+    const resolvedModel = resolveAgentExplicitModelPrimary(params.cfg, params.spec.agentId);
 
     await acpManager.initializeSession({
       cfg: params.cfg,
       sessionKey,
-      agent: agentId,
+      agent: sessionAgentId,
       mode: params.spec.mode,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,

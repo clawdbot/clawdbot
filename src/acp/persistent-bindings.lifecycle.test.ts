@@ -60,6 +60,7 @@ function mockReadySession(params: {
   spec: ConfiguredAcpBindingSpec;
   cwd: string;
   state?: "idle" | "running" | "error";
+  model?: string;
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   managerMocks.resolveSession.mockReturnValue({
@@ -70,7 +71,7 @@ function mockReadySession(params: {
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
       mode: params.spec.mode,
-      runtimeOptions: { cwd: params.cwd },
+      runtimeOptions: { cwd: params.cwd, ...(params.model ? { model: params.model } : {}) },
       state: params.state ?? "idle",
       lastActivityAt: Date.now(),
     },
@@ -183,10 +184,10 @@ describe("ensureConfiguredAcpBindingSession", () => {
       agents: {
         list: [{ id: "claude", model: "anthropic/claude-3-opus" }],
       },
-    };
+    } as OpenClawConfig;
 
     const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: cfgWithModel as any,
+      cfg: cfgWithModel,
       spec,
     });
 
@@ -194,5 +195,89 @@ describe("ensureConfiguredAcpBindingSession", () => {
     const initializeArgs = expectInitializeArgs();
     expect(initializeArgs.agent).toBe("claude");
     expect(initializeArgs.runtimeOptions).toEqual({ model: "anthropic/claude-3-opus" });
+  });
+
+  it("resolves model from owning agent, not harness override", async () => {
+    const spec = createPersistentSpec({
+      agentId: "coding",
+      acpAgentId: "codex",
+    });
+    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
+
+    const cfgWithModel = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "coding", model: "anthropic/claude-3-opus" }],
+      },
+    } as OpenClawConfig;
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: cfgWithModel,
+      spec,
+    });
+
+    expect(ensured.ok).toBe(true);
+    const initializeArgs = expectInitializeArgs();
+    // Session agent is the harness override
+    expect(initializeArgs.agent).toBe("codex");
+    // Model is resolved from the owning agent, not the harness
+    expect(initializeArgs.runtimeOptions).toEqual({ model: "anthropic/claude-3-opus" });
+  });
+
+  it("reinitializes a ready session when model differs from configured", async () => {
+    const spec = createPersistentSpec({
+      agentId: "claude",
+    });
+
+    const cfgWithModel = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "claude", model: "anthropic/claude-3-opus" }],
+      },
+    } as OpenClawConfig;
+
+    // Ready session has no model set (pre-existing session from before the patch)
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: cfgWithModel,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    const initializeArgs = expectInitializeArgs();
+    expect(initializeArgs.runtimeOptions).toEqual({ model: "anthropic/claude-3-opus" });
+  });
+
+  it("keeps a ready session when model matches configured", async () => {
+    const spec = createPersistentSpec({
+      agentId: "claude",
+    });
+
+    const cfgWithModel = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "claude", model: "anthropic/claude-3-opus" }],
+      },
+    } as OpenClawConfig;
+
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      model: "anthropic/claude-3-opus",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: cfgWithModel,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).not.toHaveBeenCalled();
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
   });
 });
