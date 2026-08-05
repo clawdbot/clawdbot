@@ -200,9 +200,10 @@ describe("createLazyGatewayCronState", () => {
   });
 
   it("preserves the startup cron enabled flag without loading cron runtime", () => {
-    vi.stubEnv("OPENCLAW_SKIP_CRON", "1");
-
-    const lazy = createLazyGatewayCronState(createParams());
+    const lazy = createLazyGatewayCronState({
+      ...createParams(),
+      env: { OPENCLAW_SKIP_CRON: "1" },
+    });
 
     expect(lazy.cronEnabled).toBe(false);
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
@@ -371,6 +372,7 @@ function createParams(overrides: Partial<OpenClawConfig> = {}) {
     } as OpenClawConfig,
     deps: {} as CliDeps,
     broadcast: vi.fn(),
+    env: {},
   };
 }
 
