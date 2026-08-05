@@ -118,6 +118,11 @@ describe("isTransientCompactionFailureResult", () => {
       reason: "Provider returned 503 but the context engine failed internally",
       failure: { reason: "auth", status: 401, code: "context_engine_failure" },
     },
+    {
+      ok: false,
+      compacted: false,
+      failure: { reason: "server_error", status: 401, code: "context_engine_failure" },
+    },
     { ok: false, compacted: false, reason: "Provider returned 503" },
     { ok: false, compacted: false, failure: { reason: "format", status: 400 } },
     { ok: false, compacted: false, failure: { reason: "tls_certificate", status: 502 } },

@@ -97,6 +97,9 @@ export function isTransientCompactionFailureResult(result: {
     return false;
   }
   const status = result.failure.status;
+  if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+    return false;
+  }
   if (status === 408 || status === 429 || (status !== undefined && status >= 500 && status < 600)) {
     return true;
   }
