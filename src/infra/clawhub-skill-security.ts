@@ -10,7 +10,7 @@ import {
 const MAX_SECURITY_VERDICT_BATCH_SIZE = 100;
 const NON_SECURITY_VERIFY_REASONS = new Set(["card.missing", "card_missing"]);
 
-export type ClawHubExactSkillSecurityTarget = {
+type ClawHubExactSkillSecurityTarget = {
   slug: string;
   ownerHandle?: string;
   version: string;
@@ -89,7 +89,7 @@ function readOptionalNumberField(value: unknown, field: string): number | undefi
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
 
-function normalizeReason(reason: string): string {
+function normalizeReason(reason: string | null | undefined): string {
   return normalizeOptionalString(reason)?.toLowerCase() ?? "";
 }
 
