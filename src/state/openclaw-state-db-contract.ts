@@ -5,10 +5,24 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 // v5 records durable cloud-worker result refs on pending workspace fences.
 export const OPENCLAW_STATE_SCHEMA_VERSION = 6;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
-// Privacy-sensitive feature tables remain absent even in fresh databases until
-// their feature-local first write. The canonical SQL still owns their shape.
-export const FIRST_USE_STATE_TABLES = ["execution_identity_contexts"] as const;
-export const FIRST_USE_STATE_INDEXES = ["execution_identity_contexts_run_created_idx"] as const;
+// Feature-local tables remain absent even in fresh databases until their first
+// write. The canonical SQL still owns their shape.
+export const FIRST_USE_STATE_TABLES = [
+  "execution_identity_contexts",
+  "delegate_artifact_audit",
+  "delegate_artifact_bindings",
+  "delegate_artifact_claims",
+  "delegate_artifact_policies",
+  "delegate_artifact_recipient_outcomes",
+] as const;
+export const FIRST_USE_STATE_INDEXES = [
+  "execution_identity_contexts_run_created_idx",
+  "idx_delegate_artifact_policies_producer",
+  "idx_delegate_artifact_policies_retention",
+  "idx_delegate_artifact_claims_flow",
+  "idx_delegate_artifact_bindings_recipient",
+  "idx_delegate_artifact_audit_recipient",
+] as const;
 // Added after v6 shipped. These tables stay optional until their feature-local
 // lazy ensures run; fold them into the next natural schema-version bump.
 export const LAZY_ADDITIVE_STATE_TABLES = [
