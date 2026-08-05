@@ -36,6 +36,14 @@ export const contextEngineCompactMock = vi.fn(async () => ({
   ok: true as boolean,
   compacted: true as boolean,
   reason: undefined as string | undefined,
+  failure: undefined as
+    | {
+        reason?: string;
+        status?: number;
+        code?: string;
+        rawError?: string;
+      }
+    | undefined,
   result: { summary: "engine-summary", tokensAfter: 50 } as
     | { summary: string; tokensAfter: number }
     | undefined,
@@ -578,6 +586,7 @@ export function resetCompactHooksHarnessMocks(): void {
     ok: true,
     compacted: true,
     reason: undefined,
+    failure: undefined,
     result: { summary: "engine-summary", tokensAfter: 50 },
   });
   compactWithSafetyTimeoutMock.mockReset();
