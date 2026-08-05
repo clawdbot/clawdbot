@@ -66,7 +66,7 @@ export type NativeHookRelayProcessResponse = {
   failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
-export type NativeHookRelayCriticalToolLoop = {
+type NativeHookRelayCriticalToolLoop = {
   toolName: string;
   toolCallId?: string;
   reason: string;

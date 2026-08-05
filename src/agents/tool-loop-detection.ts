@@ -33,7 +33,7 @@ type LoopDetectorKind =
   | "global_circuit_breaker"
   | "ping_pong";
 
-export type LoopDetectionResult =
+type LoopDetectionResult =
   | { stuck: false }
   | {
       stuck: true;
