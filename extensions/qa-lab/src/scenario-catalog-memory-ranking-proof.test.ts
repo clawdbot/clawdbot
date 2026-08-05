@@ -41,6 +41,7 @@ async function runSessionMemoryRankingFlow(params: {
   results: RankingResult[];
   providerMode?: ProviderMode;
   query?: string;
+  maxResults?: number;
   corpus?: "memory" | "sessions" | "all";
   includeToolCall?: boolean;
   includeToolResult?: boolean;
@@ -53,7 +54,7 @@ async function runSessionMemoryRankingFlow(params: {
   const includeToolResult = params.includeToolResult !== false;
   const plannedToolArgs = {
     query: params.query ?? searchQuery,
-    maxResults: 6,
+    maxResults: params.maxResults ?? 6,
     ...(params.corpus ? { corpus: params.corpus } : {}),
   };
   const toolResultCallId = params.resultCallId ?? searchCallId;
@@ -356,6 +357,19 @@ describe("session memory ranking scenario evidence", () => {
           results: [currentQuestionResult, staleDurableResult, currentSessionResult],
         }),
       ).rejects.toThrow(/rank|stale|durable/i);
+    },
+  );
+
+  it.each(["mock-openai", "live-frontier"] as const)(
+    "rejects a correlated memory search using less than the canonical six-result window (%s)",
+    async (providerMode) => {
+      await expect(
+        runSessionMemoryRankingFlow({
+          providerMode,
+          results: [currentSessionResult, staleDurableResult],
+          maxResults: 3,
+        }),
+      ).rejects.toThrow(/maxResults|result|six|6/i);
     },
   );
 
