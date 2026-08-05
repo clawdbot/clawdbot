@@ -1624,6 +1624,12 @@ describe("sessions tools", () => {
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
       waitForTranscriptCommit: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: requesterKey,
+        sourceChannel: "telegram",
+        sourceTool: "sessions_send",
+      },
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(calls.some((call) => call.method === "agent")).toBe(false);
@@ -1901,6 +1907,12 @@ describe("sessions tools", () => {
       steeringMode: "all",
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:re-portal:main",
+        sourceChannel: "telegram",
+        sourceTool: "sessions_send",
+      },
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(calls.some((call) => call.method === "agent")).toBe(false);
