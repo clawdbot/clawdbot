@@ -171,4 +171,28 @@ describe("ensureConfiguredAcpBindingSession", () => {
     const initializeArgs = expectInitializeArgs();
     expect(initializeArgs.agent).toBe("codex");
   });
+
+  it("initializes ACP session with configured model runtime option", async () => {
+    const spec = createPersistentSpec({
+      agentId: "claude",
+    });
+    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
+
+    const cfgWithModel = {
+      ...baseCfg,
+      agents: {
+        list: [{ id: "claude", model: "anthropic/claude-3-opus" }],
+      },
+    };
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: cfgWithModel as any,
+      spec,
+    });
+
+    expect(ensured.ok).toBe(true);
+    const initializeArgs = expectInitializeArgs();
+    expect(initializeArgs.agent).toBe("claude");
+    expect(initializeArgs.runtimeOptions).toEqual({ model: "anthropic/claude-3-opus" });
+  });
 });
