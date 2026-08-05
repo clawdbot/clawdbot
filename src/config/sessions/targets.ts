@@ -412,11 +412,21 @@ type SessionStoreTargetsReadResult =
       available: false;
       reason: "database-missing" | "schema-missing" | "table-missing" | "read-failed";
     };
+type FixedSessionStoreReadSnapshot =
+  | {
+      available: true;
+      databaseAgentId: string;
+      hasUnscopedRow: boolean;
+      scopedAgentIds: Set<string>;
+    }
+  | Extract<SessionStoreTargetsReadResult, { available: false }>;
+export type SessionStoreTargetsReadCache = Map<string, FixedSessionStoreReadSnapshot>;
 
 function resolveFixedSessionStoreTargetsReadOnly(
   cfg: OpenClawConfig,
   requested: string,
   env: NodeJS.ProcessEnv,
+  cache?: SessionStoreTargetsReadCache,
 ): SessionStoreTargetsReadResult {
   const storeConfig = cfg.session?.store;
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -441,8 +451,40 @@ function resolveFixedSessionStoreTargetsReadOnly(
     if (!sqlitePath) {
       return { available: false, reason: "read-failed" };
     }
-    if (!fsSync.existsSync(sqlitePath)) {
-      return { available: false, reason: "database-missing" };
+    const cacheKey = path.resolve(sqlitePath);
+    let snapshot = cache?.get(cacheKey);
+    if (!snapshot) {
+      if (!fsSync.existsSync(sqlitePath)) {
+        snapshot = { available: false, reason: "database-missing" };
+      } else {
+        const databaseAgentId = normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId);
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) => {
+            const scopedAgentIds = new Set<string>();
+            let hasUnscopedRow = false;
+            for (const sessionKey of readSqliteSessionEntryKeys(database)) {
+              const parsed = parseAgentSessionKey(sessionKey);
+              if (parsed) {
+                scopedAgentIds.add(normalizeAgentId(parsed.agentId));
+              } else {
+                hasUnscopedRow = true;
+              }
+            }
+            return { databaseAgentId, hasUnscopedRow, scopedAgentIds };
+          },
+          { agentId: databaseAgentId, env, path: sqlitePath },
+        );
+        snapshot = result.found
+          ? { available: true, ...result.value }
+          : { available: false, reason: result.reason };
+      }
+      cache?.set(cacheKey, snapshot);
+    }
+    if (!snapshot.available) {
+      return snapshot;
+    }
+    if (snapshot.scopedAgentIds.has(requested)) {
+      return { available: true, targets: [fixedTarget] };
     }
     const ownerValidated =
       resolvedTarget.shared === true ||
@@ -450,33 +492,10 @@ function resolveFixedSessionStoreTargetsReadOnly(
         defaultAgentId,
         env,
       }).some((target) => normalizeAgentId(target.agentId) === requested);
-    const databaseAgentId = normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId);
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        let hasRequestedScopedRow = false;
-        let hasUnscopedRow = false;
-        for (const sessionKey of readSqliteSessionEntryKeys(database)) {
-          const parsed = parseAgentSessionKey(sessionKey);
-          if (parsed) {
-            hasRequestedScopedRow ||= normalizeAgentId(parsed.agentId) === requested;
-          } else {
-            hasUnscopedRow = true;
-          }
-        }
-        return { hasRequestedScopedRow, hasUnscopedRow };
-      },
-      { agentId: databaseAgentId, env, path: sqlitePath },
-    );
-    if (!result.found) {
-      return { available: false, reason: result.reason };
-    }
-    if (result.value.hasRequestedScopedRow) {
-      return { available: true, targets: [fixedTarget] };
-    }
     if (!ownerValidated) {
       return { available: false, reason: "read-failed" };
     }
-    const ownsUnscopedRows = databaseAgentId === requested && result.value.hasUnscopedRow;
+    const ownsUnscopedRows = snapshot.databaseAgentId === requested && snapshot.hasUnscopedRow;
     return { available: true, targets: ownsUnscopedRows ? [fixedTarget] : [] };
   } catch {
     return { available: false, reason: "read-failed" };
@@ -487,7 +506,7 @@ function resolveFixedSessionStoreTargetsReadOnly(
 export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
   cfg: OpenClawConfig,
   agentId: string,
-  params: { env?: NodeJS.ProcessEnv } = {},
+  params: { cache?: SessionStoreTargetsReadCache; env?: NodeJS.ProcessEnv } = {},
 ): SessionStoreTargetsReadResult {
   const env = params.env ?? process.env;
   const requested = normalizeAgentId(agentId);
@@ -496,7 +515,7 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
         available: true,
         targets: resolveExistingAgentSessionStoreTargetsSync(cfg, requested, { env }),
       }
-    : resolveFixedSessionStoreTargetsReadOnly(cfg, requested, env);
+    : resolveFixedSessionStoreTargetsReadOnly(cfg, requested, env, params.cache);
 }
 
 /** Resolves only already-existing stores for one configured, retired, or manual agent. */

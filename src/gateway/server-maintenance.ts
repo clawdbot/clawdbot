@@ -12,7 +12,6 @@ import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
@@ -33,6 +32,12 @@ import {
   HEALTH_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
+import {
+  MEDIA_CLEANUP_STOP_TIMEOUT_MS,
+  type MediaCleanupStopResult,
+  registerMediaCleanupDrain,
+  waitForMediaCleanupDrains,
+} from "./server-media-cleanup-lifecycle.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
@@ -40,14 +45,6 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
-// Cleanup uses process-owned state/SQLite resources, so shutdown may leave a
-// stuck operation settling, but it must not wait forever to restart the gateway.
-const MEDIA_CLEANUP_STOP_TIMEOUT_MS = 5_000;
-export type MediaCleanupStopResult = "drained" | "timed-out";
-const mediaCleanupDrains = resolveGlobalSingleton(
-  Symbol.for("openclaw.gateway.mediaCleanupDrains"),
-  () => new Set<Promise<void>>(),
-);
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -397,33 +394,16 @@ export function startGatewayMaintenanceTimers(params: {
         mediaCleanupInFlight,
       ].filter((promise): promise is Promise<void> => promise !== undefined && promise !== null);
       if (pending.length > 0) {
-        const currentDrain = Promise.allSettled(pending).then(() => undefined);
-        mediaCleanupDrains.add(currentDrain);
-        void currentDrain.finally(() => mediaCleanupDrains.delete(currentDrain));
+        registerMediaCleanupDrain(Promise.allSettled(pending).then(() => undefined));
       }
-      const processDrains = [...mediaCleanupDrains];
-      if (processDrains.length === 0) {
-        return "drained";
-      }
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const timedOut = new Promise<true>((resolve) => {
-        timeout = setTimeout(() => resolve(true), MEDIA_CLEANUP_STOP_TIMEOUT_MS);
-        timeout.unref?.();
+      return await waitForMediaCleanupDrains({
+        timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS,
+        onTimeout: () => {
+          params.logHealth.error(
+            `media cleanup drain exceeded ${MEDIA_CLEANUP_STOP_TIMEOUT_MS}ms; retaining shared state until cleanup settles`,
+          );
+        },
       });
-      const result = await Promise.race([
-        Promise.allSettled(processDrains).then(() => false as const),
-        timedOut,
-      ]);
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      if (result) {
-        params.logHealth.error(
-          `media cleanup drain exceeded ${MEDIA_CLEANUP_STOP_TIMEOUT_MS}ms; retaining shared state until cleanup settles`,
-        );
-        return "timed-out";
-      }
-      return "drained";
     })();
     return stopMediaCleanupPromise;
   };
