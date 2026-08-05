@@ -406,7 +406,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
   );
 }
 
-export type SessionStoreTargetsReadResult =
+type SessionStoreTargetsReadResult =
   | { available: true; targets: SessionStoreTarget[] }
   | {
       available: false;
