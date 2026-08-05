@@ -45,6 +45,7 @@ import {
 } from "../workspace-bootstrap-read.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
 import {
+  REQUIRED_SUMMARY_SECTIONS,
   appendSummarySection,
   auditSummaryQuality,
   buildCompactionStructureInstructions,
@@ -73,6 +74,11 @@ const MAX_FILE_OPS_LIST_CHARS = 900;
 // own. Not applied to preserved turns, which recentTurnsPreserve bounds by turn
 // count and promises verbatim.
 const MAX_CONTEXT_SECTION_CHARS = 4_000;
+// Per-section allowance when rebuilding required headings that a body cap would
+// otherwise drop. Small: the point is to keep the audit's sections present and
+// their identifiers legible, not to re-inline the whole summary.
+const MAX_RESCUED_SECTION_CHARS = 240;
+const MAX_RESCUED_SECTION_LINES = 6;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 // Distinct from SUMMARY_TRUNCATED_MARKER: names loss of appended context
 // (preserved turns, split-turn prefix) rather than of the summary itself, so a
@@ -582,6 +588,57 @@ function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY
   return capWithMarker(summary, maxChars, SUMMARY_TRUNCATED_MARKER);
 }
 
+/**
+ * Caps the summary body without dropping the headings auditSummaryQuality
+ * requires. The audit runs before this budgeting, so a plain prefix cut can
+ * store an artifact the audit already passed: the later required sections —
+ * including the exact identifiers the audit exists to protect — sit at the end
+ * of a front-heavy summary and are the first thing a prefix cut removes.
+ */
+function capSummaryBodyPreservingSections(body: string, maxChars: number): string {
+  if (maxChars <= 0) {
+    return "";
+  }
+  if (body.length <= maxChars) {
+    return body;
+  }
+  const lines = body.split(/\r?\n/u);
+  const headingLine = new Map<string, number>();
+  for (const [index, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (
+      !headingLine.has(trimmed) &&
+      (REQUIRED_SUMMARY_SECTIONS as readonly string[]).includes(trimmed)
+    ) {
+      headingLine.set(trimmed, index);
+    }
+  }
+
+  // Rebuild the at-risk sections compactly, in the order the audit checks them.
+  const rescued: string[] = [];
+  for (const heading of REQUIRED_SUMMARY_SECTIONS) {
+    const index = headingLine.get(heading);
+    if (index === undefined) {
+      continue;
+    }
+    const content = lines
+      .slice(index + 1)
+      .slice(0, MAX_RESCUED_SECTION_LINES)
+      .filter((line) => !(REQUIRED_SUMMARY_SECTIONS as readonly string[]).includes(line.trim()))
+      .join("\n")
+      .trim();
+    rescued.push(`${heading}\n${truncateUtf16Safe(content, MAX_RESCUED_SECTION_CHARS)}`);
+  }
+  const tail = rescued.join("\n");
+  if (!tail || tail.length + SUMMARY_TRUNCATED_MARKER.length >= maxChars) {
+    // No room to rescue anything; a plain marked cut is the best available.
+    return capCompactionSummary(body, maxChars);
+  }
+  const prefixBudget = maxChars - tail.length - SUMMARY_TRUNCATED_MARKER.length;
+  const prefix = truncateUtf16Safe(body, prefixBudget);
+  return `${prefix}${SUMMARY_TRUNCATED_MARKER}\n${tail}`.slice(0, maxChars);
+}
+
 function capCompactionSummaryPreservingSuffix(
   summaryBody: string,
   suffix: string,
@@ -603,7 +660,8 @@ function capCompactionSummaryPreservingSuffix(
   // A zero budget must yield nothing. capCompactionSummary passes its input
   // through when the budget is non-positive, which would put the whole body
   // back and overrun maxChars once the suffix is appended.
-  const cappedBody = bodyBudget > 0 ? capCompactionSummary(summaryBody, bodyBudget) : "";
+  const cappedBody =
+    bodyBudget > 0 ? capSummaryBodyPreservingSections(summaryBody, bodyBudget) : "";
   const suffixBudget = maxChars - cappedBody.length;
   if (suffix.length <= suffixBudget) {
     return `${cappedBody}${suffix}`;
