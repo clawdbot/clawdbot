@@ -269,7 +269,8 @@ suite.define(() => {
       const prompt = "reconnect active turn";
       const streamText = "Reconnect progress is still running.";
       const runId = await startActiveTurn(page, gateway, prompt, streamText);
-      await installActiveRunSnapshot(gateway, runId, prompt, streamText);
+      const startedAt = Date.now() - 10 * 60_000;
+      await installActiveRunSnapshot(gateway, runId, prompt, streamText, { startedAt });
       await capture(page, "03-reconnect-before");
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
@@ -280,6 +281,10 @@ suite.define(() => {
         .toBeGreaterThan(startupCount);
       await waitForGatewayConnected(page);
       await assertActiveTurnVisible(page, streamText);
+      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await expect(
+        page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),
+      ).not.toHaveCount(0);
       await capture(page, "04-reconnect-after");
       await finishRecoveredTurn(page, gateway, runId, "Reconnect delivery complete.");
     } finally {
