@@ -72,9 +72,19 @@ function resolveAmbientZalouserTarget(context?: ZalouserToolContext): {
 
 function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolContext) {
   const explicitThreadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+  if (explicitThreadId) {
+    // Strip zalouser:/group:/user: prefixes from explicit threadId
+    // so model-copied targets (e.g. "zalouser:group:123") reach
+    // the Zalo API as bare IDs instead of failing.
+    const parsed = parseZalouserOutboundTarget(explicitThreadId);
+    return {
+      threadId: parsed.threadId,
+      isGroup: typeof params.isGroup === "boolean" ? params.isGroup : parsed.isGroup,
+    };
+  }
   const ambientTarget = resolveAmbientZalouserTarget(context);
   return {
-    threadId: explicitThreadId || ambientTarget.threadId,
+    threadId: ambientTarget.threadId,
     isGroup: typeof params.isGroup === "boolean" ? params.isGroup : ambientTarget.isGroup,
   };
 }

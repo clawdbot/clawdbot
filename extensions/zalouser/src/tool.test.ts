@@ -120,6 +120,46 @@ describe("executeZalouserTool", () => {
     });
   });
 
+  it("strips group: prefix from explicit threadId", async () => {
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-group" } as never);
+    await executeZalouserTool("tool-1", {
+      action: "send",
+      threadId: "group:grp-1",
+      message: "hello",
+    });
+    expect(mockSendMessage).toHaveBeenCalledWith("grp-1", "hello", {
+      profile: undefined,
+      isGroup: true,
+    });
+  });
+
+  it("strips zalouser:user: prefix from explicit threadId", async () => {
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-zlu" } as never);
+    await executeZalouserTool("tool-1", {
+      action: "send",
+      threadId: "zalouser:user:usr-2",
+      message: "hi",
+    });
+    expect(mockSendMessage).toHaveBeenCalledWith("usr-2", "hi", {
+      profile: undefined,
+      isGroup: false,
+    });
+  });
+
+  it("strips zalouser: prefix and honors explicit isGroup override", async () => {
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-override" } as never);
+    await executeZalouserTool("tool-1", {
+      action: "send",
+      threadId: "zalouser:group:grp-3",
+      message: "yo",
+      isGroup: false,
+    });
+    expect(mockSendMessage).toHaveBeenCalledWith("grp-3", "yo", {
+      profile: undefined,
+      isGroup: false,
+    });
+  });
+
   it("does not route send actions from foreign ambient thread defaults", async () => {
     const tool = createZalouserTool({
       deliveryContext: {
@@ -176,7 +216,7 @@ describe("executeZalouserTool", () => {
     expect(mockSendLink).toHaveBeenCalledWith("t-2", "https://openclaw.ai", {
       profile: undefined,
       caption: "read this",
-      isGroup: undefined,
+      isGroup: false,
     });
     expect(extractDetails(linkResult)).toEqual({ success: true, messageId: "lnk-1" });
   });
