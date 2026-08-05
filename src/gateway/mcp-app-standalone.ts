@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
+import { DEFAULT_REQUEST_TIMEOUT_MS } from "../agents/mcp-transport-config.js";
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -19,6 +20,7 @@ import {
 } from "./mcp-app-operations.js";
 
 const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
+const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
 const MCP_APP_STANDALONE_TICKET_TTL_MS = 2 * 60_000;
 const MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS = 15_000;
 const MCP_APP_STANDALONE_TICKET_MAX_ENTRIES = 256;
@@ -214,7 +216,11 @@ function sendText(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
-function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: string }): void {
+function runStandaloneMcpAppHost(config: {
+  protocolVersion: string;
+  viewPath: string;
+  defaultRequestTimeoutMs: number;
+}): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
     contentWindow?: { postMessage(message: unknown, targetOrigin: string): void };
@@ -257,6 +263,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
+    requestTimeoutMs?: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -330,7 +337,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       body: JSON.stringify({ method, params }),
       cache: "no-store",
       credentials: "omit",
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs),
     });
     const body = (await response.json().catch(() => undefined)) as
       | { ok?: boolean; result?: unknown; error?: string }
@@ -493,7 +500,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     headers: { Authorization: `MCP-App ${ticket}` },
     cache: "no-store",
     credentials: "omit",
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS),
   })
     .then(async (response) => {
       if (!response.ok) {
@@ -517,6 +524,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
   const clientSource = `(${runStandaloneMcpAppHost.toString()})(${JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
+    defaultRequestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
   })});`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
   return {
@@ -658,6 +666,9 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
+      const requestTimeoutMs =
+        runtime.peekCatalog()?.servers[view.serverName]?.requestTimeoutMs ??
+        DEFAULT_REQUEST_TIMEOUT_MS;
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -675,6 +686,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
+              requestTimeoutMs,
             }),
       );
       return true;
