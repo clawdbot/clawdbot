@@ -508,7 +508,7 @@ describe("legacy vs canonical exec-approvals parsing (#118242, #118524)", () => 
         },
       },
     });
-    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
   });
 
   it("still rejects null security/ask policy fields after metadata normalization", () => {
@@ -524,7 +524,7 @@ describe("legacy vs canonical exec-approvals parsing (#118242, #118524)", () => 
         },
       },
     });
-    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
   });
 
   it("still rejects null socket fields after metadata normalization", () => {
@@ -533,7 +533,7 @@ describe("legacy vs canonical exec-approvals parsing (#118242, #118524)", () => 
       socket: { path: null },
       agents: {},
     });
-    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
   });
 
   it("still rejects null agent-level policy fields after metadata normalization", () => {
@@ -547,6 +547,6 @@ describe("legacy vs canonical exec-approvals parsing (#118242, #118524)", () => 
         },
       },
     });
-    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
   });
 });
