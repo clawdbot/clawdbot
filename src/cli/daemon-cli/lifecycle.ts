@@ -28,6 +28,7 @@ import {
   assertGatewayServiceMutationAllowed,
   formatExternalSupervisorActionRequired,
   isGatewayExternallySupervised,
+  resolveGatewayServiceMutationError,
 } from "../../infra/gateway-supervision.js";
 import {
   clearGatewayRestartIntentSync,
@@ -206,12 +207,16 @@ async function handleSystemScopeSystemdGateway(
   };
 }
 
-async function stopGatewayWithoutServiceManager(port: number) {
+async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: number | undefined) {
   const managed = await handleSystemScopeSystemdGateway("stop");
   if (managed) {
     return managed;
   }
-  const pids = resolveVerifiedGatewayListenerPids(port);
+  const listenerPids = resolveVerifiedGatewayListenerPids(port);
+  // Listener discovery needs lsof, which minimal containers omit. The gateway
+  // lock already names the verified owner of this port, so signal it instead of
+  // reporting the gateway as not running while it keeps serving.
+  const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
     return null;
   }
@@ -243,10 +248,7 @@ async function resolveRestartListenerHealthWait(
   } else if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
     drainTimeoutMs = restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
   } else {
-    const config = await readBestEffortConfig().catch(() => undefined);
-    drainTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
-      config?.gateway?.reload?.deferralTimeoutMs,
-    );
+    drainTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
   }
 
   const replacementHealthAttempts = postRestartHealthAttempts();
@@ -382,16 +384,13 @@ async function signalGatewayRestart(
   };
 }
 
-async function restartGatewayWithoutServiceManager(
-  port: number,
-  restartIntent?: GatewayRestartIntent,
-) {
-  const managed = await handleSystemScopeSystemdGateway("restart");
+async function restartUnmanaged(port: number, intent?: GatewayRestartIntent, allowSystem = true) {
+  const managed = allowSystem ? await handleSystemScopeSystemdGateway("restart") : null;
   if (managed) {
     return managed;
   }
   return await signalGatewayRestart(port, {
-    restartIntent,
+    restartIntent: intent,
     enforceRestartConfig: true,
     processLabel: "unmanaged",
     auditSource: "cli",
@@ -401,7 +400,7 @@ async function restartGatewayWithoutServiceManager(
 type GatewaySignalRestartResult = NonNullable<Awaited<ReturnType<typeof signalGatewayRestart>>>;
 
 function isGatewaySignalRestartResult(
-  result: Awaited<ReturnType<typeof restartGatewayWithoutServiceManager>>,
+  result: Awaited<ReturnType<typeof restartUnmanaged>>,
 ): result is GatewaySignalRestartResult {
   return result !== null && "pid" in result && typeof result.pid === "number";
 }
@@ -499,7 +498,6 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
       await repairLoadedGatewayServiceForStart({
         service,
-        port: expectedPort,
         json,
         stdout,
         warn,
@@ -520,7 +518,6 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   }
   assertGatewayServiceMutationAllowed("stop the gateway");
   const service = resolveGatewayService();
-  let gatewayPortPromise: Promise<number> | undefined;
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
@@ -540,10 +537,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
           return { result: "stopped" };
         }
       }
-      gatewayPortPromise ??= resolveGatewayLifecyclePort(service).catch(() =>
-        resolveGatewayPortFallback(),
-      );
-      return await stopGatewayWithoutServiceManager(await gatewayPortPromise);
+      // An unmanaged run loop keeps its lock port across config edits, so use it
+      // for discovery the way restart already does; otherwise a valid port
+      // override makes the running gateway look like it is already stopped.
+      const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
+      const port =
+        lockIdentity?.port ??
+        (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
+      return await stopGatewayWithoutServiceManager(port, lockIdentity?.pid);
     },
   });
 }
@@ -592,11 +593,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     checkTokenDrift: true,
     expectedPort: configuredPort,
+    beforeServiceMutation: () => assertGatewayServiceMutationAllowed("restart the gateway"),
     repairLoadedService: async ({ json, stdout, warn, state, issues }) => {
       const result = await repairLoadedGatewayServiceForStart({
         action: "restart",
         service,
-        port: configuredPort,
         json,
         stdout,
         warn,
@@ -610,7 +611,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       return result;
     },
     onNotLoaded: async () => {
-      if (process.platform === "darwin") {
+      const mutationError = resolveGatewayServiceMutationError("restart the gateway");
+      if (process.platform === "darwin" && !mutationError) {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
         if (recovered) {
           appendGatewayLifecycleAudit({
@@ -621,7 +623,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           return recovered;
         }
       }
-      const handled = await restartGatewayWithoutServiceManager(unmanagedPort, restartIntent);
+      const handled = await restartUnmanaged(unmanagedPort, restartIntent, !mutationError);
       if (handled) {
         restartedWithoutServiceManager = true;
         if (isGatewaySignalRestartResult(handled) && handled.previousLockIdentity) {
@@ -632,6 +634,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           unmanagedRestartWaitSeconds = healthWait.timeoutSeconds;
         }
         return handled;
+      }
+      if (mutationError) {
+        throw mutationError;
       }
       return null;
     },

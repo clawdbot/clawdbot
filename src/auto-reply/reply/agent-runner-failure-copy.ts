@@ -5,6 +5,14 @@ export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
 export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
 
+const CONTROL_UI_LOG_HINT = "To view logs, run `openclaw logs --follow` in a terminal.";
+
+/** Preserves raw errors on internal surfaces while making the log command actionable. */
+export function buildControlUiAgentFailureText(errorText: string): string {
+  const trimmedError = errorText.trim().replace(/\.\s*$/, "");
+  return `⚠️ Agent failed before reply: ${trimmedError}.\n${CONTROL_UI_LOG_HINT}`;
+}
+
 /** True when text is exactly the generic external run failure copy. */
 function isGenericExternalRunFailureText(text: string | undefined): boolean {
   return text?.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT;

@@ -2,6 +2,7 @@
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
   getPrimaryIdentityId,
@@ -33,6 +34,7 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  media?: HistoryMediaEntry[];
 };
 
 type ApplyGroupGatingParams = {
@@ -107,6 +109,18 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.event.timestamp,
       id: params.msg.event.id,
       senderJid: senderIdentity.jid ?? params.msg.platform.senderJid,
+      ...(params.body === undefined && params.msg.payload.media
+        ? {
+            media: [
+              {
+                path: params.msg.payload.media.path,
+                url: params.msg.payload.media.url ?? params.msg.payload.media.path,
+                contentType: params.msg.payload.media.type,
+                kind: params.msg.payload.media.kind ?? undefined,
+              },
+            ],
+          }
+        : {}),
     },
   });
 }

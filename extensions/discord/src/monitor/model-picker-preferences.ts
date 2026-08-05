@@ -1,14 +1,18 @@
 // Discord plugin module implements model picker preferences behavior.
-import { createHash } from "node:crypto";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   MAX_DATE_TIMESTAMP_MS,
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
+import {
+  buildPreferenceModelKey,
+  normalizeModelRef,
+  sanitizeRecentModels,
+  timestampMs,
+} from "./model-picker-preference-primitives.js";
 
 const DEFAULT_RECENT_LIMIT = 5;
 const PREFERENCE_MAX_ENTRIES = 2_000;
@@ -55,40 +59,6 @@ function buildDiscordModelPickerPreferenceKey(
   return `discord:${accountId}:dm:user:${userId}`;
 }
 
-function normalizeModelRef(raw?: string): string | null {
-  const value = raw?.trim();
-  if (!value) {
-    return null;
-  }
-  const slashIndex = value.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= value.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(value.slice(0, slashIndex));
-  const model = value.slice(slashIndex + 1).trim();
-  if (!provider || !model) {
-    return null;
-  }
-  return `${provider}/${model}`;
-}
-
-function sanitizeRecentModels(models: string[] | undefined, limit: number): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const item of models ?? []) {
-    const normalized = normalizeModelRef(item);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    deduped.push(normalized);
-    if (deduped.length >= limit) {
-      break;
-    }
-  }
-  return deduped;
-}
-
 function sanitizeStoredPreferenceEntry(value: unknown): ModelPickerPreferencesEntry | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -115,19 +85,6 @@ function sanitizeStoredPreferenceEntry(value: unknown): ModelPickerPreferencesEn
         ? typedValue.updatedOrder
         : undefined,
   };
-}
-
-function hashSegment(value: string, length: number): string {
-  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, length);
-}
-
-function buildPreferenceModelKey(scopeKey: string, modelRef: string): string {
-  return `v1:${hashSegment(scopeKey, 32)}:${hashSegment(modelRef, 24)}`;
-}
-
-function timestampMs(value: string): number {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function timestampOrder(value?: number): number {

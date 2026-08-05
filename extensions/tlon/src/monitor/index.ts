@@ -1,7 +1,10 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
-import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  bindIngressLifecycleToReplyOptions,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -29,17 +32,19 @@ import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
 import { cacheMessage, fetchThreadHistory, getChannelHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
-import { downloadMessageImages } from "./media.js";
+import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
 import {
   applyTlonSettingsOverrides,
   buildTlonSettingsMigrations,
   mergeUniqueStrings,
   shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
+import { createActiveSnapshotTracker, createParticipatedThreadTracker } from "./tracking.js";
 import { asRecord, formatErrorMessage, readString } from "./utils.js";
 import {
   extractMessageText,
   formatModelName,
+  formatSummarizationHistoryText,
   isBotMentioned,
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
@@ -160,8 +165,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   let pendingApprovals: PendingApproval[] = [];
   let currentSettings: TlonSettingsStore = {};
 
-  // Track threads we've participated in (by parentId) - respond without mention requirement
-  const participatedThreads = new Set<string>();
+  // Track recent threads we've participated in so replies can omit a mention.
+  const participatedThreads = createParticipatedThreadTracker();
 
   // Track DM senders per session to detect shared sessions (security warning)
   const dmSendersBySession = new Map<string, Set<string>>();
@@ -388,11 +393,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           return;
         }
 
-        const historyText = history
-          .map(
-            (msg) => `[${new Date(msg.timestamp).toLocaleString()}] ${msg.author}: ${msg.content}`,
-          )
-          .join("\n");
+        const historyText = formatSummarizationHistoryText(history, cfg);
 
         messageText =
           `Please summarize this channel conversation (${history.length} recent messages):\n\n${historyText}\n\n` +
@@ -479,7 +480,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     let commandAuthorized = false;
 
     if (shouldComputeAuth) {
-      const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+      const useAccessGroups = true;
       const commandAccess = await resolveTlonCommandAuthorizationWithIngress({
         senderShip,
         ownerShip: effectiveOwnerShip,
@@ -494,19 +495,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
     }
 
-    let bodyWithAttachments = messageText;
-    if (attachments.length > 0) {
-      const mediaLines = attachments
-        .map((a) => `[media attached: ${a.path} (${a.contentType}) | ${a.path}]`)
-        .join("\n");
-      bodyWithAttachments = mediaLines + "\n" + messageText;
-    }
+    const promptMedia = buildTlonInboundMediaPrompt(messageText, attachments);
 
     const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
       channel: "Tlon",
       from: fromLabel,
       timestamp,
-      body: bodyWithAttachments,
+      body: promptMedia.body,
     });
 
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
@@ -594,6 +589,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
     };
 
+    const replyOptions: GetReplyOptions = {
+      ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
+      ...(promptMedia.media.length > 0 ? { media: promptMedia.media } : {}),
+    };
     await core.channel.inbound.dispatch({
       channel: "tlon",
       accountId: route.accountId,
@@ -653,9 +652,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         responsePrefix,
         humanDelay,
       },
-      ...(turnAdoptionLifecycle
-        ? { replyOptions: bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) }
-        : {}),
+      ...(turnAdoptionLifecycle || promptMedia.media.length > 0 ? { replyOptions } : {}),
       record: {
         onRecordError: (err) => {
           runtime.error?.(`[tlon] failed updating session meta: ${String(err)}`);
@@ -894,8 +891,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   };
 
   // Firehose handler for all DM messages (/v3)
-  // Track which DM invites we've already processed to avoid duplicate accepts
-  const processedDmInvites = new Set<string>();
+  // Track processed DM invites only while they remain in the active /v3 snapshot.
+  const processedDmInvites = createActiveSnapshotTracker();
 
   const handleChatFirehose = async (
     event: unknown,
@@ -904,9 +901,16 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     try {
       // Handle DM invite lists (arrays)
       if (Array.isArray(event)) {
-        for (const invite of event as DmInvite[]) {
-          const ship = normalizeShip(invite.ship || "");
-          if (!ship || processedDmInvites.has(ship)) {
+        // UrbitSSEClient awaits each handler before reading and acking the next fact,
+        // so snapshot replacement and invite side effects cannot overlap.
+        // The /v3 invite array is the active snapshot. Forget ships that left it
+        // instead of retaining every invite seen during the monitor lifetime.
+        const ships = processedDmInvites.beginSnapshot(
+          (event as DmInvite[]).map((invite) => normalizeShip(invite.ship || "")).filter(Boolean),
+        );
+
+        for (const ship of ships) {
+          if (processedDmInvites.has(ship)) {
             continue;
           }
 
@@ -926,11 +930,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             continue;
           }
 
+          const allowed = await isDmAllowedWithIngress(ship, effectiveDmAllowlist);
           // Auto-accept if on allowlist and auto-accept is enabled
-          if (
-            effectiveAutoAcceptDmInvites &&
-            (await isDmAllowedWithIngress(ship, effectiveDmAllowlist))
-          ) {
+          if (effectiveAutoAcceptDmInvites && allowed) {
             try {
               await api.poke({
                 app: "chat",
@@ -946,14 +948,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           // If owner is configured and ship is not on allowlist, queue approval
-          if (effectiveOwnerShip && !(await isDmAllowedWithIngress(ship, effectiveDmAllowlist))) {
+          if (effectiveOwnerShip && !allowed) {
             const approval = createPendingApproval({
               type: "dm",
               requestingShip: ship,
               messagePreview: "(DM invite - no message yet)",
             });
             await queueApprovalRequest(approval);
-            processedDmInvites.add(ship); // Mark as processed to avoid duplicate notifications
+            processedDmInvites.add(ship);
           }
         }
         return;
@@ -1516,21 +1518,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       2 * 60 * 1000,
     );
 
-    if (opts.abortSignal) {
-      const signal = opts.abortSignal;
-      await new Promise((resolve) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearInterval(pollInterval);
-            resolve(null);
-          },
-          { once: true },
-        );
-      });
-    } else {
-      await new Promise(() => {});
-    }
+    // Startup may finish after cancellation, so replay an already-aborted signal
+    // and release the discovery timer before running the monitor cleanup.
+    await waitUntilAbort(opts.abortSignal, () => {
+      clearInterval(pollInterval);
+    });
   } finally {
     api?.stopReceiving();
     await ingress.stop();

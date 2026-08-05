@@ -64,6 +64,65 @@ afterEach(() => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
+  it("does not start draining when migration completes after stop begins", async () => {
+    await withQueue(async (queue) => {
+      let releaseEntries: (() => void) | undefined;
+      const entries = vi.fn(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseEntries = () => resolve([]);
+          }),
+      );
+      const prune = vi.spyOn(queue, "prune");
+      const spool = createNextcloudTalkWebhookSpool({
+        accountId: "default",
+        queue,
+        deliver: vi.fn(),
+        runtime: { error: vi.fn(), log: vi.fn() },
+        pollIntervalMs: 60_000,
+        legacyReplayStore: { entries, clear: vi.fn(async () => {}) },
+      });
+
+      const stopping = spool.stop();
+      await vi.waitFor(() => expect(entries).toHaveBeenCalledTimes(1));
+      releaseEntries?.();
+      await stopping;
+
+      expect(prune).not.toHaveBeenCalled();
+    });
+  });
+
+  it("finishes durable admission for a receive that began before migration-time stop", async () => {
+    await withQueue(async (queue) => {
+      let releaseEntries: (() => void) | undefined;
+      const entries = vi.fn(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseEntries = () => resolve([]);
+          }),
+      );
+      const deliver = vi.fn();
+      const spool = createNextcloudTalkWebhookSpool({
+        accountId: "default",
+        queue,
+        deliver,
+        runtime: { error: vi.fn(), log: vi.fn() },
+        pollIntervalMs: 60_000,
+        legacyReplayStore: { entries, clear: vi.fn(async () => {}) },
+      });
+
+      const receiving = spool.receive(createRawEvent({ messageId: "msg-before-stop" }));
+      const stopping = spool.stop();
+      await vi.waitFor(() => expect(entries).toHaveBeenCalledTimes(1));
+      releaseEntries?.();
+
+      await expect(receiving).resolves.toBe("accepted");
+      await stopping;
+      expect(deliver).not.toHaveBeenCalled();
+      expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
+    });
+  });
+
   it("migrates the shipped replay guard window into completion tombstones", async () => {
     await withQueue(async (queue) => {
       const seenAt = Date.now();
@@ -156,6 +215,88 @@ describe("Nextcloud Talk durable ingress", () => {
         await spool.waitForIdle();
         expect(delivered).toEqual([["msg-guard", "test-room-token"]]);
       } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("drains other rooms while keeping unadopted same-room deliveries ordered", async () => {
+    await withQueue(async (queue) => {
+      let releaseRoomA!: () => void;
+      const roomADelivery = new Promise<void>((resolve) => {
+        releaseRoomA = resolve;
+      });
+      const delivered: string[] = [];
+      const spool = startSpool(queue, async (message, lifecycle) => {
+        delivered.push(message.messageId);
+        if (message.messageId === "room-a-1") {
+          await roomADelivery;
+        }
+        await lifecycle.onAdopted();
+      });
+
+      try {
+        await spool.receive(createRawEvent({ messageId: "room-a-1", roomToken: "room-a" }));
+        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1"]));
+
+        await spool.receive(createRawEvent({ messageId: "room-a-2", roomToken: "room-a" }));
+        await spool.receive(createRawEvent({ messageId: "room-b-1", roomToken: "room-b" }));
+
+        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1", "room-b-1"]));
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "room-a-2", laneKey: "room:room-a" }),
+        ]);
+
+        releaseRoomA();
+        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1", "room-b-1", "room-a-2"]));
+      } finally {
+        releaseRoomA();
+        await spool.stop();
+      }
+    });
+  });
+
+  it("caps active room deliveries after durable adoption across repeated pumps", async () => {
+    await withQueue(async (queue) => {
+      let releaseDeliveries!: () => void;
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDeliveries = resolve;
+      });
+      let activeDeliveries = 0;
+      let maxActiveDeliveries = 0;
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        activeDeliveries += 1;
+        maxActiveDeliveries = Math.max(maxActiveDeliveries, activeDeliveries);
+        await lifecycle.onAdopted();
+        try {
+          await deliveryGate;
+        } finally {
+          activeDeliveries -= 1;
+        }
+      });
+      const spool = startSpool(queue, deliver);
+
+      try {
+        for (let index = 0; index < 33; index += 1) {
+          await spool.receive(
+            createRawEvent({
+              messageId: `room-delivery-${index}`,
+              roomToken: `room-${index}`,
+            }),
+          );
+        }
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(32));
+        expect(maxActiveDeliveries).toBe(32);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "room-delivery-32", laneKey: "room:room-32" }),
+        ]);
+
+        releaseDeliveries();
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(33));
+        expect(maxActiveDeliveries).toBe(32);
+      } finally {
+        releaseDeliveries();
         await spool.stop();
       }
     });

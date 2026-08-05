@@ -31,19 +31,8 @@ export function startGatewayChannelHealthMonitor(params: {
   ) {
     return null;
   }
-  const healthCheckMinutes = params.cfg.gateway?.channelHealthCheckMinutes;
-  if (healthCheckMinutes === 0) {
-    return null;
-  }
-  const staleEventThresholdMinutes = params.cfg.gateway?.channelStaleEventThresholdMinutes;
-  const maxRestartsPerHour = params.cfg.gateway?.channelMaxRestartsPerHour;
   return startChannelHealthMonitor({
     channelManager: params.channelManager,
-    checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
-    ...(staleEventThresholdMinutes != null && {
-      timing: { staleEventThresholdMs: staleEventThresholdMinutes * 60_000 },
-    }),
-    ...(maxRestartsPerHour != null && { maxRestartsPerHour }),
   });
 }
 
@@ -56,7 +45,6 @@ export function startGatewayRuntimeServices(params: {
 }): {
   heartbeatRunner: ReturnType<typeof createNoopHeartbeatRunner>;
   channelHealthMonitor: ChannelHealthMonitor | null;
-  stopModelPricingRefresh: () => void;
 } {
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
@@ -66,6 +54,5 @@ export function startGatewayRuntimeServices(params: {
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
-    stopModelPricingRefresh: () => {},
   };
 }

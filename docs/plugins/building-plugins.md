@@ -333,12 +333,6 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 ```
 
-Do not import from the deprecated root barrel:
-
-```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk";
-```
-
 Within your plugin package, use local barrel files such as `api.ts` and
 `runtime-api.ts` for internal imports. Do not import your own plugin through an
 SDK path. Provider-specific helpers should stay in the provider package unless
@@ -352,6 +346,12 @@ and resolve to `operator.admin`. The
 routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
 
 For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
+
+OpenClaw SDK compatibility fields carry TypeScript `@deprecated` annotations,
+which editors surface as migration warnings. To enforce them at build time,
+enable a type-aware rule such as
+[`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
+Oxlint is not type-aware, so it cannot enforce these annotations.
 
 ## Pre-submission checklist
 

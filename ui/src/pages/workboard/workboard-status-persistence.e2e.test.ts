@@ -58,6 +58,30 @@ const initialCard = {
   ],
 } satisfies WorkboardCard;
 
+const productRunningCard = {
+  id: "product-running-card",
+  title: "Product board running card",
+  status: "running",
+  priority: "normal",
+  labels: [],
+  position: 9_000,
+  createdAt: 900,
+  updatedAt: manualTodoAt,
+  metadata: { automation: { boardId: "product" } },
+} satisfies WorkboardCard;
+
+const archivedDefaultRunningCard = {
+  id: "archived-default-running-card",
+  title: "Archived default board running card",
+  status: "running",
+  priority: "normal",
+  labels: [],
+  position: 3_000,
+  createdAt: 900,
+  updatedAt: manualTodoAt,
+  metadata: { archivedAt: 1_000 },
+} satisfies WorkboardCard;
+
 const editedCard = {
   ...initialCard,
   title: "Persisted renamed card",
@@ -70,7 +94,7 @@ const editedCard = {
 const draggedRunningCard = {
   ...editedCard,
   status: "running",
-  position: 1_000,
+  position: 4_000,
   updatedAt: draggedRunningAt,
   events: [
     ...editedCard.events,
@@ -222,6 +246,128 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
     await server?.close();
   });
 
+  it("preserves an execution-owned session when editing a linked Workboard card", async () => {
+    const executionLinkedCard: WorkboardCard = {
+      ...initialCard,
+      title: "Keep my execution-linked session",
+      status: "running",
+      execution: {
+        id: "execution-linked-card-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: linkedSessionKey,
+        startedAt: 900,
+        updatedAt: manualTodoAt,
+      },
+    };
+    delete executionLinkedCard.sessionKey;
+    const updatedCard: WorkboardCard = {
+      ...executionLinkedCard,
+      title: "Renamed without unlinking the execution",
+      updatedAt: editedAt,
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: {
+            plugins: {
+              entries: {
+                workboard: { enabled: true },
+              },
+            },
+          },
+          hash: "execution-linked-workboard-e2e-config",
+        },
+        "sessions.list": {
+          count: 1,
+          defaults: {
+            contextTokens: null,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [
+            {
+              contextTokens: null,
+              displayName: "Execution linked session",
+              hasActiveRun: true,
+              key: linkedSessionKey,
+              kind: "direct",
+              label: "Execution linked session",
+              model: "gpt-5.5",
+              modelProvider: "openai",
+              status: "running",
+              totalTokens: 0,
+              updatedAt: manualTodoAt,
+            },
+          ],
+          ts: Date.now(),
+        },
+        "tasks.list": { nextCursor: null, tasks: [] },
+        "workboard.cards.list": {
+          cards: [executionLinkedCard],
+          statuses: [
+            "triage",
+            "backlog",
+            "todo",
+            "scheduled",
+            "ready",
+            "running",
+            "review",
+            "blocked",
+            "done",
+          ],
+        },
+        "workboard.cards.update": { card: updatedCard },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+      const executionCard = page.locator(".workboard-card", {
+        hasText: executionLinkedCard.title,
+      });
+      await executionCard.waitFor({ timeout: 10_000 });
+
+      await executionCard.locator('button[aria-label="Edit card"]').click();
+      const editDialog = page.getByRole("dialog", { name: "Edit card" });
+      await editDialog.waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => workboardSelectValue(page, "Thread"))
+        .toBe("Execution linked session");
+
+      await page.getByLabel("Title").fill(updatedCard.title);
+      await page.getByRole("button", { name: "Save" }).click();
+
+      const requests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
+      expect(
+        requestParams(expectDefined(requests[0], "execution-linked card update")),
+      ).toMatchObject({
+        id: executionLinkedCard.id,
+        patch: {
+          title: updatedCard.title,
+          sessionKey: linkedSessionKey,
+        },
+      });
+      await editDialog.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".workboard-card", { hasText: updatedCard.title }).waitFor({
+        timeout: 10_000,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("persists edit/reopen fields and does not bounce a dragged linked card from stale lifecycle", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -272,7 +418,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
           tasks: [],
         },
         "workboard.cards.list": {
-          cards: [initialCard],
+          cards: [initialCard, productRunningCard, archivedDefaultRunningCard],
           statuses: [
             "triage",
             "backlog",
@@ -321,6 +467,10 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       const response = await page.goto(`${server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await workboardCard(page, "Todo", "Persist queue status").waitFor({ timeout: 10_000 });
+      await workboardCard(page, "Running", productRunningCard.title).waitFor({
+        timeout: 10_000,
+      });
+      await expect.poll(() => page.getByText(archivedDefaultRunningCard.title).count()).toBe(0);
       await waitForRequestCount(gateway, "workboard.cards.update", 0);
 
       await workboardCard(page, "Todo", "Persist queue status")
@@ -383,7 +533,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");
       expect(requestParams(moveRequest)).toMatchObject({
         id: "card-1",
-        position: 1_000,
+        position: 4_000,
         status: "running",
       });
       await workboardCard(page, "Running", "Persisted renamed card").waitFor({

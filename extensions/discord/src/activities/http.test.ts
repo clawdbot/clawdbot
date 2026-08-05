@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, request as createHttpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -17,16 +17,11 @@ import {
 const servers: Server[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => {
-            resolve();
-          });
-        }),
-    ),
-  );
+  for (const server of servers.splice(0)) {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
 });
 
 async function startServer(
@@ -37,6 +32,7 @@ async function startServer(
     vendorAssetPath?: string;
     readVendorAsset?: (assetPath: string) => Promise<Buffer>;
     logError?: (message: string) => void;
+    bodyTimeoutMs?: number;
   } = {},
 ): Promise<string> {
   const route = createDiscordActivityHttpHandler({
@@ -57,8 +53,36 @@ async function startServer(
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
-  const address = server.address() as AddressInfo;
-  return `http://127.0.0.1:${address.port}`;
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+async function observeStalledTokenRequest(
+  base: string,
+  clientTimeoutMs: number,
+): Promise<"server-terminated" | "client-timeout"> {
+  return await new Promise((resolve) => {
+    const request = createHttpRequest(`${base}/discord/activity/api/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const finish = (outcome: "server-terminated" | "client-timeout") => {
+      clearTimeout(timer);
+      resolve(outcome);
+    };
+    const timer = setTimeout(() => {
+      finish("client-timeout");
+      request.end();
+    }, clientTimeoutMs);
+    const finishServerTerminated = () => finish("server-terminated");
+    request.on("response", (response) => {
+      response.resume();
+      response.on("end", finishServerTerminated);
+      response.on("close", finishServerTerminated);
+    });
+    request.on("error", finishServerTerminated);
+    request.on("close", finishServerTerminated);
+    request.write('{"code":"');
+  });
 }
 
 function guardedJsonFetch(params?: {
@@ -67,12 +91,18 @@ function guardedJsonFetch(params?: {
   instanceStatus?: number;
   channelId?: string;
   instanceUsers?: string[];
+  onExchange?: (code: string | null) => Promise<number | void> | number | void;
 }) {
-  return vi.fn(async ({ url }: { url: string }) => {
+  return vi.fn(async ({ url, init }: { url: string; init?: RequestInit }) => {
     const wantsExchange = url.includes("/oauth2/token");
     const wantsInstance = url.includes("/activity-instances/");
+    const exchangeStatus = wantsExchange
+      ? await params?.onExchange?.(
+          init?.body instanceof URLSearchParams ? init.body.get("code") : null,
+        )
+      : undefined;
     const status = wantsExchange
-      ? (params?.tokenStatus ?? 200)
+      ? (exchangeStatus ?? params?.tokenStatus ?? 200)
       : wantsInstance
         ? (params?.instanceStatus ?? 200)
         : 200;
@@ -123,20 +153,109 @@ function fetchInputUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
 
+const activityOrigin = "https://123456789012345678.discordsays.com";
+
+function requestToken(
+  base: string,
+  params: {
+    body?: string;
+    code?: string;
+    forwardedFor?: string;
+    origin?: string;
+  } = {},
+): Promise<Response> {
+  return fetch(`${base}/discord/activity/api/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(params.origin ? { Origin: params.origin } : {}),
+      ...(params.forwardedFor ? { "X-Forwarded-For": params.forwardedFor } : {}),
+    },
+    body: params.body ?? JSON.stringify({ code: params.code ?? "oauth-code" }),
+  });
+}
+
+async function requestTokens(
+  base: string,
+  count: number,
+  params: (index: number) => Parameters<typeof requestToken>[1],
+  onResponse: (response: Response) => void,
+): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    const response = await requestToken(base, params(index));
+    onResponse(response);
+  }
+}
+
+function requestWidget(base: string, query: string, sessionToken?: string): Promise<Response> {
+  return fetch(
+    `${base}/discord/activity/api/widget?${query}`,
+    sessionToken ? { headers: { Authorization: `Bearer ${sessionToken}` } } : undefined,
+  );
+}
+
+function recordPendingLaunch(
+  runtime: DiscordActivitiesRuntime,
+  widgetId: string,
+  createdAt: number,
+  accountId = "default",
+) {
+  return runtime.store.recordPendingLaunch({
+    accountId,
+    channelId: "777",
+    discordUserId: "42",
+    widgetId,
+    createdAt,
+  });
+}
+
+function consumePendingLaunch(runtime: DiscordActivitiesRuntime, accountId = "default") {
+  return runtime.store.consumePendingLaunch(accountId, "777", "42");
+}
+
+function createWidgetFixture(
+  options: Parameters<typeof startServer>[1] = { fetchGuard: guardedJsonFetch() },
+) {
+  const runtime = createActivityTestRuntime();
+  let base: string | undefined;
+  let session: string | undefined;
+  const request = async (query: string) => {
+    session ??= await runtime.store.createSession({
+      discordUserId: "42",
+      accountId: "default",
+    });
+    base ??= await startServer(runtime, options);
+    return await requestWidget(base, query, session);
+  };
+  return {
+    get base() {
+      if (!base) {
+        throw new Error("widget fixture has not issued a request");
+      }
+      return base;
+    },
+    runtime,
+    widget: (params?: Parameters<typeof createWidget>[1]) => createWidget(runtime, params),
+    request,
+    recordPending: (widgetId: string, createdAt = 3) =>
+      recordPendingLaunch(runtime, widgetId, createdAt),
+    consumePending: () => consumePendingLaunch(runtime),
+  };
+}
+
 describe("Discord Activity HTTP OAuth", () => {
+  it("terminates stalled token request bodies within the read timeout", async () => {
+    const base = await startServer(createActivityTestRuntime(), { bodyTimeoutMs: 25 });
+
+    await expect(observeStalledTokenRequest(base, 1_000)).resolves.toBe("server-terminated");
+  });
+
   it("exchanges a code, creates a session, and uses it on the widget endpoint", async () => {
     const runtime = createActivityTestRuntime();
     const widgetId = await createWidget(runtime);
     const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
 
-    const tokenResponse = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://123456789012345678.discordsays.com",
-      },
-      body: JSON.stringify({ code: "oauth-code" }),
-    });
+    const tokenResponse = await requestToken(base, { origin: activityOrigin });
     const token = (await tokenResponse.json()) as {
       access_token: string;
       session_token: string;
@@ -145,9 +264,10 @@ describe("Discord Activity HTTP OAuth", () => {
     expect(token.access_token).toBe("atoken");
     expect(token.session_token).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
-    const widgetResponse = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(buildDiscordActivityCustomId(widgetId))}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${token.session_token}` } },
+    const widgetResponse = await requestWidget(
+      base,
+      `custom_id=${encodeURIComponent(buildDiscordActivityCustomId(widgetId))}&instance_id=instance-1`,
+      token.session_token,
     );
     expect(widgetResponse.status).toBe(200);
     await expect(widgetResponse.json()).resolves.toMatchObject({
@@ -190,16 +310,13 @@ describe("Discord Activity HTTP OAuth", () => {
     ) as unknown as typeof fetchWithSsrFGuard;
     const base = await startServer(runtime, { fetchGuard: guard });
 
-    const tokenResponse = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: "oauth-code" }),
-    });
+    const tokenResponse = await requestToken(base);
     const token = (await tokenResponse.json()) as { session_token: string };
     expect(tokenResponse.status).toBe(200);
-    const widgetResponse = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${widgetId}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${token.session_token}` } },
+    const widgetResponse = await requestWidget(
+      base,
+      `custom_id=${widgetId}&instance_id=instance-1`,
+      token.session_token,
     );
 
     expect(widgetResponse.status).toBe(200);
@@ -215,11 +332,7 @@ describe("Discord Activity HTTP OAuth", () => {
     const base = await startServer(createActivityTestRuntime(), {
       fetchGuard: guardedJsonFetch({ tokenStatus: 400 }),
     });
-    const response = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: "bad-code" }),
-    });
+    const response = await requestToken(base, { code: "bad-code" });
     expect(response.status).toBe(401);
   });
 
@@ -229,17 +342,14 @@ describe("Discord Activity HTTP OAuth", () => {
     const base = await startServer(runtime, {
       fetchGuard: guardedJsonFetch({ userId: "99", instanceUsers: ["99"] }),
     });
-    const response = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: "oauth-code" }),
-    });
+    const response = await requestToken(base);
     expect(response.status).toBe(200);
     const token = (await response.json()) as { session_token: string };
 
-    const widgetResponse = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${widgetId}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${token.session_token}` } },
+    const widgetResponse = await requestWidget(
+      base,
+      `custom_id=${widgetId}&instance_id=instance-1`,
+      token.session_token,
     );
     expect(widgetResponse.status).toBe(200);
     await expect(widgetResponse.json()).resolves.toMatchObject({ id: widgetId });
@@ -249,29 +359,19 @@ describe("Discord Activity HTTP OAuth", () => {
     const cfg = createActivityTestConfig({ clientSecret: "" });
     const runtime = new DiscordActivitiesRuntime(createMemoryActivityStore(), cfg, undefined, {});
     const base = await startServer(runtime);
-    const response = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: "oauth-code" }),
-    });
+    const response = await requestToken(base);
     expect(response.status).toBe(503);
   });
 
   it("limits token requests to ten per source IP per minute", async () => {
     const base = await startServer(createActivityTestRuntime(), { now: () => 1_000 });
-    for (let index = 0; index < 10; index += 1) {
-      const response = await fetch(`${base}/discord/activity/api/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      expect(response.status).toBe(401);
-    }
-    const limited = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
+    await requestTokens(
+      base,
+      10,
+      () => ({ body: "{}" }),
+      (response) => expect(response.status).toBe(401),
+    );
+    const limited = await requestToken(base, { body: "{}" });
     expect(limited.status).toBe(429);
   });
 
@@ -280,38 +380,30 @@ describe("Discord Activity HTTP OAuth", () => {
       fetchGuard: guardedJsonFetch(),
       now: () => 1_000,
     });
-    for (let index = 0; index < 61; index += 1) {
-      const response = await fetch(`${base}/discord/activity/api/token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: `https://${100_000_000_000_000_000n + BigInt(index)}.discordsays.com`,
-          "X-Forwarded-For": `198.51.100.${index + 1}`,
-        },
+    await requestTokens(
+      base,
+      61,
+      (index) => ({
         body: "{}",
-      });
-      expect(response.status).toBe(503);
-    }
-    for (let index = 0; index < 61; index += 1) {
-      const response = await fetch(`${base}/discord/activity/api/token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://123456789012345678.discordsays.com",
-          "X-Forwarded-For": `203.0.113.${index + 1}`,
-        },
+        origin: `https://${100_000_000_000_000_000n + BigInt(index)}.discordsays.com`,
+        forwardedFor: `198.51.100.${index + 1}`,
+      }),
+      (response) => expect(response.status).toBe(503),
+    );
+    await requestTokens(
+      base,
+      61,
+      (index) => ({
         body: "{}",
-      });
-      expect(response.status).toBe(401);
-    }
-    const legitimate = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://123456789012345678.discordsays.com",
-        "X-Forwarded-For": "192.0.2.250",
-      },
-      body: JSON.stringify({ code: "ok" }),
+        origin: activityOrigin,
+        forwardedFor: `203.0.113.${index + 1}`,
+      }),
+      (response) => expect(response.status).toBe(401),
+    );
+    const legitimate = await requestToken(base, {
+      code: "ok",
+      origin: activityOrigin,
+      forwardedFor: "192.0.2.250",
     });
     expect(legitimate.status).toBe(200);
   });
@@ -319,45 +411,26 @@ describe("Discord Activity HTTP OAuth", () => {
   it("does not charge Discord-rejected codes to the global budget", async () => {
     // Nonempty codes that Discord rejects must not consume login capacity, or a few
     // rotating sources could 429 every genuine launch with bogus-but-valid-shaped codes.
-    const rejectBogusCode = vi.fn(async ({ url, init }: { url: string; init?: RequestInit }) => {
-      const wantsExchange = url.includes("/oauth2/token");
-      const code = init?.body instanceof URLSearchParams ? init.body.get("code") : null;
-      const status = wantsExchange && code === "bogus" ? 400 : 200;
-      const body = wantsExchange
-        ? { access_token: "atoken" }
-        : { id: "42", username: "alice", discriminator: "0" };
-      return {
-        response: new Response(JSON.stringify(body), {
-          status,
-          headers: { "Content-Type": "application/json" },
-        }),
-        release: vi.fn(async () => undefined),
-      };
-    }) as unknown as typeof fetchWithSsrFGuard;
     const base = await startServer(createProxyAwareRuntime(), {
-      fetchGuard: rejectBogusCode,
+      fetchGuard: guardedJsonFetch({
+        onExchange: (code) => (code === "bogus" ? 400 : 200),
+      }),
       now: () => 1_000,
     });
-    for (let index = 0; index < 61; index += 1) {
-      const response = await fetch(`${base}/discord/activity/api/token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://123456789012345678.discordsays.com",
-          "X-Forwarded-For": `198.51.100.${index + 1}`,
-        },
-        body: JSON.stringify({ code: "bogus" }),
-      });
-      expect(response.status).toBe(401);
-    }
-    const legitimate = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://123456789012345678.discordsays.com",
-        "X-Forwarded-For": "192.0.2.250",
-      },
-      body: JSON.stringify({ code: "ok" }),
+    await requestTokens(
+      base,
+      61,
+      (index) => ({
+        code: "bogus",
+        origin: activityOrigin,
+        forwardedFor: `198.51.100.${index + 1}`,
+      }),
+      (response) => expect(response.status).toBe(401),
+    );
+    const legitimate = await requestToken(base, {
+      code: "ok",
+      origin: activityOrigin,
+      forwardedFor: "192.0.2.250",
     });
     expect(legitimate.status).toBe(200);
   });
@@ -368,48 +441,30 @@ describe("Discord Activity HTTP OAuth", () => {
       releaseExchanges = resolve;
     });
     let exchangeCalls = 0;
-    const guard = vi.fn(async ({ url }: { url: string }) => {
-      const wantsExchange = url.includes("/oauth2/token");
-      if (wantsExchange) {
+    const guard = guardedJsonFetch({
+      onExchange: async () => {
         exchangeCalls += 1;
         await exchangeGate;
-      }
-      const body = wantsExchange
-        ? { access_token: "atoken" }
-        : { id: "42", username: "alice", discriminator: "0" };
-      return {
-        response: new Response(JSON.stringify(body), {
-          headers: { "Content-Type": "application/json" },
-        }),
-        release: vi.fn(async () => undefined),
-      };
-    }) as unknown as typeof fetchWithSsrFGuard;
+      },
+    });
     const base = await startServer(createProxyAwareRuntime(), {
       fetchGuard: guard,
       now: () => 1_000,
     });
     const pending = Array.from({ length: 60 }, (_, index) =>
-      fetch(`${base}/discord/activity/api/token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://123456789012345678.discordsays.com",
-          "X-Forwarded-For": `198.51.100.${index + 1}`,
-        },
-        body: JSON.stringify({ code: "ok" }),
+      requestToken(base, {
+        code: "ok",
+        origin: activityOrigin,
+        forwardedFor: `198.51.100.${index + 1}`,
       }),
     );
     let limited: Response;
     try {
       await vi.waitFor(() => expect(exchangeCalls).toBe(60), { timeout: 5_000 });
-      limited = await fetch(`${base}/discord/activity/api/token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://123456789012345678.discordsays.com",
-          "X-Forwarded-For": "192.0.2.250",
-        },
-        body: JSON.stringify({ code: "ok" }),
+      limited = await requestToken(base, {
+        code: "ok",
+        origin: activityOrigin,
+        forwardedFor: "192.0.2.250",
       });
     } finally {
       releaseExchanges();
@@ -424,26 +479,20 @@ describe("Discord Activity HTTP OAuth", () => {
       fetchGuard: guardedJsonFetch(),
       now: () => 1_000,
     });
-    for (let index = 0; index < 60; index += 1) {
-      const response = await fetch(`${base}/discord/activity/api/token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://123456789012345678.discordsays.com",
-          "X-Forwarded-For": `198.51.100.${index + 1}`,
-        },
-        body: JSON.stringify({ code: "ok" }),
-      });
-      expect(response.status).toBe(200);
-    }
-    const limited = await fetch(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://123456789012345678.discordsays.com",
-        "X-Forwarded-For": "192.0.2.250",
-      },
-      body: JSON.stringify({ code: "ok" }),
+    await requestTokens(
+      base,
+      60,
+      (index) => ({
+        code: "ok",
+        origin: activityOrigin,
+        forwardedFor: `198.51.100.${index + 1}`,
+      }),
+      (response) => expect(response.status).toBe(200),
+    );
+    const limited = await requestToken(base, {
+      code: "ok",
+      origin: activityOrigin,
+      forwardedFor: "192.0.2.250",
     });
     expect(limited.status).toBe(429);
   });
@@ -452,34 +501,22 @@ describe("Discord Activity HTTP OAuth", () => {
 describe("Discord Activity widget routes", () => {
   it("requires a valid bearer session", async () => {
     const base = await startServer(createActivityTestRuntime());
-    expect((await fetch(`${base}/discord/activity/api/widget?instance_id=abc`)).status).toBe(401);
-    expect(
-      (
-        await fetch(`${base}/discord/activity/api/widget?instance_id=abc`, {
-          headers: { Authorization: `Bearer ${"a".repeat(43)}` },
-        })
-      ).status,
-    ).toBe(401);
+    expect((await requestWidget(base, "instance_id=abc")).status).toBe(401);
+    expect((await requestWidget(base, "instance_id=abc", "a".repeat(43))).status).toBe(401);
   });
 
   it("resolves a custom ID in the validated instance channel and consumes its doc token", async () => {
-    const runtime = createActivityTestRuntime();
-    const firstId = await createWidget(runtime, { createdAt: 1 });
-    await createWidget(runtime, { createdAt: 2 });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+    const fixture = createWidgetFixture();
+    const firstId = await fixture.widget({ createdAt: 1 });
+    await fixture.widget({ createdAt: 2 });
 
-    const direct = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(buildDiscordActivityCustomId(firstId))}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
+    const direct = await fixture.request(
+      `custom_id=${encodeURIComponent(buildDiscordActivityCustomId(firstId))}&instance_id=instance-1`,
     );
     expect(direct.status).toBe(200);
     const metadata = (await direct.json()) as { id: string; docUrl: string };
     expect(metadata.id).toBe(firstId);
-    const documentUrl = new URL(metadata.docUrl, base);
+    const documentUrl = new URL(metadata.docUrl, fixture.base);
     const firstDocument = await fetch(documentUrl);
     expect(firstDocument.status).toBe(200);
     const firstCsp = firstDocument.headers.get("content-security-policy");
@@ -494,85 +531,45 @@ describe("Discord Activity widget routes", () => {
   });
 
   it("retires the matching pending launch when its custom ID resolves", async () => {
-    const runtime = createActivityTestRuntime();
-    await createWidget(runtime, { createdAt: 1 });
-    const launchedId = await createWidget(runtime, { createdAt: 2 });
-    await runtime.store.recordPendingLaunch({
-      accountId: "default",
-      channelId: "777",
-      discordUserId: "42",
-      widgetId: launchedId,
-      createdAt: 3,
-    });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+    const fixture = createWidgetFixture();
+    await fixture.widget({ createdAt: 1 });
+    const launchedId = await fixture.widget({ createdAt: 2 });
+    await fixture.recordPending(launchedId);
 
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(buildDiscordActivityCustomId(launchedId))}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
+    const response = await fixture.request(
+      `custom_id=${encodeURIComponent(buildDiscordActivityCustomId(launchedId))}&instance_id=instance-1`,
     );
 
     expect(response.status).toBe(200);
     // Lifecycle closed: a later click on a different widget must not be poisoned.
-    await expect(
-      runtime.store.consumePendingLaunch("default", "777", "42"),
-    ).resolves.toBeUndefined();
+    await expect(fixture.consumePending()).resolves.toBeUndefined();
   });
 
   it("keeps a different-widget pending launch when a custom ID resolves", async () => {
-    const runtime = createActivityTestRuntime();
-    const requestedId = await createWidget(runtime, { createdAt: 1 });
-    const pendingId = await createWidget(runtime, { createdAt: 2 });
-    await runtime.store.recordPendingLaunch({
-      accountId: "default",
-      channelId: "777",
-      discordUserId: "42",
-      widgetId: pendingId,
-      createdAt: 3,
-    });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+    const fixture = createWidgetFixture();
+    const requestedId = await fixture.widget({ createdAt: 1 });
+    const pendingId = await fixture.widget({ createdAt: 2 });
+    await fixture.recordPending(pendingId);
 
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(buildDiscordActivityCustomId(requestedId))}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
+    const response = await fixture.request(
+      `custom_id=${encodeURIComponent(buildDiscordActivityCustomId(requestedId))}&instance_id=instance-1`,
     );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ id: requestedId });
-    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
-      { widgetId: pendingId },
-    );
+    await expect(fixture.consumePending()).resolves.toMatchObject({ widgetId: pendingId });
   });
 
   it.each(["", "ocactivity1_mangled"])(
     "resolves %j custom ID through the pending launch",
     async (customId) => {
-      const runtime = createActivityTestRuntime();
-      const pendingId = await createWidget(runtime, { createdAt: 1 });
-      await createWidget(runtime, { createdAt: 2 });
-      await runtime.store.recordPendingLaunch({
-        accountId: "default",
-        channelId: "777",
-        discordUserId: "42",
-        widgetId: pendingId,
-        createdAt: 3,
-      });
-      const session = await runtime.store.createSession({
-        discordUserId: "42",
-        accountId: "default",
-      });
-      const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+      const fixture = createWidgetFixture();
+      const pendingId = await fixture.widget({ createdAt: 1 });
+      await fixture.widget({ createdAt: 2 });
+      await fixture.recordPending(pendingId);
 
-      const response = await fetch(
-        `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(customId)}&instance_id=instance-1`,
-        { headers: { Authorization: `Bearer ${session}` } },
+      const response = await fixture.request(
+        `custom_id=${encodeURIComponent(customId)}&instance_id=instance-1`,
       );
 
       expect(response.status).toBe(200);
@@ -581,74 +578,35 @@ describe("Discord Activity widget routes", () => {
   );
 
   it("falls through to the newest widget when overlapping launches target different widgets", async () => {
-    const runtime = createActivityTestRuntime();
-    const firstId = await createWidget(runtime, { createdAt: 1 });
-    const newestId = await createWidget(runtime, { createdAt: 2 });
-    const record = (widgetId: string, createdAt: number) =>
-      runtime.store.recordPendingLaunch({
-        accountId: "default",
-        channelId: "777",
-        discordUserId: "42",
-        widgetId,
-        createdAt,
-      });
-    await Promise.all([record(firstId, 3), record(newestId, 4)]);
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+    const fixture = createWidgetFixture();
+    const firstId = await fixture.widget({ createdAt: 1 });
+    const newestId = await fixture.widget({ createdAt: 2 });
+    await Promise.all([fixture.recordPending(firstId, 3), fixture.recordPending(newestId, 4)]);
 
-    const response = await fetch(`${base}/discord/activity/api/widget?instance_id=instance-1`, {
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const response = await fixture.request("instance_id=instance-1");
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ id: newestId });
-    await expect(
-      runtime.store.consumePendingLaunch("default", "777", "42"),
-    ).resolves.toBeUndefined();
+    await expect(fixture.consumePending()).resolves.toBeUndefined();
   });
 
   it("keeps a pending launch when the same widget is clicked twice", async () => {
     const runtime = createActivityTestRuntime();
     const widgetId = await createWidget(runtime, { createdAt: 1 });
-    const record = (createdAt: number) =>
-      runtime.store.recordPendingLaunch({
-        accountId: "default",
-        channelId: "777",
-        discordUserId: "42",
-        widgetId,
-        createdAt,
-      });
-    await record(2);
-    await record(3);
+    await recordPendingLaunch(runtime, widgetId, 2);
+    await recordPendingLaunch(runtime, widgetId, 3);
 
-    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
-      { widgetId },
-    );
+    await expect(consumePendingLaunch(runtime)).resolves.toMatchObject({ widgetId });
   });
 
   it("consumes a pending launch after one widget resolution", async () => {
-    const runtime = createActivityTestRuntime();
-    const pendingId = await createWidget(runtime, { createdAt: 1 });
-    const newestId = await createWidget(runtime, { createdAt: 2 });
-    await runtime.store.recordPendingLaunch({
-      accountId: "default",
-      channelId: "777",
-      discordUserId: "42",
-      widgetId: pendingId,
-      createdAt: 3,
-    });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
-    const url = `${base}/discord/activity/api/widget?instance_id=instance-1`;
+    const fixture = createWidgetFixture();
+    const pendingId = await fixture.widget({ createdAt: 1 });
+    const newestId = await fixture.widget({ createdAt: 2 });
+    await fixture.recordPending(pendingId);
 
-    const first = await fetch(url, { headers: { Authorization: `Bearer ${session}` } });
-    const second = await fetch(url, { headers: { Authorization: `Bearer ${session}` } });
+    const first = await fixture.request("instance_id=instance-1");
+    const second = await fixture.request("instance_id=instance-1");
 
     expect(first.status).toBe(200);
     await expect(first.json()).resolves.toMatchObject({ id: pendingId });
@@ -658,94 +616,55 @@ describe("Discord Activity widget routes", () => {
 
   it("keeps pending launches isolated by Discord account", async () => {
     const runtime = createActivityTestRuntime();
-    await runtime.store.recordPendingLaunch({
-      accountId: "account-b",
-      channelId: "777",
-      discordUserId: "42",
-      widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
-      createdAt: 1,
-    });
+    await recordPendingLaunch(runtime, "AAAAAAAAAAAAAAAAAAAAAA", 1, "account-b");
 
-    await expect(
-      runtime.store.consumePendingLaunch("account-a", "777", "42"),
-    ).resolves.toBeUndefined();
-    await expect(
-      runtime.store.consumePendingLaunch("account-b", "777", "42"),
-    ).resolves.toMatchObject({ widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+    await expect(consumePendingLaunch(runtime, "account-a")).resolves.toBeUndefined();
+    await expect(consumePendingLaunch(runtime, "account-b")).resolves.toMatchObject({
+      widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+    });
   });
 
   it("keeps the newest-widget fallback when pending launch lookup fails", async () => {
-    const runtime = createActivityTestRuntime();
-    await createWidget(runtime, { createdAt: 1 });
-    const newestId = await createWidget(runtime, { createdAt: 2 });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const consumePendingLaunch = vi
-      .spyOn(runtime.store, "consumePendingLaunch")
-      .mockRejectedValue(new Error("store offline"));
     const logError = vi.fn();
-    const base = await startServer(runtime, {
-      fetchGuard: guardedJsonFetch(),
-      logError,
-    });
-    const url = `${base}/discord/activity/api/widget?custom_id=missing&instance_id=instance-1`;
-
+    const fixture = createWidgetFixture({ fetchGuard: guardedJsonFetch(), logError });
+    await fixture.widget({ createdAt: 1 });
+    const newestId = await fixture.widget({ createdAt: 2 });
+    const pendingLaunchLookup = vi
+      .spyOn(fixture.runtime.store, "consumePendingLaunch")
+      .mockRejectedValue(new Error("store offline"));
     for (let index = 0; index < 2; index += 1) {
-      const response = await fetch(url, { headers: { Authorization: `Bearer ${session}` } });
+      const response = await fixture.request("custom_id=missing&instance_id=instance-1");
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toMatchObject({ id: newestId });
     }
-    expect(consumePendingLaunch).toHaveBeenCalledTimes(2);
+    expect(pendingLaunchLookup).toHaveBeenCalledTimes(2);
     expect(logError).toHaveBeenCalledOnce();
   });
 
   it("rejects a custom ID outside the validated instance channel", async () => {
-    const runtime = createActivityTestRuntime();
-    const widgetId = await createWidget(runtime, { channelId: "888" });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, {
+    const fixture = createWidgetFixture({
       fetchGuard: guardedJsonFetch({ channelId: "777" }),
     });
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${widgetId}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
-    );
+    const widgetId = await fixture.widget({ channelId: "888" });
+    const response = await fixture.request(`custom_id=${widgetId}&instance_id=instance-1`);
 
     expect(response.status).toBe(404);
   });
 
   it("ignores a forged channel ID when no Activity instance is supplied", async () => {
-    const runtime = createActivityTestRuntime();
-    await createWidget(runtime);
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime);
-    const response = await fetch(`${base}/discord/activity/api/widget?channel_id=777`, {
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const fixture = createWidgetFixture({});
+    await fixture.widget();
+    const response = await fixture.request("channel_id=777");
     expect(response.status).toBe(404);
   });
 
   it("uses the Activity Instance API channel when exactly one widget matches", async () => {
-    const runtime = createActivityTestRuntime();
-    await createWidget(runtime, { channelId: "888", createdAt: 1 });
-    const newestId = await createWidget(runtime, { channelId: "777", createdAt: 2 });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
     const guard = guardedJsonFetch({ channelId: "777" });
-    const base = await startServer(runtime, { fetchGuard: guard });
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=missing&instance_id=instance-1&channel_id=888`,
-      { headers: { Authorization: `Bearer ${session}` } },
+    const fixture = createWidgetFixture({ fetchGuard: guard });
+    await fixture.widget({ channelId: "888", createdAt: 1 });
+    const newestId = await fixture.widget({ channelId: "777", createdAt: 2 });
+    const response = await fixture.request(
+      "custom_id=missing&instance_id=instance-1&channel_id=888",
     );
 
     expect(response.status).toBe(200);
@@ -759,52 +678,30 @@ describe("Discord Activity widget routes", () => {
   });
 
   it("uses the latest widget when a client omits the custom ID", async () => {
-    const runtime = createActivityTestRuntime();
-    await createWidget(runtime, { channelId: "777", createdAt: 1 });
-    const newestId = await createWidget(runtime, { channelId: "777", createdAt: 2 });
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
-    const response = await fetch(`${base}/discord/activity/api/widget?instance_id=instance-1`, {
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const fixture = createWidgetFixture();
+    await fixture.widget({ channelId: "777", createdAt: 1 });
+    const newestId = await fixture.widget({ channelId: "777", createdAt: 2 });
+    const response = await fixture.request("instance_id=instance-1");
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ id: newestId });
   });
 
   it("returns 404 when the Activity instance cannot be resolved", async () => {
-    const runtime = createActivityTestRuntime();
-    await createWidget(runtime);
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, {
+    const fixture = createWidgetFixture({
       fetchGuard: guardedJsonFetch({ instanceStatus: 404 }),
     });
-    const response = await fetch(`${base}/discord/activity/api/widget?instance_id=missing`, {
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    await fixture.widget();
+    const response = await fixture.request("instance_id=missing");
     expect(response.status).toBe(404);
   });
 
   it("returns 404 for a custom ID when the session user is absent from the Activity instance", async () => {
-    const runtime = createActivityTestRuntime();
-    const widgetId = await createWidget(runtime);
-    const session = await runtime.store.createSession({
-      discordUserId: "42",
-      accountId: "default",
-    });
-    const base = await startServer(runtime, {
+    const fixture = createWidgetFixture({
       fetchGuard: guardedJsonFetch({ instanceUsers: ["99"] }),
     });
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=${widgetId}&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
-    );
+    const widgetId = await fixture.widget();
+    const response = await fixture.request(`custom_id=${widgetId}&instance_id=instance-1`);
     expect(response.status).toBe(404);
   });
 });

@@ -867,7 +867,7 @@ describe("handleAllowlistCommand", () => {
         const written = await readJsonFile<OpenClawConfig>(configPath);
         const channelConfig = written.channels?.[testCase.provider];
         expect(channelConfig?.allowFrom).toEqual(testCase.expectedAllowFrom);
-        expect(channelConfig?.dm?.allowFrom).toBeUndefined();
+        expect(channelConfig?.dm).not.toHaveProperty("allowFrom");
         expect(result?.reply?.text).toContain(`channels.${testCase.provider}.allowFrom`);
       });
     }

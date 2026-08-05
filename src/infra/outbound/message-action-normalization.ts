@@ -5,6 +5,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -19,9 +20,28 @@ import {
 } from "./message-action-spec.js";
 import { HEARTBEAT_SENDER_SENTINEL } from "./targets.js";
 
-/** True when a tool-context value is the non-deliverable heartbeat sender sentinel. */
-function isHeartbeatSenderSentinel(value: string | undefined): boolean {
-  return value === HEARTBEAT_SENDER_SENTINEL;
+export function resolveImplicitMessageActionTarget(
+  toolContext: ChannelThreadingToolContext | undefined,
+): string | undefined {
+  for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
+    const target = normalizeOptionalString(value);
+    if (!target) {
+      continue;
+    }
+    // Defense in depth for isolated heartbeat turns: the runner may still
+    // surface the non-deliverable "heartbeat" sentinel in tool context even
+    // when the owning run forgot requireExplicitMessageTarget.
+    if (target === HEARTBEAT_SENDER_SENTINEL) {
+      continue;
+    }
+    // A session can arrive bare or wrapped as a channel target; neither is
+    // a transport destination. Keep searching for the real conversation.
+    if (parseAgentSessionKey(target.replace(/^channel:/i, ""))) {
+      continue;
+    }
+    return target;
+  }
+  return undefined;
 }
 
 /** Normalizes message-action args before target validation and dispatch. */
@@ -82,13 +102,8 @@ export function normalizeMessageActionInput(params: {
     actionRequiresTarget(action) &&
     (hasResourceReference || !actionHasTarget(action, normalizedArgs, { channel: inferredChannel }))
   ) {
-    const inferredTarget =
-      normalizeOptionalString(toolContext?.currentChannelId) ??
-      normalizeOptionalString(toolContext?.currentMessagingTarget);
-    // Defense in depth for isolated heartbeat turns: the runner may still
-    // surface the non-deliverable "heartbeat" sentinel in tool context even
-    // when the owning run forgot requireExplicitMessageTarget.
-    if (inferredTarget && !isHeartbeatSenderSentinel(inferredTarget)) {
+    const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
+    if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
     }
   }

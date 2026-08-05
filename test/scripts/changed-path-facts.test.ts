@@ -29,7 +29,7 @@ describe("changed path facts", () => {
   });
 
   it("preserves test and native-only predicates independently from surfaces", () => {
-    expect(getChangedPathFacts("extensions/slack/src/index.test.ts")).toMatchObject({
+    expect(getChangedPathFacts("extensions/slack/src/index.test-support.ts")).toMatchObject({
       surface: "extension",
       isChangedLaneTest: true,
       isTestOnly: true,

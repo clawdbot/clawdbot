@@ -55,8 +55,10 @@ export type DiscordThreadStarterRestMember = {
 
 export type DiscordThreadStarterRestMessage = {
   content?: string | null;
+  attachments?: APIAttachment[] | null;
   embeds?: DiscordThreadStarterRestEmbed[] | null;
   message_snapshots?: Array<{ message?: DiscordThreadStarterRestSnapshotMessage | null }> | null;
+  sticker_items?: APIStickerItem[] | null;
   member?: DiscordThreadStarterRestMember | null;
   author?: DiscordThreadStarterRestAuthor | null;
   timestamp?: string | null;

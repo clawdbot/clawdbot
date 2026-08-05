@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
+import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -31,6 +32,7 @@ const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1")
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
 );
+const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -150,6 +152,10 @@ type DiagnosticEventsStateForTest = {
   asyncQueue?: unknown[];
 };
 
+type SessionSuspensionTestApi = {
+  resetSessionSuspensionStateForTest?: () => void;
+};
+
 function runCleanupActions(actions: CleanupAction[]): unknown {
   let firstError: unknown;
   for (const action of actions) {
@@ -244,6 +250,12 @@ function resetOpenClawGlobalDiagnosticState(): void {
     presence.internalCount = 0;
     presence.trustedCount = 0;
   }
+}
+
+function resetOpenClawSessionSuspensionState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const api = globalStore[SESSION_SUSPENSION_TEST_API] as SessionSuspensionTestApi | undefined;
+  api?.resetSessionSuspensionStateForTest?.();
 }
 
 const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
@@ -363,6 +375,10 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
     resetOpenClawGlobalDiagnosticState();
+    resetOpenClawSessionSuspensionState();
+    // Named plugin runtimes intentionally survive duplicate module evaluation in production.
+    // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
+    clearNamedPluginRuntimeStoresForTest();
     vi.resetModules();
     const internals = this as unknown as TestRunnerInternals;
     internals.moduleRunner?.mocker?.reset?.();

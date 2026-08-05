@@ -52,7 +52,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 2" });
+    ).toEqual({ text: "Automations listed.\nCount: 2" });
     expect(
       terminalPresentation(
         { action: "list" },
@@ -64,7 +64,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 250" });
+    ).toEqual({ text: "Automations listed.\nCount: 250" });
     expect(
       terminalPresentation(
         { action: "add" },
@@ -73,7 +73,7 @@ describe("cron tool flat-params", () => {
     ).toBeUndefined();
   });
 
-  it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
+  it("binds recovered agentTurn jobs to the creating conversation by default", async () => {
     const tool = createCronTool(
       { agentSessionKey: "agent:main:discord:channel:ops" },
       { callGatewayTool: callGatewayToolMock },
@@ -85,9 +85,13 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ sessionKey?: string }>();
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      sessionKey?: string;
+      sessionTarget?: string;
+    }>();
     expect(method).toBe("cron.add");
-    expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    expect(params.sessionTarget).toBe("current");
+    expect(params.sessionKey).toBe("agent:main:discord:channel:ops");
   });
 
   it("recovers flat cron schedule shorthand for add", async () => {
@@ -116,6 +120,30 @@ describe("cron tool flat-params", () => {
     expect(params.payload).toEqual({
       kind: "agentTurn",
       message: "send report",
+    });
+  });
+
+  it("recovers flat script payload fields before agent-turn hints", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-script-add", {
+      action: "add",
+      name: "queue watcher",
+      everyMs: 60_000,
+      script: "return { notify: 'changed' }",
+      timeoutSeconds: 30,
+      toolBudget: 12,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      payload?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload).toEqual({
+      kind: "script",
+      script: "return { notify: 'changed' }",
+      timeoutSeconds: 30,
+      toolBudget: 12,
     });
   });
 
@@ -149,7 +177,7 @@ describe("cron tool flat-params", () => {
         cwd: "/repo",
         message: "rebuilt",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -163,7 +191,7 @@ describe("cron tool flat-params", () => {
         command: "make",
         message: "done",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -178,7 +206,7 @@ describe("cron tool flat-params", () => {
         command: "pnpm build",
         cwd: "/repo",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -191,7 +219,7 @@ describe("cron tool flat-params", () => {
         jobId: "job-infer",
         command: "make",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -259,6 +287,35 @@ describe("cron tool flat-params", () => {
       expr: "15 8 * * 1-5",
       tz: "America/Los_Angeles",
       staggerMs: 30_000,
+    });
+  });
+
+  it("recovers flat script payload fields for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-script-update", {
+      action: "update",
+      jobId: "job-script",
+      script: "return { wake: 'now' }",
+      timeoutSeconds: 45,
+      toolBudget: 8,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { payload?: unknown };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({
+      id: "job-script",
+      patch: {
+        payload: {
+          kind: "script",
+          script: "return { wake: 'now' }",
+          timeoutSeconds: 45,
+          toolBudget: 8,
+        },
+      },
     });
   });
 

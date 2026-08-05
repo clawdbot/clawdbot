@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { agentHandlers } from "./agent.js";
@@ -87,4 +88,115 @@ describe("agent.wait gateway dedupe observations", () => {
       expect.objectContaining({ runId, status: "ok", endedAt: 200 }),
     );
   });
+
+  it.each([
+    {
+      name: "late completion",
+      payload: { status: "ok", startedAt: 100, endedAt: 300 },
+      expected: { status: "timeout", endedAt: 200, timeoutPhase: "provider" },
+    },
+    {
+      name: "late restart cancellation",
+      payload: { status: "error", startedAt: 100, endedAt: 300, stopReason: "restart" },
+      expected: { status: "timeout", endedAt: 200, timeoutPhase: "provider" },
+    },
+    {
+      name: "earlier user cancellation",
+      payload: { status: "error", startedAt: 100, endedAt: 150, stopReason: "rpc" },
+      expected: { status: "error", endedAt: 150, stopReason: "rpc" },
+    },
+  ])("merges $name across agent and chat observations", async ({ name, payload, expected }) => {
+    for (const timeoutFirst of [true, false]) {
+      const runId = `run-cross-source-${name.replaceAll(" ", "-")}-${timeoutFirst}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const timeout = {
+        dedupe,
+        key: `agent:${runId}`,
+        entry: {
+          ts: 200,
+          ok: false,
+          payload: {
+            runId,
+            status: "timeout",
+            startedAt: 100,
+            endedAt: 200,
+            timeoutPhase: "provider",
+          },
+        },
+      };
+      const other = {
+        dedupe,
+        key: `chat:${runId}`,
+        entry: { ts: 300, ok: payload.status === "ok", payload: { runId, ...payload } },
+      };
+
+      for (const observation of timeoutFirst ? [timeout, other] : [other, timeout]) {
+        setGatewayDedupeEntry(observation);
+      }
+
+      const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+      await waiter.promise;
+      expect(waiter.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, ...expected }),
+      );
+    }
+  });
+
+  it.each(["lifecycle-first", "dedupe-first"] as const)(
+    "keeps reply evidence when sticky status arrives $0",
+    async (order) => {
+      const runId = `run-reply-merge-${order}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      const lifecycleEnd = () =>
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            startedAt: 100,
+            endedAt: 300,
+            terminalReply: { disposition: "visible", text: "canonical reply" },
+          },
+        });
+      const dedupeTimeout = () =>
+        setGatewayDedupeEntry({
+          dedupe,
+          key: `agent:${runId}`,
+          entry: {
+            ts: 200,
+            ok: false,
+            payload: {
+              runId,
+              status: "timeout",
+              startedAt: 100,
+              endedAt: 200,
+              timeoutPhase: "provider",
+            },
+          },
+        });
+
+      for (const observe of order === "lifecycle-first"
+        ? [lifecycleEnd, dedupeTimeout]
+        : [dedupeTimeout, lifecycleEnd]) {
+        observe();
+      }
+
+      const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+      await waiter.promise;
+      expect(waiter.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          terminalReply: { disposition: "visible", text: "canonical reply" },
+        }),
+      );
+    },
+  );
 });

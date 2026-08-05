@@ -111,14 +111,14 @@ export function createGatewayTool(): AnyAgentTool {
     name: "gateway",
     description: "Read gateway config + schema. Writes/restart: use openclaw tool.",
     parameters: GatewayToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
 
       if (action === "config.get") {
         const path = readStringParam(params, "path");
-        const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+        const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
         const result = selectGatewayConfigGetResult(snapshot, path);
         return createGatewayConfigGetToolResult(result);
       }
@@ -128,7 +128,12 @@ export function createGatewayTool(): AnyAgentTool {
           label: "path",
         });
         try {
-          const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
+          const result = await callGatewayTool(
+            "config.schema.lookup",
+            gatewayOpts,
+            { path },
+            { signal },
+          );
           return jsonResult({ ok: true, result });
         } catch (error) {
           if (isConfigSchemaPathNotFoundError(error)) {

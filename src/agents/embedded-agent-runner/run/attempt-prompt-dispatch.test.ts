@@ -65,7 +65,9 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     vi.clearAllMocks();
     hoisted.prepareEmbeddedAttemptPromptExecution.mockResolvedValue({
       images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      imageFactIndexes: [null],
       detectedRefs: [],
+      failedMediaCount: 0,
       loadedCount: 1,
       skippedCount: 0,
     });
@@ -82,7 +84,9 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
       order.push("images");
       return {
         images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+        imageFactIndexes: [null],
         detectedRefs: [],
+        failedMediaCount: 0,
         loadedCount: 1,
         skippedCount: 0,
       };

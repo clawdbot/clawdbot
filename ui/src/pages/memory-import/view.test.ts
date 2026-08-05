@@ -74,6 +74,15 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
     applyingProviderId: null,
     pendingProviderId: null,
     lastResults: {},
+    backfillAvailable: true,
+    backfillFrom: "",
+    backfillTo: "",
+    backfillBusy: null,
+    backfillError: null,
+    backfillPreview: null,
+    backfillProgress: null,
+    backfillRollbackResult: null,
+    backfillRollbackPending: false,
     onSelectAgent: vi.fn(),
     onReplaceExisting: vi.fn(),
     onRefresh: vi.fn(),
@@ -81,6 +90,13 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
     onRequestImport: vi.fn(),
     onConfirmImport: vi.fn(),
     onCancelImport: vi.fn(),
+    onBackfillFromChange: vi.fn(),
+    onBackfillToChange: vi.fn(),
+    onBackfillPreview: vi.fn(),
+    onBackfillApply: vi.fn(),
+    onBackfillRollbackRequest: vi.fn(),
+    onBackfillRollbackConfirm: vi.fn(),
+    onBackfillRollbackCancel: vi.fn(),
     ...overrides,
   };
 }
@@ -106,6 +122,104 @@ describe("renderMemoryImport", () => {
     expect(container.textContent).toContain("Consolidated Codex memory files.");
     expect(container.textContent).not.toContain("Import Codex memory.");
     expect(container.textContent).not.toContain("private memory body");
+  });
+
+  it("renders the avatar agent picker and routes agent changes", async () => {
+    const onSelectAgent = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderMemoryImport(
+        createProps({
+          agents: [
+            { id: "research", name: "Research", identity: { emoji: "🔎" } },
+            { id: "writer", name: "Writer" },
+          ],
+          onSelectAgent,
+        }),
+      ),
+      container,
+    );
+
+    const picker = container.querySelector<
+      HTMLElement & {
+        options: Array<{ value: string }>;
+        onSelect: (value: string) => void;
+        updateComplete: Promise<boolean>;
+      }
+    >('openclaw-agent-select[name="memory-import-agent"]');
+    await picker?.updateComplete;
+    expect(picker?.options.map((option) => option.value)).toEqual(["research", "writer"]);
+    expect(picker?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "🔎",
+    );
+
+    picker?.onSelect("writer");
+    expect(onSelectAgent).toHaveBeenCalledWith("writer");
+    container.remove();
+  });
+
+  it("renders per-day session backfill candidates and final staging progress", () => {
+    const container = document.createElement("div");
+    render(
+      renderMemoryImport(
+        createProps({
+          backfillPreview: {
+            days: 1,
+            candidates: 2,
+            staged: 0,
+            truncated: true,
+            perDay: [
+              {
+                day: "2026-07-01",
+                candidateCount: 2,
+                sample: ["Remember the release checklist", "Use the main agent"],
+              },
+            ],
+          },
+          backfillProgress: { days: 3, candidates: 7, staged: 4, complete: true },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("2 candidates across 1 days");
+    expect(container.textContent).toContain("2026-07-01");
+    expect(container.textContent).toContain("Remember the release checklist");
+    expect(container.textContent).toContain("preview shows the first bounded batch");
+    expect(container.textContent).toContain("4 staged; promotion happens via dreaming");
+    expect(container.textContent).toContain("3 days processed");
+  });
+
+  it("requires destructive confirmation before session backfill rollback", () => {
+    const onBackfillRollbackConfirm = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderMemoryImport(createProps({ backfillRollbackPending: true, onBackfillRollbackConfirm })),
+      container,
+    );
+
+    expect(container.textContent).toContain("Session backfill cursors are rewound");
+    container
+      .querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-rollback-confirm']")
+      ?.click();
+    expect(onBackfillRollbackConfirm).toHaveBeenCalledOnce();
+  });
+
+  it("serializes memory imports with backfill mutations", () => {
+    const importing = document.createElement("div");
+    render(renderMemoryImport(createProps({ applyingProviderId: "codex" })), importing);
+    expect(
+      importing.querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-apply']")
+        ?.disabled,
+    ).toBe(true);
+
+    const backfilling = document.createElement("div");
+    render(renderMemoryImport(createProps({ backfillBusy: "apply" })), backfilling);
+    expect(
+      backfilling.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("passes the exact collection item ids when selection changes", () => {
@@ -186,6 +300,11 @@ describe("renderMemoryImport", () => {
       (button) => button.textContent?.trim() === "Refresh",
     );
     expect(refresh?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLElement & { disabled: boolean }>(
+        'openclaw-agent-select[name="memory-import-agent"]',
+      )?.disabled,
+    ).toBe(true);
     expect(
       container.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
         ?.disabled,

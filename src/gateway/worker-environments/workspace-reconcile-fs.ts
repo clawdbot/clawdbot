@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside, resolveOpenedFileRealPathForHandle } from "../../infra/fs-safe.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import {
   gitFileMode,
@@ -16,12 +17,82 @@ export function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
 }
 
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
+type WorkspaceFileSnapshot =
+  | { type: "file"; mode: number; size: number; sha256: string }
+  | { type: "unsupported" };
+
+async function readOpenedWorkspaceFile(params: {
+  handle: Awaited<ReturnType<typeof fs.open>>;
+  expectedPath: string;
+  root?: string;
+}): Promise<WorkspaceFileSnapshot> {
+  const before = await params.handle.stat();
+  const realPath = await resolveOpenedFileRealPathForHandle(params.handle, params.expectedPath);
+  if (!before.isFile() || (params.root && !isPathInside(params.root, realPath))) {
+    throw new Error("Gateway workspace file changed while it was being read");
   }
-  return hash.digest("hex");
+  if (before.size > MAX_RECONCILIATION_FILE_BYTES) {
+    return { type: "unsupported" };
+  }
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let size = 0;
+  for (;;) {
+    const { bytesRead } = await params.handle.read(buffer, 0, buffer.length, size);
+    if (bytesRead === 0) {
+      break;
+    }
+    size += bytesRead;
+    if (size > MAX_RECONCILIATION_FILE_BYTES) {
+      return { type: "unsupported" };
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+  }
+  const after = await params.handle.stat();
+  if (
+    after.size !== size ||
+    after.size !== before.size ||
+    after.mtimeMs !== before.mtimeMs ||
+    after.ctimeMs !== before.ctimeMs ||
+    after.ino !== before.ino ||
+    after.dev !== before.dev
+  ) {
+    throw new Error("Gateway workspace file changed while it was being read");
+  }
+  return {
+    type: "file",
+    mode: gitFileMode(after.mode & 0o777),
+    size,
+    sha256: hash.digest("hex"),
+  };
+}
+
+export async function readWorkspaceFileSnapshot(
+  root: string,
+  entryPath: string,
+): Promise<WorkspaceFileSnapshot> {
+  const absolute = localPath(root, entryPath);
+  const handle = await fs.open(
+    absolute,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute, root });
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFileSnapshot> {
+  const handle = await fs.open(
+    absolute,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute });
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function absoluteEntryMatches(
@@ -35,12 +106,15 @@ export async function absoluteEntryMatches(
   if (entry.type === "symlink") {
     return stats.isSymbolicLink() && (await fs.readlink(absolute)) === entry.target;
   }
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    return false;
+  }
+  const snapshot = await readAbsoluteFileSnapshot(absolute).catch(() => undefined);
   return (
-    stats.isFile() &&
-    !stats.isSymbolicLink() &&
-    gitFileMode(stats.mode & 0o777) === entry.mode &&
-    stats.size === entry.size &&
-    (await sha256File(absolute)) === entry.sha256
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
   );
 }
 
@@ -48,7 +122,16 @@ export async function entryMatches(
   root: string,
   entry: WorkerWorkspaceManifestEntry,
 ): Promise<boolean> {
-  return await absoluteEntryMatches(localPath(root, entry.path), entry);
+  if (entry.type === "symlink") {
+    return await absoluteEntryMatches(localPath(root, entry.path), entry);
+  }
+  const snapshot = await readWorkspaceFileSnapshot(root, entry.path).catch(() => undefined);
+  return (
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
+  );
 }
 
 export async function readWorkspaceTreeFile(params: {
@@ -115,10 +198,16 @@ export async function directoryContainsOnlyJournalPaths(
     }
     const stats = await fs.lstat(localPath(root, child));
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (!directories.has(child)) {
+      if (
+        !directories.has(child) &&
+        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child))
+      ) {
         return false;
       }
-      if (!(await directoryContainsOnlyJournalPaths(root, child, paths, directories))) {
+      if (
+        directories.has(child) &&
+        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories))
+      ) {
         return false;
       }
     } else if (!paths.has(child)) {

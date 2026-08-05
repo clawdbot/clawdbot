@@ -237,6 +237,15 @@ describe("inworldTTS", () => {
     );
   });
 
+  it("rejects malformed base64 audio chunks", async () => {
+    const body = JSON.stringify({ result: { audioContent: "not-base64!" } });
+    queueGuardedResponse(new Response(body, { status: 200 }));
+
+    await expect(inworldTTS({ text: "test", apiKey: "fixture-api-key" })).rejects.toThrow(
+      "Inworld TTS returned malformed base64 audio data",
+    );
+  });
+
   it("throws on HTTP errors with response body", async () => {
     queueGuardedResponse(new Response("bad request body", { status: 400 }));
 

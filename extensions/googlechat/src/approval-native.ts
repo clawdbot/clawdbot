@@ -202,7 +202,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
         accountId && accountId !== "default"
           ? `channels.googlechat.accounts.${accountId}`
           : "channels.googlechat";
-      return `Approve it from the Web UI or terminal UI for now. Google Chat supports native approvals for this account when the webhook and service account are configured. Configure \`${prefix}.dm.allowFrom\` or \`${prefix}.defaultTo\` with numeric \`users/{id}\` approvers.`;
+      return `Approve it from the Web UI or terminal UI for now. Google Chat supports native approvals for this account when the webhook and service account are configured. Configure \`${prefix}.allowFrom\` or \`${prefix}.defaultTo\` with numeric \`users/{id}\` approvers.`;
     },
     listAccountIds: listGoogleChatAccountIds,
     hasApprovers: ({ cfg, accountId }) =>

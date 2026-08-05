@@ -82,12 +82,8 @@ function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
   return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
 }
 
-export function resolveDiscordGatewayInfoTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
+export function resolveDiscordGatewayInfoTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
   return (
-    normalizeGatewayInfoTimeoutMs(params?.configuredTimeoutMs) ??
     normalizeGatewayInfoTimeoutMs(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
     DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS
   );

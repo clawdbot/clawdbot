@@ -8,8 +8,32 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   active: false,
+  capability: false,
   external: false,
+  upstreamFork: vi.fn(),
   queueClear: vi.fn(),
+  readMediaBuffer: vi.fn(),
+}));
+
+vi.mock("../../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media/store.js")>();
+  return { ...actual, readMediaBuffer: mocks.readMediaBuffer };
+});
+
+vi.mock("../../agents/harness/registry.js", () => ({
+  listRegisteredAgentHarnesses: () =>
+    mocks.capability
+      ? [
+          {
+            harness: {
+              sessionFork: {
+                upstreamKinds: ["codex-app-server"],
+                fork: mocks.upstreamFork,
+              },
+            },
+          },
+        ]
+      : [],
 }));
 
 vi.mock("../../auto-reply/reply/queue/cleanup.js", () => ({
@@ -17,7 +41,19 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", () => ({
 }));
 
 vi.mock("../../sessions/session-upstream-links.js", () => ({
-  readSessionUpstreamLink: () => (mocks.external ? { upstreamKind: "external" } : undefined),
+  readSessionUpstreamLink: () =>
+    mocks.external
+      ? {
+          agentId: "main",
+          catalogId: "codex",
+          hostId: "gateway:local",
+          marker: { turnId: "turn-2", userMessageCount: 1 },
+          sessionKey,
+          threadId: "thread-source",
+          upstreamKind: "codex-app-server",
+          upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
+        }
+      : undefined,
 }));
 
 vi.mock("./session-active-runs.js", () => {
@@ -27,17 +63,37 @@ vi.mock("./session-active-runs.js", () => {
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  listSessionEntries,
+  loadSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { sessionsHandlers } from "./sessions.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { sessionRewindHandlers } from "./sessions-rewind.js";
+import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:rewind-handler";
+const storedImageId = "stored-image.png";
+const storedImagePath = `/state/media/inbound/${storedImageId}`;
+const storedImageData = Buffer.from("stored-image");
 
 beforeEach(async () => {
   mocks.active = false;
+  mocks.capability = false;
   mocks.external = false;
+  mocks.upstreamFork.mockReset();
   mocks.queueClear.mockReset();
+  mocks.readMediaBuffer.mockReset().mockImplementation(async (id: string) => {
+    if (id !== storedImageId) {
+      throw new Error(`missing media: ${id}`);
+    }
+    return {
+      id,
+      path: storedImagePath,
+      buffer: storedImageData,
+      size: storedImageData.byteLength,
+    };
+  });
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
   await upsertSessionEntry(
     { agentId: "main", sessionKey },
@@ -52,7 +108,21 @@ beforeEach(async () => {
       type: "message",
       id: "user-entry",
       parentId: null,
-      message: { role: "user", content: "edit me" },
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "edit me" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+        __openclaw: {
+          media: [
+            { path: storedImagePath, contentType: "image/png" },
+            // Duplicate ref proves dedupe: the response must carry this image once.
+            { path: storedImagePath, contentType: "image/png" },
+            { path: `${storedImagePath}.missing`, contentType: "image/png" },
+          ],
+        },
+      },
     },
     {
       type: "message",
@@ -107,10 +177,14 @@ type MessageCutMethod =
   | "sessions.fork"
   | "sessions.rewind";
 
-async function invoke(method: MessageCutMethod, entryId?: string) {
-  const respond = vi.fn() as unknown as RespondFn;
+async function invoke(
+  method: MessageCutMethod,
+  entryId?: string,
+  client: GatewayClient | null = null,
+) {
+  const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers[method],
+    sessionRewindHandlers[method],
     `${method} handler`,
   )({
     req: { id: `${method}-request` } as never,
@@ -122,15 +196,31 @@ async function invoke(method: MessageCutMethod, entryId?: string) {
           ? {}
           : { entryId }),
     },
-    respond,
+    respond: respond as unknown as RespondFn,
     context: context(),
-    client: null,
+    client,
     isWebchatConnect: () => false,
   });
   return respond;
 }
 
 describe("session message-cut methods", () => {
+  it("returns an empty branch list for a not-yet-materialized session", async () => {
+    const respond = vi.fn() as unknown as RespondFn;
+    await expectDefined(
+      sessionRewindHandlers["sessions.branches.list"],
+      "sessions.branches.list handler",
+    )({
+      req: { id: "fresh-branches-list" } as never,
+      params: { sessionKey: "agent:main:never-materialized" },
+      respond,
+      context: context(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { branches: [] }, undefined);
+  });
+
   it("lists branches and switches to an inactive tip", async () => {
     const listed = await invoke("sessions.branches.list");
     expect(listed).toHaveBeenCalledWith(
@@ -176,15 +266,58 @@ describe("session message-cut methods", () => {
   });
 
   it("returns editor text for rewind and a new key for fork", async () => {
-    const fork = await invoke("sessions.fork", "user-entry");
+    const profileId = "profile-fork-creator";
+    const fork = await invoke("sessions.fork", "user-entry", {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId,
+        displayName: "Fork Operator",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    } as GatewayClient);
     expect(fork).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ editorText: "edit me", sessionKey: expect.any(String) }),
+      expect.objectContaining({
+        editorText: "edit me",
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "image/png", data: storedImageData.toString("base64") },
+        ],
+        sessionKey: expect.any(String),
+      }),
       undefined,
+    );
+    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(2);
+    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+    expect(forkKey).toBeTruthy();
+    const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
+    expect(forkEntry).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: profileId },
+      createdAt: expect.any(Number),
+    });
+    expect(listSessionStateEventsSince(forkKey ?? "", "main", 0, 20).events).toContainEqual(
+      expect.objectContaining({
+        kind: "created",
+        actorType: "human",
+        actorId: profileId,
+      }),
     );
 
     const rewind = await invoke("sessions.rewind", "user-entry");
-    expect(rewind).toHaveBeenCalledWith(true, { editorText: "edit me" }, undefined);
+    expect(rewind).toHaveBeenCalledWith(
+      true,
+      {
+        editorText: "edit me",
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "image/png", data: storedImageData.toString("base64") },
+        ],
+      },
+      undefined,
+    );
+    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
     expect(mocks.queueClear).toHaveBeenCalledTimes(1);
   });
 
@@ -222,33 +355,101 @@ describe("session message-cut methods", () => {
     }
   });
 
-  it("returns a typed error for unsupported transcript storage", async () => {
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey },
-      {
-        sessionFile: "/tmp/legacy-session.jsonl",
-      },
+  it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
+    "rejects %s for upstream-linked sessions even with a fork-capable harness",
+    async (method) => {
+      mocks.external = true;
+      mocks.capability = true;
+      const respond = await invoke(method, "user-entry");
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("external agent harness"),
+        }),
+      );
+      expect(mocks.upstreamFork).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delegates complete upstream fork materialization to the harness", async () => {
+    mocks.external = true;
+    mocks.capability = true;
+    mocks.upstreamFork.mockResolvedValue({
+      status: "created",
+      key: "agent:main:dashboard:forked",
+      editorText: "edit me",
+    });
+
+    const respond = await invoke("sessions.fork", "user-entry");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" },
+      undefined,
     );
-    const respond = await invoke("sessions.rewind", "user-entry");
-    const listed = await invoke("sessions.branches.list");
+    expect(mocks.upstreamFork).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
+        targetKey: expect.stringMatching(/^agent:main:dashboard:/),
+        upstream: expect.objectContaining({
+          catalogId: "codex",
+          hostId: "gateway:local",
+          kind: "codex-app-server",
+          threadId: "thread-source",
+        }),
+      }),
+    );
+  });
+
+  it("does not mutate the local session when the upstream fork fails", async () => {
+    mocks.external = true;
+    mocks.capability = true;
+    mocks.upstreamFork.mockResolvedValue({
+      status: "failed",
+      code: "upstream-unavailable",
+      message: "Codex is offline. Try again.",
+    });
+
+    const entryCount = listSessionEntries({ agentId: "main" }).length;
+    const respond = await invoke("sessions.fork", "user-entry");
 
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("storage does not support rewind"),
+        code: ErrorCodes.UNAVAILABLE,
+        details: { reason: "upstream-unavailable" },
       }),
     );
-    expect(listed).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("storage does not support branch listing"),
-      }),
-    );
+    expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
   });
+
+  it.each(["steer-message", "in-progress-turn", "drift-mismatch"] as const)(
+    "passes through the %s boundary failure",
+    async (reason) => {
+      mocks.external = true;
+      mocks.capability = true;
+      mocks.upstreamFork.mockResolvedValue({
+        status: "failed",
+        code: reason,
+        message: `boundary failed: ${reason}`,
+      });
+
+      const respond = await invoke("sessions.fork", "user-entry");
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          details: { reason },
+          message: `boundary failed: ${reason}`,
+        }),
+      );
+    },
+  );
 
   it.each([
     ["sessions.fork", "Fork"],

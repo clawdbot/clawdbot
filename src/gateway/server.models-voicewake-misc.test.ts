@@ -12,7 +12,7 @@ import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -92,6 +92,7 @@ type ModelCatalogRpcEntry = {
   contextWindow?: number;
   input?: string[];
   reasoning?: boolean;
+  supportsTools?: boolean;
   agentRuntime?: GatewayAgentRuntime;
 };
 
@@ -179,6 +180,7 @@ type ConfiguredProviderModelFixture = {
   name: string;
   alias: string;
   contextWindow: number;
+  supportsTools?: boolean;
 };
 
 const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) => ({
@@ -200,6 +202,9 @@ const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) =
             id: params.modelId,
             name: params.name,
             contextWindow: params.contextWindow,
+            ...(params.supportsTools === undefined
+              ? {}
+              : { compat: { supportsTools: params.supportsTools } }),
           },
         ],
       },
@@ -213,6 +218,7 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
   alias: params.alias,
   provider: params.provider,
   contextWindow: params.contextWindow,
+  ...(params.supportsTools === undefined ? {} : { supportsTools: params.supportsTools }),
 });
 
 describe("gateway server models + voicewake", () => {
@@ -234,7 +240,17 @@ describe("gateway server models + voicewake", () => {
   const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = entries;
-    await resetGatewayModelCatalogCacheForTest();
+    await resetPreparedModelCatalogForTest();
+    const [
+      { refreshPreparedModelRuntimeSnapshots },
+      { clearRuntimeConfigSnapshot: clearIoRuntimeConfigSnapshot, getRuntimeConfig },
+    ] = await Promise.all([
+      import("../agents/prepared-model-runtime.js"),
+      import("../config/io.js"),
+    ]);
+    clearIoRuntimeConfigSnapshot();
+    const publishedConfig = getRuntimeConfig();
+    await refreshPreparedModelRuntimeSnapshots(publishedConfig, { gatewayLifecycle: true });
   };
 
   const seedAgentModelCatalog = async () => {
@@ -351,6 +367,9 @@ describe("gateway server models + voicewake", () => {
     }
     if (expected.contextWindow !== undefined) {
       expect(models[0]?.contextWindow).toBe(expected.contextWindow);
+    }
+    if (expected.supportsTools !== undefined) {
+      expect(models[0]?.supportsTools).toBe(expected.supportsTools);
     }
   };
 
@@ -577,7 +596,7 @@ describe("gateway server models + voicewake", () => {
       async () => {
         await setAgentCatalog(remoteUnauthModels());
         const res = await listModels();
-        expect(res.ok).toBe(true);
+        expect(res.ok, JSON.stringify(res)).toBe(true);
         expectSingleModel(res.payload?.models ?? [], {
           id: "MiniMax-M2.7-highspeed",
           name: "MiniMax M2.7 Highspeed",
@@ -587,7 +606,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view does not run runtime discovery without a read-only catalog", async () => {
+  test("models.list configured view reuses the prepared generation", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -704,9 +723,10 @@ describe("gateway server models + voicewake", () => {
       expected: [
         {
           id: "claude-test-a",
-          name: "claude-test-a",
+          name: "A-Model",
           provider: "anthropic",
           available: false,
+          contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",
@@ -746,6 +766,7 @@ describe("gateway server models + voicewake", () => {
         name: "Kimi K2.5 (Configured)",
         alias: "Kimi K2.5 (NVIDIA)",
         contextWindow: 32_000,
+        supportsTools: false,
       },
     },
     {

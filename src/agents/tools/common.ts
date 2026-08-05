@@ -21,6 +21,7 @@ import type {
   AgentToolUpdateCallback,
 } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
+import { registerTrustedToolInputError } from "../tool-result-error.js";
 import { textResult } from "./tool-results.js";
 
 export { jsonResult, textResult } from "./tool-results.js";
@@ -92,6 +93,7 @@ export class ToolInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ToolInputError";
+    registerTrustedToolInputError(this);
   }
 }
 
@@ -116,10 +118,6 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   };
 }
 
-function readParamRaw(params: Record<string, unknown>, key: string): unknown {
-  return readSnakeCaseParamRaw(params, key);
-}
-
 // Models may emit blank defaults for optional numeric fields. Treat them as
 // absent while still rejecting nonblank invalid input.
 function isBlankParamValue(raw: unknown): boolean {
@@ -142,7 +140,7 @@ export function readStringParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
-  const raw = readParamRaw(params, key);
+  const raw = readSnakeCaseParamRaw(params, key);
   if (typeof raw !== "string") {
     if (required) {
       throw new ToolInputError(`${label} required`);
@@ -182,7 +180,7 @@ export function readStringOrNumberParam(
   options: { required?: boolean; label?: string } = {},
 ): string | undefined {
   const { required = false, label = key } = options;
-  const raw = readParamRaw(params, key);
+  const raw = readSnakeCaseParamRaw(params, key);
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return String(raw);
   }
@@ -218,7 +216,7 @@ export function readNumberParam(
     positiveInteger = false,
     nonNegativeInteger = false,
   } = options;
-  const raw = readParamRaw(params, key);
+  const raw = readSnakeCaseParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     value = raw;
@@ -259,7 +257,7 @@ export function readPositiveIntegerParam(
     strict: true,
   });
   if (value === undefined) {
-    const raw = readParamRaw(params, key);
+    const raw = readSnakeCaseParamRaw(params, key);
     if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
     }
@@ -283,7 +281,7 @@ export function readNonNegativeIntegerParam(
     strict: true,
   });
   if (value === undefined) {
-    const raw = readParamRaw(params, key);
+    const raw = readSnakeCaseParamRaw(params, key);
     if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
     }
@@ -309,7 +307,7 @@ export function readFiniteNumberParam(
     strict: true,
   });
   if (value === undefined) {
-    const raw = readParamRaw(params, key);
+    const raw = readSnakeCaseParamRaw(params, key);
     if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a finite number`);
     }
@@ -346,7 +344,7 @@ export function readStringArrayParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, label = key } = options;
-  const raw = readParamRaw(params, key);
+  const raw = readSnakeCaseParamRaw(params, key);
   if (Array.isArray(raw)) {
     const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
     if (values.length === 0) {

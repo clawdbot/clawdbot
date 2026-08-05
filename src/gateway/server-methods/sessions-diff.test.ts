@@ -5,6 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
+import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import {
   loadSessionDiff,
   parseNameStatusZ,
@@ -15,17 +18,23 @@ import {
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
+  patchSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
 }));
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: hoisted.loadSessionEntry,
+  loadSessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  patchSessionEntry: hoisted.patchSessionEntry,
 }));
 
 function git(cwd: string, ...args: string[]): string {
@@ -39,10 +48,10 @@ function initRepo(root: string): void {
   git(root, "config", "commit.gpgsign", "false");
 }
 
-function mockSession(spawnedCwd: string): void {
+function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): void {
   hoisted.loadSessionEntry.mockReturnValue({
     cfg: {},
-    entry: { sessionId: "s1", spawnedCwd },
+    entry: { sessionId: "s1", spawnedCwd, ...entry },
     storePath: "/tmp/sessions.json",
     canonicalKey: "agent:main:s1",
   });
@@ -267,6 +276,77 @@ describe("loadSessionDiff", () => {
     expect(result.files.find((file) => file.path === "loose.txt")?.untracked).toBe(true);
   });
 
+  it("hides unchanged files captured at session start and resurfaces later edits", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "existing bootstrap\n");
+    mockSession(repoRoot);
+
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "s1",
+    });
+    expect(baseline?.files).toHaveLength(1);
+
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+    const unchanged = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(unchanged.files).toEqual([]);
+    expect(unchanged.additions).toBe(0);
+
+    fs.appendFileSync(path.join(repoRoot, "AGENTS.md"), "added by this session\n");
+    const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(changed.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
+    expect(changed.files[0]?.patch).toContain("+added by this session");
+  });
+
+  it("hides unchanged binary files and resurfaces later binary edits", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "icon.bin"), Buffer.from([0, 1, 2, 0, 3]));
+    mockSession(repoRoot);
+
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "s1",
+    });
+    expect(baseline?.files).toHaveLength(1);
+
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+    const unchanged = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(unchanged.files).toEqual([]);
+
+    fs.writeFileSync(path.join(repoRoot, "icon.bin"), Buffer.from([0, 1, 9, 0, 3]));
+    const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(changed.files.map((file) => file.path)).toEqual(["icon.bin"]);
+    expect(changed.files[0]?.binary).toBe(true);
+  });
+
+  it("skips oversized files instead of materializing them during baseline capture", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "large.txt"), Buffer.alloc(4 * 1024 * 1024 + 1, 97));
+
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "s1",
+    });
+
+    expect(baseline?.files).toEqual([]);
+    expect(baseline?.truncated).toBe(true);
+  });
+
+  it("ignores a baseline from an older session generation", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "existing bootstrap\n");
+    mockSession(repoRoot);
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "old-session",
+    });
+
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
+  });
+
   it("counts untracked additions whose content begins with plus signs", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "seed.txt"), "seed\n");
@@ -296,5 +376,26 @@ describe("loadSessionDiff", () => {
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.ok).toBe(false);
+  });
+});
+
+describe("ensureSessionDiffBaseline", () => {
+  it("does not baseline an existing operator session after upgrade", async () => {
+    const entry: SessionEntry = {
+      createdVia: "operator",
+      sessionId: "existing-session",
+      updatedAt: Date.now(),
+    };
+
+    const result = await ensureSessionDiffBaseline({
+      cwd: "/unused",
+      entry,
+      isNewSession: false,
+      sessionKey: "agent:main:existing",
+      storePath: "/unused/sessions.json",
+    });
+
+    expect(result).toBe(entry);
+    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
   });
 });

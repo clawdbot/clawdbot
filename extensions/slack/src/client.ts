@@ -4,12 +4,16 @@ import { type WebClientOptions, WebClient } from "@slack/web-api";
 import type { SlackLookupClientOptions } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
+  resolveSlackReadClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
+  SLACK_DEFAULT_RETRY_OPTIONS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
 const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
+const SLACK_STARTUP_AUTH_TIMEOUT_MS = 10_000;
+const SLACK_STARTUP_AUTH_RETRY_BUDGET_MS = 35_000;
 const slackWriteClientCache = new Map<string, WebClient>();
 let slackListenerUploadCompletionClientCache = new WeakMap<
   WebClient,
@@ -17,6 +21,7 @@ let slackListenerUploadCompletionClientCache = new WeakMap<
 >();
 
 type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl">;
+type SlackFetch = NonNullable<WebClientOptions["fetch"]>;
 
 export {
   resolveSlackWebClientOptions,
@@ -26,17 +31,50 @@ export {
 } from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+  // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
+  // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
   return new WebClient(token, resolveSlackWebClientOptions(options));
 }
 
+export function createSlackReadClient(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, resolveSlackReadClientOptions(options));
+}
+
+function createSlackStartupAuthFetch(baseFetch: SlackFetch): SlackFetch {
+  const deadline = Date.now() + SLACK_STARTUP_AUTH_RETRY_BUDGET_MS;
+  return async (input, init) => {
+    const response = await baseFetch(input, init);
+    if (response.status !== 429) {
+      return response;
+    }
+    const retryAfter = Number.parseInt(response.headers.get("retry-after") ?? "", 10);
+    const remainingMs = Math.max(0, deadline - Date.now());
+    if (!Number.isFinite(retryAfter) || retryAfter * 1000 <= remainingMs) {
+      return response;
+    }
+    // Slack sleeps through Retry-After outside its per-attempt timeout. Wait only
+    // within the startup budget, then let the retry policy terminate the call.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, remainingMs);
+    });
+    throw new Error("Slack startup auth retry budget exhausted after rate limit");
+  };
+}
+
 export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
-  // Startup degrades after auth.test fails, so terminate this one-shot request without
-  // imposing the same short deadline on Bolt's long-lived client.
-  return createSlackWebClient(token, {
-    ...options,
-    rejectRateLimitedCalls: true,
-    retryConfig: { retries: 0 },
-    timeout: 10_000,
+  const resolvedOptions = resolveSlackWebClientOptions(options);
+  const baseFetch = resolvedOptions.fetch;
+  if (!baseFetch) {
+    throw new Error("Slack startup auth fetch is unavailable");
+  }
+  return new WebClient(token, {
+    ...resolvedOptions,
+    fetch: createSlackStartupAuthFetch(baseFetch),
+    retryConfig: {
+      ...SLACK_DEFAULT_RETRY_OPTIONS,
+      maxRetryTime: SLACK_STARTUP_AUTH_RETRY_BUDGET_MS,
+    },
+    timeout: SLACK_STARTUP_AUTH_TIMEOUT_MS,
   });
 }
 

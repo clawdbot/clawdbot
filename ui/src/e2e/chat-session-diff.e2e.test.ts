@@ -163,7 +163,46 @@ describeControlUiE2e("session diff panel", () => {
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
   });
 
-  it("shows the not-a-git-checkout notice", async () => {
+  it("disables the diff toggle for a workspace outside a git checkout", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.files.list": {
+          sessionKey: "main",
+          root: "/tmp/plain-workspace",
+          gitCheckout: false,
+          files: [],
+          browser: { path: "", entries: [] },
+        },
+        "sessions.diff": {
+          sessionKey: "main",
+          files: [],
+          additions: 0,
+          deletions: 0,
+          unavailableReason: "not_git",
+        },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+
+    const toggle = page.locator(".chat-session-diff-toggle").first();
+    await expect.poll(() => toggle.isDisabled()).toBe(true);
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Show thread changes");
+    await expect
+      .poll(() =>
+        toggle.evaluate(
+          (element) =>
+            (element.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+              ?.content,
+        ),
+      )
+      .toBe("This thread's workspace is not a git checkout.");
+    await expect.poll(() => page.locator(".session-diff").count()).toBe(0);
+  });
+
+  it("keeps the panel fallback for gateways that omit checkout capability", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     await installMockGateway(page, {

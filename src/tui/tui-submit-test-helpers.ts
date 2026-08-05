@@ -31,7 +31,7 @@ export function createSubmitHarness(params?: {
   const handleCommand = vi.fn();
   const sendMessage = vi.fn();
   const handleBangLine = vi.fn();
-  const admitMessage = vi.fn(params?.admitMessage ?? (() => "allowed" as const));
+  const admitMessage = vi.fn(params?.admitMessage ?? (() => ({ status: "allowed" }) as const));
   const onBlockedMessageSubmit = vi.fn();
   const onSubmitError = vi.fn();
   const onSubmit = createEditorSubmitHandler({

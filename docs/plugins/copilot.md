@@ -209,8 +209,7 @@ plus a small set of env defaults inside `extensions/copilot/src/`:
 | `enableSessionTelemetry` | Optional SDK session telemetry flag.                                                                                                                                                                                                                                                            |
 
 OpenClaw plugin hooks need no Copilot-specific attempt configuration. The
-harness runs `before_prompt_build` (and the legacy `before_agent_start`
-compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
+harness runs `before_prompt_build`, `llm_input`, `llm_output`, and `agent_end` through the
 standard harness helpers. Successful SDK compactions also run
 `before_compaction` and `after_compaction`. Bridged OpenClaw tools run
 `before_tool_call` and report `after_tool_call`; `hooksConfig` remains for

@@ -13,6 +13,7 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createXaiMediaUnderstandingProviderMetadata } from "./capability-provider-metadata.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
 type XaiSttResponse = {
@@ -57,6 +58,7 @@ async function transcribeXaiAudio(
     headers,
     body: form,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -79,9 +81,7 @@ export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider
   // before transcribeAudio runs, so an OAuth profile (when configured) reaches
   // here as `params.apiKey` already. No plugin-side fallback required.
   return {
-    id: "xai",
-    capabilities: ["audio"],
-    autoPriority: { audio: 25 },
+    ...createXaiMediaUnderstandingProviderMetadata(),
     transcribeAudio: transcribeXaiAudio,
   };
 }

@@ -55,7 +55,6 @@ export {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
-  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   resolveTelegramStreamMode,
   resolveTelegramThreadSpec,

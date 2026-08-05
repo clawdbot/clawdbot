@@ -13,6 +13,7 @@ export type ChatStream = {
 };
 
 export function deriveTabSessionKey(mainSessionKey: unknown, sessionId: unknown): string | null;
+export function deriveCopilotSessionLabel(sessionKey: unknown): string;
 export function gatewayUrlFromPairing(
   relayUrl: unknown,
   explicitGatewayUrl: unknown,

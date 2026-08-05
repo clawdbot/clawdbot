@@ -1,7 +1,6 @@
 // Enqueues follow-up reply runs and schedules queue drains.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import {
   applyQueueDropPolicy,
@@ -15,6 +14,11 @@ import {
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
 } from "./drain.js";
+import {
+  peekRecentQueueMessageId,
+  recordRecentQueueMessageId,
+  resetRecentQueuedMessageIdDedupe,
+} from "./recent-message-ids.js";
 import { getExistingFollowupQueue, getFollowupQueue, trimSummaryElisionsToCap } from "./state.js";
 import {
   completeFollowupRunLifecycle,
@@ -25,17 +29,6 @@ import {
   type QueueDedupeMode,
   type QueueSettings,
 } from "./types.js";
-
-/**
- * Keep queued message-id dedupe shared across bundled chunks so redeliveries
- * are rejected no matter which chunk receives the enqueue call.
- */
-const RECENT_QUEUE_MESSAGE_IDS_KEY = Symbol.for("openclaw.recentQueueMessageIds");
-
-const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_IDS_KEY, {
-  ttlMs: 5 * 60 * 1000,
-  maxSize: 10_000,
-});
 
 function followupRouteIdentityKey(run: FollowupRun): string {
   return JSON.stringify([
@@ -113,7 +106,7 @@ export function enqueueFollowupRun(
   }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
-  if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {
+  if (recentMessageIdKey && peekRecentQueueMessageId(recentMessageIdKey)) {
     return false;
   }
 
@@ -131,6 +124,7 @@ export function enqueueFollowupRun(
   // publish an external queued identity for work that will never be admitted.
   const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
   if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
+    run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
     return false;
   }
@@ -138,16 +132,19 @@ export function enqueueFollowupRun(
     return false;
   }
 
+  const elidedSummaryLines: string[] = [];
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     inFlight: queue.inFlight,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    onSummaryElide: (lines) => elidedSummaryLines.push(...lines),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
         queue.summarySources.push(...dropped);
         return;
       }
       for (const item of dropped) {
+        item.onQueueDisposition?.("queue-cap-old");
         completeFollowupRunLifecycle(item);
       }
     },
@@ -157,13 +154,18 @@ export function enqueueFollowupRun(
     const overflow = queue.summarySources.length - queue.summaryLines.length;
     if (overflow > 0) {
       const removed = queue.summarySources.splice(0, overflow);
-      for (const item of removed) {
+      for (const [index, item] of removed.entries()) {
+        const summaryLine = elidedSummaryLines[index];
+        if (summaryLine === undefined) {
+          throw new Error("followup queue summary source lost its elided line");
+        }
         const contextKey = resolveFollowupDeliveryContextKey(item);
         const lastElision = queue.summaryElisions.at(-1);
         if (lastElision?.contextKey === contextKey) {
           const compactSource = createOverflowSummaryRetrySource(item);
           lastElision.count += 1;
           lastElision.sources.push(compactSource);
+          lastElision.summaryLines.push(summaryLine);
           lastElision.sourceRefs.set(item, compactSource);
           if (queue.activeSummarySources.has(item)) {
             queue.activeSummarySources.add(compactSource);
@@ -174,6 +176,7 @@ export function enqueueFollowupRun(
             contextKey,
             count: 1,
             sources: [compactSource],
+            summaryLines: [summaryLine],
             sourceRefs: new WeakMap([[item, compactSource]]),
           });
           if (queue.activeSummarySources.has(item)) {
@@ -185,6 +188,7 @@ export function enqueueFollowupRun(
     }
   }
   if (!shouldEnqueue) {
+    run.onQueueDisposition?.("queue-cap");
     completeFollowupRunLifecycle(run);
     return false;
   }
@@ -200,7 +204,7 @@ export function enqueueFollowupRun(
     queue.items.push(run);
   }
   if (recentMessageIdKey) {
-    RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
+    recordRecentQueueMessageId(run, recentMessageIdKey);
   }
   if (runFollowup) {
     rememberFollowupDrainCallback(key, runFollowup);
@@ -220,10 +224,6 @@ export function getFollowupQueueDepth(key: string): number {
     return 0;
   }
   return countPendingQueueItems(queue.items, queue.inFlight);
-}
-
-function resetRecentQueuedMessageIdDedupe(): void {
-  RECENT_QUEUE_MESSAGE_IDS.clear();
 }
 
 if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {

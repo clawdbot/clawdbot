@@ -16,6 +16,27 @@ const webFetchProviderDiscovery = vi.hoisted(() => ({
   }),
 }));
 
+// This boundary proves that credential-free web fetch config reaches the HTTP
+// listener. Model publication, chat metadata, and orphan recovery have dedicated owners.
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  publishPreparedModelRuntimeSnapshot: vi.fn(async () => ({})),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
+}));
+
+vi.mock("./server-chat-metadata-lifecycle.js", () => ({
+  createGatewayChatMetadataLifecycle: vi.fn(async () => ({
+    attachContext: vi.fn(async () => {}),
+    read: vi.fn(async () => {
+      throw new Error("chat metadata is outside this startup test");
+    }),
+    refresh: vi.fn(async () => {}),
+  })),
+}));
+
+vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+  markStartupOrphanedMainSessionsForRecovery: vi.fn(async () => ({ marked: 0, skipped: 0 })),
+}));
+
 vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", async () => {
   const actual = await vi.importActual<
     typeof import("../secrets/runtime-web-tools-fallback.runtime.js")

@@ -96,7 +96,7 @@ describe("question reaction runtime", () => {
           status: "pending",
           questions: [
             {
-              id: "target",
+              questionId: "target",
               header: "Target",
               question: "Deploy where?",
               options: [{ label: "Staging" }, { label: "Production" }],
@@ -124,7 +124,7 @@ describe("question reaction runtime", () => {
       expect.objectContaining({
         method: "question.resolve",
         params: expect.objectContaining({
-          answers: { answers: { target: { answers: ["Production"] } } },
+          answers: { answers: { target: ["Production"] } },
         }),
       }),
     );

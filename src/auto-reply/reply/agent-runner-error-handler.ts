@@ -15,11 +15,12 @@ import {
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { isSessionWriteLockLeaseLostError } from "../../agents/session-write-lock-error.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -29,8 +30,9 @@ import { defaultRuntime } from "../../runtime.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
-import type { AgentRunLoopResult, AgentTurnParams } from "./agent-runner-execution.types.js";
+import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
+  buildControlUiAgentFailureText,
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
@@ -105,7 +107,25 @@ export async function cancelOverloadRetryNotice(state: OverloadRetryState): Prom
 
 type ErrorAction =
   | { kind: "retry"; liveModelSwitchError?: LiveSessionModelSwitchError }
-  | Extract<AgentRunLoopResult, { kind: "final" }>;
+  | Extract<AgentTurnInternalResult, { kind: "final" }>;
+
+function isSessionLeaseLoss(error: unknown): boolean {
+  const pending = [error];
+  const seen = new Set<unknown>();
+  for (const candidate of pending) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    if (isSessionWriteLockLeaseLostError(candidate)) {
+      return true;
+    }
+    if (candidate instanceof Error && "cause" in candidate && candidate.cause !== undefined) {
+      pending.push(candidate.cause);
+    }
+  }
+  return false;
+}
 
 export async function handleAgentExecutionError(params: {
   turn: AgentTurnParams;
@@ -167,9 +187,9 @@ export async function handleAgentExecutionError(params: {
     );
     takePendingLifecycleTerminal()?.emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? "⚠️ Agent failed before reply: model switch could not be completed. " +
-        "The requested model may be temporarily unavailable.\n" +
-        "Logs: openclaw logs --follow"
+      ? buildControlUiAgentFailureText(
+          "model switch could not be completed. The requested model may be temporarily unavailable.",
+        )
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
         ? "⚠️ Agent failed before reply: model switch could not be completed. " +
           "The requested model may be temporarily unavailable. Please try again shortly."
@@ -232,6 +252,16 @@ export async function handleAgentExecutionError(params: {
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
+  }
+  if (
+    isSessionLeaseLoss(err) &&
+    (await turn.confirmRestartRecoveryArmedAfterLeaseLoss?.()) === true
+  ) {
+    // The replacement owns recovery only after the latest SQLite row confirms
+    // the active claim or its terminal marker. The old owner then exits silently.
+    turn.replyOperation?.abortForRestart();
+    takePendingLifecycleTerminal()?.emit("end", err);
+    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
   }
   const restartLifecycleError = resolveRestartLifecycleError(err);
   if (
@@ -400,17 +430,9 @@ export async function handleAgentExecutionError(params: {
     turn.replyOperation?.recordActivity();
     return { kind: "retry" };
   }
-  if (providerRequestError) {
-    takePendingLifecycleTerminal()?.emit("error", err);
-    turn.replyOperation?.fail("run_failed", err);
-    await params.modelPatch.fail(err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
-    };
-  }
   if (
     isTransientHttp &&
+    (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
     !params.overloadRetryState.unsafeToReplay &&
     params.consumeTransientHttpRetry()
   ) {
@@ -425,6 +447,15 @@ export async function handleAgentExecutionError(params: {
     }
     return { kind: "retry" };
   }
+  if (providerRequestError) {
+    takePendingLifecycleTerminal()?.emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    return {
+      kind: "final",
+      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
+    };
+  }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
   const isPureTransientSummary = isFallbackSummary ? isPureTransientRateLimitSummary(err) : false;
   const isRateLimit = isFallbackSummary
@@ -438,9 +469,9 @@ export async function handleAgentExecutionError(params: {
           failoverReason === "overloaded" ? "overloaded" : message,
         )
       : undefined;
-  const trimmedMessage = (
-    isTransientHttp ? sanitizeUserFacingText(message, { errorContext: true }) : message
-  ).replace(/\.\s*$/, "");
+  const userFacingMessage = isTransientHttp
+    ? sanitizeUserFacingText(message, { errorContext: true })
+    : message;
   const externalRunFailureReply =
     !isBilling &&
     !(isRateLimit && !isOverloaded) &&
@@ -466,7 +497,7 @@ export async function handleAgentExecutionError(params: {
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : params.shouldSurfaceToControlUi
-            ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+            ? buildControlUiAgentFailureText(userFacingMessage)
             : (externalRunFailureReply?.text ??
               (turn.isHeartbeat
                 ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT

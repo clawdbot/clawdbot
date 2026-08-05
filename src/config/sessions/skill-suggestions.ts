@@ -1,6 +1,6 @@
 // Session skill suggestions are one-shot hints consumed by the next interactive turn.
 import {
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   patchSessionEntry,
   type SessionAccessScope,
 } from "./session-accessor.js";
@@ -45,7 +45,7 @@ function appendSignalHashes(entry: SessionEntry, signalHashes: readonly string[]
 export function readSessionSkillCaptureSignalHashes(
   options: SessionSkillSuggestionScope,
 ): string[] | undefined {
-  const entry = loadSessionEntry({ ...options, readConsistency: "latest" });
+  const entry = loadSessionEntryReadOnly({ ...options, readConsistency: "latest" });
   return entry ? [...(entry.skillCaptureSignalHashes ?? [])] : undefined;
 }
 

@@ -507,18 +507,17 @@ function createSessionBinding(overrides?: Partial<FakeBinding>): FakeBinding {
 }
 
 const baseCfg = {
-  session: { mainKey: "main", scope: "per-sender" },
   acp: {
     enabled: true,
     dispatch: { enabled: true },
     backend: "acpx",
   },
-  channels: {
-    discord: {
-      threadBindings: {
-        enabled: true,
-        spawnSessions: true,
-      },
+  session: {
+    mainKey: "main",
+    scope: "per-sender",
+    threadBindings: {
+      enabled: true,
+      spawnSessions: true,
     },
   },
 } satisfies OpenClawConfig;
@@ -1360,12 +1359,10 @@ describe("/acp command", () => {
   it("binds the current Discord channel with --bind here without creating a child thread", async () => {
     const cfg = {
       ...baseCfg,
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnSessions: false,
-          },
+      session: {
+        threadBindings: {
+          enabled: true,
+          spawnSessions: false,
         },
       },
     } satisfies OpenClawConfig;
@@ -1570,12 +1567,10 @@ describe("/acp command", () => {
   it("rejects thread-bound ACP spawn when spawnSessions is disabled", async () => {
     const cfg = {
       ...baseCfg,
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnSessions: false,
-          },
+      session: {
+        threadBindings: {
+          enabled: true,
+          spawnSessions: false,
         },
       },
     } satisfies OpenClawConfig;
@@ -1722,9 +1717,7 @@ describe("/acp command", () => {
     const cfg = {
       ...baseCfg,
       channels: {
-        ...baseCfg.channels,
         discord: {
-          ...baseCfg.channels.discord,
           defaultAccount: "work",
         },
       },

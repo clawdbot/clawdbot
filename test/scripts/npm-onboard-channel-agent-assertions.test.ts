@@ -137,6 +137,86 @@ describe("npm onboard channel agent assertions", () => {
     }
   });
 
+  it("configures and validates the canonical main agent's mock model", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-mock-agent-"));
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+
+    try {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: { models: {} },
+            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+          },
+          models: { providers: {} },
+        }),
+      );
+
+      expect(runMockModelAssert(home, "configure-mock-model", "18181").status).toBe(0);
+      expect(runMockModelAssert(home, "assert-mock-model-config", "18181").status).toBe(0);
+
+      const cfg = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+        agents: {
+          entries: Record<
+            string,
+            {
+              default?: boolean;
+              model?: { primary?: string };
+              models?: Record<string, { agentRuntime?: { id?: string } }>;
+            }
+          >;
+        };
+      };
+      expect(cfg.agents.entries.main).toMatchObject({
+        default: true,
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: {
+          "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+        },
+      });
+    } finally {
+      fs.rmSync(home, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a canonical main agent that does not use the configured mock model", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-mock-agent-"));
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+
+    try {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: { models: {} },
+            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+          },
+          models: { providers: {} },
+        }),
+      );
+      expect(runMockModelAssert(home, "configure-mock-model", "18181").status).toBe(0);
+
+      const cfg = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+        agents: { entries: Record<string, { model?: { primary?: string } }> };
+      };
+      const mainAgent = cfg.agents.entries.main;
+      if (!mainAgent) {
+        throw new Error("mock configuration did not contain the main agent");
+      }
+      mainAgent.model = { primary: "openai/gpt-5.6" };
+      fs.writeFileSync(configPath, JSON.stringify(cfg));
+
+      const result = runMockModelAssert(home, "assert-mock-model-config", "18181");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("mock agent model was not preserved");
+    } finally {
+      fs.rmSync(home, { force: true, recursive: true });
+    }
+  });
+
   it("validates OpenAI env refs from the SQLite auth profile store", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
     const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");

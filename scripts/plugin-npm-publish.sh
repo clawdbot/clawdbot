@@ -111,9 +111,9 @@ build_package_runtime() {
   node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}" >&2
 }
 
-check_package_shrinkwrap() {
-  log "Package-local shrinkwrap check: ${package_dir}"
-  node scripts/generate-npm-shrinkwrap.mjs --package-dir "${package_dir}" --check >&2
+check_package_npm_lock() {
+  log "Package-local npm package-lock check: ${package_dir}"
+  node scripts/generate-npm-package-lock.mjs --package-dir "${package_dir}" >&2
 }
 
 mirror_auth_token=""
@@ -164,7 +164,7 @@ if [[ "${mode}" == "--dry-run" ]]; then
 fi
 
 build_package_runtime
-check_package_shrinkwrap
+check_package_npm_lock
 
 if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
   pack_args=(npm pack --json --ignore-scripts)

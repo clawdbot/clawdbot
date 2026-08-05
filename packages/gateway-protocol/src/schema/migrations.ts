@@ -10,7 +10,7 @@ const MemoryMigrationPlanFingerprintSchema = Type.String({
   pattern: "^[a-f0-9]{64}$",
 });
 
-export const MemoryMigrationItemStatusSchema = Type.Union([
+const MemoryMigrationItemStatusSchema = Type.Union([
   Type.Literal("planned"),
   Type.Literal("migrated"),
   Type.Literal("skipped"),
@@ -19,7 +19,7 @@ export const MemoryMigrationItemStatusSchema = Type.Union([
   Type.Literal("error"),
 ]);
 
-export const MemoryMigrationItemSchema = Type.Object(
+const MemoryMigrationItemSchema = Type.Object(
   {
     id: NonEmptyString,
     status: MemoryMigrationItemStatusSchema,
@@ -32,7 +32,7 @@ export const MemoryMigrationItemSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const MemoryMigrationSummarySchema = Type.Object(
+const MemoryMigrationSummarySchema = Type.Object(
   {
     total: Type.Integer({ minimum: 0 }),
     planned: Type.Integer({ minimum: 0 }),
@@ -45,7 +45,7 @@ export const MemoryMigrationSummarySchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const MemoryMigrationProviderPlanSchema = Type.Object(
+const MemoryMigrationProviderPlanSchema = Type.Object(
   {
     providerId: NonEmptyString,
     label: NonEmptyString,
@@ -74,7 +74,7 @@ export const MigrationsMemoryPlanParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const MigrationsMemoryPlanResultSchema = Type.Object(
+const MigrationsMemoryPlanResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
     workspace: NonEmptyString,
@@ -99,7 +99,7 @@ export const MigrationsMemoryApplyParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const MigrationsMemoryApplyResultSchema = Type.Object(
+const MigrationsMemoryApplyResultSchema = Type.Object(
   {
     providerId: NonEmptyString,
     source: NonEmptyString,
@@ -124,10 +124,7 @@ export const MigrationProtocolSchemas = {
   MigrationsMemoryApplyResult: MigrationsMemoryApplyResultSchema,
 } as const;
 
-export type MemoryMigrationItemStatus = Static<typeof MemoryMigrationItemStatusSchema>;
 export type MemoryMigrationItem = Static<typeof MemoryMigrationItemSchema>;
 export type MemoryMigrationProviderPlan = Static<typeof MemoryMigrationProviderPlanSchema>;
-export type MigrationsMemoryPlanParams = Static<typeof MigrationsMemoryPlanParamsSchema>;
 export type MigrationsMemoryPlanResult = Static<typeof MigrationsMemoryPlanResultSchema>;
-export type MigrationsMemoryApplyParams = Static<typeof MigrationsMemoryApplyParamsSchema>;
 export type MigrationsMemoryApplyResult = Static<typeof MigrationsMemoryApplyResultSchema>;

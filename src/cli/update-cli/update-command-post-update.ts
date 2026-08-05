@@ -11,6 +11,7 @@ import {
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
@@ -26,17 +27,24 @@ import {
   persistRequestedUpdateChannel,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
+import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
+  didCoreUpdateChangeInstall,
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   shouldResumePostCoreUpdateInFreshProcess,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-post-core.js";
+import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
 import {
+  assertGatewayServiceManagementAllowedForUpdate,
+  GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
+  isGatewayServiceManagementAllowedForUpdate,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
+  resolveGatewayServiceManagementBlockMessageForUpdate,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   restoreWindowsTaskAutoStartOrExit,
@@ -77,6 +85,7 @@ function pickUpdateQuip(): string {
 export async function finishUpdate(params: {
   result: UpdateRunResult;
   root: string;
+  installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: UpdateChannel | null;
   storedChannel: UpdateChannel | null;
@@ -106,10 +115,20 @@ export async function finishUpdate(params: {
       result: params.result,
       jsonMode: Boolean(params.opts.json),
     });
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop: params.preManagedServiceStop,
-      jsonMode: Boolean(params.opts.json),
-    });
+    if (params.result.recovery?.serviceRestartSafe === false) {
+      if (!params.opts.json) {
+        defaultRuntime.log(
+          theme.warn(
+            `Managed gateway remains stopped because update recovery could not prove a runnable installation (${params.result.recovery.reason}).`,
+          ),
+        );
+      }
+    } else {
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: params.preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      });
+    }
     defaultRuntime.exit(1);
     return;
   }
@@ -150,25 +169,17 @@ export async function finishUpdate(params: {
         ),
       );
     }
-    defaultRuntime.exit(0);
+    defaultRuntime.exit(params.result.reason === "dirty" ? 1 : 0);
     return;
   }
 
   const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
     result: params.result,
     downgradeRisk: params.downgradeRisk,
+    installKindChanged: params.installKindChanged,
   });
 
-  let postUpdateConfigSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: true,
-    suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
-  });
-  if (!shouldResumePostCoreInFreshProcess) {
-    postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
-      configSnapshot: postUpdateConfigSnapshot,
-      requestedChannel: params.requestedChannel,
-    });
-  }
+  let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
   if (
     params.requestedChannel &&
     params.configSnapshot.valid &&
@@ -221,58 +232,78 @@ export async function finishUpdate(params: {
   }
 
   if (!pluginsUpdatedInFreshProcess) {
-    if (shouldResumePostCoreInFreshProcess) {
+    await withPluginLifecycleLease({}, async () => {
+      postUpdateConfigSnapshot = await readConfigFileSnapshot({
+        skipPluginValidation: true,
+        suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+      });
       postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
         configSnapshot: postUpdateConfigSnapshot,
         requestedChannel: params.requestedChannel,
       });
-    }
-    const restoredConfig = restoreDroppedPreUpdateChannels(
-      postUpdateConfigSnapshot,
-      params.configSnapshot.valid
-        ? {
-            sourceConfig: params.configSnapshot.sourceConfig,
-            authoredConfig: isRecord(params.configSnapshot.parsed)
-              ? (params.configSnapshot.parsed as OpenClawConfig)
-              : params.configSnapshot.sourceConfig,
-          }
-        : undefined,
-    );
-    postUpdateConfigSnapshot = restoredConfig.snapshot;
-    // Current-process post-core convergence still reports the pre-update
-    // VERSION. During downgrades, pin compatibility checks to the installed
-    // target so incompatible newer plugins are disabled before restart.
-    const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
-    const versionComparison =
-      postUpdateInstalledVersion && VERSION
-        ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
-        : null;
-    const compatibilityDowngradeTarget =
-      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
-    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    if (compatibilityDowngradeTarget) {
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
-    }
-    try {
-      postCorePluginUpdate = await updatePluginsAfterCoreUpdate({
-        root: postUpdateRoot,
-        channel: params.channel,
-        configSnapshot: postUpdateConfigSnapshot,
-        configChanged: restoredConfig.changed,
-        restoredAuthoredChannels: restoredConfig.authoredChannels,
-        opts: params.opts,
-        timeoutMs: params.updateStepTimeoutMs,
-        pluginInstallRecords: params.preUpdatePluginInstallRecords,
-      });
-    } finally {
+      const restoredConfig = restoreDroppedPreUpdateChannels(
+        postUpdateConfigSnapshot,
+        params.configSnapshot.valid
+          ? {
+              sourceConfig: params.configSnapshot.sourceConfig,
+              authoredConfig: isRecord(params.configSnapshot.parsed)
+                ? (params.configSnapshot.parsed as OpenClawConfig)
+                : params.configSnapshot.sourceConfig,
+            }
+          : undefined,
+      );
+      postUpdateConfigSnapshot = restoredConfig.snapshot;
+      // Current-process post-core convergence still reports the pre-update
+      // VERSION. During downgrades, pin compatibility checks to the installed
+      // target so incompatible newer plugins are disabled before restart.
+      const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+      const versionComparison =
+        postUpdateInstalledVersion && VERSION
+          ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
+          : null;
+      const compatibilityDowngradeTarget =
+        versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
+      const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
       if (compatibilityDowngradeTarget) {
-        if (previousCompatibilityHostVersion === undefined) {
-          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-        } else {
-          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
+        process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+      }
+      try {
+        const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
+          root: postUpdateRoot,
+          channel: params.channel,
+          configSnapshot: postUpdateConfigSnapshot,
+          configChanged: restoredConfig.changed,
+          restoredAuthoredChannels: restoredConfig.authoredChannels,
+          opts: params.opts,
+          timeoutMs: params.updateStepTimeoutMs,
+          pluginInstallRecords: params.preUpdatePluginInstallRecords,
+        });
+        const completedPluginUpdate = await completePostCorePluginUpdate({
+          root: postUpdateRoot,
+          pluginUpdate: initialPluginUpdate,
+          // A plugin-only update can replace its migration owner without replacing core.
+          // Downgrades and resume fallbacks can also leave an updated core on disk in this process.
+          freshDoctorRequired:
+            didCoreUpdateChangeInstall(params.result) ||
+            initialPluginUpdate.sync.changed ||
+            initialPluginUpdate.npm.changed,
+          yes: params.opts.yes === true,
+          json: params.opts.json === true,
+          timeoutMs: params.updateStepTimeoutMs,
+          ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
+        });
+        postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
+        postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+      } finally {
+        if (compatibilityDowngradeTarget) {
+          if (previousCompatibilityHostVersion === undefined) {
+            delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+          } else {
+            process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
+          }
         }
       }
-    }
+    });
   }
 
   const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
@@ -296,6 +327,14 @@ export async function finishUpdate(params: {
       result: resultWithPostUpdate,
       jsonMode: Boolean(params.opts.json),
     });
+    // If strict config became valid despite a fresh-doctor process failure, restore the service
+    // stopped by this update. Invalid post-migration config intentionally remains stopped.
+    if (postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON) {
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: params.preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      });
+    }
     if (params.opts.json) {
       defaultRuntime.writeJson(resultWithPostUpdate);
     } else {
@@ -305,22 +344,40 @@ export async function finishUpdate(params: {
     return;
   }
 
+  const restartConfigSnapshot =
+    postUpdateConfigSnapshot ??
+    (await readConfigFileSnapshot({
+      skipPluginValidation: true,
+      suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+    }));
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let skipLegacyServiceRestart = false;
+  const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
+    updateMode: resultWithPostUpdate.mode,
+    processEnv: process.env,
+    preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
+  });
+  const serviceMutationAllowed =
+    params.preManagedServiceStop?.serviceMutationAllowed !== false &&
+    isGatewayServiceManagementAllowedForUpdate(process.env) &&
+    isGatewayServiceManagementAllowedForUpdate(serviceStateReadEnv);
+  const serviceMutationSkipMessage =
+    params.shouldRestart && !serviceMutationAllowed
+      ? (params.preManagedServiceStop?.serviceMutationSkipMessage ??
+        resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
+        resolveGatewayServiceManagementBlockMessageForUpdate(serviceStateReadEnv))
+      : undefined;
   let gatewayPort = resolveUpdatedGatewayRestartPort({
-    config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+    config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
     processEnv: process.env,
   });
-  if (params.shouldRestart) {
+  if (params.shouldRestart && serviceMutationAllowed) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-        env: resolvePostUpdateServiceStateReadEnv({
-          updateMode: resultWithPostUpdate.mode,
-          processEnv: process.env,
-          preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
-        }),
+        env: serviceStateReadEnv,
+        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       });
       const serviceMatchesUpdateRoot =
         (await gatewayServiceCommandUsesRoot({
@@ -355,7 +412,7 @@ export async function finishUpdate(params: {
       ) {
         gatewayServiceEnv = serviceState.env;
         gatewayPort = resolveUpdatedGatewayRestartPort({
-          config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+          config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
           processEnv: process.env,
           serviceEnv: gatewayServiceEnv,
         });
@@ -368,7 +425,12 @@ export async function finishUpdate(params: {
         // ownership authorizes rewriting the service definition.
         refreshGatewayServiceEnv = serviceOwnershipConfirmed;
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof GatewayServiceUpdateOwnershipError) {
+        defaultRuntime.error(err.message);
+        defaultRuntime.exit(1);
+        return;
+      }
       // Ignore errors during pre-check; fallback to standard restart
     }
   }
@@ -389,7 +451,7 @@ export async function finishUpdate(params: {
     return;
   }
   const restartOk = await maybeRestartService({
-    shouldRestart: params.shouldRestart,
+    shouldRestart: params.shouldRestart && serviceMutationAllowed,
     result: resultWithPostUpdate,
     opts: params.opts,
     refreshServiceEnv: refreshGatewayServiceEnv,
@@ -401,6 +463,7 @@ export async function finishUpdate(params: {
     skipLegacyServiceRestart,
     requireRunningServiceAfterRestart:
       resultWithPostUpdate.mode === "git" && params.preManagedServiceStop?.stopped === true,
+    serviceMutationSkipMessage,
     timeoutMs: params.updateStepTimeoutMs,
   });
   if (!restartOk) {

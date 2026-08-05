@@ -43,7 +43,7 @@ export function parseCsvFilter(raw?: string): Set<string> | null {
 }
 
 export function resolveConfiguredLiveImageModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.imageGenerationModel);
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.image);
 }
 
 export function resolveLiveImageAuthStore(params: {

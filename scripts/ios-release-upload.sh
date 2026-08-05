@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-release-upload.sh --version 2026.6.11 [--build-number 7]
+  scripts/ios-release-upload.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
 
 Generates App Store screenshots, updates release metadata, archives, and uploads
 an App Store distribution build to App Store Connect. This does not submit the
@@ -13,6 +13,7 @@ EOF
 }
 
 BUILD_NUMBER=""
+APP_STORE_REVISION=""
 RELEASE_VERSION=""
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
@@ -38,6 +39,11 @@ while [[ $# -gt 0 ]]; do
       BUILD_NUMBER="${2:-}"
       shift 2
       ;;
+    --revision)
+      require_option_value "$1" "${2-}"
+      APP_STORE_REVISION="${2:-}"
+      shift 2
+      ;;
     --version)
       require_option_value "$1" "${2-}"
       RELEASE_VERSION="${2:-}"
@@ -55,13 +61,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${RELEASE_VERSION}" ]]; then
-  echo "Missing required --version." >&2
-  usage >&2
-  exit 1
+FASTLANE_ARGS=(ios release_upload)
+if [[ -n "${RELEASE_VERSION}" ]]; then
+  FASTLANE_ARGS+=("release_version:${RELEASE_VERSION}")
 fi
-
-FASTLANE_ARGS=(ios release_upload "release_version:${RELEASE_VERSION}")
+if [[ -n "${APP_STORE_REVISION}" ]]; then
+  FASTLANE_ARGS+=("app_store_revision:${APP_STORE_REVISION}")
+fi
 if [[ -n "${BUILD_NUMBER}" ]]; then
   FASTLANE_ARGS+=("build_number:${BUILD_NUMBER}")
 fi

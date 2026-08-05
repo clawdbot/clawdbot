@@ -1,9 +1,11 @@
 // Runway provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
@@ -35,7 +37,6 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const MAX_DURATION_SECONDS = 10;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
@@ -122,14 +123,6 @@ function resolveRunwayBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ?? DEFAULT_RUNWAY_BASE_URL
   );
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -323,6 +316,15 @@ async function downloadRunwayVideos(params: {
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
     });
+    try {
+      assertProviderBinaryResponseContent(response, "Runway generated video download", "video");
+    } catch (error) {
+      // A rejected binary response still owns a live socket until its unread body is canceled.
+      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+      // before the rejected response and its dispatcher can be released.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
       timeoutMs,
@@ -333,6 +335,9 @@ async function downloadRunwayVideos(params: {
       onOverflow: ({ maxBytes }) =>
         new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
     });
+    if (buffer.byteLength === 0) {
+      throw new Error("Runway generated video download: malformed video response");
+    }
     videos.push({
       buffer,
       mimeType,
@@ -349,11 +354,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     label: "Runway",
     defaultModel: DEFAULT_RUNWAY_MODEL,
     models: ["gen4.5", "gen4_turbo", "gen4_aleph", "gen3a_turbo", "veo3.1", "veo3.1_fast", "veo3"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "runway",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "runway", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -448,7 +449,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
         return {
           videos,

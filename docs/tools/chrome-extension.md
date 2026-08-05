@@ -91,6 +91,37 @@ openclaw config set browser.defaultProfile chrome
 - Revoke: click the button again, drag the tab out of the group, or dismiss
   Chrome's debugging banner. The agent loses access to that tab immediately.
 
+### External CDP clients (chrome-devtools-mcp, Puppeteer)
+
+The relay is a standard CDP browser endpoint, so tools other than OpenClaw can
+drive the paired Chrome through it — same consent model (shared tabs only),
+same host-local token, and still no "Allow remote debugging?" prompt. Print the
+endpoint and auth header:
+
+```bash
+openclaw browser extension cdp
+```
+
+For example, Google's [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+connects with:
+
+```bash
+npx chrome-devtools-mcp --wsEndpoint ws://127.0.0.1:18799/cdp \
+  --wsHeaders '{"Authorization":"Bearer <token>"}'
+```
+
+`openclaw browser extension cdp --json` emits `{ browserUrl, wsEndpoint,
+headers }` for scripting. The token is the same host-local relay secret the
+pairing string carries: treat it as private, and rotate it by deleting
+`credentials/browser-extension-relay.secret` and pairing again.
+
+[mcporter](https://github.com/openclaw/mcporter) needs no wiring at all: when a
+paired relay answers on this host, it transparently rewrites
+`chrome-devtools-mcp --autoConnect` server commands to the relay endpoint, so
+agents calling Chrome DevTools through mcporter skip the remote-debugging
+prompt automatically (set `MCPORTER_DISABLE_CHROME_DEVTOOLS_RELAY=1` there to
+opt out).
+
 ### Tab copilot side panel
 
 After pairing the extension, click **Open tab copilot** in its toolbar popup.
@@ -133,13 +164,37 @@ different Gateway. After a browser crash, the next launch archives sessions
 left by the previous browser instance. Archived sessions reject new work, while
 their transcripts remain available in session history. Browser-copilot keys are
 thread sessions, so normal age and entry-count maintenance preserves them. The
-per-agent session disk budget still applies (default `2gb`) and may evict the
+per-agent session disk budget still applies (default `10gb`) and may evict the
 oldest sessions under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
 
 The side panel currently requires either a Gateway-hosted extension relay or a
 direct remote Gateway relay. A loopback relay on a browser node cannot yet
 provide the node route required by the typed tab binding, so the panel denies
 that topology instead of falling back to browser-wide routing.
+
+## Send a page to OpenClaw
+
+Use **Send page to OpenClaw** in the toolbar popup to share readable page text
+with your main OpenClaw session. You can add an optional note, use the page or
+selection right-click menu, or press `Alt+Shift+S`. OpenClaw prefers your current
+selection when one exists, enqueues the share as a system event, and wakes the
+main session immediately.
+
+The tab does not need to be in the OpenClaw tab group. This is a one-shot,
+explicit share: nothing else on the page is exposed, and it grants no ongoing
+access. Google Docs are exported as plain text with your signed-in browser
+session, without Google API setup. X and Twitter threads are extracted without
+the surrounding interface chrome.
+
+Page text is wrapped in OpenClaw's external-content safety boundary. Your
+optional note stays outside that boundary as your own instruction. Page text
+and selections are capped at about 120,000 characters and include a truncation
+marker when shortened.
+
+Page sharing works when the extension relay is hosted by the Gateway, using
+same-host pairing or direct `wss://` Gateway pairing. Node-hosted relays return
+a clear error for now. To remap the keyboard shortcut, open
+`chrome://extensions/shortcuts`.
 
 ## Remote / cross-machine
 

@@ -15,7 +15,6 @@ let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
 let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePluginWebFetchProviders"];
-let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
 
@@ -105,9 +104,10 @@ function createRuntimeWebFetchProvider() {
 
 describe("resolvePluginWebFetchProviders", () => {
   beforeAll(async () => {
-    vi.doMock("./plugin-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+    vi.doMock("./plugin-registry-snapshot.js", async () => {
+      const actual = await vi.importActual<typeof import("./plugin-registry-snapshot.js")>(
+        "./plugin-registry-snapshot.js",
+      );
       return {
         ...actual,
         loadPluginRegistrySnapshotWithMetadata: () => ({
@@ -121,12 +121,10 @@ describe("resolvePluginWebFetchProviders", () => {
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
     vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
       createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
         ...args: unknown[]
@@ -146,7 +144,6 @@ describe("resolvePluginWebFetchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 
@@ -280,6 +277,7 @@ describe("resolvePluginWebFetchProviders", () => {
       config: rawConfig,
       workspaceDir: "/tmp/runtime-workspace",
       env,
+      candidates: [],
       diagnostics: [],
       installRecords: {},
     });

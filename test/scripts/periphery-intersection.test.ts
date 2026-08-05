@@ -1,7 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { compileFunction } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -166,44 +165,5 @@ describe("shared OpenClawKit Periphery workflow", () => {
       (step) => step.name === "Scan shared kit",
     );
     expect(macosScan?.run).not.toContain("--exclude-tests");
-  });
-
-  it("scopes native consumer, shared package, and workflow changes", async () => {
-    const script = workflow.jobs?.scope?.steps?.find((step) => step.id === "scope")?.with?.script;
-    expect(script).toBeTruthy();
-    const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
-      "context",
-      "core",
-      "exec",
-    ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
-
-    for (const filename of [
-      "apps/ios/Sources/App.swift",
-      "apps/macos/Sources/OpenClaw/App.swift",
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Example.swift",
-      WORKFLOW_PATH,
-    ]) {
-      const outputs = new Map<string, string>();
-      await execute(
-        {
-          eventName: "pull_request",
-          payload: { pull_request: { base: { sha: "base-sha" }, draft: false, number: 1 } },
-          repo: {},
-        },
-        { setOutput: (name: string, value: string) => outputs.set(name, value) },
-        {
-          async getExecOutput(command: string, args: string[]) {
-            expect(command).toBe("git");
-            expect(args.slice(0, 5)).toEqual(["diff", "--quiet", "base-sha", "HEAD", "--"]);
-            const pathspecs = args.slice(5);
-            const changed = pathspecs.some((pathspec) =>
-              pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
-            );
-            return { exitCode: changed ? 1 : 0 };
-          },
-        },
-      );
-      expect(outputs.get("should-scan"), filename).toBe("true");
-    }
   });
 });

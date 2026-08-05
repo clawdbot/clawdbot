@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/index.ts";
 import {
-  boardFilterFromSearch,
   buildBoardFilterOptions,
   matchesBoardFilter,
-  normalizeActiveBoardFilter,
-  searchForBoardFilter,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "./board-filter.ts";
 
@@ -69,7 +66,19 @@ describe("Workboard board filter", () => {
       label: "Operations (ops)",
       description: "2 active · 3 total",
     });
-    expect(normalizeActiveBoardFilter(options, "missing")).toBe(WORKBOARD_ALL_BOARDS_FILTER);
+  });
+
+  it("disambiguates a custom name for the default board", () => {
+    const options = buildBoardFilterOptions(
+      [board({ id: "default", name: "Operations" }), board({ id: "operations" })],
+      [],
+    );
+
+    expect(options.map((option) => option.label)).toEqual([
+      "All boards",
+      "Operations (default)",
+      "operations",
+    ]);
   });
 
   it("maps cards without an explicit board to default", () => {
@@ -77,13 +86,5 @@ describe("Workboard board filter", () => {
     expect(matchesBoardFilter(card("ops"), "default")).toBe(false);
     expect(matchesBoardFilter(card("ops"), "ops")).toBe(true);
     expect(matchesBoardFilter(card("ops"), WORKBOARD_ALL_BOARDS_FILTER)).toBe(true);
-  });
-
-  it("round-trips the shareable board query without dropping other parameters", () => {
-    expect(boardFilterFromSearch("?agent=main&board=ops")).toBe("ops");
-    expect(searchForBoardFilter("?agent=main", "ops")).toBe("?agent=main&board=ops");
-    expect(searchForBoardFilter("?agent=main&board=ops", WORKBOARD_ALL_BOARDS_FILTER)).toBe(
-      "?agent=main",
-    );
   });
 });

@@ -11,7 +11,7 @@ import { NonEmptyString } from "./primitives.js";
  * persisted policy, request snapshots, and resolve decisions stay explicit.
  */
 /** One persisted allowlist entry for a command pattern or resolved executable. */
-export const ExecApprovalsAllowlistEntrySchema = closedObject({
+const ExecApprovalsAllowlistEntrySchema = closedObject({
   id: Type.Optional(NonEmptyString),
   pattern: Type.String(),
   source: Type.Optional(Type.Literal("allow-always")),
@@ -49,16 +49,16 @@ const ExecApprovalsResolvedDefaultsSchema = closedObject({
 });
 
 /** Default exec approval policy shared by all agents unless overridden. */
-export const ExecApprovalsDefaultsSchema = closedObject(ExecApprovalsPolicyFields);
+const ExecApprovalsDefaultsSchema = closedObject(ExecApprovalsPolicyFields);
 
 /** Agent-specific exec approval policy and allowlist. */
-export const ExecApprovalsAgentSchema = closedObject({
+const ExecApprovalsAgentSchema = closedObject({
   ...ExecApprovalsPolicyFields,
   allowlist: Type.Optional(Type.Array(ExecApprovalsAllowlistEntrySchema)),
 });
 
 /** Versioned exec approvals config file edited through gateway APIs. */
-export const ExecApprovalsFileSchema = closedObject({
+const ExecApprovalsFileSchema = closedObject({
   version: Type.Literal(1),
   socket: Type.Optional(
     closedObject({

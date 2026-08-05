@@ -1,12 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   draftPayload,
   removeCardAndReferences,
   replaceCard,
   resetDraftState,
+  selectedWorkboardBoardParams,
 } from "./card-state.ts";
 import { clearPendingStatusTransition, recordPendingStatusTransition } from "./lifecycle.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
+import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload, normalizeCardsPayload } from "./normalization.ts";
 import {
   getWorkboardState,
@@ -54,7 +56,10 @@ async function createWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    const payload = await params.client.request("workboard.cards.create", draftPayload(state));
+    const payload = await params.client.request("workboard.cards.create", {
+      ...draftPayload(state),
+      ...selectedWorkboardBoardParams(state),
+    });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
   } catch (error) {
@@ -287,7 +292,10 @@ export async function dispatchWorkboard(params: {
   state.lastDispatchSummary = null;
   params.requestUpdate?.();
   try {
-    const dispatchResult = await params.client.request("workboard.cards.dispatch", {});
+    const dispatchResult = await params.client.request(
+      "workboard.cards.dispatch",
+      selectedWorkboardBoardParams(state),
+    );
     const payload = await params.client.request("workboard.cards.list", {});
     const normalized = normalizeCardsPayload(payload);
     state.cards = normalized.cards;

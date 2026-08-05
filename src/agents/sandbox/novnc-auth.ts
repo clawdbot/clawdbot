@@ -50,8 +50,8 @@ function resolveNoVncObserverTokenExpiresAt(params: { ttlMs?: number; nowMs: num
   );
 }
 
-export function isNoVncEnabled(params: { enableNoVnc: boolean; headless: boolean }) {
-  return params.enableNoVnc && !params.headless;
+export function isNoVncEnabled(params: { noVncEnabled: boolean; headless: boolean }) {
+  return params.noVncEnabled && !params.headless;
 }
 
 export function generateNoVncPassword() {

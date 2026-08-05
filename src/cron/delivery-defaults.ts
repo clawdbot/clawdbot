@@ -8,7 +8,11 @@ export function shouldDefaultCronDeliveryToAnnounce(params: {
   payloadKind: unknown;
   sessionTarget: unknown;
 }): boolean {
-  if (params.payloadKind !== "agentTurn" && params.payloadKind !== "command") {
+  if (
+    params.payloadKind !== "agentTurn" &&
+    params.payloadKind !== "command" &&
+    params.payloadKind !== "script"
+  ) {
     return false;
   }
   return (

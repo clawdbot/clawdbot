@@ -1,25 +1,32 @@
 // Control UI chat module implements realtime talk google live behavior.
-import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import {
-  base64ToBytes,
   bytesToBase64,
+  estimateBase64DecodedByteLength,
   floatToPcm16,
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
 } from "./realtime-talk-audio.ts";
+import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
+import {
+  buildGoogleLiveUrl,
+  GoogleLiveConnectionLifecycle,
+  GOOGLE_LIVE_SETUP_TIMEOUT_MS,
+  runRealtimeTalkCleanup,
+} from "./realtime-talk-google-live-lifecycle.ts";
+import {
+  GoogleLiveToolOwner,
+  type GoogleLiveFunctionCall,
+} from "./realtime-talk-google-live-tools.ts";
 import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkJsonPcmWebSocketSessionResult } from "./realtime-talk-shared.ts";
 import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
-  submitRealtimeTalkAgentControl,
-  submitRealtimeTalkConsult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
+  type RealtimeTalkTransportStartResult,
 } from "./realtime-talk-shared.ts";
 import {
   captureRealtimeTalkVideoFrame,
@@ -42,25 +49,15 @@ type GoogleLiveMessage = {
     turnComplete?: boolean;
   };
   toolCall?: {
-    functionCalls?: Array<{
-      id?: string;
-      name?: string;
-      args?: unknown;
-    }>;
+    functionCalls?: GoogleLiveFunctionCall[];
+  };
+  toolCallCancellation?: {
+    ids?: string[];
   };
 };
 
-type PendingFunctionCall = {
-  name: string;
-  args: unknown;
-};
-
-const GOOGLE_LIVE_WEBSOCKET_HOST = "generativelanguage.googleapis.com";
-const GOOGLE_LIVE_WEBSOCKET_PATH =
-  /^\/ws\/google\.ai\.generativelanguage\.v[0-9a-z]+\.GenerativeService\.BidiGenerateContent(?:Constrained)?$/;
 const GOOGLE_LIVE_VIDEO_FRAME_INTERVAL_MS = 1_000;
 const GOOGLE_LIVE_VIDEO_MESSAGE_MAX_BYTES = 512 * 1024;
-
 function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
   return {
     realtimeInput: {
@@ -79,60 +76,74 @@ function isGemini31LiveModel(model: string | undefined): boolean {
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
 }
 
-function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
-  let url: URL;
-  try {
-    url = new URL(session.websocketUrl);
-  } catch {
-    throw new Error("Invalid Google Live WebSocket URL");
-  }
-  if (url.protocol !== "wss:") {
-    throw new Error("Google Live WebSocket URL must use wss://");
-  }
-  if (url.hostname.toLowerCase() !== GOOGLE_LIVE_WEBSOCKET_HOST) {
-    throw new Error("Untrusted Google Live WebSocket host");
-  }
-  if (url.username || url.password) {
-    throw new Error("Google Live WebSocket URL must not include credentials");
-  }
-  if (!GOOGLE_LIVE_WEBSOCKET_PATH.test(url.pathname)) {
-    throw new Error("Untrusted Google Live WebSocket path");
-  }
-  url.search = "";
-  url.searchParams.set("access_token", session.clientSecret);
-  return url.toString();
-}
-
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
+  private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
   private media: MediaStream | null = null;
-  private cameraMedia: MediaStream | null = null;
-  private captureVideo: HTMLVideoElement | null = null;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private closed = false;
   private mediaSetupController: AbortController | null = null;
-  private cameraSetupController: AbortController | null = null;
-  private readonly handleCameraTrackEnded = () => this.releaseCamera();
-  private setupComplete = false;
+  private readonly camera: RealtimeTalkCameraController;
+  private readonly lifecycle = new GoogleLiveConnectionLifecycle();
+  private cameraPublished = false;
   private videoFramesActive = false;
   private hasSentVideoFrame = false;
   private videoFrameTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private pendingCalls = new Map<string, PendingFunctionCall>();
-  private readonly consultAbortControllers = new Set<AbortController>();
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
+  private readonly toolOwner: GoogleLiveToolOwner;
 
   constructor(
     private readonly session: RealtimeTalkJsonPcmWebSocketSessionResult,
     private readonly ctx: RealtimeTalkTransportContext,
   ) {
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
+    this.toolOwner = new GoogleLiveToolOwner({
+      ctx,
+      emitTalkEvent: this.emitTalkEvent,
+      isClosed: () => this.closed,
+      failConnection: (detail) => {
+        const ws = this.ws;
+        if (ws) {
+          this.failConnection(ws, detail);
+        }
+      },
+      isDescribeViewActive: () =>
+        this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack(),
+      sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
+      sendControlSpeechMessage: (message) => this.sendControlSpeechMessage(message),
+      stopOutputForSuppressedControl: (result) => this.stopOutputForSuppressedControl(result),
+    });
+    this.camera = new RealtimeTalkCameraController({
+      acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
+      getDeviceId: () => this.ctx.videoDeviceId,
+      setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
+      isClosed: () => this.closed,
+      onStream: (stream) => {
+        if (stream) {
+          if (!this.lifecycle.isActive) {
+            return;
+          }
+          this.cameraPublished = true;
+          this.ctx.callbacks.onVideoStream?.(stream);
+        } else if (this.cameraPublished) {
+          this.cameraPublished = false;
+          this.ctx.callbacks.onVideoStream?.(null);
+        }
+      },
+      onAcquired: () => {
+        if (this.lifecycle.isActive) {
+          this.startVideoFrames();
+        }
+      },
+      onReleased: () => this.stopVideoFrames(),
+    });
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<RealtimeTalkTransportStartResult> {
     if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === "undefined") {
       throw new Error("Realtime Talk requires browser WebSocket and microphone access");
     }
@@ -141,6 +152,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.closed = false;
+    this.cameraPublished = false;
     this.mediaSetupController?.abort();
     const mediaSetupController = new AbortController();
     this.mediaSetupController = mediaSetupController;
@@ -151,7 +163,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       });
     } catch (error) {
       if (this.closed) {
-        return;
+        return "cancelled";
       }
       throw error;
     } finally {
@@ -161,147 +173,162 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     if (this.closed) {
       media.getTracks().forEach((track) => track.stop());
-      return;
+      return "cancelled";
     }
     this.media = media;
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
-    if (this.ctx.callbacks.onInputLevel) {
-      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
-      this.inputMeter.start(this.media, this.inputContext);
-    }
-    this.ws = new WebSocket(wsUrl);
-    this.ws.binaryType = "arraybuffer";
-    this.ws.addEventListener("open", () => {
-      if (this.closed) {
+    const ws = new WebSocket(wsUrl);
+    this.ws = ws;
+    ws.binaryType = "arraybuffer";
+    const startup = this.lifecycle.begin(ws);
+    this.setupTimeout = globalThis.setTimeout(() => {
+      if (this.closed || this.ws !== ws) {
+        return;
+      }
+      this.setupTimeout = null;
+      this.failConnection(
+        ws,
+        `Realtime connection timed out after ${GOOGLE_LIVE_SETUP_TIMEOUT_MS}ms`,
+      );
+    }, GOOGLE_LIVE_SETUP_TIMEOUT_MS);
+    ws.addEventListener("open", () => {
+      if (this.closed || this.ws !== ws) {
         return;
       }
       this.send(this.session.initialMessage ?? { setup: {} });
+    });
+    ws.addEventListener("message", (event) => {
+      void this.handleMessage(ws, event.data);
+    });
+    ws.addEventListener("close", () => {
+      this.failConnection(ws, "Realtime connection closed");
+    });
+    ws.addEventListener("error", () => {
+      this.failConnection(ws, "Realtime connection failed");
+    });
+    return this.lifecycle.finishStart(await startup);
+  }
+
+  activate(): void {
+    if (this.closed || !this.lifecycle.activate()) {
+      return;
+    }
+    try {
+      this.ctx.callbacks.onStatus?.("listening");
+      this.assertActivationCurrent();
+      this.emitTalkEvent({ type: "session.ready" });
+      this.assertActivationCurrent();
+      if (this.ctx.callbacks.onInputLevel && this.media && this.inputContext) {
+        const inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
+        this.inputMeter = inputMeter;
+        inputMeter.start(this.media, this.inputContext);
+        this.assertActivationCurrent();
+      }
       this.startMicrophonePump();
-    });
-    this.ws.addEventListener("message", (event) => {
-      void this.handleMessage(event.data);
-    });
-    this.ws.addEventListener("close", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
+      if (this.camera.stream && !this.cameraPublished) {
+        this.cameraPublished = true;
+        this.ctx.callbacks.onVideoStream?.(this.camera.stream);
       }
-    });
-    this.ws.addEventListener("error", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection failed");
+      this.assertActivationCurrent();
+      this.startVideoFrames();
+    } catch (error) {
+      try {
+        this.stop({ emitClosed: false });
+      } catch {
+        // Preserve the activation callback as the terminal cause after cleanup.
       }
-    });
+      throw error;
+    }
+  }
+
+  private assertActivationCurrent(): void {
+    if (this.closed || !this.lifecycle.isActive) {
+      throw new Error("Google Live transport activation cancelled");
+    }
   }
 
   async setVideoEnabled(enabled: boolean): Promise<void> {
-    if (!enabled) {
-      this.releaseCamera();
-      return;
-    }
-    if (this.closed) {
-      throw new Error("Realtime Talk session is closed");
-    }
-    if (this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live")) {
-      return;
-    }
-    this.cameraSetupController?.abort();
-    const controller = new AbortController();
-    this.cameraSetupController = controller;
-    let camera: MediaStream;
-    try {
-      camera = await openRealtimeTalkCamera(this.ctx.videoDeviceId, {
-        signal: controller.signal,
-      });
-    } catch (error) {
-      if (this.closed || controller.signal.aborted) {
-        return;
-      }
-      throw error;
-    } finally {
-      if (this.cameraSetupController === controller) {
-        this.cameraSetupController = null;
-      }
-    }
-    if (this.closed || controller.signal.aborted) {
-      camera.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    this.cameraMedia = camera;
-    // External track loss clears preview state so the next toggle reacquires the camera.
-    camera
-      .getVideoTracks()
-      .forEach((track) =>
-        track.addEventListener("ended", this.handleCameraTrackEnded, { once: true }),
-      );
-    const captureVideo = document.createElement("video");
-    captureVideo.autoplay = true;
-    captureVideo.muted = true;
-    captureVideo.playsInline = true;
-    captureVideo.srcObject = camera;
-    this.captureVideo = captureVideo;
-    this.ctx.callbacks.onVideoStream?.(camera);
-    void captureVideo.play().catch(() => undefined);
-    if (this.setupComplete) {
-      this.startVideoFrames();
-    }
+    await this.camera.setEnabled(enabled);
   }
 
   async switchCamera(videoDeviceId: string | undefined): Promise<void> {
-    const nextDeviceId = videoDeviceId?.trim() || undefined;
-    const previousDeviceId =
-      this.cameraMedia?.getVideoTracks()[0]?.getSettings?.().deviceId?.trim() ||
-      this.ctx.videoDeviceId;
-    const shouldReacquire = this.cameraMedia !== null || this.cameraSetupController !== null;
-    this.ctx.videoDeviceId = nextDeviceId;
-    if (!shouldReacquire) {
-      return;
-    }
+    await this.camera.switchDevice(videoDeviceId);
+  }
 
-    this.releaseCamera();
-    try {
-      await this.setVideoEnabled(true);
-    } catch (error) {
-      if (!this.closed && previousDeviceId !== nextDeviceId) {
-        this.ctx.videoDeviceId = previousDeviceId;
-        try {
-          await this.setVideoEnabled(true);
-        } catch {
-          // The original switch failure is the actionable error for the user.
+  stop(options?: { emitClosed?: boolean }): void {
+    const emitClosed = !this.closed && this.lifecycle.isActive && options?.emitClosed !== false;
+    this.closed = true;
+    this.lifecycle.cancel();
+    runRealtimeTalkCleanup([
+      () => {
+        if (emitClosed) {
+          this.emitTalkEvent({ type: "session.closed", final: true });
         }
-      }
-      throw error;
+      },
+      () => this.releaseResources(),
+    ]);
+  }
+
+  private releaseResources(): void {
+    const mediaSetupController = this.mediaSetupController;
+    this.mediaSetupController = null;
+    this.clearSetupTimeout();
+    const inputMeter = this.inputMeter;
+    this.inputMeter = null;
+    const media = this.media;
+    this.media = null;
+    const inputContext = this.inputContext;
+    this.inputContext = null;
+    const outputContext = this.outputContext;
+    this.outputContext = null;
+    const ws = this.ws;
+    this.ws = null;
+    runRealtimeTalkCleanup([
+      () => mediaSetupController?.abort(),
+      () => this.toolOwner.release(),
+      () => this.inputPump.stop(),
+      () => inputMeter?.stop(),
+      ...(media?.getTracks() ?? []).map((track) => () => track.stop()),
+      () => this.camera.release(),
+      () => this.stopOutput(),
+      () => {
+        void inputContext?.close();
+      },
+      () => {
+        void outputContext?.close();
+      },
+      () => ws?.close(),
+    ]);
+  }
+
+  private clearSetupTimeout(): void {
+    if (this.setupTimeout !== null) {
+      globalThis.clearTimeout(this.setupTimeout);
+      this.setupTimeout = null;
     }
   }
 
-  stop(): void {
-    if (!this.closed) {
-      this.emitTalkEvent({ type: "session.closed", final: true });
+  private failConnection(ws: WebSocket, detail: string): void {
+    // Error and close can arrive for the same socket, or after a replacement
+    // starts. Only the current lifecycle owner may report and release resources.
+    if (this.closed || this.ws !== ws) {
+      return;
     }
-    this.closed = true;
-    this.mediaSetupController?.abort();
-    this.mediaSetupController = null;
-    this.cameraSetupController?.abort();
-    this.cameraSetupController = null;
-    this.setupComplete = false;
-    for (const controller of this.consultAbortControllers) {
-      controller.abort();
+    if (this.lifecycle.failStartup(ws, new Error(detail))) {
+      try {
+        this.stop({ emitClosed: false });
+      } catch {
+        // Startup rejection owns terminal precedence; cleanup still ran to completion.
+      }
+      return;
     }
-    this.consultAbortControllers.clear();
-    this.pendingCalls.clear();
-    this.inputPump.stop();
-    this.inputMeter?.stop();
-    this.inputMeter = null;
-    this.media?.getTracks().forEach((track) => track.stop());
-    this.media = null;
-    this.releaseCamera();
-    this.stopOutput();
-    void this.inputContext?.close();
-    this.inputContext = null;
-    void this.outputContext?.close();
-    this.outputContext = null;
-    this.ws?.close();
-    this.ws = null;
+    try {
+      this.ctx.callbacks.onStatus?.("error", detail);
+    } finally {
+      // Socket failure is terminal even when a consumer callback rejects the update.
+      this.stop();
+    }
   }
 
   private startMicrophonePump(): void {
@@ -332,8 +359,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     return false;
   }
 
-  private async handleMessage(data: unknown): Promise<void> {
-    if (this.closed) {
+  private async handleMessage(ws: WebSocket, data: unknown): Promise<void> {
+    if (this.closed || this.ws !== ws) {
       return;
     }
     let message: GoogleLiveMessage;
@@ -342,14 +369,16 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     } catch {
       return;
     }
-    if (this.closed) {
+    if (this.closed || this.ws !== ws) {
       return;
     }
-    if (message.setupComplete) {
-      this.setupComplete = true;
-      this.ctx.callbacks.onStatus?.("listening");
-      this.emitTalkEvent({ type: "session.ready" });
-      this.startVideoFrames();
+    if (message.setupComplete && this.lifecycle.markReady(ws)) {
+      this.clearSetupTimeout();
+    }
+    // The parent session adopts the candidate after start() resolves. Provider
+    // events remain provisional until activate() publishes that ownership.
+    if (!this.lifecycle.isActive) {
+      return;
     }
     const content = message.serverContent;
     if (content?.interrupted) {
@@ -366,6 +395,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         text: content.inputTranscription.text,
         final: content.inputTranscription.finished ?? false,
       });
+      if (this.closed) {
+        return;
+      }
       this.emitTalkEvent({
         type: content.inputTranscription.finished ? "transcript.done" : "transcript.delta",
         final: content.inputTranscription.finished ?? false,
@@ -373,7 +405,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       });
       if (
         content.inputTranscription.finished &&
-        this.consultAbortControllers.size > 0 &&
+        this.toolOwner.hasPendingConsult() &&
         shouldAutoControlRealtimeVoiceAgentText(content.inputTranscription.text)
       ) {
         void steerRealtimeTalkActiveConsult({
@@ -392,6 +424,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         text: content.outputTranscription.text,
         final: content.outputTranscription.finished ?? false,
       });
+      if (this.closed) {
+        return;
+      }
       this.emitTalkEvent({
         type: content.outputTranscription.finished ? "output.text.done" : "output.text.delta",
         final: content.outputTranscription.finished ?? false,
@@ -403,17 +438,23 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         this.emitTalkEvent({
           type: "output.audio.delta",
           payload: {
-            byteLength: base64ToBytes(part.inlineData.data).byteLength,
+            byteLength: estimateBase64DecodedByteLength(part.inlineData.data),
             mimeType: part.inlineData.mimeType,
           },
         });
         this.playPcm16(part.inlineData.data);
+        if (this.closed) {
+          return;
+        }
       } else if (!part.thought && typeof part.text === "string" && part.text.trim()) {
         this.ctx.callbacks.onTranscript?.({
           role: "assistant",
           text: part.text,
           final: content?.turnComplete ?? false,
         });
+        if (this.closed) {
+          return;
+        }
         this.emitTalkEvent({
           type: content?.turnComplete ? "output.text.done" : "output.text.delta",
           final: content?.turnComplete ?? false,
@@ -425,116 +466,51 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.emitTalkEvent({ type: "turn.ended", final: true });
     }
     for (const call of message.toolCall?.functionCalls ?? []) {
-      void this.handleToolCall(call).catch((error: unknown) => {
+      void this.toolOwner.handleCall(call).catch((error: unknown) => {
         this.reportToolResultSubmissionError(error);
       });
     }
+    this.toolOwner.cancel(message.toolCallCancellation?.ids);
   }
 
   private playPcm16(base64: string): void {
-    this.outputQueue.play(base64, this.outputContext, this.session.audio.outputSampleRateHz);
+    if (this.closed) {
+      return;
+    }
+    const result = this.outputQueue.play(
+      base64,
+      this.outputContext,
+      this.session.audio.outputSampleRateHz,
+    );
+    if (result !== "overflow") {
+      return;
+    }
+    this.stopOutput();
+    this.emitTalkEvent({
+      type: "turn.cancelled",
+      final: true,
+      payload: { reason: "playback-overflow" },
+    });
+    this.ctx.callbacks.onStatus?.(
+      "error",
+      "Realtime Talk playback exceeded the browser audio buffer limit",
+    );
+    // Google Live exposes server-driven interruption but no client response-cancel
+    // frame, so closing the session is the only deterministic provider-side stop.
+    this.stop();
   }
 
   private stopOutput(): void {
     this.outputQueue.stop(this.outputContext);
   }
 
-  private async handleToolCall(call: {
-    id?: string;
-    name?: string;
-    args?: unknown;
-  }): Promise<void> {
-    const name = call.name?.trim();
-    const callId = call.id?.trim();
-    if (!name || !callId) {
-      return;
-    }
-    this.pendingCalls.set(callId, { name, args: call.args ?? {} });
-    this.emitTalkEvent({
-      type: "tool.call",
-      callId,
-      payload: { name, args: call.args ?? {} },
-    });
-    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
-      await submitRealtimeTalkAgentControl({
-        ctx: this.createActiveContext(),
-        callId,
-        args: call.args ?? {},
-        emitTalkEvent: this.emitTalkEvent,
-        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
-      });
-      return;
-    }
-    if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
-      const active = this.videoFramesActive && this.hasSentVideoFrame && this.isCameraTrackUsable();
-      this.submitToolResult(
-        callId,
-        active ? { ok: true, cameraStreamActive: true } : { ok: false, error: "camera is off" },
-      );
-      this.emitTalkEvent({
-        type: active ? "tool.result" : "tool.error",
-        callId,
-        final: true,
-        payload: {
-          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-          cameraStreamActive: active,
-        },
-      });
-      return;
-    }
-    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      return;
-    }
-    const abortController = new AbortController();
-    this.consultAbortControllers.add(abortController);
-    try {
-      await submitRealtimeTalkConsult({
-        ctx: this.createActiveContext(),
-        callId,
-        args: call.args ?? {},
-        signal: abortController.signal,
-        emitTalkEvent: this.emitTalkEvent,
-        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
-      });
-    } finally {
-      this.consultAbortControllers.delete(abortController);
-    }
-  }
-
-  private createActiveContext(): RealtimeTalkTransportContext {
-    return {
-      ...this.ctx,
-      callbacks: {
-        onStatus: (status, detail) => {
-          if (!this.closed) {
-            this.ctx.callbacks.onStatus?.(status, detail);
-          }
-        },
-        onTranscript: (entry) => {
-          if (!this.closed) {
-            this.ctx.callbacks.onTranscript?.(entry);
-          }
-        },
-        onTalkEvent: (event) => {
-          if (!this.closed) {
-            this.ctx.callbacks.onTalkEvent?.(event);
-          }
-        },
-      },
-    };
-  }
-
-  private submitToolResult(callId: string, result: unknown): void {
-    const pending = this.pendingCalls.get(callId);
-    if (!pending) {
-      throw new Error(`Google Live has no pending tool call for ${callId}`);
-    }
+  private sendToolResult(callId: string, name: string, result: unknown): void {
     const sent = this.send({
       toolResponse: {
         functionResponses: [
           {
             id: callId,
-            name: pending.name,
+            name,
             ...(!isGemini31LiveModel(this.session.model) ? { scheduling: "WHEN_IDLE" } : {}),
             response:
               result && typeof result === "object" && !Array.isArray(result)
@@ -547,7 +523,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (!sent) {
       throw new Error("Google Live socket is not open");
     }
-    this.pendingCalls.delete(callId);
   }
 
   private reportToolResultSubmissionError(error: unknown): void {
@@ -559,7 +534,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private startVideoFrames(): void {
-    if (!this.captureVideo || this.videoFramesActive || this.closed) {
+    if (!this.camera.video || this.videoFramesActive || this.closed) {
       return;
     }
     this.videoFramesActive = true;
@@ -577,17 +552,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private async sendVideoFrame(): Promise<void> {
-    if (!this.hasLiveCameraTrack()) {
+    if (!this.camera.hasLiveTrack()) {
       this.stopVideoFrames();
       return;
     }
-    if (!this.isCameraTrackUsable()) {
+    if (!this.camera.hasUsableTrack()) {
       this.scheduleVideoFrame(GOOGLE_LIVE_VIDEO_FRAME_INTERVAL_MS);
       return;
     }
     try {
       const frame = await captureRealtimeTalkVideoFrame(
-        this.captureVideo,
+        this.camera.video,
         GOOGLE_LIVE_VIDEO_MESSAGE_MAX_BYTES,
         googleLiveVideoMessage,
       );
@@ -615,34 +590,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       globalThis.clearTimeout(this.videoFrameTimer);
       this.videoFrameTimer = null;
     }
-  }
-
-  private hasLiveCameraTrack(): boolean {
-    return this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live") === true;
-  }
-
-  private isCameraTrackUsable(): boolean {
-    return (
-      this.cameraMedia
-        ?.getVideoTracks()
-        .some((track) => track.readyState === "live" && track.enabled && !track.muted) === true
-    );
-  }
-
-  private releaseCamera(): void {
-    this.cameraSetupController?.abort();
-    this.cameraSetupController = null;
-    this.stopVideoFrames();
-    this.cameraMedia?.getVideoTracks().forEach((track) => {
-      track.removeEventListener("ended", this.handleCameraTrackEnded);
-      track.stop();
-    });
-    this.cameraMedia = null;
-    if (this.captureVideo) {
-      this.captureVideo.srcObject = null;
-      this.captureVideo = null;
-    }
-    this.ctx.callbacks.onVideoStream?.(null);
   }
 
   private sendControlSpeechMessage(message: string): void {

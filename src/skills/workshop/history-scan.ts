@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveAgentConfig, resolveAgentDir } from "../../agents/agent-scope.js";
-import { resolveModel } from "../../agents/embedded-agent-runner/model.js";
+import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
@@ -212,12 +212,14 @@ async function runSkillHistoryScanCore(
   const modelRef = resolveDefaultModelForAgent({ cfg: params.config, agentId: params.agentId });
   const resolvedModel =
     eligible.length > 0
-      ? resolveModel(
-          modelRef.provider,
-          modelRef.model,
-          resolveAgentDir(params.config, params.agentId, params.env),
-          params.config,
-          { workspaceDir: params.workspaceDir },
+      ? (
+          await resolveModelAsync(
+            modelRef.provider,
+            modelRef.model,
+            resolveAgentDir(params.config, params.agentId, params.env),
+            params.config,
+            { agentId: params.agentId, workspaceDir: params.workspaceDir },
+          )
         ).model
       : undefined;
   const contextTokens = resolvedModel

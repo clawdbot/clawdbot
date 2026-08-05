@@ -5,6 +5,7 @@ import {
   selectCopilotPanelState,
 } from "./copilot-background-shared.js";
 import { createCopilotController } from "./copilot-background.js";
+import { deriveCopilotSessionLabel } from "./panel-core.js";
 
 function eventHook() {
   return { addListener: vi.fn() };
@@ -718,16 +719,15 @@ describe("browser copilot background", () => {
   });
 
   it("replays ambiguous session creation before archiving its key", async () => {
+    const sessionKey =
+      "agent:main:main:thread:browser-copilot-11111111-1111-4111-8111-111111111111";
     const request = vi.fn(async () => ({ ok: true }));
-    await archiveCopilotSession(
-      { request } as never,
-      { sessionKey: "session-pending", ensureCreated: true } as never,
-    );
+    await archiveCopilotSession({ request } as never, { sessionKey, ensureCreated: true } as never);
     expect(request.mock.calls).toEqual([
-      ["sessions.create", { key: "session-pending", label: "Browser copilot" }],
-      ["sessions.messages.unsubscribe", { key: "session-pending" }],
-      ["sessions.abort", { key: "session-pending" }],
-      ["sessions.patch", { key: "session-pending", archived: true }],
+      ["sessions.create", { key: sessionKey, label: deriveCopilotSessionLabel(sessionKey) }],
+      ["sessions.messages.unsubscribe", { key: sessionKey }],
+      ["sessions.abort", { key: sessionKey }],
+      ["sessions.patch", { key: sessionKey, archived: true }],
     ]);
   });
 });

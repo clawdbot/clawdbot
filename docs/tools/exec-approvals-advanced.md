@@ -110,7 +110,7 @@ automatically.
 
 ### Safe bins versus allowlist
 
-| Topic            | `tools.exec.safeBins`                                  | Allowlist (`exec-approvals.json`)                                                  |
+| Topic            | `tools.exec.safeBins`                                  | Allowlist (SQLite exec approvals document)                                         |
 | ---------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------- |
 | Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                                              |
 | Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob, or bare command-name glob for PATH-invoked commands |
@@ -120,10 +120,10 @@ automatically.
 
 Configuration location:
 
-- `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
-- `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.list[].tools.exec.safeBinTrustedDirs`).
-- `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
-- allowlist entries live in the host-local approvals file under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
+- `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.entries.*.tools.exec.safeBins`).
+- `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.entries.*.tools.exec.safeBinTrustedDirs`).
+- `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.entries.*.tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
+- allowlist entries live in the host-local approvals document under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
 - `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
 - `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
 
@@ -182,6 +182,10 @@ main session are either suppressed or reported through a safe direct route when 
 - In webchat-only or internal-session flows with no external target, followup delivery stays session-only (`deliver: false`).
 - If a caller explicitly requests strict external delivery with no resolvable external channel, the request fails with `INVALID_REQUEST`.
 - If `bestEffortDeliver` is enabled and no external channel can be resolved, delivery is downgraded to session-only instead of failing.
+
+## Minimal scopes for third-party clients
+
+Gateway approval resolution is guarded by the dedicated `operator.approvals` scope. This applies to both the owner-specific `exec.approval.resolve` method and the kind-agnostic `approval.resolve` method; `operator.write` does not subsume it. Dashboards and integrations should request only the scopes required by the methods they use. Treat approval-resolution access as remote-execution-grade authority and grant `operator.approvals` deliberately, even when the client only presents a small approval UI.
 
 ## Approval forwarding to chat channels
 
@@ -389,7 +393,8 @@ Gateway -> Node Service (WS)
 
 Security notes:
 
-- Unix socket mode `0600`, token stored in `exec-approvals.json`.
+- Unix socket mode `0600`, token stored in the `exec_approvals_config` row of
+  `state/openclaw.sqlite`.
 - Same-UID peer check.
 - Challenge/response (nonce + HMAC token + request hash) + short TTL.
 

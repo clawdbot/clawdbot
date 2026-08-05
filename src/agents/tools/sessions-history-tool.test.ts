@@ -6,7 +6,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  applySessionStoreProjection,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
+import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 
@@ -28,6 +34,28 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   const configPath = path.join(tempDir, name);
   fs.writeFileSync(configPath, `${JSON.stringify({ logging })}\n`, "utf8");
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+}
+
+async function writeSessionStore(
+  name: string,
+  entries: Record<string, { sessionId: string; updatedAt: number; archivedAt?: number }>,
+): Promise<string> {
+  if (!tempDir) {
+    throw new Error("tempDir not initialized");
+  }
+  const storePath = path.join(tempDir, name);
+  await applySessionStoreProjection({
+    storePath,
+    skipMaintenance: true,
+    update: (store) => {
+      for (const sessionKey of Object.keys(store)) {
+        delete store[sessionKey];
+      }
+      Object.assign(store, entries);
+      return { persist: true, result: undefined };
+    },
+  });
+  return storePath;
 }
 
 function createHistoryToolWithMessage(content: unknown) {
@@ -406,5 +434,156 @@ describe("sessions_history redaction", () => {
       hasMore: true,
       totalMessages: 10,
     });
+  });
+
+  it("honors a scoped incarnation grant through the sandbox visibility clamp", async () => {
+    const requesterSessionKey = "agent:main:clickclack:discussion-proof";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "main-session-incarnation";
+    const storePath = await writeSessionStore("scoped-grant.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
+      request.requesterSessionKey === requesterSessionKey &&
+      request.targetSessionKey === targetSessionKey
+        ? { expectedSessionId }
+        : undefined,
+    );
+    try {
+      const tool = createSessionsHistoryTool({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          if (request.method === "sessions.resolve") {
+            return { key: targetSessionKey } as T;
+          }
+          return { messages: [{ role: "assistant", content: "visible" }] } as T;
+        },
+      });
+
+      const result = await tool.execute("scoped-grant", { sessionKey: targetSessionKey });
+
+      expect(result.details).toMatchObject({
+        sessionKey: targetSessionKey,
+        messages: [{ role: "assistant", content: "visible" }],
+      });
+      expect(requests.map((request) => request.method)).toEqual(["chat.history"]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rejects a scoped grant when the target incarnation changes before the read", async () => {
+    const requesterSessionKey = "agent:main:clickclack:discussion-race";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "old-incarnation";
+    const storePath = await writeSessionStore("scoped-grant-race.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    let grantChecks = 0;
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
+      if (
+        request.requesterSessionKey !== requesterSessionKey ||
+        request.targetSessionKey !== targetSessionKey
+      ) {
+        return undefined;
+      }
+      grantChecks += 1;
+      if (grantChecks === 2) {
+        replaceSessionEntrySync(
+          { storePath, sessionKey: targetSessionKey },
+          { sessionId: "replacement-incarnation", updatedAt: 2 },
+        );
+      }
+      return { expectedSessionId };
+    });
+    try {
+      const tool = createSessionsHistoryTool({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          if (request.method === "sessions.resolve") {
+            return { key: targetSessionKey } as T;
+          }
+          return { messages: [] } as T;
+        },
+      });
+
+      await expect(
+        tool.execute("scoped-grant-race", { sessionKey: targetSessionKey }),
+      ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+      expect(requests).toEqual([]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rejects a scoped grant when the target is archived before the read", async () => {
+    const requesterSessionKey = "agent:main:clickclack:discussion-archive-race";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "main-incarnation";
+    const storePath = await writeSessionStore("scoped-grant-archive-race.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    let grantChecks = 0;
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
+      if (
+        request.requesterSessionKey !== requesterSessionKey ||
+        request.targetSessionKey !== targetSessionKey
+      ) {
+        return undefined;
+      }
+      grantChecks += 1;
+      if (grantChecks === 2) {
+        replaceSessionEntrySync(
+          { storePath, sessionKey: targetSessionKey },
+          { sessionId: expectedSessionId, updatedAt: 2, archivedAt: 2 },
+        );
+      }
+      return { expectedSessionId };
+    });
+    try {
+      const tool = createSessionsHistoryTool({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          return { messages: [] } as T;
+        },
+      });
+
+      await expect(
+        tool.execute("scoped-grant-archive-race", { sessionKey: targetSessionKey }),
+      ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+      expect(requests).toEqual([]);
+    } finally {
+      unregister();
+    }
   });
 });

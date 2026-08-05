@@ -4,12 +4,8 @@ import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-  MOONSHOT_DEFAULT_MODEL_REF,
-} from "./onboard.js";
-import { buildMoonshotProvider } from "./provider-catalog.js";
+import { applyMoonshotConfig, applyMoonshotConfigCn } from "./onboard.js";
+import { buildMoonshotProvider, MOONSHOT_DEFAULT_MODEL_REF } from "./provider-catalog.js";
 import { isMoonshotAlwaysThinkingModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
@@ -58,6 +54,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMoonshotProvider,
       buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),

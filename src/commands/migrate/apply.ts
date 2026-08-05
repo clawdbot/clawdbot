@@ -22,9 +22,7 @@ function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
 }
 
 /** Creates a verified pre-migration backup, treating absent local state as empty. */
-export async function createPreMigrationBackup(opts: {
-  output?: string;
-}): Promise<string | undefined> {
+async function createPreMigrationBackup(opts: { output?: string }): Promise<string | undefined> {
   try {
     const result = await backupCreateCommand(
       {

@@ -119,8 +119,11 @@ afterEach(() => {
 
 describe("web tools defaults", () => {
   it("enables web_fetch by default (non-sandbox)", () => {
-    const tool = createWebFetchTool({ config: {}, sandboxed: false });
-    expect(tool?.name).toBe("web_fetch");
+    const fetchTool = createWebFetchTool({ config: {}, sandboxed: false });
+    const searchTool = createWebSearchTool({ config: {}, sandboxed: false });
+    expect(fetchTool?.name).toBe("web_fetch");
+    expect(fetchTool?.resultContentSource).toBe("network");
+    expect(searchTool?.resultContentSource).toBe("network");
   });
 
   it("disables web_fetch when explicitly disabled", () => {

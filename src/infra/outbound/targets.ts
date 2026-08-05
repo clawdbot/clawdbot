@@ -551,7 +551,7 @@ export function resolveHeartbeatSenderContext(params: {
   const sender = resolveHeartbeatSenderId({
     allowFrom,
     deliveryTo: params.delivery.to,
-    lastTo: params.entry?.lastTo,
+    lastTo: deliveryContextFromSession(params.entry)?.to,
     provider,
   });
 

@@ -82,6 +82,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("keeps configured channel owner collectors when the provided channel plugin list omits them", async () => {
     const sourceConfig = {
+      agents: { list: [{ id: "main", default: true }] },
       plugins: {
         allow: ["external-channel-plugin", "audit-plugin"],
       },
@@ -129,6 +130,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("removes configured channel owner collectors only when channel security will audit them", async () => {
     const sourceConfig = {
+      agents: { list: [{ id: "main", default: true }] },
       plugins: {
         allow: ["external-channel-plugin", "audit-plugin"],
       },
@@ -161,6 +163,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("skips plugin runtime and collector discovery when collector loading is disabled", async () => {
     const sourceConfig = {
+      agents: { list: [{ id: "main", default: true }] },
       plugins: {
         allow: ["audit-plugin"],
       },
@@ -182,6 +185,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("keeps plain security audit off plugin collector runtime discovery by default", async () => {
     const sourceConfig = {
+      agents: { list: [{ id: "main", default: true }] },
       plugins: {
         allow: ["audit-plugin"],
       },

@@ -14,13 +14,22 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
+  resolveSkillReferenceInvocations,
 } from "../../skills/discovery/chat-commands.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   readAbortCutoffFromSessionEntry,
@@ -63,6 +72,7 @@ const commandsRuntimeLoader = createLazyImportLoader<CommandsRuntime>(
   () => import("./commands.runtime.js"),
 );
 let builtinSlashCommands: Set<string> | null = null;
+const MAX_EXPLICIT_SKILL_REFERENCES = 8;
 
 function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
   return skillCommandsRuntimeLoader.load();
@@ -106,6 +116,26 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
   const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
   return name ? name : null;
+}
+
+function applyExplicitSkillReferences(
+  body: string,
+  skillCommands: SkillCommandSpec[],
+): { body: string; overflow: boolean; skills: SkillCommandSpec[] } {
+  const resolved = resolveSkillReferenceInvocations({ text: body, skillCommands });
+  const overflow = resolved.length > MAX_EXPLICIT_SKILL_REFERENCES;
+  const skills = resolved.slice(0, MAX_EXPLICIT_SKILL_REFERENCES);
+  if (skills.length === 0) {
+    return { body, overflow, skills };
+  }
+  const instruction = [
+    "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+    ...skills.map((skill) => `- ${skill.skillName}`),
+    "",
+    "User request:",
+    body,
+  ].join("\n");
+  return { body: instruction, overflow, skills };
 }
 
 function expandBundleCommandPromptTemplate(template: string, args?: string): string {
@@ -200,6 +230,7 @@ export async function handleInlineActions(params: {
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"];
+  thinkingCatalog?: ThinkingCatalogEntry[];
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
@@ -244,6 +275,7 @@ export async function handleInlineActions(params: {
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
@@ -315,11 +347,16 @@ export async function handleInlineActions(params: {
   }
 
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
+  const hasSkillReferences =
+    command.isAuthorizedSender &&
+    ctx.Surface === INTERNAL_MESSAGE_CHANNEL &&
+    hasSkillReferenceCandidate(initialCleanedBody);
   const shouldLoadSkillCommands =
     allowTextCommands &&
-    slashCommandName !== null &&
-    // `/skill …` needs the full skill command list.
-    (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
+    (hasSkillReferences ||
+      (slashCommandName !== null &&
+        // `/skill …` needs the full skill command list.
+        (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName))));
   const canReusePreloadedSkillCommands = execOverrides === undefined;
   const skillCommands =
     shouldLoadSkillCommands &&
@@ -382,6 +419,7 @@ export async function handleInlineActions(params: {
         workspaceDir,
         provider,
         model,
+        senderIsOwner: command.senderIsOwner,
         senderId: command.senderId,
         currentChannelId: command.channelId,
         groupId: extractExplicitGroupId(ctx.From),
@@ -450,8 +488,10 @@ export async function handleInlineActions(params: {
           .filter((entry): entry is string => Boolean(entry))
           .join("\n\n");
     ctx.Body = rewrittenBody;
+    ctx.agentText = rewrittenBody;
     ctx.BodyForAgent = rewrittenBody;
     sessionCtx.Body = rewrittenBody;
+    sessionCtx.agentText = rewrittenBody;
     sessionCtx.BodyForAgent = rewrittenBody;
     sessionCtx.BodyStripped = rewrittenBody;
     cleanedBody = rewrittenBody;
@@ -474,8 +514,37 @@ export async function handleInlineActions(params: {
   if (inlineCommand) {
     cleanedBody = inlineCommand.cleaned;
     sessionCtx.Body = cleanedBody;
+    sessionCtx.agentText = cleanedBody;
     sessionCtx.BodyForAgent = cleanedBody;
     sessionCtx.BodyStripped = cleanedBody;
+  }
+
+  if (
+    hasSkillReferences &&
+    !skillInvocation &&
+    resolveSlashCommandName(cleanedBody) === null &&
+    skillCommands.length > 0
+  ) {
+    const referenced = applyExplicitSkillReferences(cleanedBody, skillCommands);
+    if (referenced.overflow) {
+      typing.cleanup();
+      return {
+        kind: "reply",
+        reply: markCommandReplyForDelivery({
+          text: `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`,
+        }),
+      };
+    }
+    if (referenced.skills.length > 0) {
+      cleanedBody = referenced.body;
+      ctx.Body = cleanedBody;
+      ctx.agentText = cleanedBody;
+      ctx.BodyForAgent = cleanedBody;
+      sessionCtx.Body = cleanedBody;
+      sessionCtx.agentText = cleanedBody;
+      sessionCtx.BodyForAgent = cleanedBody;
+      sessionCtx.BodyStripped = cleanedBody;
+    }
   }
 
   const handleInlineStatus =
@@ -502,6 +571,7 @@ export async function handleInlineActions(params: {
       model,
       contextTokens,
       workspaceDir,
+      thinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -544,6 +614,7 @@ export async function handleInlineActions(params: {
       workspaceDir,
       opts,
       defaultGroupActivation: defaultActivation,
+      thinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -616,7 +687,7 @@ export async function handleInlineActions(params: {
   }
 
   const commandBodyBeforeRun = command.commandBodyNormalized;
-  const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+  const bodyBeforeRun = sessionCtx.agentText;
   const commandResult = await runCommands(command);
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
@@ -626,7 +697,7 @@ export async function handleInlineActions(params: {
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;
   } else {
-    const bodyAfterRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+    const bodyAfterRun = sessionCtx.agentText;
     if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
       cleanedBody = bodyAfterRun;
     }

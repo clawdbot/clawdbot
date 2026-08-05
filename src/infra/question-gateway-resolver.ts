@@ -99,7 +99,7 @@ export async function resolveQuestionOverGateway(
       method: "question.resolve",
       params: {
         id: params.questionId,
-        answers: { answers: { [question.id]: { answers: [optionValue] } } },
+        answers: { answers: { [question.questionId]: [optionValue] } },
         resolvedBy: params.senderId?.trim() || undefined,
       },
     });
@@ -110,5 +110,5 @@ export async function resolveQuestionOverGateway(
     }
     throw error;
   }
-  return { status: "answered", questionId: question.id, optionValue };
+  return { status: "answered", questionId: question.questionId, optionValue };
 }

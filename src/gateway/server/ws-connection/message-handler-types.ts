@@ -20,6 +20,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import type { resolveControlUiAuthPolicy } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
+import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type ControlUiAuthPolicy = ReturnType<typeof resolveControlUiAuthPolicy>;
@@ -54,11 +55,13 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
+  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
   getMethodRegistry?: () => GatewayMethodRegistry;
   buildRequestContext: () => GatewayRequestContext;
+  nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   send: (obj: unknown) => void;
   close: (code?: number, reason?: string) => void;
@@ -119,6 +122,7 @@ export type AuthenticatedGatewayConnect = {
   usesLegacyNodeProtocol: boolean;
   role: GatewayRole;
   scopes: string[];
+  hasRequestedScopes: boolean;
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
@@ -141,6 +145,7 @@ export type AuthenticatedGatewayConnect = {
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
+  allowControlUiDeviceAuthMigration: boolean;
   skipControlUiPairingForDevice: boolean;
   skipLocalBackendSelfPairing: boolean;
   rejectUnauthorized: (failedAuth: GatewayAuthResult) => void;
@@ -148,6 +153,7 @@ export type AuthenticatedGatewayConnect = {
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
   deviceToken: DeviceAuthToken | null;
+  controlUiDeviceAuthMigrationPending: boolean;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;
     role: string;

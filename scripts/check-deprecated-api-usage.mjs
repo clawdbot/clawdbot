@@ -2,7 +2,7 @@
 // Scans source files for usage of deprecated API markers.
 import fs from "node:fs";
 import path from "node:path";
-import { collectDeprecatedInternalConfigApiViolations } from "./lib/deprecated-config-api-guard.mjs";
+import { collectDeprecatedInternalConfigApiViolations } from "./lib/config-boundary-guard.mjs";
 import {
   BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES,
   buildDeprecatedPluginSdkModuleSpecifiers,
@@ -211,10 +211,8 @@ const rules = [
       "src/channels/message/inbound-reply-dispatch.ts",
       "src/infra/outbound/deliver-runtime.ts",
       "src/infra/outbound/deliver.ts",
-      "src/plugin-sdk/channel-message-runtime.ts",
       "src/plugin-sdk/channel-message.ts",
       "src/plugin-sdk/inbound-reply-dispatch.ts",
-      "src/plugin-sdk/outbound-runtime.ts",
     ],
     message: "use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext",
   },

@@ -7,9 +7,12 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { nostrPlugin } from "./channel.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import { nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
+  TEST_HEX_PUBLIC_KEY,
   TEST_SETUP_RELAY_URLS,
   buildResolvedNostrAccount,
   createConfiguredNostrCfg,
@@ -201,6 +204,25 @@ describe("nostrPlugin", () => {
       const ids = nostrTestPlugin.config.listAccountIds(cfg);
       expect(ids).toContain("default");
     });
+
+    it("normalizes prefixed npub allowlist entries", () => {
+      const npub = "npub140x77qfrg4ncn27dauqjx3t83x4ummcpydzk0zdtehhszg69v7ystddknj";
+      const formatted = nostrPlugin.config.formatAllowFrom?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        allowFrom: [`nostr:${npub}`],
+      });
+
+      expect(formatted).toEqual([normalizePubkey(npub)]);
+    });
+
+    it("preserves invalid prefixed allowlist entries instead of promoting them to wildcards", () => {
+      const formatted = nostrPlugin.config.formatAllowFrom?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        allowFrom: ["nostr:*"],
+      });
+
+      expect(formatted).toEqual(["nostr:*"]);
+    });
   });
 
   describe("messaging", () => {
@@ -228,6 +250,44 @@ describe("nostrPlugin", () => {
 
       expect(normalize(`nostr:${TEST_HEX_PRIVATE_KEY}`)).toBe(TEST_HEX_PRIVATE_KEY);
       expect(normalize(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
+    });
+
+    it("recognizes prefixed targets after provider normalization", () => {
+      const raw = `nostr:${TEST_HEX_PUBLIC_KEY}`;
+      const normalized = nostrPlugin.messaging?.normalizeTarget?.(raw);
+
+      expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(raw, normalized)).toBe(true);
+    });
+
+    it.each([
+      { name: "hex", target: TEST_HEX_PUBLIC_KEY },
+      {
+        name: "npub",
+        target: "npub140x77qfrg4ncn27dauqjx3t83x4ummcpydzk0zdtehhszg69v7ystddknj",
+      },
+    ])("normalizes prefixed $name targets for direct outbound sends", ({ target }) => {
+      const result = nostrPlugin.outbound?.resolveTarget?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        to: `nostr:${target}`,
+        mode: "explicit",
+      });
+
+      expect(result).toEqual({ ok: true, to: normalizePubkey(target) });
+    });
+
+    it("preserves the missing-target hint when no outbound target is supplied", () => {
+      const result = nostrPlugin.outbound?.resolveTarget?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        mode: "explicit",
+      });
+
+      expect(result?.ok).toBe(false);
+      if (!result || result.ok) {
+        throw new Error("expected blank Nostr target to fail");
+      }
+      expect(result.error.message).toBe(
+        "Delivering to Nostr requires target <npub|hex pubkey|nostr:npub...>",
+      );
     });
   });
 

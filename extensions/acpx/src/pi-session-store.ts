@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { piSessionStore } from "./pi-session-paths.js";
+import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
 
 const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
@@ -12,9 +12,11 @@ const MAX_SESSION_BYTES = 32 * 1024 * 1024;
 const MAX_SUMMARY_LINE_BYTES = 1024 * 1024;
 const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
+const PI_FILE_CANDIDATE_CACHE_TTL_MS = 32_000;
+const PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES = 8;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
-type PiSessionSummary = SessionCatalogSession & { file: string };
+type PiSessionSummary = SessionCatalogSession & { file: string; version: number };
 
 type PiFileCandidate = {
   file: string;
@@ -22,6 +24,7 @@ type PiFileCandidate = {
   identity: string;
   mtimeMs: number;
   size: number;
+  resumable: boolean;
 };
 
 type PiSummaryScanState = {
@@ -39,10 +42,19 @@ type CachedSummary = PiFileCandidate & {
   appendProof: { head: Buffer; tail: Buffer };
 };
 
+type PiFileCandidateCacheEntry = {
+  expiresAt: number;
+  candidates: Promise<PiFileCandidate[]>;
+};
+
 // Pi owns session-file mutation. The bounded cache resumes append-only metadata
 // scans, avoiding a full reread every time an active transcript grows.
 const summaryCache = new Map<string, CachedSummary>();
 const threadFileCache = new Map<string, string>();
+// Candidate snapshots are valid for one session-root/ACP-root identity for 32s, just beyond stable
+// polling. Root changes or expiry re-walk; rejected scans are removed so transient I/O recovers.
+// Keeping this bounded avoids rescanning every file each poll without retaining obsolete stores.
+const piFileCandidateCache = new Map<string, PiFileCandidateCacheEntry>();
 
 function threadCacheKey(storeRoot: string, threadId: string): string {
   return `${storeRoot}\0${threadId}`;
@@ -84,9 +96,10 @@ async function discoverPiSessionFiles(
   env: NodeJS.ProcessEnv,
 ): Promise<{ root: string; files: string[] }> {
   const store = piSessionStore(env);
+  const resolvedRoot = await realpathOrResolve(store.root);
   let entries: Array<import("node:fs").Dirent>;
   try {
-    entries = await fs.readdir(store.root, { withFileTypes: true });
+    entries = await fs.readdir(resolvedRoot, { withFileTypes: true });
   } catch {
     return { root: store.root, files: [] };
   }
@@ -96,7 +109,7 @@ async function discoverPiSessionFiles(
       files: entries
         .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
         .slice(0, MAX_DISCOVERY_FILES)
-        .map((entry) => path.join(store.root, entry.name)),
+        .map((entry) => path.join(resolvedRoot, entry.name)),
     };
   }
   const files: string[] = [];
@@ -104,7 +117,7 @@ async function discoverPiSessionFiles(
     if (!entry.isDirectory() || files.length >= MAX_DISCOVERY_FILES) {
       continue;
     }
-    const directory = path.join(store.root, entry.name);
+    const directory = path.join(resolvedRoot, entry.name);
     let children: Array<import("node:fs").Dirent>;
     try {
       children = await fs.readdir(directory, { withFileTypes: true });
@@ -121,6 +134,14 @@ async function discoverPiSessionFiles(
     }
   }
   return { root: store.root, files };
+}
+
+async function realpathOrResolve(value: string): Promise<string> {
+  try {
+    return await fs.realpath(value);
+  } catch {
+    return path.resolve(value);
+  }
 }
 
 async function mapConcurrent<T, R>(
@@ -141,8 +162,10 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
-async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
+async function scanPiFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
   const { root, files } = await discoverPiSessionFiles(env);
+  const configuredAcpRoot = piAcpSessionStoreRoot(env);
+  const acpRoot = configuredAcpRoot ? await realpathOrResolve(configuredAcpRoot) : undefined;
   const candidates = await mapConcurrent(files, IO_CONCURRENCY, async (file) => {
     try {
       const stats = await fs.stat(file);
@@ -153,6 +176,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
             identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
             mtimeMs: stats.mtimeMs,
             size: stats.size,
+            resumable: acpRoot ? pathIsWithin(acpRoot, file) : false,
           }
         : undefined;
     } catch {
@@ -162,6 +186,48 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   return candidates
     .filter((candidate): candidate is PiFileCandidate => candidate !== undefined)
     .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
+  const store = piSessionStore(env);
+  const key = `${store.root}\0${store.flat}\0${piAcpSessionStoreRoot(env) ?? ""}`;
+  const cached = piFileCandidateCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    piFileCandidateCache.delete(key);
+    piFileCandidateCache.set(key, cached);
+    return await cached.candidates;
+  }
+  if (cached) {
+    piFileCandidateCache.delete(key);
+  }
+  const candidates = scanPiFileCandidates(env);
+  const entry = { expiresAt: Date.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
+  piFileCandidateCache.set(key, entry);
+  while (piFileCandidateCache.size > PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES) {
+    const oldest = piFileCandidateCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    piFileCandidateCache.delete(oldest.value);
+  }
+  try {
+    return await candidates;
+  } catch (error) {
+    if (piFileCandidateCache.get(key) === entry) {
+      piFileCandidateCache.delete(key);
+    }
+    throw error;
+  }
+}
+
+function pathIsWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
 }
 
 function parsePiJsonLines(content: string): Record<string, unknown>[] {
@@ -320,7 +386,9 @@ async function readPiSessionSummary(
   if (cached?.mtimeMs === candidate.mtimeMs && cached.size === candidate.size) {
     summaryCache.delete(candidate.file);
     summaryCache.set(candidate.file, cached);
-    return cached.summary;
+    return cached.summary
+      ? { ...cached.summary, canContinue: candidate.resumable }
+      : cached.summary;
   }
   let summary: PiSessionSummary | undefined;
   let scanState: PiSummaryScanState;
@@ -349,12 +417,15 @@ async function readPiSessionSummary(
       processSummaryLine(projectedState, projectedState.pending);
     }
     const { header, name, firstMessage } = projectedState;
+    const version =
+      header?.type === "session" && typeof header.version === "number" ? header.version : 1;
     const threadId = header?.type === "session" ? optionalString(header.id, 256) : undefined;
     if (header && threadId && SESSION_ID_PATTERN.test(threadId)) {
       const cwd = optionalString(header.cwd, 4_096);
       const createdAt = timestampMs(header.timestamp);
       summary = {
         file: candidate.file,
+        version,
         threadId,
         ...(name || firstMessage ? { name: name ?? firstMessage } : {}),
         ...(cwd ? { cwd } : {}),
@@ -365,7 +436,7 @@ async function readPiSessionSummary(
         source: "pi-cli",
         modelProvider: "pi",
         archived: false,
-        canContinue: false,
+        canContinue: candidate.resumable,
         canArchive: false,
       };
     }
@@ -446,6 +517,28 @@ async function findPiSummary(
     }
   }
   return undefined;
+}
+
+export async function readPiSessionFileBaseline(
+  threadId: string,
+  env: NodeJS.ProcessEnv,
+): Promise<
+  | {
+      filePath: string;
+      offset: number;
+    }
+  | undefined
+> {
+  const summary = await findPiSummary(threadId, env);
+  if (!summary?.canContinue || summary.version < 3) {
+    return undefined;
+  }
+  try {
+    const stats = await fs.stat(summary.file);
+    return stats.isFile() ? { filePath: summary.file, offset: stats.size } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function readPiSessionById(

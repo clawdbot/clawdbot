@@ -167,6 +167,77 @@ describe("loadEnabledBundleMcpConfig", () => {
     });
   });
 
+  it("loads MCP servers declared by an enabled native plugin", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
+    const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["native-mcp"]),
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "native-mcp",
+            origin: "global",
+            format: "openclaw",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: pluginRoot,
+            source: path.join(pluginRoot, "index.js"),
+            manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+            mcpServers: {
+              app: {
+                transport: "stdio",
+                command: "node",
+                args: ["./mcp-server.js"],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.app).toEqual({
+      transport: "stdio",
+      command: "node",
+      args: [path.join(pluginRoot, "mcp-server.js")],
+      cwd: pluginRoot,
+    });
+  });
+
+  it("skips MCP servers declared by a disabled native plugin", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
+    const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: { plugins: { entries: { "native-mcp": { enabled: false } } } },
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "native-mcp",
+            origin: "global",
+            format: "openclaw",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: pluginRoot,
+            source: path.join(pluginRoot, "index.js"),
+            manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+            mcpServers: { app: { command: "node", args: ["./mcp-server.js"] } },
+          },
+        ],
+      },
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers).toStrictEqual({});
+  });
+
   it("merges inline bundle MCP servers and skips disabled bundles", async () => {
     await withBundleHomeEnv(
       tempHarness,

@@ -18,13 +18,14 @@ data class GatewayEndpoint(
     fun manual(
       host: String,
       port: Int,
+      tlsEnabled: Boolean = false,
     ): GatewayEndpoint =
       GatewayEndpoint(
         stableId = "manual|${host.lowercase()}|$port",
         name = "$host:$port",
         host = host,
         port = port,
-        tlsEnabled = false,
+        tlsEnabled = tlsEnabled,
         tlsFingerprintSha256 = null,
       )
   }

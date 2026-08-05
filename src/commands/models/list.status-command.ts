@@ -38,7 +38,6 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
-import { loadModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   modelCatalogLogicalKey,
@@ -52,7 +51,9 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
+import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   readUtilityModelSetting,
@@ -65,6 +66,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import {
   parseStrictFiniteNumber,
@@ -73,10 +75,8 @@ import {
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import {
-  captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
+  installTemporaryCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -288,15 +288,12 @@ function installCommandPluginMetadataSnapshot(params: {
   if (current) {
     return () => {};
   }
-  const previousState = captureCurrentPluginMetadataSnapshotState();
-  setCurrentPluginMetadataSnapshot(params.snapshot, {
+  const lease = installTemporaryCurrentPluginMetadataSnapshot(params.snapshot, {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return () => {
-    restoreCurrentPluginMetadataSnapshotState(previousState);
-  };
+  return lease.release;
 }
 
 function syntheticAuthCredential(
@@ -361,7 +358,11 @@ export async function modelsStatusCommand(
     throw new Error("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
-  const cfg = await loadModelsConfig({ commandName: "models status", runtime });
+  const cfg = await loadModelsConfig({
+    commandName: "models status",
+    runtime,
+    skipPluginValidation: opts.probe !== true,
+  });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = agentId
@@ -399,8 +400,6 @@ export async function modelsStatusCommand(
   const selectedPluginRootDirs = new Map(
     [...metadataSnapshot.byPluginId].map(([pluginId, plugin]) => [pluginId, plugin.rootDir]),
   );
-  const { runPluginPayloadSmokeCheckForManifestRecords } =
-    await import("../../cli/update-cli/plugin-payload-validation.js");
   const codexRuntimeAvailabilityByProvider = new Map<
     string,
     Promise<AgentHarnessRuntimeAvailability>
@@ -413,6 +412,8 @@ export async function modelsStatusCommand(
       return cached;
     }
     const pending = (async () => {
+      const { runPluginPayloadSmokeCheckForManifestRecords } =
+        await import("../../cli/update-cli/plugin-payload-validation.js");
       const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
         runtime: "codex",
         provider,
@@ -487,7 +488,9 @@ export async function modelsStatusCommand(
       }
       return acc;
     }, {});
-    const allowed = [...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs];
+    const configuredAllowRefs = [
+      ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
+    ];
 
     const modelsPath = path.join(agentDir, "models.json");
     const aliasIndex = buildModelAliasIndex({
@@ -557,7 +560,7 @@ export async function modelsStatusCommand(
       imageModel,
       ...imageFallbacks,
       utilityModelRef ?? "",
-      ...allowed,
+      ...configuredAllowRefs,
     ]) {
       const ref = resolveStatusModelRef(raw);
       if (ref?.provider) {
@@ -613,24 +616,6 @@ export async function modelsStatusCommand(
         registryDiagnostics: metadataSnapshot.registryDiagnostics,
       }).map((provider) => normalizeProviderId(provider)),
     );
-    const catalog = await loadModelCatalogSnapshot({
-      config: cfg,
-      readOnly: true,
-      metadataSnapshot,
-    });
-    const routeSourcesByModel = new Map<
-      string,
-      Array<{ api?: (typeof catalog.routeVariants)[number]["api"]; baseUrl?: string }>
-    >();
-    for (const entry of catalog.routeVariants) {
-      if (entry.api === undefined && entry.baseUrl === undefined) {
-        continue;
-      }
-      const key = modelCatalogLogicalKey(entry);
-      const sources = routeSourcesByModel.get(key) ?? [];
-      sources.push({ api: entry.api, baseUrl: entry.baseUrl });
-      routeSourcesByModel.set(key, sources);
-    }
     const createStatusAuthResolver = (
       authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
     ) =>
@@ -648,6 +633,62 @@ export async function modelsStatusCommand(
         metadataSnapshot,
       });
     let authResolver = createStatusAuthResolver(store);
+    // Status already owns the complete provider/auth use set. Carry it into the
+    // catalog owner so a read-only status does not discover every provider plugin.
+    const probedProvider = normalizeOptionalString(opts.probeProvider);
+    const providerDiscoveryProviderIds = [
+      ...new Set([
+        ...authResolver.providerDiscoveryProviderIds,
+        ...providersFromConfig,
+        ...providersFromModels,
+        ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
+    const catalog = await loadPreparedModelCatalogSnapshot({
+      config: cfg,
+      ...(agentId ? { agentId } : {}),
+      providerDiscoveryProviderIds,
+      readOnly: true,
+    });
+    const visibilityPolicy = createModelVisibilityPolicy({
+      cfg,
+      catalog: catalog.entries,
+      defaultProvider: resolved.provider,
+      defaultModel: resolved.model,
+      agentId: workspaceAgentId,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+    });
+    const allowed = visibilityPolicy.allowAny
+      ? []
+      : [
+          ...new Set([
+            ...visibilityPolicy.allowedCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+            ...configuredAllowRefs.flatMap((raw) => {
+              const wildcard = parseModelPolicyWildcardRef(raw);
+              if (!wildcard) {
+                return [];
+              }
+              const prefix = wildcard.key.slice(0, -1);
+              const hasCatalogMatch = catalog.entries.some((entry) =>
+                modelKey(entry.provider, entry.id).startsWith(prefix),
+              );
+              return hasCatalogMatch ? [] : [wildcard.key];
+            }),
+          ]),
+        ].toSorted();
+    const routeSourcesByModel = new Map<
+      string,
+      Array<{ api?: (typeof catalog.routeVariants)[number]["api"]; baseUrl?: string }>
+    >();
+    for (const entry of catalog.routeVariants) {
+      if (entry.api === undefined && entry.baseUrl === undefined) {
+        continue;
+      }
+      const key = modelCatalogLogicalKey(entry);
+      const sources = routeSourcesByModel.get(key) ?? [];
+      sources.push({ api: entry.api, baseUrl: entry.baseUrl });
+      routeSourcesByModel.set(key, sources);
+    }
     const resolveProviderUses = async (
       resolver: ModelAuthAvailabilityResolver,
     ): Promise<StatusProviderUse[]> =>
@@ -1143,7 +1184,7 @@ export async function modelsStatusCommand(
       // Probe the configured utility model itself; an arbitrary catalog model
       // from the same provider can sit on a different auth route.
       utilityModelRef ?? "",
-      ...allowed,
+      ...configuredAllowRefs,
     ].filter(Boolean);
     const resolvedCandidates = rawCandidates
       .map(

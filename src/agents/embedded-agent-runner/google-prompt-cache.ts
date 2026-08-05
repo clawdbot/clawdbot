@@ -2,7 +2,12 @@
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
 import crypto from "node:crypto";
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import {
+  sortPromptCacheToolsByName,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
+import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -24,8 +29,6 @@ import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
-import { stableStringify } from "../stable-stringify.js";
-import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
@@ -213,7 +216,7 @@ function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,

@@ -18,8 +18,9 @@ type TestActivityPage = HTMLElement & {
 function gateway(): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
-    reconnecting: false,
+    phase: "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",

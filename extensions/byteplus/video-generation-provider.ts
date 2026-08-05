@@ -2,11 +2,13 @@
  * BytePlus Seedance video generation provider implementation.
  */
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
@@ -37,7 +39,6 @@ const MAX_POLL_ATTEMPTS = 120;
 const BYTEPLUS_SEED_MAX = 2_147_483_647;
 const BYTEPLUS_MIN_DURATION_SECONDS = 2;
 const BYTEPLUS_MAX_DURATION_SECONDS = 12;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type BytePlusTaskCreateResponse = {
   id?: unknown;
@@ -105,14 +106,6 @@ function resolveBytePlusVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.byteplus?.baseUrl) ?? BYTEPLUS_BASE_URL
   );
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefined {
@@ -204,6 +197,15 @@ async function downloadBytePlusVideo(params: {
     provider: "byteplus",
     requestFailedMessage: "BytePlus generated video download failed",
   });
+  try {
+    assertProviderBinaryResponseContent(response, "BytePlus generated video download", "video");
+  } catch (error) {
+    // A rejected binary response still owns a live socket until its unread body is canceled.
+    // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+    // before the rejected response and its dispatcher can be released.
+    void response.body?.cancel().catch(() => undefined);
+    throw error;
+  }
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
     timeoutMs,
@@ -214,6 +216,9 @@ async function downloadBytePlusVideo(params: {
     onOverflow: ({ maxBytes }) =>
       new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
   });
+  if (buffer.byteLength === 0) {
+    throw new Error("BytePlus generated video download: malformed video response");
+  }
   return {
     buffer,
     mimeType,
@@ -228,11 +233,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
     label: "BytePlus",
     defaultModel: DEFAULT_BYTEPLUS_VIDEO_MODEL,
     models: [DEFAULT_BYTEPLUS_VIDEO_MODEL, "seedance-1-5-pro-251215"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "byteplus",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "byteplus", ...ctx }),
     capabilities: {
       providerOptions: {
         seed: "number",
@@ -386,7 +387,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
         return {
           videos: [video],

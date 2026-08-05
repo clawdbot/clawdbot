@@ -1,22 +1,23 @@
 ---
-summary: "Agent-driven desktop control on a paired macOS node via the computer tool and computer.act node command"
+summary: "Capability-based desktop control through the computer tool and computer.act node command"
 read_when:
-  - Letting the gateway agent see and control a Mac desktop
-  - Arming, permissions, or safety for computer use
+  - Letting the gateway agent see and control a paired desktop
+  - Enablement, permissions, or safety for computer use
   - Extending the computer.act node command or its fulfillers
 title: "Computer use"
 ---
 
-Computer use lets the gateway agent see and control a paired **macOS** desktop: it captures a screenshot with the existing `screen.snapshot` node command and drives the pointer and keyboard through a single dangerous node command, `computer.act`. The action set follows the core Anthropic computer-use actions; optional `computer_20251124` zoom is not exposed. A vision-capable model drives it through the built-in `computer` agent tool.
+Computer use lets the gateway agent see and control a capable paired desktop. Eligibility is capability-based: the connected node must advertise both `computer.act` and `screen.snapshot`, whose result must include a `displayFrameId`. The tool captures a screenshot as its reference frame, then drives the pointer and keyboard through `computer.act`. The action set follows the core Anthropic computer-use actions; optional `computer_20251124` zoom is not exposed. A vision-capable model drives it through the built-in `computer` agent tool.
 
-The agent emits one uniform command, `computer.act`; it cannot tell how a node fulfills it. A macOS node fulfills `computer.act` in-process with embedded Peekaboo services plus narrow CoreGraphics primitives (correct TCC permissions, no extra process). Other platforms can fulfill the same command later without changing the agent-facing contract.
+The agent emits one uniform command, `computer.act`; it cannot tell how a node fulfills it. The bundled macOS app handles the command in-process with embedded Peekaboo services plus narrow CoreGraphics primitives (correct TCC permissions, no extra process). Windows and Linux can use the optional, experimental `cua-computer` plugin, which calls the packaged CUA Driver SDK directly. Both fulfillers use the same durable local enablement and pairing policy.
 
 ## Requirements
 
-- A paired **macOS** node (the OpenClaw macOS app running in node mode).
-- macOS app setting **Allow Computer Control** enabled (default: off).
-- macOS **Accessibility** permission granted to OpenClaw (for pointer/keyboard injection) and **Screen Recording** permission (for `screen.snapshot`).
-- The `computer.act` command armed on the gateway (it is dangerous and disarmed by default).
+- A paired, connected node advertising both `computer.act` and `screen.snapshot`, with `screen.snapshot` returning `displayFrameId`.
+- **macOS fulfiller:** app setting **Allow Computer Control** enabled. It defaults on; an explicit off choice stays off.
+- **macOS fulfiller:** **Accessibility** and Event Posting access granted to OpenClaw (for pointer/keyboard injection), plus **Screen Recording** permission (for `screen.snapshot`).
+- **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled. Its package includes the pinned CUA Driver SDK 0.14.1 runtime; no `cua-driver` executable, daemon, or MCP server is configured.
+- The pairing update that includes `computer.act` approved on the gateway.
 - A vision-capable agent model.
 - Tool policy that exposes `computer`. The default `coding` profile does not. Add `computer` to `tools.alsoAllow`; sandboxed agents also need it in `tools.sandbox.tools.alsoAllow`.
 
@@ -34,18 +35,50 @@ Modifier keys ride the `text` field on click and scroll actions (`shift`, `ctrl`
 
 Screenshots are kept **model-only**: they are never auto-delivered to the chat channel. Treat all on-screen content as untrusted input; the tool warns the model not to follow on-screen instructions that conflict with the user's request.
 
+## Windows and Linux (experimental, via CUA Driver SDK)
+
+The bundled `cua-computer` plugin provides an experimental fulfiller for Windows and Linux node hosts. It is disabled by default and uses the pinned CUA Driver SDK 0.14.1 contract directly:
+
+1. Enable the plugin:
+
+   ```bash
+   openclaw plugins enable cua-computer
+   ```
+
+2. Start `openclaw node run` from the interactive desktop session. The plugin creates its configured SDK runtime lazily, then creates one OpenClaw-owned trusted session for the node-host command execution. It closes that session and shuts down the runtime when the command host stops or restarts.
+
+This fulfiller currently controls only the primary display. `hold_key`, `left_mouse_down`, and `left_mouse_up` are unavailable because the CUA Driver SDK has no desktop-scope held-input contract. Modifier-held clicks, scrolling, and dragging are rejected because the typed desktop methods do not accept modifiers. The `key` action accepts named keys, letters, and modifier combos (for example `cmd+c` or `Return`); digit and punctuation keys are rejected because the driver drops their layout-dependent shift state, so send that text through the `type` action instead. Cancellation is passed to the SDK for each node invocation.
+
+The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its authorization ceiling, trusted session identifier, TTLs, and desktop scope are fixed by OpenClaw; model-facing `screen.snapshot` and `computer.act` inputs cannot select a session or widen that authority. Because the driver reports no stable display identity, frame authorization binds to the trusted session generation plus live primary-display geometry. A new session invalidates outstanding frames, but a same-geometry primary-display substitution inside one session cannot be detected; prefer a stable single-display session for this fulfiller.
+
+This is a hard replacement of the former 0.10 daemon/MCP integration. OpenClaw does not spawn a CUA process, proxy an MCP client, or fall back to another CUA runtime.
+
+### Troubleshooting
+
+The `cua-computer` fulfiller surfaces typed error codes in the tool result and node logs. Common ones:
+
+| Code                                                 | Cause                                                                                                                                                         | Fix                                                                                                                                                                             |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COMPUTER_DRIVER_UNAVAILABLE`                        | The CUA Driver SDK runtime cannot initialize, the node is not Windows/Linux, or its desktop permissions/session are unavailable.                              | Run `openclaw node run` inside the interactive desktop session and check the platform desktop permissions. Reinstall OpenClaw if its bundled CUA Driver SDK package is missing. |
+| `COMPUTER_REFUSED_<code>`                            | The driver refused the action with a structured code such as `background_unavailable`, `background_occluded`, or `foreground_unavailable` (KDE/KWin Wayland). | Bring the target window forward, switch to X11, or use a supported compositor. See the compatibility notes above.                                                               |
+| `COMPUTER_STALE_FRAME`                               | The coordinates referenced a screenshot that is no longer current (context compaction, a display geometry change, or a reference-width change).               | Take a fresh `screenshot` before the coordinate action.                                                                                                                         |
+| `COMPUTER_UNSUPPORTED_ACTION`                        | An action this fulfiller cannot faithfully deliver: `hold_key`, `left_mouse_down`, `left_mouse_up`, or modifier-held click/drag/scroll.                       | Use a supported action. The typed CUA Driver desktop contract has no held-input or modifier argument for these calls.                                                           |
+| `COMPUTER_UNSUPPORTED_DISPLAY`                       | A non-primary `screenIndex`, a capture/screen geometry mismatch, or a cursor outside the primary display.                                                     | Drive the primary display only.                                                                                                                                                 |
+| `COMPUTER_UNSUPPORTED_KEY`                           | A `key` value the driver cannot reproduce reliably: a digit or punctuation key whose shift state is layout-dependent, or an unknown key.                      | Send that text through the `type` action instead.                                                                                                                               |
+| `COMPUTER_DRIVER_ERROR` / `COMPUTER_INVALID_REQUEST` | The driver failed without a structured code, or the action arguments were malformed.                                                                          | Check the driver state and retake a screenshot; correct the action arguments.                                                                                                   |
+
 ## The `computer.act` node command
 
 `computer.act` is the single node command the tool routes input through (`node.invoke` with `command: "computer.act"`). It is:
 
-- **Dangerous by default**: listed in the built-in dangerous node commands and excluded from the runtime allowlist until explicitly armed. A macOS node may still declare it at pairing so the surface is approved once.
-- **macOS-only** today: only advertised by a macOS node that has **Allow Computer Control** enabled.
+- **Locally enabled**: the node advertises it only while Computer Control is enabled. The gateway can approve that advertised surface once at pairing.
+- **Capability-based**: the tool requires a connected node to advertise both `computer.act` and `screen.snapshot`. The bundled macOS app and the opt-in experimental `cua-computer` plugin fulfill the same command pair.
 
 Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and screen nodes](/nodes/camera) for the shared capture command.
 
-## Enable and arm
+## Authorization
 
-1. In the macOS app, enable **Settings → Allow Computer Control**. Then open **Settings → Permissions** and grant **Accessibility** and **Screen Recording** in macOS System Settings.
+1. Enable the platform fulfiller: on macOS, **Settings → Allow Computer Control** starts enabled, then grant **Accessibility** and **Screen Recording** under **Settings → Permissions**; on Windows/Linux, follow the experimental `cua-computer` setup above.
 2. Approve the pairing update on the gateway (a new command forces re-pairing).
 3. Expose the tool to the vision-capable agent. For the default `coding` profile:
 
@@ -59,32 +92,24 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
    }
    ```
 
-4. Arm `computer.act` for a bounded window. The `phone-control` plugin exposes a `computer` group:
+Once the node-local control is enabled and the pairing update is approved, `computer.act` is durably available while the node continues to advertise it. There is no lease, expiry, or arm/disarm command. Disabling Computer Control locally removes the advertised command and the node rechecks the toggle at invocation time.
 
-   ```text
-   /phone arm computer 30m
-   /phone status
-   /phone disarm
-   ```
+On macOS, default-on means a paired gateway can drive pointer and keyboard input as soon as the required macOS grants exist. There is no per-action confirmation. Turn off **Allow Computer Control** before pairing, or at any later time, to stop advertising and accepting `computer.act`.
 
-   Arming requires `operator.admin` (or the owner) and auto-expires. The legacy `/phone arm all` group intentionally excludes desktop control; use the explicit `computer` group. Arming only toggles what the gateway may invoke; the macOS app still enforces its **Allow Computer Control** setting and OS permissions.
-
-For persistent authorization, add `computer.act` to `gateway.nodes.allowCommands` **and remove it from** `gateway.nodes.denyCommands`; the deny list wins. Persistent authorization does not auto-expire. Entries already present before `/phone arm` remain after `/phone disarm`; do not convert a temporary grant to persistent while it is armed.
-
-Authorization is deliberately split between enabling and use. Arming or
-persistently configuring `computer.act` requires administrative authority.
-Once armed, an authenticated operator with `operator.write` can invoke
-`computer.act` through `node.invoke` until the grant expires or is disarmed;
-there is no per-action admin check. Approving a node that declares
-`computer.act` only records the surface so it can be armed later and does not
-enable invocation by itself.
+`gateway.nodes.commands.deny` remains an explicit global revocation and always wins. `computer.act` does not need a `gateway.nodes.commands.allow` entry. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
 
 ## Safety
 
-- Before authorization, every layer (tool policy, gateway command policy, macOS setting, Accessibility, and Screen Recording) must agree. Once armed, actions execute without a per-action confirmation until expiry or `/phone disarm`.
-- Text input is posted one grapheme at a time. Cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme instead of letting the stale remainder continue.
+- Every layer (tool policy, gateway command policy, pairing, node-app setting, and platform permissions) must agree. For the current macOS fulfiller, that includes **Allow Computer Control**, Accessibility, and Screen Recording. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
+- The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental CUA Driver fulfiller passes node cancellation to the SDK for each call.
 - Screenshots are model-only and never auto-sent to chat (issue [#44759](https://github.com/openclaw/openclaw/issues/44759)).
 - Treat screen content as untrusted; it can carry prompt injection.
+
+## macOS permission troubleshooting
+
+The Computer Control status in **Settings → General → Capabilities** checks Accessibility, Event Posting, and Screen Recording separately. Screen capture can work while input remains denied because macOS stores those grants in separate TCC buckets.
+
+If the status says **Accessibility grant may be stale**, OpenClaw may already appear enabled under **System Settings → Privacy & Security → Accessibility** even though macOS rejects it. This happens when the Accessibility entry is pinned to an older app build. Select OpenClaw in that list, remove it with **−**, then re-add `/Applications/OpenClaw.app`. Quit and reopen OpenClaw after changing the grant because macOS can cache Accessibility trust for the lifetime of the process.
 
 ## Relationship to other desktop-control paths
 

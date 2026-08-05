@@ -59,14 +59,17 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function memoryWorkspaceJournal(): WorkerWorkspaceReconciliationJournalAdapter {
+function memoryWorkspaceJournal(
+  onCommit?: (manifestRef: string) => void,
+): WorkerWorkspaceReconciliationJournalAdapter {
   let pending: WorkerWorkspaceReconciliationJournal | undefined;
   return {
     load: () => pending,
     begin: (journal) => {
       pending = journal;
     },
-    commit: () => {
+    commit: (manifestRef) => {
+      onCommit?.(manifestRef);
       pending = undefined;
     },
     abort: () => {
@@ -506,6 +509,7 @@ describe("worker tunnel manager", () => {
       fs.writeFile(path.join(localPath, "gone.txt"), "delete me\n"),
       fs.writeFile(path.join(localPath, "rename-old.txt"), "rename me\n"),
       fs.writeFile(path.join(localPath, "modified.txt"), "before\n"),
+      fs.writeFile(path.join(localPath, "conflict.txt"), "base\n"),
     ]);
     const largeFiles = Array.from(
       { length: 1_800 },
@@ -592,6 +596,7 @@ describe("worker tunnel manager", () => {
       await fs.mkdir(path.join(result.remoteWorkspaceDir, "private"));
       await Promise.all([
         fs.writeFile(path.join(result.remoteWorkspaceDir, "modified.txt"), "worker result\n"),
+        fs.writeFile(path.join(result.remoteWorkspaceDir, "conflict.txt"), "worker result\n"),
         fs.appendFile(
           path.join(result.remoteWorkspaceDir, ".gitignore"),
           "ordinary-untracked.txt\n",
@@ -609,8 +614,12 @@ describe("worker tunnel manager", () => {
         fs.rm(path.join(result.remoteWorkspaceDir, "rename-new.txt")),
         fs.symlink("modified.txt", path.join(result.remoteWorkspaceDir, "worker-link")),
       ]);
+      await fs.writeFile(path.join(localPath, "conflict.txt"), "local result\n");
 
-      const journal = memoryWorkspaceJournal();
+      let acceptedManifestRef = result.manifestRef;
+      const journal = memoryWorkspaceJournal((manifestRef) => {
+        acceptedManifestRef = manifestRef;
+      });
       const reconciled = await handle.reconcileWorkspace({
         localPath,
         remoteWorkspaceDir: result.remoteWorkspaceDir,
@@ -636,14 +645,23 @@ describe("worker tunnel manager", () => {
       ).resolves.toBe("allowed\n");
       await expect(fs.access(path.join(localPath, "private/worker-secret.txt"))).rejects.toThrow();
       await expect(fs.access(path.join(localPath, "rename-new.txt"))).rejects.toThrow();
+      await expect(fs.readFile(path.join(localPath, "conflict.txt"), "utf8")).resolves.toBe(
+        "local result\n",
+      );
+      await expect(
+        fs.readFile(path.join(result.remoteWorkspaceDir, "conflict.txt"), "utf8"),
+      ).resolves.toBe("local result\n");
+      await expect(
+        fs.access(path.join(result.remoteWorkspaceDir, "private/ignored.txt")),
+      ).rejects.toThrow();
       expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
       const unchanged = await handle.reconcileWorkspace({
         localPath,
         remoteWorkspaceDir: result.remoteWorkspaceDir,
-        baseManifestRef: reconciled.manifestRef,
+        baseManifestRef: acceptedManifestRef,
         journal,
       });
-      expect(unchanged).toMatchObject({ manifestRef: reconciled.manifestRef, changed: false });
+      expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
       await unchanged.verifyStable();
       await unchanged.verifyLocalStable();
       await fs.writeFile(path.join(result.remoteWorkspaceDir, "modified.txt"), "late write\n");
@@ -652,7 +670,7 @@ describe("worker tunnel manager", () => {
       );
       await fs.writeFile(path.join(localPath, "modified.txt"), "local late write\n");
       await expect(unchanged.verifyLocalStable()).rejects.toThrow(
-        "Gateway workspace changed after cloud dispatch",
+        "Gateway workspace changed after cloud reconciliation",
       );
 
       const manifestPath = path.join(

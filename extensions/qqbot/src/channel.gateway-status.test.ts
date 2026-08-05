@@ -68,11 +68,13 @@ describe("qqbot channel gateway status", () => {
 
     options.onReady?.({});
     expect(getStatus().connected).toBe(true);
+    expect(getStatus().lifecycle).toBe("ready");
 
     expect(options.onDisconnected).toBeDefined();
     options.onDisconnected?.({ reason: "close code 1006", fatal: false });
     expect(getStatus().connected).toBe(false);
     expect(getStatus().running).toBe(true);
+    expect(getStatus().lifecycle).toBe("recovering");
   });
 
   it("marks fatal disconnects unhealthy and records the close reason", async () => {
@@ -87,6 +89,7 @@ describe("qqbot channel gateway status", () => {
     // flip it here (a Start action would no-op against a held task).
     expect(getStatus().running).toBe(true);
     expect(getStatus().lastError).toBe("banned");
+    expect(getStatus().lifecycle).toBe("blocked");
 
     const publicStatus = await qqbotPlugin.status?.buildAccountSnapshot?.({
       account,
@@ -95,6 +98,15 @@ describe("qqbot channel gateway status", () => {
     });
     expect(publicStatus?.connected).toBe(false);
     expect(publicStatus?.lastError).toBe("banned");
+    expect(publicStatus?.lifecycle).toBe("blocked");
+
+    const publicSummary = await qqbotPlugin.status?.buildChannelSummary?.({
+      account,
+      cfg: {},
+      defaultAccountId: "test-account",
+      snapshot: getStatus(),
+    });
+    expect(publicSummary?.lifecycle).toBe("blocked");
   });
 
   it("clears fatal errors when the gateway becomes ready or resumes", async () => {
@@ -106,11 +118,15 @@ describe("qqbot channel gateway status", () => {
 
     expect(getStatus().connected).toBe(true);
     expect(getStatus().lastError).toBeNull();
+    expect(getStatus().lifecycle).toBe("ready");
+    expect(getStatus().terminalDisconnect).toBeUndefined();
 
     options.onDisconnected?.({ reason: "offline/sandbox-only", fatal: true });
     options.onReady?.({});
 
     expect(getStatus().connected).toBe(true);
     expect(getStatus().lastError).toBeNull();
+    expect(getStatus().lifecycle).toBe("ready");
+    expect(getStatus().terminalDisconnect).toBeUndefined();
   });
 });

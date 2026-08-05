@@ -1,0 +1,10 @@
+const password = "FAKE-CorrectHorseBattery-Staple-2026!";
+const credential = "FAKE_A7f9K2m4Q8v6N3x5R1p0T9z8";
+const apiKey = "sk-proj-FAKE00000000000000000000000000000000000000000000";
+const githubToken = "ghp_FAKE000000000000000000000000000000";
+const awsAccessKey = "AKIAFAKE000000000000";
+const slackToken = "xoxb-FAKE000000000-FAKE000000000-FAKE000000000000000000000000";
+const authorization = "Bearer eyJhbGciOiJIUzI1NiJ9.RkFLRS1OT1QtQS1SRUFM.TOKENFAKESIGNATURE";
+const resolvedToken = resolveToken({ value: "FAKE_B8g0L3n5R9w7P4y6S2q1U0a9" });
+const filePassword = tryReadSecretFileSync(path, "FAKE-A7f9K2m4Q8v6N3x5R1p0T9z8");
+const password = readPassword("alice", "FAKE correct horse secret battery 2026");

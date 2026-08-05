@@ -8,7 +8,6 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -19,6 +18,7 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
   isTruthyEnvValue,
+  readLiveTestConfig,
 } from "openclaw/plugin-sdk/test-live";
 import { collectProviderApiKeys, getShellEnvAppliedKeys } from "openclaw/plugin-sdk/test-live-auth";
 import {
@@ -196,7 +196,7 @@ describeLive("music generation provider live", () => {
   it(
     "covers generate plus declared edit paths with shell/profile auth",
     async () => {
-      const cfg = withPluginsEnabled(getRuntimeConfig());
+      const cfg = withPluginsEnabled(await readLiveTestConfig());
       const configuredModels = resolveConfiguredLiveMusicModels(cfg);
       const agentDir = resolveDefaultAgentDir(cfg as never);
       const attempted: string[] = [];

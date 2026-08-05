@@ -12,7 +12,7 @@ export async function checkWhatsAppHeartbeatReady(params: {
     hasActiveWebListener?: (accountId?: string) => boolean;
   };
 }) {
-  if (params.cfg.web?.enabled === false) {
+  if (params.cfg.channels?.whatsapp?.enabled === false) {
     return { ok: false as const, reason: "whatsapp-disabled" as const };
   }
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });

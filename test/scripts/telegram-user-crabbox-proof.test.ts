@@ -5,12 +5,18 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMMAND_TIMEOUT_MS,
+  createContainerizedSutSpawnSpec,
+  createCrabboxWarmupArgs,
   createOpenClawGatewaySpawnSpec,
   parseArgs,
+  processTargetExists,
+  readCodexProxyPort,
   readLogTail,
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
@@ -19,11 +25,14 @@ import {
   renderRemoteProbe,
   renderRemoteSetup,
   renderSelectDesktopChat,
+  renderTailscaleSshProxy,
   runCommand,
+  runSutContainerAction,
   signalCommandTree,
   stageFullSessionArtifacts,
   startLocalSut,
   waitForLog,
+  writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
@@ -82,6 +91,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -106,6 +116,152 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.options.cwd).toBe(root);
     expect(spec.options.env?.OPENCLAW_TELEGRAM_PROOF_SENTINEL).toBe("1");
     expect(spec.options.shell).toBe(false);
+  });
+
+  it("uses an explicitly pinned pnpm executable for a worktree gateway", () => {
+    const spec = createOpenClawGatewaySpawnSpec({
+      env: { PATH: "/definitely-missing" },
+      gatewayPort: 19042,
+      pnpmExecPath: "/opt/mantis-toolchain/pnpm",
+      repoRoot: "/repo",
+    });
+
+    expect(spec.command).toBe("/opt/mantis-toolchain/pnpm");
+    expect(spec.args).toEqual(["openclaw", "gateway", "--port", "19042"]);
+    expect(spec.options.cwd).toBe("/repo");
+    expect(spec.options.shell).toBe(false);
+  });
+
+  it("routes fork SUT startup through the root-owned validating wrapper", () => {
+    const repoRoot = makeTempDir();
+    const runtimeRoot = makeTempDir();
+    const spec = createContainerizedSutSpawnSpec({
+      codexProxyPort: 43123,
+      containerName: "openclaw-telegram-sut-test",
+      gatewayEnv: {
+        TELEGRAM_BOT_TOKEN: "telegram-burner-token",
+      },
+      gatewayPort: 19042,
+      mockPort: 19043,
+      mockResponseText: "streamed response",
+      repoRoot,
+      runtimeRoot,
+      sutLane: "candidate",
+    });
+
+    expect(spec.command).toBe("sudo");
+    expect(spec.args).toContain("/usr/local/sbin/openclaw-mantis-sut-container");
+    expect(spec.args).toContain("run");
+    expect(spec.args).toContain("candidate");
+    expect(spec.args).not.toContain("docker");
+    expect(spec.args.join("\n")).not.toContain("--preserve-env");
+    expect(spec.args.join("\n")).not.toContain("CODEX_HOME");
+    expect(spec.options.env).not.toHaveProperty("CODEX_HOME");
+    expect(spec.options.env).not.toHaveProperty("OPENAI_API_KEY");
+    expect(spec.options.env).not.toHaveProperty("TELEGRAM_BOT_TOKEN");
+    expect(fs.statSync(spec.inputPath).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(fs.readFileSync(spec.inputPath, "utf8"))).toEqual({
+      mockResponseText: "streamed response",
+      telegramBotToken: "telegram-burner-token",
+    });
+  });
+
+  it("reads only the loopback Responses proxy port from Codex config", () => {
+    const codexHome = makeTempDir();
+    fs.writeFileSync(
+      path.join(codexHome, "config.toml"),
+      '[model_providers.codex-action-responses-proxy]\nbase_url = "http://127.0.0.1:43123/v1"\n',
+    );
+    expect(readCodexProxyPort(codexHome)).toBe(43123);
+    fs.writeFileSync(
+      path.join(codexHome, "config.toml"),
+      '[model_providers.codex-action-responses-proxy]\nbase_url = "https://api.openai.com/v1"\n',
+    );
+    expect(readCodexProxyPort(codexHome)).toBeUndefined();
+  });
+
+  it("requires successful privileged SUT teardown commands", () => {
+    const run = vi.fn(() => ({ signal: null, status: 0, stderr: "" }));
+    runSutContainerAction(
+      "stop",
+      "openclaw-telegram-sut-test",
+      "/tmp/openclaw-tg-crabbox-sut-test",
+      run,
+    );
+    expect(run).toHaveBeenCalledWith(
+      "sudo",
+      [
+        "-n",
+        "/usr/local/sbin/openclaw-mantis-sut-container",
+        "stop",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+      ],
+      expect.objectContaining({ encoding: "utf8", stdio: "pipe" }),
+    );
+
+    expect(() =>
+      runSutContainerAction(
+        "destroy",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+        () => ({ signal: null, status: 1, stderr: "destroy failed" }),
+      ),
+    ).toThrow("destroy failed with exit code 1.\ndestroy failed");
+    expect(() =>
+      runSutContainerAction(
+        "stop",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+        () => ({ signal: "SIGKILL", status: null, stderr: "" }),
+      ),
+    ).toThrow("stop was terminated by SIGKILL");
+    expect(() =>
+      runSutContainerAction(
+        "stop",
+        "openclaw-telegram-sut-test",
+        "/tmp/openclaw-tg-crabbox-sut-test",
+        () => ({ error: new Error("spawn failed"), status: null }),
+      ),
+    ).toThrow("Failed to stop container-isolated SUT: spawn failed");
+  });
+
+  it("treats permission-denied process probes as alive", () => {
+    const kill = vi.spyOn(process, "kill");
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    });
+    expect(processTargetExists(1234)).toBe(true);
+
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    });
+    expect(processTargetExists(1234)).toBe(false);
+
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("unexpected"), { code: "EINVAL" });
+    });
+    expect(() => processTargetExists(1234)).toThrow("unexpected");
+  });
+
+  it("forces fork candidates into the isolated SUT container", () => {
+    vi.stubEnv("MANTIS_CANDIDATE_TRUST", "fork-pr-head");
+    expect(() => parseArgs(["start"])).toThrow(
+      "container proof requires --sut-repo-root and --sut-lane.",
+    );
+    expect(
+      parseArgs(["start", "--sut-lane", "candidate", "--sut-repo-root", "/prepared/candidate"]),
+    ).toMatchObject({
+      sutContainer: true,
+      sutLane: "candidate",
+      sutRepoRoot: "/prepared/candidate",
+    });
+    expect(() => parseArgs([])).toThrow("--sut-container requires the held-session start flow.");
+    vi.stubEnv("MANTIS_CANDIDATE_TRUST", "open-pr-head");
+    expect(parseArgs(["start"]).sutContainer).toBe(false);
+    expect(() => parseArgs(["start", "--sut-container"])).toThrow(
+      "container proof requires --sut-repo-root and --sut-lane.",
+    );
   });
 
   it("allows cold remote setup to outlive ordinary command timeouts", () => {
@@ -161,6 +317,24 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(parseArgs(["--text", "-ping"]).text).toBe("-ping");
   });
 
+  it("accepts an explicit Telegram link-preview setting", () => {
+    expect(parseArgs(["start", "--link-preview", "false"]).linkPreview).toBe(false);
+    expect(parseArgs(["start", "--link-preview", "true"]).linkPreview).toBe(true);
+    expect(parseArgs(["start"]).linkPreview).toBeUndefined();
+    expect(() => parseArgs(["start", "--link-preview", "disabled"])).toThrow(
+      "--link-preview must be true or false.",
+    );
+  });
+
+  it("accepts a positive mock response chunk delay", () => {
+    expect(
+      parseArgs(["start", "--mock-response-chunk-delay-ms", "1200"]).mockResponseChunkDelayMs,
+    ).toBe(1200);
+    expect(() => parseArgs(["start", "--mock-response-chunk-delay-ms", "0"])).toThrow(
+      "--mock-response-chunk-delay-ms must be a positive integer.",
+    );
+  });
+
   it("rejects duplicate single-value proof controls while keeping repeated expectations", () => {
     expect(() =>
       parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
@@ -190,6 +364,171 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(parseArgs(["--timeout-ms", String(MAX_TIMER_TIMEOUT_MS + 1)]).timeoutMs).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
+  });
+
+  it("enables the pinned MCP App fixture only when explicitly requested", () => {
+    expect(parseArgs(["start", "--mcp-app-fixture"]).mcpAppFixture).toBe(true);
+    expect(parseArgs([]).mcpAppFixture).toBe(false);
+
+    const ordinaryArgs = createCrabboxWarmupArgs(parseArgs([]));
+    const fixtureArgs = createCrabboxWarmupArgs(parseArgs(["start", "--mcp-app-fixture"]));
+    expect(ordinaryArgs).not.toContain("--tailscale");
+    expect(fixtureArgs).toContain("--tailscale");
+    expect(() => parseArgs(["--mcp-app-fixture"])).toThrow(
+      "--mcp-app-fixture is available only for start sessions.",
+    );
+    expect(() =>
+      parseArgs([
+        "start",
+        "--mcp-app-fixture",
+        "--sut-lane",
+        "baseline",
+        "--sut-repo-root",
+        "/prepared/baseline",
+      ]),
+    ).toThrow("--mcp-app-fixture is unavailable for container-isolated SUT proof.");
+    expect(() => parseArgs(["start", "--mcp-app-fixture", "--id", "cbx_reused"])).toThrow(
+      "--mcp-app-fixture requires a fresh lifecycle-owned Crabbox lease.",
+    );
+  });
+
+  it("writes an isolated Funnel and official MCP App fixture config", () => {
+    const configRoot = writeSutConfig({
+      gatewayPort: 19042,
+      groupId: "group",
+      mcpAppFixture: true,
+      mockPort: 19043,
+      outputDir: makeTempDir(),
+      repoRoot: "/repo",
+      testerId: "tester",
+    });
+    tempDirs.push(configRoot.tempRoot);
+    const config = JSON.parse(fs.readFileSync(configRoot.configPath, "utf8"));
+
+    expect(config.gateway).toMatchObject({
+      auth: {
+        mode: "password",
+        password: { id: "OPENCLAW_GATEWAY_PASSWORD", source: "env" },
+      },
+      tailscale: { mode: "funnel", resetOnExit: true },
+    });
+    expect(config.mcp.servers.fixture).toEqual({
+      args: ["/repo/scripts/e2e/mcp-app-conformance-server.mjs"],
+      command: process.execPath,
+    });
+    expect(JSON.stringify(config)).not.toContain("companion-called");
+    expect(JSON.stringify(config)).not.toContain("resource-ok");
+  });
+
+  it("injects the requested Telegram link-preview setting before startup", () => {
+    const disabledConfigRoot = writeSutConfig({
+      gatewayPort: 19042,
+      groupId: "group",
+      linkPreview: false,
+      mockPort: 19043,
+      outputDir: makeTempDir(),
+      testerId: "tester",
+    });
+    const defaultConfigRoot = writeSutConfig({
+      gatewayPort: 19044,
+      groupId: "group",
+      mockPort: 19045,
+      outputDir: makeTempDir(),
+      testerId: "tester",
+    });
+    tempDirs.push(disabledConfigRoot.tempRoot, defaultConfigRoot.tempRoot);
+
+    const disabledConfig = JSON.parse(fs.readFileSync(disabledConfigRoot.configPath, "utf8"));
+    const defaultConfig = JSON.parse(fs.readFileSync(defaultConfigRoot.configPath, "utf8"));
+
+    expect(disabledConfig.channels.telegram.linkPreview).toBe(false);
+    expect(defaultConfig.channels.telegram).not.toHaveProperty("linkPreview");
+  });
+
+  it("pins the browser fixture SDK and exposes only the required app capabilities", () => {
+    const fixture = fs.readFileSync("scripts/e2e/mcp-app-conformance-server.mjs", "utf8");
+    const uiPackage = JSON.parse(fs.readFileSync("ui/package.json", "utf8"));
+
+    expect(uiPackage.dependencies["@modelcontextprotocol/ext-apps"]).toBe("1.7.5");
+    expect(fixture).toContain(
+      `@modelcontextprotocol/ext-apps@${uiPackage.dependencies["@modelcontextprotocol/ext-apps"]}`,
+    );
+    expect(fixture).toContain('server.tool("app_companion"');
+    expect(fixture).toContain('visibility: ["app"]');
+    expect(fixture).toContain('"data://conformance/value"');
+    expect(fixture).toContain('text: "resource-ok"');
+  });
+
+  it("serves the fixture view, app-only tool, and resource over official MCP stdio", async () => {
+    const transport = new StdioClientTransport({
+      args: ["scripts/e2e/mcp-app-conformance-server.mjs"],
+      command: process.execPath,
+      cwd: process.cwd(),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "telegram-proof-fixture-test", version: "1.0.0" });
+    try {
+      await client.connect(transport);
+      const tools = await client.listTools();
+      expect(tools.tools.find((tool) => tool.name === "show")?._meta).toMatchObject({
+        ui: { resourceUri: "ui://conformance/app" },
+      });
+      expect(tools.tools.find((tool) => tool.name === "app_companion")?._meta).toMatchObject({
+        ui: { visibility: ["app"] },
+      });
+      expect(await client.callTool({ arguments: {}, name: "app_companion" })).toMatchObject({
+        structuredContent: { value: "companion-called" },
+      });
+      expect(await client.readResource({ uri: "data://conformance/value" })).toMatchObject({
+        contents: [{ text: "resource-ok" }],
+      });
+    } finally {
+      await Promise.allSettled([client.close(), transport.close()]);
+    }
+  });
+
+  posixIt("limits the Funnel bridge proxy to the Gateway lifecycle commands", () => {
+    const root = makeTempDir();
+    const sshPath = path.join(root, "ssh");
+    const argvPath = path.join(root, "ssh-argv.json");
+    const proxyPath = path.join(root, "tailscale");
+    writeExecutable(
+      sshPath,
+      `#!/usr/bin/env node\nimport fs from "node:fs";\nfs.writeFileSync(process.env.ARGV_PATH, JSON.stringify(process.argv.slice(2)));\n`,
+    );
+    writeExecutable(
+      proxyPath,
+      renderTailscaleSshProxy({
+        gatewayPort: 19042,
+        inspect: {
+          host: "proof.example",
+          sshKey: "/tmp/proof-key",
+          sshPort: "2222",
+          sshUser: "proof",
+        },
+      }),
+    );
+    const env = {
+      ...process.env,
+      ARGV_PATH: argvPath,
+      PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+    };
+
+    const allowed = spawnSync(proxyPath, ["funnel", "--bg", "--yes", "19042"], {
+      encoding: "utf8",
+      env,
+    });
+    expect(allowed.status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toContain(
+      "'tailscale' 'funnel' '--bg' '--yes' '19042'",
+    );
+
+    const rejected = spawnSync(proxyPath, ["serve", "--bg", "19042"], {
+      encoding: "utf8",
+      env,
+    });
+    expect(rejected.status).toBe(64);
+    expect(rejected.stderr).toContain("unsupported proof Tailscale command");
   });
 
   it("reads only the requested log tail", () => {

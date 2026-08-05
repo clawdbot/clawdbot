@@ -9,7 +9,7 @@ import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 function createManager() {
-  return new ExecApprovalManager<PluginApprovalRequestPayload>();
+  return new ExecApprovalManager<PluginApprovalRequestPayload>({ approvalKind: "plugin" });
 }
 
 function createLogGatewayMock() {
@@ -314,6 +314,7 @@ describe("createPluginApprovalHandlers", () => {
 
       // Resolve the approval so the handler can complete
       expect(manager.getSnapshot(approvalId)?.requestedByClientId).toBe("test-client");
+      expect(manager.getSnapshot(approvalId)?.request.detail).toBeNull();
       manager.resolve(approvalId, "allow-once");
 
       await handlerPromise;
@@ -707,6 +708,7 @@ describe("createPluginApprovalHandlers", () => {
         {
           title: "Sensitive action",
           description: "Desc",
+          detail: '  {"command":"deploy --production"}  ',
           twoPhase: true,
         },
         { respond },
@@ -733,9 +735,20 @@ describe("createPluginApprovalHandlers", () => {
       const request = requireRecord(approval.request, "approval request");
       expect(request.title).toBe("Sensitive action");
       expect(request.description).toBe("Desc");
+      expect(request.detail).toBe('{"command":"deploy --production"}');
 
       expect(listedApprovalId).toBe(approvalId);
-      manager.resolve(approvalId, "allow-once");
+      const resolved = manager.resolveDetailed(approvalId, "allow-once", {
+        kind: "runtime",
+        id: null,
+      });
+      expect(resolved.outcome).toBe("resolved");
+      if (resolved.outcome === "resolved") {
+        expect(resolved.record.presentation).toMatchObject({
+          kind: "plugin",
+          detail: '{"command":"deploy --production"}',
+        });
+      }
       await handlerPromise;
     });
 

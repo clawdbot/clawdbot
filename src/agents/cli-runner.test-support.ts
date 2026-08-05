@@ -42,14 +42,14 @@ setCliRunnerPrepareTestDeps({
 });
 
 /** Queue one successful CLI supervisor run. */
-export function mockSuccessfulCliRun() {
+export function mockSuccessfulCliRun(stdout = "ok") {
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
       reason: "exit",
       exitCode: 0,
       exitSignal: null,
       durationMs: 50,
-      stdout: "ok",
+      stdout,
       stderr: "",
       timedOut: false,
       noOutputTimedOut: false,

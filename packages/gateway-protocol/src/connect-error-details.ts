@@ -57,11 +57,11 @@ export const ConnectErrorDetailCodes = {
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
-export type ConnectErrorDetailCode =
+type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
 /** Pairing-specific reasons clients can display and use for reconnect policy. */
-export const ConnectPairingRequiredReasons = {
+const ConnectPairingRequiredReasons = {
   NOT_PAIRED: "not-paired",
   ROLE_UPGRADE: "role-upgrade",
   SCOPE_UPGRADE: "scope-upgrade",
@@ -72,7 +72,7 @@ export type ConnectPairingRequiredReason =
   (typeof ConnectPairingRequiredReasons)[keyof typeof ConnectPairingRequiredReasons];
 
 /** Suggested client-side recovery action for structured connect errors. */
-export type ConnectRecoveryNextStep =
+type ConnectRecoveryNextStep =
   | "retry_with_device_token"
   | "update_auth_configuration"
   | "update_auth_credentials"
@@ -80,13 +80,13 @@ export type ConnectRecoveryNextStep =
   | "review_auth_configuration";
 
 /** Optional retry guidance extracted from gateway connect-error details. */
-export type ConnectErrorRecoveryAdvice = {
+type ConnectErrorRecoveryAdvice = {
   canRetryWithDeviceToken?: boolean;
   recommendedNextStep?: ConnectRecoveryNextStep;
 };
 
 /** Full structured details for pairing-required connect failures. */
-export type PairingConnectErrorDetails = {
+type PairingConnectErrorDetails = {
   code: typeof ConnectErrorDetailCodes.PAIRING_REQUIRED;
   reason?: ConnectPairingRequiredReason;
   requestId?: string;

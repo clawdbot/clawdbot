@@ -28,6 +28,64 @@ const DISCORD_TEST_CFG = {
   channels: { discord: { token: "t" } },
 };
 
+const DISCORD_MARKDOWN_GOLDENS = [
+  {
+    name: "normalizes CommonMark underscore bold without changing other Discord markdown",
+    before: "__bold__ *italic* ~~strike~~ `code`",
+    after: "**bold** *italic* ~~strike~~ `code`",
+  },
+  {
+    name: "normalizes nested CommonMark emphasis and strong spans",
+    before:
+      "__*nested italic*__ __foo*bar*baz__ __a*x*.__ __foo**bar**baz__ __outer __inner__ tail__",
+    after:
+      "**_nested italic_** **foo*bar*baz** **a*x*.** **foo****bar****baz** **outer **inner** tail**",
+  },
+  {
+    name: "normalizes CommonMark bold containing links without changing destinations",
+    before:
+      "__See https://example.com and [__docs__](https://example.com)__ __See https://example.com__. __*see https://example.com*__ __<mailto:user*tag@example.com>__",
+    after:
+      "**See https://example.com and [**docs**](https://example.com)** **See https://example.com**. **_see https://example.com_** **<mailto:user*tag@example.com>**",
+  },
+  {
+    name: "normalizes CommonMark bold around URLs with parentheses and asterisks",
+    before:
+      "__https://example.com/a(b)*c__ __<https://example.com/a(b)*c>__ ____https://example.com____ https://[2001:db8::1]/__v1__ ftp://example.com/__v2__ WWW.example.com/__v3__",
+    after:
+      "__https://example.com/a(b)*c__ **<https://example.com/a(b)*c>** ****https://example.com**** https://[2001:db8::1]/__v1__ ftp://example.com/__v2__ WWW.example.com/__v3__",
+  },
+  {
+    name: "keeps escaped and intraword underscores literal",
+    before: "\\__literal__ foo__bar__baz awww.__bold__ \\\\__bold__",
+    after: "\\__literal__ foo__bar__baz awww.**bold** \\\\**bold**",
+  },
+  {
+    name: "keeps underscore markers inside code byte-identical",
+    before:
+      "`__inline__` ``tick ` __literal__`` `a` __bold__ `b` `__` __outside__\n\n````md\nline\n```\n__fenced__\n````",
+    after:
+      "`__inline__` ``tick ` __literal__`` `a` **bold** `b` `__` **outside**\n\n````md\nline\n```\n__fenced__\n````",
+  },
+  {
+    name: "keeps indentation and special link destinations byte-identical",
+    before:
+      '    a\n    b\n\n[x](<https://example.test/__v1__/a)>)\n<https://example.test/__v1__/>\nhttps://example.test/__v1__/bare\n<:__wave__:123456789012345678> <a:__dance__:123456789012345679> </__foo__:123456789012345680>\n\n[r]: https://example.test/__v1__/unused\n  "__title__"',
+    after:
+      '    a\n    b\n\n[x](<https://example.test/__v1__/a)>)\n<https://example.test/__v1__/>\nhttps://example.test/__v1__/bare\n<:__wave__:123456789012345678> <a:__dance__:123456789012345679> </__foo__:123456789012345680>\n\n[r]: https://example.test/__v1__/unused\n  "__title__"',
+  },
+  {
+    name: "keeps compact reference links byte-identical before channel chunking",
+    before: "[x][r] [x][r]\n\n[r]: https://example.test/a/very/long/reference",
+    after: "[x][r] [x][r]\n\n[r]: https://example.test/a/very/long/reference",
+  },
+  {
+    name: "escapes literal asterisks when normalizing underscore bold",
+    before: "__safe__ and __a * b__ and __foo **bar__",
+    after: "**safe** and **a \\* b** and **foo \\*\\*bar**",
+  },
+];
+
 beforeAll(async () => {
   ({
     deleteMessageDiscord,
@@ -229,6 +287,20 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("hello world");
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
+  });
+
+  it.each(DISCORD_MARKDOWN_GOLDENS)("$name", async ({ before, after }) => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", before, {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+    });
+
+    expect(requireRestBody(postMock).content).toBe(after);
   });
 
   it("reports the first Discord chunk before a later chunk fails", async () => {
@@ -470,6 +542,24 @@ describe("sendMessageDiscord", () => {
     });
   });
 
+  it("explains how to create a forum thread when the parent requires an applied tag", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildForum,
+      flags: 1 << 4,
+      available_tags: [{ id: "tag1", name: "Question", moderated: false }],
+    });
+
+    await expect(
+      sendMessageDiscord("channel:forum1", "Discussion topic", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).rejects.toThrow(/thread-create with appliedTags/);
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
   it("posts media as a follow-up message in forum channels", async () => {
     const { rest, postMock } = setupForumSend({ id: "media1", channel_id: "thread1" });
     const res = await sendMessageDiscord("channel:forum1", "Topic", {
@@ -482,9 +572,18 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("thread1");
     expectRecordFields(res.receipt, "send receipt", {
       threadId: "thread1",
-      platformMessageIds: ["starter1"],
+      platformMessageIds: ["starter1", "media1"],
     });
-    expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "media" });
+    expect(
+      res.receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual([
+      { platformMessageId: "starter1", kind: "text", index: 0 },
+      { platformMessageId: "media1", kind: "media", index: 1 },
+    ]);
     expectRestRoute(postMock, 0, Routes.threads("forum1"));
     expect(requireRestBody(postMock, 0)).toEqual({
       name: "Topic",
@@ -497,7 +596,7 @@ describe("sendMessageDiscord", () => {
   it("chunks long forum posts into follow-up messages", async () => {
     const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
     const longText = "a".repeat(2001);
-    await sendMessageDiscord("channel:forum1", longText, {
+    const result = await sendMessageDiscord("channel:forum1", longText, {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -508,6 +607,11 @@ describe("sendMessageDiscord", () => {
     const secondBody = requireRestBody(postMock, 1) as { content?: string };
     expect(firstBody?.message?.content).toHaveLength(2000);
     expect(secondBody?.content).toBe("a");
+    expect(result.receipt.platformMessageIds).toEqual(["starter1", "msg2"]);
+    expect(result.receipt.parts.map(({ kind, index }) => ({ kind, index }))).toEqual([
+      { kind: "text", index: 0 },
+      { kind: "text", index: 1 },
+    ]);
   });
 
   it("starts DM when recipient is a user", async () => {
@@ -925,6 +1029,23 @@ describe("removeReactionDiscord", () => {
       Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
     );
   });
+
+  it("retries transient failures while removing an idempotent reaction", async () => {
+    const { rest, deleteMock } = makeDiscordRest();
+    deleteMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      removeReactionDiscord("chan1", "msg1", "✅", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("removeOwnReactionsDiscord", () => {
@@ -952,6 +1073,27 @@ describe("removeOwnReactionsDiscord", () => {
     expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
     );
+  });
+
+  it("retries transient failures while listing and clearing owned reactions", async () => {
+    const { rest, getMock, deleteMock } = makeDiscordRest();
+    getMock
+      .mockRejectedValueOnce(Object.assign(new Error("service unavailable"), { status: 503 }))
+      .mockResolvedValueOnce({ reactions: [{ emoji: { name: "✅", id: null } }] });
+    deleteMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      removeOwnReactionsDiscord("chan1", "msg1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual({ ok: true, removed: ["✅"] });
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(deleteMock).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a failed deletion instead of reporting false success", async () => {
@@ -1006,6 +1148,38 @@ describe("fetchReactionsDiscord", () => {
         users: [{ id: "u2", username: "beta", tag: "beta" }],
       },
     ]);
+  });
+
+  it.each([
+    { operation: "message lookup", firstFailure: true, status: 503 },
+    { operation: "reaction-user lookup", firstFailure: false, status: 502 },
+  ])("retries a transient $operation failure", async ({ firstFailure, status }) => {
+    const { rest, getMock } = makeDiscordRest();
+    const transientError = Object.assign(new Error("Discord temporarily unavailable"), { status });
+    const message = { reactions: [{ count: 1, emoji: { name: "✅", id: null } }] };
+    const users = [{ id: "u1", username: "alpha" }];
+    if (firstFailure) {
+      getMock.mockRejectedValueOnce(transientError).mockResolvedValueOnce(message);
+    } else {
+      getMock.mockResolvedValueOnce(message).mockRejectedValueOnce(transientError);
+    }
+    getMock.mockResolvedValueOnce(users);
+
+    await expect(
+      fetchReactionsDiscord("chan1", "msg1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual([
+      {
+        emoji: { id: null, name: "✅", raw: "✅" },
+        count: 1,
+        users: [{ id: "u1", username: "alpha", tag: "alpha" }],
+      },
+    ]);
+    expect(getMock).toHaveBeenCalledTimes(3);
   });
 });
 

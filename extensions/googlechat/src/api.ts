@@ -1,6 +1,7 @@
 // Googlechat API module exposes the plugin public contract.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  MediaFetchError,
   parseMediaContentLength,
   readResponseTextSnippet,
 } from "openclaw/plugin-sdk/media-runtime";
@@ -19,6 +20,8 @@ const GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS = 15 * 60_000;
 const GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS = 30_000;
 const GOOGLECHAT_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
+const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
+const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
 
 function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   if (!maxBytes) {
@@ -99,6 +102,11 @@ async function withGoogleChatResponse<T>(params: {
     }
     return await handleResponse(response);
   } finally {
+    // Status-only responses leave an unread body. Start cancellation before
+    // release; awaiting it can deadlock when debug capture tees the stream.
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }
@@ -153,27 +161,39 @@ async function fetchBuffer(
     // response body is still bounded independently below.
     timeoutMs: resolveGoogleChatMediaTimeoutMs(options?.maxBytes),
     handleResponse: async (res) => {
-      const maxBytes = options?.maxBytes;
+      const maxBytes = options?.maxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
       const lengthHeader = res.headers.get("content-length");
-      if (maxBytes && lengthHeader) {
+      if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
         if (length !== null && length > maxBytes) {
-          throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
+          throw new MediaFetchError(
+            "max_bytes",
+            `Google Chat media exceeds max bytes (${maxBytes})`,
+          );
         }
-      }
-      if (!maxBytes) {
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const contentType = res.headers.get("content-type") ?? undefined;
-        return { buffer, contentType };
       }
       const buffer = await readResponseWithLimit(res, maxBytes, {
         chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
-        onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
+        onOverflow: () =>
+          new MediaFetchError("max_bytes", `Google Chat media exceeds max bytes (${maxBytes})`),
       });
       const contentType = res.headers.get("content-type") ?? undefined;
       return { buffer, contentType };
     },
   });
+}
+
+/**
+ * A Google Chat `thread` must be a `spaces/{space}/threads/{thread}` resource
+ * name that belongs to the target space. Reply routing sometimes yields other
+ * shapes — a bare id, a `spaces/{space}/messages/{message}` name, or a thread
+ * from a different (or wrongly-cased) space — and passing any of those makes the
+ * Chat API reject the whole send with `400 INVALID_ARGUMENT`. Accept only a
+ * well-formed, same-space thread name; callers drop the rest so the message
+ * still delivers to the space (as a new thread) instead of failing outright.
+ */
+function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
+  return /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread) && thread.startsWith(`${space}/threads/`);
 }
 
 export async function sendGoogleChatMessage(params: {
@@ -184,6 +204,7 @@ export async function sendGoogleChatMessage(params: {
   cardsV2?: GoogleChatCardV2[];
 }): Promise<{ messageName?: string; threadName?: string } | null> {
   const { account, space, text, thread, cardsV2 } = params;
+  const usableThread = thread && isUsableGoogleChatThreadName(thread, space) ? thread : undefined;
   if (
     text &&
     (!cardsV2 || cardsV2.length === 0) &&
@@ -198,11 +219,11 @@ export async function sendGoogleChatMessage(params: {
   if (cardsV2 && cardsV2.length > 0) {
     body.cardsV2 = cardsV2;
   }
-  if (thread) {
-    body.thread = { name: thread };
+  if (usableThread) {
+    body.thread = { name: usableThread };
   }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
-  if (thread) {
+  if (usableThread) {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();

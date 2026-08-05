@@ -1,4 +1,4 @@
-import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 
 // Workspace bootstrap files are model context, not arbitrary attachments. Keep every
 // read path on the same bound so compaction and sandbox copies cannot bypass it.

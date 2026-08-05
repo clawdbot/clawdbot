@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -42,8 +43,6 @@ const DEFAULT_PROMPT_INPUT_NAME = "text";
 const DEFAULT_INPUT_IMAGE_INPUT_NAME = "image";
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
-const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
-const DEFAULT_GENERATED_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
@@ -123,19 +122,6 @@ if (process.env.VITEST === "true") {
     getConfig: getComfyConfig,
     setFetchGuard: setComfyFetchGuardForTesting,
   });
-}
-
-function resolveComfyGeneratedOutputMaxBytes(params: {
-  cfg: OpenClawConfig;
-  capability: ComfyCapability;
-}): number {
-  const configured = params.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return params.capability === "image"
-    ? DEFAULT_GENERATED_IMAGE_MAX_BYTES
-    : DEFAULT_GENERATED_MEDIA_MAX_BYTES;
 }
 
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
@@ -541,6 +527,7 @@ function collectOutputFiles(params: {
   history: ComfyHistoryEntry;
   outputNodeId?: string;
   outputKinds: readonly ComfyOutputKind[];
+  capability: ComfyCapability;
 }): Array<{ nodeId: string; file: ComfyOutputFile }> {
   const outputs = params.history.outputs;
   if (!outputs) {
@@ -560,6 +547,15 @@ function collectOutputFiles(params: {
         continue;
       }
       for (const file of bucket) {
+        if (params.capability === "video" && kind === "images") {
+          // Comfy SaveVideo shares the images bucket with real image outputs.
+          // Filter before download so mixed workflows cannot return images as videos.
+          const fileName =
+            normalizeOptionalString(file.filename) || normalizeOptionalString(file.name);
+          if (!fileName || !/\.(?:mp4|webm)$/i.test(fileName)) {
+            continue;
+          }
+        }
         files.push({ nodeId, file });
       }
     }
@@ -651,6 +647,7 @@ export function isComfyCapabilityConfigured(params: {
   }
   return isProviderApiKeyConfigured({
     provider: "comfy",
+    cfg: params.cfg,
     agentDir: params.agentDir,
   });
 }
@@ -841,16 +838,15 @@ export async function runComfyWorkflow(params: {
     history: historyEntry,
     outputNodeId,
     outputKinds: params.outputKinds,
+    capability: params.capability,
   });
   if (outputFiles.length === 0) {
     throw new Error(`Comfy workflow ${promptId} completed without ${params.capability} outputs`);
   }
 
   const assets: ComfyGeneratedAsset[] = [];
-  const maxOutputBytes = resolveComfyGeneratedOutputMaxBytes({
-    cfg: params.cfg,
-    capability: params.capability,
-  });
+  const outputKind = params.capability === "music" ? "audio" : params.capability;
+  const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
   let assetIndex = 0;
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({

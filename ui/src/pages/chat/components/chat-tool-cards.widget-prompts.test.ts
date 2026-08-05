@@ -86,7 +86,12 @@ describe("widget prompts", () => {
     );
     // The bridge posts its offer at parse time, before the frame's load event.
     const port = offerPromptPort(frame);
+    const hostMessages: unknown[] = [];
+    port.addEventListener("message", (event) => hostMessages.push(event.data));
+    port.start();
     frame.dispatchEvent(new Event("load"));
+    await flushPorts();
+    expect(hostMessages).toContainEqual({ type: "openclaw:widget-prompt-host-ready" });
     emulateInteractableFrame(frame);
     const received = collectPromptEvents(container);
     try {

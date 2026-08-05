@@ -38,6 +38,16 @@ describe("markdownToTelegramHtml", () => {
       ],
       ["preserves Telegram HTML", "<b>yes</b>", "<b>yes</b>"],
       [
+        "preserves Bot API tg-time attributes",
+        '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+        '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+      ],
+      [
+        "escapes rejected tg-time datetime attributes",
+        '<tg-time datetime="2022-03-17T22:45:00Z">22:45 tomorrow</tg-time>',
+        '&lt;tg-time datetime="2022-03-17T22:45:00Z"&gt;22:45 tomorrow&lt;/tg-time&gt;',
+      ],
+      [
         "escapes unsupported raw HTML",
         "<script>nope</script>",
         "&lt;script&gt;nope&lt;/script&gt;",
@@ -97,6 +107,9 @@ describe("markdownToTelegramHtml", () => {
       '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;',
     );
     expect(markdownToTelegramHtml("<sup>1</sup>")).toBe("&lt;sup&gt;1&lt;/sup&gt;");
+    expect(markdownToTelegramHtml('<tg-time unix="-1">bad</tg-time>')).toBe(
+      '&lt;tg-time unix="-1"&gt;bad&lt;/tg-time&gt;',
+    );
     expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
       '&lt;b class="x"&gt;bad&lt;/b&gt;',
     );
@@ -126,12 +139,24 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
-  it("renders block-mode tables as code in legacy Telegram HTML", () => {
+  it.each([
+    { name: "a table-only reply", before: "", after: "" },
+    { name: "a table between surrounding prose", before: "Before\n\n", after: "\n\nAfter" },
+  ])("keeps $name visible in one-shot and chunked legacy Telegram HTML", ({ before, after }) => {
     const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const markdown = `${before}${table}${after}`;
+    const html = markdownToTelegramHtml(markdown, { tableMode: "block" });
+    const chunks = markdownToTelegramChunks(markdown, 4096, { tableMode: "block" });
 
-    expect(markdownToTelegramHtml(table, { tableMode: "block" })).toBe(
-      "<pre><code>| A | B |\n| --- | --- |\n| 1 | 2 |\n</code></pre>",
-    );
+    expect(html).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(chunks.map((chunk) => chunk.html)).toEqual([html]);
+    expect(chunks[0]?.text).toContain("| 1 | 2 |");
+    if (before) {
+      expect(html).toContain("Before");
+    }
+    if (after) {
+      expect(html).toContain("After");
+    }
   });
 
   it("normalizes raw code language HTML without leaking tags", () => {
@@ -304,16 +329,6 @@ describe("markdownToTelegramHtml", () => {
     expect(finalChunk).toContain("\n<b>user[Thu 2026-07-02]</b> authorize");
   });
 
-  it("does not synthesize closing tags for rich void tags when chunking html", () => {
-    const chunks = splitTelegramHtmlChunks(
-      `<figure><img src="https://example.com/a.jpg"></figure><ul><li><input type="checkbox" checked>${"A".repeat(80)}</li></ul>`,
-      64,
-    );
-
-    expect(chunks.join("")).not.toContain("</img>");
-    expect(chunks.join("")).not.toContain("</input>");
-  });
-
   it("fails loudly when a leading entity cannot fit inside a chunk", () => {
     expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
   });
@@ -322,6 +337,27 @@ describe("markdownToTelegramHtml", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("breaks long html text on word boundaries instead of mid-word", () => {
+    const text = Array.from({ length: 12 }, () => "abcde").join(" ");
+    const chunks = splitTelegramHtmlChunks(text, 13);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
+    for (const chunk of chunks) {
+      for (const token of chunk.trim().split(/\s+/)) {
+        expect(token).toBe("abcde");
+      }
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("still hard-cuts a single word longer than the html chunk limit", () => {
+    const chunks = splitTelegramHtmlChunks("A".repeat(30), 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expect(chunks.join("")).toBe("A".repeat(30));
   });
 
   it("derives readable plain text from Telegram HTML fallback markup", () => {
@@ -352,6 +388,24 @@ describe("markdownToTelegramHtml", () => {
         "<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
       ),
     ).toBe("Name | Age\nAlice | 30");
+  });
+
+  it.each([
+    ["malformed suffix", "colspan=2x", "Alice | 30"],
+    ["plus sign", "colspan=+2", "Alice | 30"],
+    ["minus sign", "colspan=-2", "Alice | 30"],
+    ["decimal", "colspan=2.5", "Alice | 30"],
+    ["exponent", "colspan=2e1", "Alice | 30"],
+    ["hexadecimal", "colspan=0x10", "Alice | 30"],
+    ["numeric data attribute", "data-colspan=9 colspan=2", "Alice |  | 30"],
+    ["unquoted decimal", "colspan=2", "Alice |  | 30"],
+    ["single-quoted decimal", "colspan='2'", "Alice |  | 30"],
+    ["double-quoted decimal", 'colspan="2"', "Alice |  | 30"],
+    ["whitespace-padded decimal", 'colspan=" 2 "', "Alice |  | 30"],
+  ])("parses only complete decimal fallback colspans: %s", (_label, attrs, expected) => {
+    expect(
+      telegramHtmlToPlainTextFallback(`<table><tr><td ${attrs}>Alice</td><td>30</td></tr></table>`),
+    ).toBe(expected);
   });
 
   it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {

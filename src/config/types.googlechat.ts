@@ -1,22 +1,14 @@
 // Defines Google Chat channel configuration types.
-import type {
-  ChannelDeliveryStreamingConfig,
-  DmPolicy,
-  GroupPolicy,
-  ReplyToMode,
-} from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
-import type { ChannelHealthMonitorConfig } from "./types.channel-health.js";
-import type { DmConfig } from "./types.messages.js";
+import type {
+  ChannelBotInteractionConfig,
+  CommonChannelMessagingConfig,
+} from "./types.channel-messaging-common.js";
 import type { SecretRef } from "./types.secrets.js";
 
 export type GoogleChatDmConfig = {
   /** If false, ignore all incoming Google Chat DMs. Default: true. */
   enabled?: boolean;
-  /** Direct message access policy (default: pairing). */
-  policy?: DmPolicy;
-  /** Allowlist for DM senders (user ids or emails). */
-  allowFrom?: Array<string | number>;
 };
 
 export type GoogleChatGroupConfig = {
@@ -32,92 +24,40 @@ export type GoogleChatGroupConfig = {
   systemPrompt?: string;
 };
 
-export type GoogleChatActionConfig = {
-  /** @deprecated Accepted for config compatibility; service-account auth cannot use reaction APIs. */
-  reactions?: boolean;
-};
-
-export type GoogleChatAccountConfig = {
-  /** Optional display name for this account (used in CLI/UI lists). */
-  name?: string;
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: string[];
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /** If false, do not start this Google Chat account. Default: true. */
-  enabled?: boolean;
-  /** Allow bot-authored messages to trigger replies (default: false). */
-  allowBots?: boolean;
-  /** Sliding-window bot-pair loop guard for accepted bot-authored Google Chat messages. */
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-  /**
-   * Break-glass override: allow mutable principal matching (raw email entries) in allowlists.
-   * Default behavior is ID-only matching.
-   */
-  dangerouslyAllowNameMatching?: boolean;
-  /** Default mention requirement for space messages (default: true). */
-  requireMention?: boolean;
-  /**
-   * Controls how space messages are handled:
-   * - "open": spaces bypass allowlists; mention-gating applies
-   * - "disabled": block all space messages
-   * - "allowlist": only allow spaces present in channels.googlechat.groups
-   */
-  groupPolicy?: GroupPolicy;
-  /** Optional allowlist for space senders (user ids or emails). */
-  groupAllowFrom?: Array<string | number>;
-  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
-  defaultTo?: string;
-  /** Per-space configuration keyed by space id or name. */
-  groups?: Record<string, GoogleChatGroupConfig>;
-  /** Service account JSON (inline string, object, or secret reference). */
-  serviceAccount?: string | Record<string, unknown> | SecretRef;
-  /** Explicit secret reference for service account JSON. */
-  serviceAccountRef?: SecretRef;
-  /** Service account JSON file path. */
-  serviceAccountFile?: string;
-  /** Webhook audience type (app-url or project-number). */
-  audienceType?: "app-url" | "project-number";
-  /** Audience value (app URL or project number). */
-  audience?: string;
-  /** Exact add-on principal to accept when app-url delivery uses add-on tokens. */
-  appPrincipal?: string;
-  /** Google Chat webhook path (default: /googlechat). */
-  webhookPath?: string;
-  /** Google Chat webhook URL (used to derive the path). */
-  webhookUrl?: string;
-  /** Optional bot user resource name (users/...). */
-  botUser?: string;
-  /** Max space messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user id. */
-  dms?: Record<string, DmConfig>;
-  /** Outbound text chunk size (chars). Default: 4000. */
-  textChunkLimit?: number;
-  /** Delivery streaming config: chunk mode plus block streaming controls. */
-  streaming?: ChannelDeliveryStreamingConfig;
-  mediaMaxMb?: number;
-  /** Control reply threading when reply tags are present (off|first|all|batched). */
-  replyToMode?: ReplyToMode;
-  /** Per-action tool gating (default: true for all). */
-  actions?: GoogleChatActionConfig;
-  dm?: GoogleChatDmConfig;
-  /** Channel health monitor overrides for this channel/account. */
-  healthMonitor?: ChannelHealthMonitorConfig;
-  /**
-   * Typing indicator mode (default: "message").
-   * - "none": No indicator
-   * - "message": Send "_<name> is typing..._" then edit with response
-   * - "reaction": React with 👀 to user message, remove on reply
-   *   NOTE: Reaction mode requires user OAuth (not supported with service account auth).
-   *   If configured, falls back to message mode with a warning.
-   */
-  typingIndicator?: "none" | "message" | "reaction";
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
-};
+export type GoogleChatAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> &
+  ChannelBotInteractionConfig<boolean> & {
+    /** Default mention requirement for space messages (default: true). */
+    requireMention?: boolean;
+    /** Per-space configuration keyed by space id or name. */
+    groups?: Record<string, GoogleChatGroupConfig>;
+    /** Service account JSON (inline string, object, or secret reference). */
+    serviceAccount?: string | Record<string, unknown> | SecretRef;
+    /** Service account JSON file path. */
+    serviceAccountFile?: string;
+    /** Webhook audience type (app-url or project-number). */
+    audienceType?: "app-url" | "project-number";
+    /** Audience value (app URL or project number). */
+    audience?: string;
+    /** Exact add-on principal to accept when app-url delivery uses add-on tokens. */
+    appPrincipal?: string;
+    /** Google Chat webhook path (default: /googlechat). */
+    webhookPath?: string;
+    /** Google Chat webhook URL (used to derive the path). */
+    webhookUrl?: string;
+    /** Optional bot user resource name (users/...). */
+    botUser?: string;
+    /** If false, ignore all incoming Google Chat DMs. Default: true. */
+    dm?: GoogleChatDmConfig;
+    /**
+     * Typing indicator mode (default: "message").
+     * - "none": No indicator
+     * - "message": Send "_<name> is typing..._" then edit with response
+     * - "reaction": React with 👀 to user message, remove on reply
+     *   NOTE: Reaction mode requires user OAuth (not supported with service account auth).
+     *   If configured, falls back to message mode with a warning.
+     */
+    typingIndicator?: "none" | "message" | "reaction";
+  };
 
 export type GoogleChatConfig = {
   /** Optional per-account Google Chat configuration (multi-account). */

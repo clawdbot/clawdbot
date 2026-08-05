@@ -171,23 +171,23 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_agent_session_entries_session_updated",
+      indexName: "idx_agent_session_nodes_current_session_id",
       params: ["session-1"],
       sql: `
         SELECT session_key
-          FROM session_entries
-         WHERE session_id = ?
+          FROM session_nodes
+         WHERE current_session_id = ?
          ORDER BY updated_at DESC, session_key ASC
          LIMIT 1
       `,
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_agent_session_entries_status",
+      indexName: "idx_agent_session_nodes_status",
       params: ["running"],
       sql: `
         SELECT session_key, entry_json
-          FROM session_entries
+          FROM session_nodes
          WHERE status = ?
       `,
     });
@@ -209,13 +209,41 @@ describe("sqlite hot query plans", () => {
     );
     expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
+    const mirrorIdentityPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT identity.message_idempotency_key, event.event_json
+          FROM transcript_event_identities AS identity
+          JOIN transcript_events AS event
+            ON event.session_id = identity.session_id AND event.seq = identity.seq
+         WHERE identity.session_id = ?
+           AND identity.message_idempotency_key IN (?, ?)
+         ORDER BY identity.seq ASC
+      `,
+      ["session-1", "prompt-key", "assistant-key"],
+    );
+    expect(mirrorIdentityPlan).toContain("idx_agent_transcript_message_idempotency");
+    expect(mirrorIdentityPlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(mirrorIdentityPlan).not.toContain("SCAN transcript_events");
+
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_transcript_event_sequence",
+      params: ["session-1", "message"],
+      sql: `
+        SELECT COUNT(seq)
+          FROM transcript_event_identities
+         WHERE session_id = ? AND event_type = ?
+      `,
+    });
+
     expectPlanIncludes({
       db: database.db,
-      expected: "sqlite_autoindex_session_transcript_generations_1",
+      expected: "sqlite_autoindex_transcript_rewrite_watermarks_1",
       params: ["session-1"],
       sql: `
         SELECT generation
-          FROM session_transcript_generations
+          FROM transcript_rewrite_watermarks
          WHERE session_id = ?
       `,
     });

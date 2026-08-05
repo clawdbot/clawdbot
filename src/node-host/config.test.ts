@@ -210,7 +210,11 @@ describe("node-host SQLite config", () => {
   it("adds the gateway context-path column to an existing state database", async () => {
     const { env } = makeTestEnv();
     const database = openOpenClawStateDatabase({ env });
-    database.db.exec("ALTER TABLE node_host_config DROP COLUMN gateway_context_path");
+    database.db.exec(`
+      ALTER TABLE node_host_config DROP COLUMN gateway_context_path;
+      PRAGMA user_version = 5;
+      UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
+    `);
     closeOpenClawStateDatabaseForTest();
 
     const configured = await configureNodeHost({

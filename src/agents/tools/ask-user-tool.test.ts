@@ -60,7 +60,7 @@ describe("ask_user normalization", () => {
 
     expect(normalized.timeoutSeconds).toBe(30);
     expect(normalized.questions[0]).toMatchObject({
-      id: "deploy_target",
+      questionId: "deploy_target",
       header: "Deployment t",
       isOther: true,
     });
@@ -252,7 +252,7 @@ describe("ask_user prompt delivery", () => {
     settleAskUserPromptDelivery(reservation.questionId);
     finishWait?.({
       status: "answered",
-      answers: { answers: { deploy_target: { answers: ["Production"] } } },
+      answers: { answers: { deploy_target: ["Production"] } },
     });
     await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
   });
@@ -260,7 +260,7 @@ describe("ask_user prompt delivery", () => {
 
 describe("ask_user execution", () => {
   it("returns answered details plus readable answer lines", async () => {
-    const answers = { answers: { deploy_target: { answers: ["Staging (Recommended)"] } } };
+    const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
     const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
         return { id: params.id, expiresAtMs: Date.now() + 30_000 };
@@ -273,6 +273,7 @@ describe("ask_user execution", () => {
     const tool = createAskUserTool({
       agentId: "main",
       sessionKey: "agent:main:main",
+      runId: "run-main",
       gatewayCall: gateway.call,
     });
 
@@ -294,6 +295,7 @@ describe("ask_user execution", () => {
         id: questionId,
         agentId: "main",
         sessionKey: "agent:main:main",
+        runId: "run-main",
         timeoutMs: 900_000,
       }),
       undefined,
@@ -599,7 +601,7 @@ describe("ask_user execution", () => {
     if (!reservation) {
       throw new Error("expected prompt reservation");
     }
-    const answers = { answers: { deploy_target: { answers: ["Production"] } } };
+    const answers = { answers: { deploy_target: ["Production"] } };
     let waitCalls = 0;
     const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
@@ -735,7 +737,7 @@ describe("ask_user execution", () => {
       {},
       {
         id: questionId,
-        answers: { answers: { deploy_target: { answers: ["A custom destination"] } } },
+        answers: { answers: { deploy_target: ["A custom destination"] } },
         resolvedBy: "plain-text",
       },
     );

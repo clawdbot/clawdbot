@@ -11,11 +11,17 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
     cfg?: { mcp?: { servers?: Record<string, unknown> } };
+    toolOverrides?: { mcpServers?: Record<string, boolean> };
   }) => {
     mocks.loadCount += 1;
+    const servers = Object.fromEntries(
+      Object.entries(params.cfg?.mcp?.servers ?? {}).filter(
+        ([name]) => params.toolOverrides?.mcpServers?.[name] !== false,
+      ),
+    );
     return {
       diagnostics: structuredClone(mocks.diagnostics),
-      mcpServers: params.cfg?.mcp?.servers ?? {},
+      mcpServers: servers,
     };
   },
 }));
@@ -99,6 +105,30 @@ describe("session MCP config discovery cache", () => {
 
     expect(mocks.loadCount).toBe(4);
     expect(first.fingerprint).not.toBe(second.fingerprint);
+  });
+
+  it("keeps process-wide discovery isolated across sessions on the same agent", () => {
+    const cfg = { mcp: { servers: { docs: { command: "docs" } } } };
+    const disabled = loadSessionMcpConfig({
+      workspaceDir: "/same-agent-workspace",
+      cfg,
+      toolOverrides: { mcpServers: { docs: false } },
+    });
+    const enabled = loadSessionMcpConfig({
+      workspaceDir: "/same-agent-workspace",
+      cfg,
+      toolOverrides: { mcpServers: { docs: true } },
+    });
+    const disabledAgain = loadSessionMcpConfig({
+      workspaceDir: "/same-agent-workspace",
+      cfg,
+      toolOverrides: { mcpServers: { docs: false } },
+    });
+
+    expect(Object.keys(disabled.loaded.mcpServers)).toEqual([]);
+    expect(Object.keys(enabled.loaded.mcpServers)).toEqual(["docs"]);
+    expect(disabledAgain).toEqual(disabled);
+    expect(mocks.loadCount).toBe(2);
   });
 
   it("snapshots nested config values at the cache boundary", () => {

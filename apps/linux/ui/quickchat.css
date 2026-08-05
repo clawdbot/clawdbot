@@ -296,6 +296,76 @@ body.shown .composer {
   white-space: pre-wrap;
 }
 
+.reply.has-widgets .reply-scroll {
+  max-height: 90px;
+}
+
+.reply-widgets {
+  display: grid;
+  margin-top: 8px;
+  gap: 6px;
+}
+
+.inline-widget-tabs {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.inline-widget-tab {
+  height: 23px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 999px;
+  color: #9f9fa4;
+  cursor: pointer;
+  font: 600 10px/1 inherit;
+  background: rgb(255 255 255 / 4%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-widget-tab.active {
+  color: #f7f7f8;
+  border-color: rgb(255 107 107 / 38%);
+  background: rgb(255 107 107 / 12%);
+}
+
+.inline-widget {
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 10px;
+  background: rgb(0 0 0 / 18%);
+}
+
+.inline-widget-title {
+  padding: 7px 9px;
+  overflow: hidden;
+  border-bottom: 1px solid rgb(255 255 255 / 7%);
+  color: #d7d7da;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-widget-host {
+  width: 100%;
+  min-height: 160px;
+  background: transparent;
+}
+
+.inline-widget-unavailable {
+  min-height: 160px;
+  padding: 18px 12px;
+  color: #8e8e93;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .reply-thinking {
   display: inline-block;
   color: transparent;

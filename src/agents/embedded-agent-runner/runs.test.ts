@@ -1,8 +1,5 @@
 // Embedded run registry tests cover active run handles, queueing, abort/drain,
 // abandonment tracking, diagnostics, and snapshots.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,7 +37,6 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
-  updateActiveEmbeddedRunSessionFile,
   waitForActiveEmbeddedRuns,
   waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
@@ -399,30 +395,6 @@ describe("embedded-agent runner run registry", () => {
     expect(abort).not.toHaveBeenCalled();
   });
 
-  it("resolves active embedded runs by canonical session file", async () => {
-    // Session-file lookup canonicalizes symlinks so heartbeat/diagnostic callers
-    // can find the active handle from the file path they observe.
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-registry-"));
-    try {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const symlinkFile = path.join(tempDir, "session-link.jsonl");
-      await fs.writeFile(sessionFile, '{"type":"session"}\n', "utf8");
-      await fs.symlink(sessionFile, symlinkFile);
-      const handle = createRunHandle();
-
-      setActiveEmbeddedRun("session-file-run", handle, "agent:main:visible", sessionFile);
-
-      expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(symlinkFile)).toBe(
-        "session-file-run",
-      );
-
-      clearActiveEmbeddedRun("session-file-run", handle, "agent:main:visible", sessionFile);
-      expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(symlinkFile)).toBeUndefined();
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("records active run session files in diagnostic state for heartbeat recovery", () => {
     setDiagnosticsEnabledForProcess(true);
     const sessionFile = "/tmp/openclaw-run-registry-session.jsonl";
@@ -432,15 +404,6 @@ describe("embedded-agent runner run registry", () => {
 
     expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
       sessionFile,
-    );
-
-    updateActiveEmbeddedRunSessionFile(
-      "session-file-diagnostics",
-      "/tmp/openclaw-run-registry-rotated.jsonl",
-    );
-
-    expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
-      "/tmp/openclaw-run-registry-rotated.jsonl",
     );
   });
 
@@ -848,11 +811,15 @@ describe("embedded-agent runner run registry", () => {
     vi.useFakeTimers();
     try {
       const abortRun = vi.fn();
-      setActiveEmbeddedRun("session-stuck", createRunHandle({ abort: abortRun }), "agent:main");
+      setActiveEmbeddedRun(
+        "session-stuck",
+        createRunHandle({ abort: abortRun }),
+        "agent:main:main",
+      );
 
       const resultPromise = abortAndDrainEmbeddedAgentRun({
         sessionId: "session-stuck",
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         settleMs: 100,
         forceClear: true,
         reason: "test_timeout",
@@ -863,7 +830,7 @@ describe("embedded-agent runner run registry", () => {
       expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
       expect(abortRun).toHaveBeenCalledTimes(1);
       expect(isEmbeddedAgentRunHandleActive("session-stuck")).toBe(false);
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main")).toBeUndefined();
+      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
@@ -1042,6 +1009,19 @@ describe("embedded-agent runner run registry", () => {
 
     expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
+  it("clears a relative compatibility file key after normalization", () => {
+    const handle = createRunHandle();
+    const sessionFile = "relative-session-token";
+
+    setActiveEmbeddedRun("session-relative", handle, "agent:main:relative", sessionFile);
+    expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile)).toBe(
+      "session-relative",
+    );
+
+    clearActiveEmbeddedRun("session-relative", handle, "agent:main:relative", sessionFile);
+    expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile)).toBeUndefined();
   });
 
   it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {

@@ -68,8 +68,7 @@ export async function resolveMatrixPreflightAudioTranscript(params: {
     }
     const transcript = await transcribeFirstAudio({
       ctx: {
-        MediaPaths: [params.mediaPath],
-        MediaTypes: params.mediaContentType ? [params.mediaContentType] : undefined,
+        media: [{ path: params.mediaPath, contentType: params.mediaContentType }],
         Provider: "matrix",
         Surface: "matrix",
         OriginatingChannel: "matrix",

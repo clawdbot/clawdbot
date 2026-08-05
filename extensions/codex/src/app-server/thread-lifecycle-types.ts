@@ -16,6 +16,7 @@ type CodexAppServerThreadLifecycle = {
 
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
+  liveThreadConfigFingerprint?: string;
 };
 
 type CodexThreadFinalConfigPatchDecision =

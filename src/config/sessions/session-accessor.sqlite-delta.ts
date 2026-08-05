@@ -128,7 +128,7 @@ function readRawDeltaInTransaction(
   const state = executeSqliteQueryTakeFirstSync(
     database,
     db
-      .selectFrom("session_transcript_generations")
+      .selectFrom("transcript_rewrite_watermarks")
       .select("generation")
       .where("session_id", "=", scope.sessionId),
   );

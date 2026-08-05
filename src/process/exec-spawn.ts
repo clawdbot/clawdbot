@@ -55,13 +55,8 @@ export function shouldSpawnWithShell(params: {
   return false;
 }
 
-type SpawnCommandOptions = Omit<
-  ExecaOptions,
-  "env" | "extendEnv" | "shell" | "windowsHide" | "windowsVerbatimArguments"
-> & {
+type SpawnCommandOptions = ExecaOptions & {
   baseEnv?: NodeJS.ProcessEnv;
-  env?: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
 };
 
 export function spawnCommandWithInvocation<
@@ -88,7 +83,7 @@ export function spawnCommandWithInvocation<
     shell: false,
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }) as unknown as ResultPromise<OptionsType>;
+  } as ExecaOptions) as unknown as ResultPromise<OptionsType>;
   return { child, invocation };
 }
 

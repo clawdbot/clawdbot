@@ -44,7 +44,7 @@ command handling is enabled for the surface.
       do **not** persist session settings.
     - Directives only apply for **authorized senders**. If `commands.allowFrom`
       is set, it is the only allowlist used; otherwise authorization comes from
-      channel allowlists/pairing plus `commands.useAccessGroups`. Unauthorized
+      channel allowlists, pairing, and always-on access-group enforcement. Unauthorized
       senders see directives treated as plain text.
   </Accordion>
 </AccordionGroup>
@@ -150,10 +150,6 @@ command handling is enabled for the surface.
   global default; provider-specific keys override it.
 </ParamField>
 
-<ParamField path="commands.useAccessGroups" type="boolean" default="true">
-  Enforces allowlists/policies for commands when `commands.allowFrom` is not set.
-</ParamField>
-
 ## Command list
 
 Commands come from three sources:
@@ -252,6 +248,9 @@ plugins.
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
     | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
+    | `/loop status` | Owner-only. List loops bound to this conversation |
+    | `/loop stop [name]` | Owner-only. Stop matching loops bound to this conversation |
     | `/allowlist [list\|add\|remove] ...` | Manage allowlist entries. Text-only |
     | `/approve <id> <decision>` | Resolve exec or plugin approval prompts |
     | `/btw <question>` | Ask a side question without changing session context. Alias: `/side`. See [BTW](/tools/btw) |
@@ -310,7 +309,6 @@ must be in the same identity group.
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/dreaming [on\|off\|status\|help]`                     | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
 | `/pair [qr\|status\|pending\|approve\|cleanup\|notify]` | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
-| `/phone status\|arm ...\|disarm`                        | Temporarily arm high-risk node commands (camera/screen/computer/writes). See [Computer use](/nodes/computer-use)                                                                               |
 | `/voice status\|list\|set <voiceId>`                    | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
 | `/card ...`                                             | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
 | `/codex <action> ...`                                   | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
@@ -358,6 +356,10 @@ Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
 
+## `/loop`: recurring conversation work
+
+`/loop` is owner-only because it uses the cron control-plane tool. `/loop 5m check deploy status` asks the agent to create a fixed-cadence cron job in the current conversation. Without an interval, `/loop watch for new issues` creates a self-paced loop that checks more often while active and backs off toward 1 hour while quiet. `/loop status` lists the conversation's loop jobs; `/loop stop [name]` removes them.
+
 ## `/model`: model selection
 
 ```text
@@ -383,10 +385,10 @@ aliases do not restrict selection.
 
 ```text
 /config show
-/config show messages.responsePrefix
-/config get messages.responsePrefix
-/config set messages.responsePrefix="[openclaw]"
-/config unset messages.responsePrefix
+/config show channels.whatsapp.responsePrefix
+/config get channels.whatsapp.responsePrefix
+/config set channels.whatsapp.responsePrefix="[openclaw]"
+/config unset channels.whatsapp.responsePrefix
 ```
 
 Config is validated before write. Invalid changes are rejected. `/config`
@@ -421,9 +423,9 @@ chat.
 
 ```text
 /debug show
-/debug set messages.responsePrefix="[openclaw]"
+/debug set channels.whatsapp.responsePrefix="[openclaw]"
 /debug set channels.whatsapp.allowFrom=["+1555","+4477"]
-/debug unset messages.responsePrefix
+/debug unset channels.whatsapp.responsePrefix
 /debug reset
 ```
 
@@ -484,6 +486,10 @@ Unlike a normal message:
 - In Codex harness sessions, runs as an ephemeral Codex side thread.
 - Does **not** change future session context.
 - Is not written to transcript history.
+
+In the Control UI, `/btw` and `/side` open the session rail and ask its
+read-only companion instead of starting the detached BTW path. The TUI and
+external-channel behavior above is unchanged.
 
 See [BTW side questions](/tools/btw) for the full behavior.
 

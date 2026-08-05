@@ -18,7 +18,7 @@ vi.mock("../gateway-rpc.js", async () => {
 
 const { registerCronAddCommand } = await import("./register.cron-add.js");
 const { registerCronEditCommand } = await import("./register.cron-edit.js");
-const { readCronTriggerScript } = await import("./trigger-options.js");
+const { readCronPayloadScript, readCronTriggerScript } = await import("./trigger-options.js");
 
 describe("cron trigger CLI options", () => {
   let fixtureRoot = "";
@@ -79,6 +79,87 @@ describe("cron trigger CLI options", () => {
     );
   });
 
+  it("reads --script client-side and sends payload budgets on add", async () => {
+    const scriptPath = path.join(fixtureRoot, "job.js");
+    await fs.writeFile(scriptPath, "  return { notify: 'done' }  \n", "utf8");
+    const program = new Command().exitOverride();
+    registerCronAddCommand(program);
+
+    await program.parseAsync(
+      [
+        "add",
+        "--name",
+        "script job",
+        "--every",
+        "30s",
+        "--script",
+        scriptPath,
+        "--script-timeout-seconds",
+        "450",
+        "--script-tool-budget",
+        "75",
+        "--session",
+        "isolated",
+      ],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.add",
+      expect.objectContaining({
+        script: scriptPath,
+        scriptTimeoutSeconds: "450",
+        scriptToolBudget: "75",
+      }),
+      expect.objectContaining({
+        sessionTarget: "isolated",
+        payload: {
+          kind: "script",
+          script: "return { notify: 'done' }",
+          timeoutSeconds: 450,
+          toolBudget: 75,
+        },
+      }),
+    );
+  });
+
+  it("reads script payload updates client-side", async () => {
+    const scriptPath = path.join(fixtureRoot, "edit-job.js");
+    await fs.writeFile(scriptPath, "return { state: { ok: true } }\n", "utf8");
+    const program = new Command().exitOverride();
+    registerCronEditCommand(program);
+
+    await program.parseAsync(
+      [
+        "edit",
+        "job-1",
+        "--script",
+        scriptPath,
+        "--script-timeout-seconds",
+        "600",
+        "--script-tool-budget",
+        "100",
+      ],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ script: scriptPath }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "script",
+            script: "return { state: { ok: true } }",
+            timeoutSeconds: 600,
+            toolBudget: 100,
+          },
+        },
+      },
+    );
+  });
+
   it("sends pacing bounds on add", async () => {
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
@@ -114,6 +195,18 @@ describe("cron trigger CLI options", () => {
     await fs.writeFile(scriptPath, "x".repeat(65_536), "utf8");
 
     await expect(readCronTriggerScript(scriptPath)).resolves.toHaveLength(65_536);
+  });
+
+  it("uses the same size and empty-input validation for payload scripts", async () => {
+    const atLimitPath = path.join(fixtureRoot, "payload-at-limit.js");
+    const emptyPath = path.join(fixtureRoot, "payload-empty.js");
+    await fs.writeFile(atLimitPath, "x".repeat(65_536), "utf8");
+    await fs.writeFile(emptyPath, " \n", "utf8");
+
+    await expect(readCronPayloadScript(atLimitPath)).resolves.toHaveLength(65_536);
+    await expect(readCronPayloadScript(emptyPath)).rejects.toThrow(
+      "Script payload must not be empty",
+    );
   });
 
   it("stops oversized trigger script files before the gateway call", async () => {

@@ -45,6 +45,7 @@ describe("resolveInitialCronDelivery", () => {
       const payloads: CronJobCreate["payload"][] = [
         { kind: "agentTurn", message: "hello" },
         { kind: "command", argv: ["echo", "hello"] },
+        { kind: "script", script: "return { notify: 'hello' }" },
       ];
       for (const payload of payloads) {
         expect(resolveInitialCronDelivery(createInput({ sessionTarget, payload }))).toEqual({

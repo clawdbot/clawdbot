@@ -2,6 +2,7 @@
 // Registers active run abort controllers and projects in-flight chat state.
 import {
   asDateTimestampMs,
+  isFutureDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -10,13 +11,18 @@ import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  type AgentEventPayload,
+} from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
-  type ChatAbortMarker,
   type ChatRunPlanSnapshot,
+  type ChatRunState,
 } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
@@ -80,10 +86,18 @@ export type RestartRecoveryCandidate = {
   observedAt?: number;
 };
 
+type InFlightRunSnapshot = {
+  runId: string;
+  text: string;
+  plan?: ChatRunPlanSnapshot;
+  events?: AgentEventPayload[];
+};
+
 type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;
+  markExecutionStarted: () => void;
   cleanup: (opts?: { force?: boolean }) => void;
 };
 
@@ -168,6 +182,25 @@ export function registerChatAbortController(params: {
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
   const controller = new AbortController();
+  let executionStarted = false;
+  const markExecutionStarted = () => {
+    if (executionStarted) {
+      return;
+    }
+    const entry = params.chatAbortControllers.get(params.runId);
+    if (entry?.controller !== controller || controller.signal.aborted || entry.kind !== "agent") {
+      return;
+    }
+    const now = Date.now();
+    executionStarted = true;
+    if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
+      return;
+    }
+    entry.expiresAtMs = resolveAgentRunExpiresAtMs({
+      now,
+      timeoutMs: params.timeoutMs,
+    });
+  };
   const cleanup = (opts?: { force?: boolean }) => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
@@ -203,7 +236,7 @@ export function registerChatAbortController(params: {
   if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
     // Duplicate run ids keep their fresh controller for caller cancellation, but
     // do not replace the registered entry that owns active-run projection.
-    return { controller, registered: false, cleanup };
+    return { controller, registered: false, markExecutionStarted, cleanup };
   }
 
   const rawNow = params.now ?? Date.now();
@@ -232,7 +265,7 @@ export function registerChatAbortController(params: {
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
-  return { controller, registered: true, entry, cleanup };
+  return { controller, registered: true, entry, markExecutionStarted, cleanup };
 }
 
 function normalizeProviderIdForActiveRun(providerId: string | undefined): string | undefined {
@@ -263,13 +296,12 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
  */
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
-  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
+  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
   requestedSessionKey: string;
   canonicalSessionKey: string;
   agentId?: string;
   defaultAgentId?: string;
-}): { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined {
+}): InFlightRunSnapshot | undefined {
   const matchesKey = (entry: ChatAbortControllerEntry, key: string): boolean => {
     if (entry.sessionKey !== key) {
       return false;
@@ -329,23 +361,26 @@ export function resolveInFlightRunSnapshot(params: {
   // only at completion — so there is nothing to show mid-run, but the client
   // should still adopt the run and show a `streaming` status (not idle) and
   // render the result cleanly when it lands.
-  const bufferedText = params.chatRunBuffers?.get(best.runId) ?? "";
-  const projected = projectLiveAssistantBufferedText(bufferedText, {
-    suppressLeadFragments: true,
-  });
-  const plan = params.chatRunPlanSnapshots?.get(best.runId);
+  const run = params.chatRunState.runs.get(best.runId);
+  const projected = projectLiveAssistantBufferedText(
+    params.chatRunState.resolveBuffer(best.runId).text,
+    { suppressLeadFragments: true },
+  );
+  const plan = run?.planSnapshot;
+  const events = run?.progressSnapshot?.events;
   return {
     runId: best.runId,
     text: projected.suppress ? "" : projected.text,
     ...(plan ? { plan } : {}),
+    ...(events?.length ? { events } : {}),
   };
 }
 
 export function boundInFlightRunSnapshotForChatHistory(params: {
-  snapshot: { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined;
+  snapshot: InFlightRunSnapshot | undefined;
   messages: unknown[];
   maxBytes: number;
-}): { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined {
+}): InFlightRunSnapshot | undefined {
   if (!params.snapshot) {
     return undefined;
   }
@@ -354,37 +389,47 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   if (messagesBytes + snapshotBytes <= params.maxBytes) {
     return params.snapshot;
   }
-  // Recovery priority is run adoption, then plan replay, then opportunistic text.
-  const withoutText = {
+  // Recovery priority is run adoption, then active progress, plan replay, and
+  // opportunistic text. Explicit empty projections authoritatively clear any
+  // stale client state when a richer snapshot cannot fit the history budget.
+  let bounded: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
-    ...(params.snapshot.plan ? { plan: params.snapshot.plan } : {}),
+    ...(params.snapshot.events ? { events: [] } : {}),
+    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
-  if (params.snapshot.plan && messagesBytes + jsonUtf8Bytes(withoutText) <= params.maxBytes) {
-    return withoutText;
+
+  if (params.snapshot.events) {
+    const events = [...params.snapshot.events];
+    while (events.length > 0) {
+      const candidate = { ...bounded, events };
+      if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+        bounded = candidate;
+        break;
+      }
+      events.shift();
+    }
   }
-  // An oversized plan must not also cost the deliverable buffered text. Clients
-  // treat an ABSENT plan as legacy-gateway unknown and preserve retained state,
-  // so a budget-dropped plan is sent as an explicit empty snapshot (authoritative
-  // clear) — accepted tradeoff: the checklist blanks until the next live plan
-  // event instead of showing a possibly obsolete retained plan indefinitely.
-  const droppedPlan = params.snapshot.plan ? { plan: { steps: [] } } : {};
-  const withoutPlan = {
-    runId: params.snapshot.runId,
-    text: params.snapshot.text,
-    ...droppedPlan,
-  };
-  if (params.snapshot.text && messagesBytes + jsonUtf8Bytes(withoutPlan) <= params.maxBytes) {
-    return withoutPlan;
+
+  if (params.snapshot.plan) {
+    const candidate = { ...bounded, plan: params.snapshot.plan };
+    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+      bounded = candidate;
+    }
   }
-  return { runId: params.snapshot.runId, text: "", ...droppedPlan };
+
+  if (params.snapshot.text) {
+    const candidate = { ...bounded, text: params.snapshot.text };
+    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+      bounded = candidate;
+    }
+  }
+  return bounded;
 }
 
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
-  chatAbortedRuns: Map<string, ChatAbortMarker>;
-  clearChatRunState: (runId: string) => void;
+  chatRunState: Pick<ChatRunState, "clearRun" | "getOrCreate" | "resolveBuffer" | "runs">;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -403,11 +448,7 @@ export type ChatAbortOps = {
 
 type TrackedChatRunAbortOps = {
   chatAbortControllers: ChatAbortOps["chatAbortControllers"];
-  chatRunBuffers: ChatAbortOps["chatRunBuffers"];
-  chatRunState: {
-    abortedRuns: ChatAbortOps["chatAbortedRuns"];
-    clearRun: ChatAbortOps["clearChatRunState"];
-  };
+  chatRunState: ChatAbortOps["chatRunState"];
   removeChatRun: ChatAbortOps["removeChatRun"];
   agentRunSeq: ChatAbortOps["agentRunSeq"];
   broadcast: ChatAbortOps["broadcast"];
@@ -418,19 +459,7 @@ export function abortTrackedChatRunById(
   ops: TrackedChatRunAbortOps,
   params: Parameters<typeof abortChatRunById>[1],
 ) {
-  return abortChatRunById(
-    {
-      chatAbortControllers: ops.chatAbortControllers,
-      chatRunBuffers: ops.chatRunBuffers,
-      chatAbortedRuns: ops.chatRunState.abortedRuns,
-      clearChatRunState: ops.chatRunState.clearRun,
-      removeChatRun: ops.removeChatRun,
-      agentRunSeq: ops.agentRunSeq,
-      broadcast: ops.broadcast,
-      nodeSendToSession: ops.nodeSendToSession,
-    },
-    params,
-  );
+  return abortChatRunById(ops, params);
 }
 
 function resolveChatAbortDeliverySessionKeys(
@@ -550,9 +579,9 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunBuffers.get(runId);
+  const bufferedText = ops.chatRunState.resolveBuffer(runId).text;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
-  ops.chatAbortedRuns.set(runId, createChatAbortMarker());
+  ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
@@ -570,7 +599,7 @@ export function abortChatRunById(
     // Approval persistence failure must not prevent the requested run abort.
   }
   active.controller.abort(createChatAbortSignalReason(stopReason));
-  ops.clearChatRunState(runId);
+  ops.chatRunState.clearRun(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (active.controlUiVisible !== false) {
     broadcastChatAborted(ops, {
@@ -586,6 +615,7 @@ export function abortChatRunById(
     runId,
     ...(active.lifecycleGeneration ? { lifecycleGeneration: active.lifecycleGeneration } : {}),
     sessionKey,
+    sessionId: active.sessionId,
     agentId: active.agentId,
     stream: "lifecycle",
     data: {
@@ -634,19 +664,28 @@ export function updateChatRunProvider(
 export function abortChatRunsForProvider(
   ops: ChatAbortOps,
   params: {
+    cfg: OpenClawConfig;
     providerId: string;
+    agentId?: string;
     stopReason?: string;
   },
 ): { runIds: string[] } {
   const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  const agentId = normalizeActiveAgentId(params.agentId);
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   if (!providerId) {
     return { runIds: [] };
   }
-  const matches = [...ops.chatAbortControllers.entries()].filter(
-    ([, entry]) =>
-      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
-      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
-  );
+  const matches = [...ops.chatAbortControllers.entries()].filter(([, entry]) => {
+    const entryAgentId = normalizeActiveAgentId(
+      entry.agentId ?? parseAgentSessionKey(entry.sessionKey)?.agentId ?? defaultAgentId,
+    );
+    return (
+      (!agentId || entryAgentId === agentId) &&
+      (normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+        normalizeProviderIdForActiveRun(entry.providerId) === providerId)
+    );
+  });
   const runIds: string[] = [];
   for (const [runId, entry] of matches) {
     const result = abortChatRunById(ops, {

@@ -26,6 +26,7 @@ export type {
   ReadToolDetails,
   ReadToolInput,
   ReadToolTruncationDetails,
+  WriteToolDetails,
   WriteToolInput,
 } from "./tool-contracts.js";
 export {

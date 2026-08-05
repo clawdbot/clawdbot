@@ -92,6 +92,7 @@ export async function minimaxUnderstandImage(params: {
   modelBaseUrl?: string;
   provider?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** Operator-configured private-network policy from the provider request config. */
   allowPrivateNetwork?: boolean;
   /** Resolved model request transport metadata, including proxy and TLS policy. */
@@ -152,6 +153,7 @@ export async function minimaxUnderstandImage(params: {
       image_url: imageDataUrl,
     },
     timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn: fetch,
     allowPrivateNetwork,
     ssrfPolicy,

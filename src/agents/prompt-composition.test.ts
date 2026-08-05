@@ -120,8 +120,8 @@ describe("prompt composition invariants", () => {
     const turn = getTurn(scenario, "t1");
     const inboundBody = "Please summarize the deploy log.";
 
-    expect(turn.bodyPrompt).toContain("Discord channel metadata (untrusted metadata):");
-    expect(turn.bodyPrompt).toContain('"topic": "Deploy coordination"');
+    expect(turn.bodyPrompt).toContain("Discord channel metadata: ⟦openclaw:ctx⟧");
+    expect(turn.bodyPrompt).toContain('"topic":"Deploy coordination"');
     expect(turn.bodyPrompt).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(countOccurrences(turn.bodyPrompt, inboundBody)).toBe(1);
     expect(turn.systemPrompt).not.toContain(inboundBody);

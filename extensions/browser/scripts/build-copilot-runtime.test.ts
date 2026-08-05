@@ -26,6 +26,7 @@ describe("scripts/build-copilot-runtime.mjs", () => {
     expect(build).toHaveBeenCalledWith(
       expect.objectContaining({
         outfile: outputPath,
+        minifyIdentifiers: false,
         write: false,
       }),
     );

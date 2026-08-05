@@ -4,6 +4,7 @@ import type { DB as StateDatabase } from "../../state/openclaw-state-db.generate
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
@@ -247,6 +248,9 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
       write((db) => {
         assertPendingClaim(db, claim);
         markWorkerWorkspacePendingResultAccepted(db, claim, now());
+        // Keep the applied journal as the crash-safe marker until this fence is
+        // accepted. Recovery then inspects reality instead of replaying a result.
+        clearWorkerWorkspaceReconciliation(db, claim.sessionId);
       });
     },
 

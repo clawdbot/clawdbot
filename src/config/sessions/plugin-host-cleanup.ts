@@ -71,7 +71,7 @@ function clearPromotedSessionEntrySlots(
     options.includeStoredSlotKeys === false && sessionEntrySlotKeys
       ? new Set(sessionEntrySlotKeys)
       : collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
-  const entryRecord = entry as Record<string, unknown>;
+  const entryRecord = entry as unknown as Record<string, unknown>;
   for (const slotKey of slotKeys) {
     delete entryRecord[slotKey];
   }
@@ -152,7 +152,7 @@ function hasPromotedSessionEntrySlot(
   if (slotKeys.size === 0) {
     return false;
   }
-  const entryRecord = entry as Record<string, unknown>;
+  const entryRecord = entry as unknown as Record<string, unknown>;
   for (const slotKey of slotKeys) {
     if (Object.hasOwn(entryRecord, slotKey)) {
       return true;

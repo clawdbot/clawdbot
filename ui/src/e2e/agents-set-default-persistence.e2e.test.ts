@@ -52,6 +52,12 @@ describeControlUiE2e("Control UI agents Set Default mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const initialConfig = {
+      agents: { entries: { main: { default: true }, kimi: {} } },
+    };
+    const savedConfig = {
+      agents: { entries: { main: {}, kimi: { default: true } } },
+    };
     const gateway = await installMockGateway(page, {
       assistantName: "Main agent",
       defaultAgentId: "main",
@@ -66,17 +72,19 @@ describeControlUiE2e("Control UI agents Set Default mocked Gateway E2E", () => {
           scope: "agent",
         },
         "config.get": {
-          config: { agents: { list: [{ id: "main" }, { id: "kimi" }] } },
+          config: initialConfig,
+          sourceConfig: initialConfig,
           hash: "hash-1",
           issues: [],
-          raw: '{"agents":{"list":[{"id":"main"},{"id":"kimi"}]}}',
+          raw: JSON.stringify(initialConfig),
           valid: true,
         },
         "config.set": {
-          config: { agents: { list: [{ id: "main" }, { id: "kimi", default: true }] } },
+          config: savedConfig,
+          sourceConfig: savedConfig,
           hash: "hash-2",
           issues: [],
-          raw: '{"agents":{"list":[{"id":"main"},{"id":"kimi","default":true}]}}',
+          raw: JSON.stringify(savedConfig),
           valid: true,
         },
       },
@@ -91,16 +99,15 @@ describeControlUiE2e("Control UI agents Set Default mocked Gateway E2E", () => {
       // non-default agent.
       const agentSelect = page.locator("wa-dropdown.agent-select");
       await agentSelect.locator(".agent-select__trigger").click();
-      await agentSelect.getByRole("menuitemcheckbox", { name: "Kimi agent", exact: true }).click();
+      await agentSelect.getByRole("menuitemradio", { name: "Kimi agent", exact: true }).click();
       await page.getByRole("button", { name: "Set Default", exact: true }).click();
 
       // The fix routes Set Default through the canonical save path; without it the click
       // only stages a form draft and never emits config.set, so this request never arrives.
       const setRequest = await gateway.waitForRequest("config.set");
       const raw = requestParams(setRequest).raw;
-      expect(JSON.parse(String(raw))).toEqual({
-        agents: { list: [{ id: "main" }, { id: "kimi", default: true }] },
-      });
+      expect(JSON.parse(String(raw))).toEqual(savedConfig);
+      expect(requireRecord(JSON.parse(String(raw))).agents).not.toHaveProperty("list");
     } finally {
       await context.close();
     }

@@ -1,32 +1,25 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { icons } from "../../components/icons.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import * as realtimeTalkInput from "./realtime-talk-input.ts";
 
-const discoverRealtimeTalkInputsMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./realtime-talk-input.ts", () => ({
-  discoverRealtimeTalkInputs: discoverRealtimeTalkInputsMock,
-}));
-
-vi.mock("../../components/icons.ts", async () => {
-  const { html: litHtml } = await import("lit");
-  return {
-    icons: {
-      camera: litHtml`<svg data-icon="camera"></svg>`,
-      cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
-      switchCamera: litHtml`<svg data-icon="switch-camera"></svg>`,
-      check: litHtml`<svg data-icon="check"></svg>`,
-      chevronDown: litHtml`<svg data-icon="chevron-down"></svg>`,
-    },
-  };
-});
+const discoverRealtimeTalkInputsMock = vi.fn();
+const openRealtimeTalkInputMock = vi.fn();
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
+
+function iconMarkup(icon: unknown): string | undefined {
+  const container = document.createElement("div");
+  render(icon, container);
+  return container.querySelector("svg")?.innerHTML;
+}
 
 function props(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
@@ -58,12 +51,42 @@ function renderComposer(overrides: Partial<ComposerProps> = {}) {
   return { container, props: composerProps };
 }
 
+describe("suggestion composer", () => {
+  it("labels the send action as Suggest and emits ephemeral typing state", () => {
+    const onTypingChange = vi.fn();
+    const view = renderComposer({
+      suggestionComposer: true,
+      draft: "",
+      onTypingChange,
+    });
+    expect(view.container.querySelector(".agent-chat__control-label")?.textContent).toContain(
+      "Suggest",
+    );
+    expect(
+      view.container.querySelector<HTMLButtonElement>('button[aria-label="Add attachment"]')
+        ?.disabled,
+    ).toBe(true);
+
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+    textarea.value = "hello";
+    textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    expect(onTypingChange).toHaveBeenNthCalledWith(1, true);
+    expect(onTypingChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
 function questionPrompt(id: string, question: string): QuestionPrompt {
   return {
     id,
     questions: [
       {
-        id: "choice",
+        questionId: "choice",
         header: "Choice",
         question,
         options: [{ label: "Yes" }, { label: "No" }],
@@ -92,29 +115,121 @@ function button(container: Element, label: string): HTMLButtonElement {
   return result;
 }
 
+class DictationAudioContext {
+  readonly destination = {};
+  readonly sampleRate = 8000;
+  readonly close = vi.fn(async () => undefined);
+
+  createMediaStreamSource() {
+    return { connect: vi.fn(), disconnect: vi.fn() };
+  }
+
+  createScriptProcessor() {
+    return { connect: vi.fn(), disconnect: vi.fn(), onaudioprocess: null };
+  }
+
+  createGain() {
+    return { connect: vi.fn(), disconnect: vi.fn(), gain: { value: 1 } };
+  }
+
+  createAnalyser() {
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
+    };
+  }
+}
+
+function dictationPointerDown(pointerId: number): PointerEvent {
+  const event = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+  Object.defineProperty(event, "pointerId", { value: pointerId });
+  return event as PointerEvent;
+}
+
+beforeEach(() => {
+  // ESM imports remain live when the composer was cached by another test file.
+  // Patch the shared dependencies instead of clearing isolate:false's registry.
+  vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
+    discoverRealtimeTalkInputsMock,
+  );
+  vi.spyOn(realtimeTalkInput, "openRealtimeTalkInput").mockImplementation(
+    openRealtimeTalkInputMock,
+  );
+});
+
 afterEach(async () => {
   resetChatComposerState();
   discoverRealtimeTalkInputsMock.mockReset();
+  openRealtimeTalkInputMock.mockReset();
   localStorage.clear();
   document.body.replaceChildren();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   await i18n.setLocale("en");
   vi.restoreAllMocks();
 });
 
 describe("renderChatComposer controls", () => {
-  it("renders and invokes an action beside the disabled reason", () => {
-    const onDisabledAction = vi.fn();
+  it("keeps composing enabled and explains queued delivery while offline", () => {
     const { container } = renderComposer({
-      canSend: false,
-      disabledReason: "This session is archived.",
-      disabledActionLabel: "Restore",
-      onDisabledAction,
+      offline: true,
+      queuedOutboxCount: 3,
+      draft: "Queue this message",
     });
 
-    const reason = container.querySelector(".agent-chat__disabled-reason");
-    expect(reason?.textContent).toContain("This session is archived.");
-    reason?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onDisabledAction).toHaveBeenCalledOnce();
+    expect(container.querySelector(".agent-chat__input--offline")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
+      "Offline — 3 queued; messages send when the connection returns.",
+    );
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
+
+    const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
+    expect(empty.container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
+      "Offline — messages will be queued and sent when the connection returns.",
+    );
+
+    const online = renderComposer({ queuedOutboxCount: 3 });
+    expect(online.container.querySelector(".agent-chat__offline-hint")).toBeNull();
+  });
+
+  it("replaces the composer with the archived-session notice", () => {
+    const onAction = vi.fn();
+    const onAbort = vi.fn();
+    const { container } = renderComposer({
+      canSend: false,
+      canAbort: true,
+      onAbort,
+      disabledBanner: {
+        kind: "composer-replacement",
+        text: "This session is archived. Unarchive it to continue the conversation.",
+        actionLabel: "Unarchive",
+        onAction,
+      },
+    });
+
+    const banner = container.querySelector(".agent-chat__disabled-banner");
+    expect(banner?.textContent).toContain("This session is archived.");
+    expect(container.querySelector(".agent-chat__input")).toBeNull();
+    expect(container.querySelector("textarea")).toBeNull();
+    banner?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onAction).toHaveBeenCalledOnce();
+    button(container, t("chat.runControls.stopGenerating")).click();
+    expect(onAbort).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the disabled composer mounted for a catalog read-only state", () => {
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "This catalog session is read-only.",
+    });
+
+    expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
   it("switches the primary action between voice, send, queue, and stop", () => {
@@ -150,6 +265,15 @@ describe("renderChatComposer controls", () => {
       onAbort,
     });
     expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
+
+    const onToggleWithDraft = vi.fn();
+    view = renderComposer({
+      draft: "Keep this text",
+      onToggleRealtimeTalk: onToggleWithDraft,
+    });
+    button(view.container, t("chat.composer.startVoiceInput")).click();
+    expect(onToggleWithDraft).toHaveBeenCalledOnce();
+    expect(button(view.container, t("chat.runControls.sendMessage"))).toBeTruthy();
 
     view = renderComposer({
       canAbort: true,
@@ -206,9 +330,9 @@ describe("renderChatComposer controls", () => {
     expect(items.find((item) => item.value === "studio-mic")?.getAttribute("aria-checked")).toBe(
       "true",
     );
-    expect(
-      items.find((item) => item.value === "studio-mic")?.querySelector('[data-icon="check"]'),
-    ).not.toBeNull();
+    expect(items.find((item) => item.value === "studio-mic")?.querySelector("svg")?.innerHTML).toBe(
+      iconMarkup(icons.check),
+    );
 
     items.find((item) => item.value === "headset")?.click();
     await dropdown?.updateComplete;
@@ -299,8 +423,8 @@ describe("renderChatComposer controls", () => {
     });
 
     const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
-    expect(cameraToggle.querySelector('[data-icon="camera-off"]')).not.toBeNull();
-    expect(cameraToggle.querySelector('[data-icon="camera"]')).toBeNull();
+    expect(cameraToggle.querySelector("svg")?.innerHTML).toBe(iconMarkup(icons.cameraOff));
+    expect(cameraToggle.querySelector("svg")?.innerHTML).not.toBe(iconMarkup(icons.camera));
   });
 
   it("offers camera switching only for a live preview with multiple cameras", () => {
@@ -354,7 +478,7 @@ describe("renderChatComposer controls", () => {
     );
   });
 
-  it("sends attachment-only drafts instead of starting voice", () => {
+  it("keeps send and dictation distinct for attachment-only drafts", () => {
     const onSend = vi.fn();
     const onToggleRealtimeTalk = vi.fn();
     const { container } = renderComposer({
@@ -368,7 +492,65 @@ describe("renderChatComposer controls", () => {
     expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
     expect(
       container.querySelector(`button[aria-label="${t("chat.composer.startVoiceInput")}"]`),
-    ).toBeNull();
+    ).not.toBeNull();
+  });
+
+  it("keeps the captured dictation button through the hold-start rerender", async () => {
+    vi.useFakeTimers();
+    openRealtimeTalkInputMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    vi.stubGlobal("AudioContext", DictationAudioContext);
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return { transcription: { ready: true } };
+      }
+      if (method === "talk.session.create") {
+        return {
+          sessionId: "dictation-1",
+          transcriptionSessionId: "dictation-1",
+          audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+        };
+      }
+      return { ok: true };
+    });
+    const gatewayClient = {
+      addEventListener: vi.fn(() => () => undefined),
+      request,
+    } as unknown as GatewayBrowserClient;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      draft: "Keep this text",
+      gatewayClient,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const capturedButton = container.querySelector<HTMLButtonElement>(
+      ".chat-talk-control > openclaw-tooltip > button",
+    );
+    expect(capturedButton).not.toBeNull();
+    const captures = new Set<number>();
+    Object.defineProperties(capturedButton!, {
+      setPointerCapture: { value: (pointerId: number) => captures.add(pointerId) },
+      hasPointerCapture: { value: (pointerId: number) => captures.has(pointerId) },
+      releasePointerCapture: { value: (pointerId: number) => captures.delete(pointerId) },
+    });
+
+    capturedButton!.dispatchEvent(dictationPointerDown(9));
+    expect(capturedButton!.hasPointerCapture(9)).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rerenderedButton = container.querySelector<HTMLButtonElement>(
+      ".chat-talk-control > openclaw-tooltip > button",
+    );
+    expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
+    expect(rerenderedButton).toBe(capturedButton);
+    expect(rerenderedButton?.hasPointerCapture(9)).toBe(true);
   });
 
   it("keeps voice and generation stop controls distinct when both are active", () => {
@@ -437,6 +619,48 @@ describe("renderChatComposer controls", () => {
     steer[0]?.click();
     steer[1]?.click();
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
+  });
+
+  it("renders the queued author's avatar before the turn is submitted", async () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+          sender: { id: "profile_123", name: "Alice Example" },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-queue__item .chat-author-avatar__initials")?.textContent,
+      ).toContain("AE");
+    });
+  });
+
+  it("renders reconnect waits as quiet status without the raw transport error", () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "reconnect-1",
+          text: "send me once the gateway is back",
+          createdAt: 1,
+          sendError: "chat.send unavailable during gateway restart",
+          sendState: "waiting-reconnect",
+        },
+      ],
+    });
+    const item = container.querySelector(".chat-queue__item");
+    expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
+    expect(item?.querySelector(".chat-queue__dot")).not.toBeNull();
+    expect(item?.querySelector(".chat-queue__icon")).toBeNull();
+    expect(item?.querySelector(".chat-queue__error")).toBeNull();
+    const badge = item?.querySelector(".chat-queue__badge");
+    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(badge?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
   });
 
   it("renders failed sends as retryable and running commands as inert", () => {
@@ -633,6 +857,11 @@ describe("renderChatComposer status", () => {
     );
     expect(container.querySelector(".compaction-indicator--fallback")?.textContent?.trim()).toBe(
       "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
+    );
+    expect(
+      container.querySelector(".compaction-indicator--fallback")?.getAttribute("aria-label"),
+    ).toBe(
+      "Selected: fireworks/minimax-m2p5 • Active: deepinfra/moonshotai/Kimi-K2.5 • Attempts: fireworks/minimax-m2p5: rate limit",
     );
   });
 

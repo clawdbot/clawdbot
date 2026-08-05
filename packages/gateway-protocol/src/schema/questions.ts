@@ -3,8 +3,10 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 const QuestionIdSchema = Type.String({ pattern: "^[a-z][a-z0-9_]*$" });
+// UI chip/tag display cap shared by every question input and output shape.
 const QuestionHeaderSchema = Type.String({ maxLength: 12 });
 
 export const QuestionOptionSchema = closedObject({
@@ -13,8 +15,8 @@ export const QuestionOptionSchema = closedObject({
 });
 
 const QuestionInputFields = {
-  id: QuestionIdSchema,
-  header: Type.String(),
+  questionId: QuestionIdSchema,
+  header: QuestionHeaderSchema,
   question: NonEmptyString,
   options: Type.Array(QuestionOptionSchema, { maxItems: 4 }),
   multiSelect: Type.Optional(Type.Boolean()),
@@ -27,14 +29,13 @@ export const QuestionRequestQuestionSchema = closedObject(QuestionInputFields);
 
 const QuestionFields = {
   ...QuestionInputFields,
-  header: QuestionHeaderSchema,
 };
 
 /** Canonical normalized question shown to an operator. */
 export const QuestionSchema = closedObject(QuestionFields);
 
 export const QuestionAnswersSchema = closedObject({
-  answers: Type.Record(QuestionIdSchema, closedObject({ answers: Type.Array(Type.String()) })),
+  answers: Type.Record(QuestionIdSchema, Type.Array(Type.String())),
 });
 
 export const QuestionStatusSchema = Type.Union([
@@ -55,6 +56,7 @@ export const QuestionRecordSchema = closedObject({
   questions: Type.Array(QuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
   createdAtMs: Type.Integer({ minimum: 0 }),
   expiresAtMs: Type.Integer({ minimum: 0 }),
   status: QuestionStatusSchema,
@@ -67,6 +69,7 @@ export const QuestionRequestParamsSchema = closedObject({
   questions: Type.Array(QuestionRequestQuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
@@ -112,16 +115,21 @@ export const QuestionListResultSchema = closedObject({
   questions: Type.Array(QuestionRecordSchema),
 });
 
-export const QuestionRequestedEventSchema = QuestionRecordSchema;
-export const QuestionResolvedEventSchema = Type.Union([
-  closedObject({
-    id: NonEmptyString,
-    status: Type.Literal("answered"),
-    answers: QuestionAnswersSchema,
-  }),
-  closedObject({ id: NonEmptyString, status: Type.Literal("cancelled") }),
-  closedObject({ id: NonEmptyString, status: Type.Literal("expired") }),
-]);
+// Native codegen intentionally reuses QuestionRecord for this event instead of
+// registering a duplicate alias, so stamp the shared schema at the event site.
+export const QuestionRequestedEventSchema = withSince("2026.7", QuestionRecordSchema);
+export const QuestionResolvedEventSchema = withSince(
+  "2026.7",
+  Type.Union([
+    closedObject({
+      id: NonEmptyString,
+      status: Type.Literal("answered"),
+      answers: QuestionAnswersSchema,
+    }),
+    closedObject({ id: NonEmptyString, status: Type.Literal("cancelled") }),
+    closedObject({ id: NonEmptyString, status: Type.Literal("expired") }),
+  ]),
+);
 
 export type QuestionOption = Static<typeof QuestionOptionSchema>;
 export type Question = Static<typeof QuestionSchema>;

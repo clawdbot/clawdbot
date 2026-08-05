@@ -5,6 +5,7 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
+  stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
@@ -852,6 +853,40 @@ describe("stripMinimaxToolCallXml", () => {
 });
 
 describe("sanitizeAssistantVisibleText", () => {
+  it("does not preserve reasoning inside unequal backtick runs", () => {
+    expect(sanitizeAssistantVisibleText("before ```<think>private</think>`` after")).toBe(
+      "before ````` after",
+    );
+  });
+
+  it("preserves fenced log lines quoting tool markers through delivery", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves fenced serialized tool-call examples through delivery", () => {
+    const input = [
+      "Example:",
+      "```json",
+      "[read]",
+      '{"path":"example.txt"}',
+      "[/read]",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
       '<invoke name="read">payload</invoke></minimax:tool_call>',
@@ -900,6 +935,10 @@ describe("sanitizeAssistantVisibleText", () => {
       "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
+      "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
+      "⚠️ 🛠️ Bash failed: `git status` (workspace) (exit 1)",
+      "⚠️ 🛠️ Exec failed (exit 1)",
+      "⚠️ 🛠️ Bash failed",
       "🛠️ run git status",
       "Visible outro.",
     ].join("\n");
@@ -907,10 +946,20 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible intro.\nVisible outro.");
   });
 
+  it("preserves assistant warnings that are not internal trace formats", () => {
+    const input = [
+      "⚠️ 🛠️ The deployment failed",
+      "⚠️ 🛠️ Exec failed to start, so I used the fallback",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("preserves internal tool trace examples inside fenced code", () => {
     const input = [
       "Example:",
       "```",
+      "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
       "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
       "```",
     ].join("\n");
@@ -996,5 +1045,70 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
       "🛠️ run git status",
     );
+  });
+});
+
+describe("stripDowngradedToolCallText", () => {
+  it("preserves fenced log lines that quote [Tool Result for ID ...]", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves fenced log lines that quote [Tool Call: ...] and Arguments", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Call: bash (ID: 7)]",
+      'Arguments: {"cmd":"ls"}',
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves fenced log lines that quote [Historical context: ...]", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Historical context: earlier run]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("strips real [Tool Result for ID ...] blocks outside code", () => {
+    const input = ["[Tool Result for ID abc]", "stdout: hello"].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("");
+  });
+
+  it("strips real [Tool Call: ...] blocks outside code", () => {
+    const input = ["[Tool Call: read (ID: toolu_1)]", 'Arguments: {"path":"/tmp/x"}'].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("");
+  });
+
+  it("strips real [Historical context: ...] markers outside code", () => {
+    const input = "[Historical context: earlier run]\nVisible answer";
+
+    expect(stripDowngradedToolCallText(input)).toBe("Visible answer");
   });
 });

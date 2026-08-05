@@ -177,7 +177,7 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
         throw new ToolInputError(`${prefix}.multiSelect must be a boolean`);
       }
       return {
-        id,
+        questionId: id,
         header,
         question: questionText,
         options: question.options.map((option, optionIndex) =>
@@ -474,7 +474,7 @@ export function cancelAskUserPromptDelivery(
 function answeredResult(questions: readonly QuestionRequestQuestion[], answers: QuestionAnswers) {
   const payload = { status: "answered" as const, answers };
   const lines = questions.map((question) => {
-    const values = answers.answers[question.id]?.answers ?? [];
+    const values = answers.answers[question.questionId] ?? [];
     return `${question.header}: ${values.length > 0 ? values.join(", ") : "(no answer)"}`;
   });
   return textResult(`${lines.join("\n")}\n\n${JSON.stringify(payload, null, 2)}`, payload);
@@ -584,13 +584,10 @@ export function createAskUserTool(params: {
           gatewayCall,
           waiters: new Set(),
         } satisfies AskUserQuestionState);
-      state.sessionKey = sessionKey;
-      state.questions = normalized.questions;
+      Object.assign(state, { sessionKey, questions: normalized.questions, gatewayCall });
       state.expiresAtMs = Date.now() + timeoutMs;
-      state.gatewayCall = gatewayCall;
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
-
       let cancellation:
         | Promise<Extract<QuestionWaitAnswerResult, { status: "answered" }> | undefined>
         | undefined;
@@ -647,12 +644,14 @@ export function createAskUserTool(params: {
         }
         throw new Error("question.waitAnswer returned an invalid status");
       };
-
       try {
         state.claim = registerPendingAgentQuestion({
           questionId,
           sessionKey,
-          questions: normalized.questions,
+          questions: normalized.questions.map(({ questionId: id, ...question }) => ({
+            ...question,
+            id,
+          })),
           gatewayCall,
           onCancel: () => {
             if (
@@ -675,6 +674,7 @@ export function createAskUserTool(params: {
                 questions: normalized.questions,
                 ...(params.agentId ? { agentId: params.agentId } : {}),
                 ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                ...(params.runId ? { runId: params.runId } : {}),
                 timeoutMs,
               },
               signal ? { signal } : undefined,

@@ -72,15 +72,20 @@ describe("telegramOutbound", () => {
     sendLocationTelegramMock.mockReset();
   });
 
-  it("forwards mediaLocalRoots in direct media sends", async () => {
+  it("forwards workspace-scoped media access in direct media sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media" });
+    const mediaReadFile = vi.fn(async (_filePath: string) => Buffer.from("chart"));
+    const workspaceDir = "/tmp/agent-root";
+    const mediaAccess = { localRoots: [workspaceDir], readFile: mediaReadFile, workspaceDir };
 
     const result = await telegramOutbound.sendMedia!({
       cfg: {} as never,
       to: "12345",
       text: "hello",
-      mediaUrl: "/tmp/image.png",
-      mediaLocalRoots: ["/tmp/agent-root"],
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       accountId: "ops",
       replyToId: "900",
       threadId: "12",
@@ -95,11 +100,15 @@ describe("telegramOutbound", () => {
       accountId: "ops",
       silent: undefined,
       gatewayClientScopes: undefined,
-      mediaUrl: "/tmp/image.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
       mediaLocalRoots: ["/tmp/agent-root"],
-      mediaReadFile: undefined,
+      mediaReadFile,
       forceDocument: false,
     });
+    expect(lastCallOptions(sendMessageTelegramMock, "12345", "hello").mediaAccess).toBe(
+      mediaAccess,
+    );
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
@@ -107,6 +116,7 @@ describe("telegramOutbound", () => {
     sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })
       .mockResolvedValueOnce({ messageId: "tg-2", chatId: "12345" });
+    const mediaAccess = { localRoots: ["/tmp/media"], workspaceDir: "/tmp/media" };
 
     const result = await telegramOutbound.sendPayload!({
       cfg: {} as never,
@@ -114,7 +124,7 @@ describe("telegramOutbound", () => {
       text: "",
       payload: {
         text: "Approval required",
-        mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+        mediaUrls: ["chart.png", "chart-2.png"],
         channelData: {
           telegram: {
             quoteText: "quoted",
@@ -123,20 +133,22 @@ describe("telegramOutbound", () => {
               transcriptMessageId: "assistant-media",
               deliverySignature: resolveTelegramPromptContextDeliverySignature({
                 text: "Approval required",
-                mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+                mediaUrls: ["chart.png", "chart-2.png"],
               }),
             },
           },
         },
       },
-      mediaLocalRoots: ["/tmp/media"],
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
       accountId: "ops",
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
     expect(sendMessageTelegramMock).toHaveBeenCalledTimes(2);
     const firstOptions = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Approval required");
-    expect(firstOptions.mediaUrl).toBe("https://example.com/1.jpg");
+    expect(firstOptions.mediaUrl).toBe("chart.png");
+    expect(firstOptions.mediaAccess).toBe(mediaAccess);
     expect(firstOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
     expect(firstOptions.quoteText).toBe("quoted");
     expect(firstOptions.buttons).toEqual([
@@ -153,7 +165,8 @@ describe("telegramOutbound", () => {
       finalPart: false,
     });
     const secondOptions = callOptionsAt(sendMessageTelegramMock, 1, "12345", "");
-    expect(secondOptions.mediaUrl).toBe("https://example.com/2.jpg");
+    expect(secondOptions.mediaUrl).toBe("chart-2.png");
+    expect(secondOptions.mediaAccess).toBe(mediaAccess);
     expect(secondOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
     expect(secondOptions.quoteText).toBe("quoted");
     expect(secondOptions.buttons).toBeUndefined();
@@ -481,14 +494,22 @@ describe("telegramOutbound", () => {
       blocks: [
         {
           type: "buttons" as const,
-          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+          buttons: [
+            {
+              label: "Launch",
+              action: {
+                type: "web-app" as const,
+                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+              },
+            },
+          ],
         },
       ],
     };
     const rendered = await telegramOutbound.renderPresentation?.({
       payload: { text: "Open app:" },
       presentation,
-      ctx: {} as never,
+      ctx: { to: "12345" } as never,
     });
     if (!rendered) {
       throw new Error("expected rendered Telegram presentation");
@@ -504,7 +525,14 @@ describe("telegramOutbound", () => {
 
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Open app:");
     expect(options.buttons).toEqual([
-      [{ text: "Launch", web_app: { url: "https://example.com/app" } }],
+      [
+        {
+          text: "Launch",
+          web_app: {
+            url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+          },
+        },
+      ],
     ]);
   });
 

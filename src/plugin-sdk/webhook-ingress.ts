@@ -28,11 +28,14 @@ export {
   type WebhookInFlightLimiter,
 } from "./webhook-request-guards.js";
 export {
+  canonicalizeWebhookRouteKey,
   registerPluginHttpRoute,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
+  normalizeWebhookPath,
+  resolveWebhookPath,
   resolveWebhookTargetWithAuthOrReject,
   resolveWebhookTargetWithAuthOrRejectSync,
   resolveWebhookTargets,
@@ -42,7 +45,6 @@ export {
   type RegisteredWebhookTarget,
   type WebhookTargetMatchResult,
 } from "./webhook-targets.js";
-export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export { resolveRequestClientIp } from "../gateway/net.js";
 export { createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
 export type { AuthRateLimiter, RateLimitConfig } from "../gateway/auth-rate-limit.js";

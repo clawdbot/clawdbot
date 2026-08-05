@@ -115,4 +115,32 @@ describe("formatGeneratedModule", () => {
       expect(message).not.toContain("DO_NOT_DUMP_OLD_STDOUT");
     }
   });
+
+  it("keeps truncated formatter diagnostics UTF-8 safe", () => {
+    const repoRoot = makeRepoRoot();
+    const splitBoundaryOutput = `你好${"x".repeat(16_380)}`;
+    let message = "";
+
+    try {
+      formatGeneratedModule(
+        "export const value=1;",
+        {
+          errorLabel: "test module",
+          outputPath: "generated.ts",
+          repoRoot,
+        },
+        {
+          spawnSync: () => ({
+            status: 1,
+            stderr: splitBoundaryOutput,
+            stdout: "",
+          }),
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/stderr tail:\n好x/u);
+    expect(message).not.toContain("�");
+  });
 });

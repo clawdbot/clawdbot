@@ -46,6 +46,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
   return {
     candidates: result.candidates.map((candidate) => ({
       kind: candidate.kind,
+      ...(candidate.brandId !== undefined ? { brandId: candidate.brandId } : {}),
       label: candidate.label,
       detail: candidate.detail,
       modelRef: candidate.modelRef,
@@ -58,6 +59,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
     })),
     manualProviders: result.manualProviders.map((provider) => ({
       id: provider.id,
+      ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
       label: provider.label,
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
       ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
@@ -67,6 +69,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
       Object.assign(
         {
           id: option.id,
+          ...(option.brandId !== undefined ? { brandId: option.brandId } : {}),
           label: option.label,
           kind: option.kind,
           featured: option.featured,
@@ -77,6 +80,22 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
         option.website !== undefined ? { website: option.website } : {},
       ),
     ),
+    ...(result.prepareOptions !== undefined
+      ? {
+          prepareOptions: result.prepareOptions.map((option) =>
+            Object.assign(
+              {
+                id: option.id,
+                label: option.label,
+              },
+              option.brandId !== undefined ? { brandId: option.brandId } : {},
+              option.hint !== undefined ? { hint: option.hint } : {},
+              option.icon !== undefined ? { icon: option.icon } : {},
+              option.website !== undefined ? { website: option.website } : {},
+            ),
+          ),
+        }
+      : {}),
     recommendedInstalls: result.recommendedInstalls ?? [],
     unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
       id: candidate.id,
@@ -255,7 +274,7 @@ export async function runRemoteGatewayInferenceOnboarding(
     // Setup applies on the remote gateway through its chat; the local
     // custodian flow (question zero, local setup apply, local hatch) is wrong here.
     handoffMode: "chat",
-    runSetupMemoryImportStep: async () => {},
+    runSetupMemoryImportStep: async () => ({ status: "skipped", providers: [] }),
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
       const prompter = await (deps.createPrompter?.() ??

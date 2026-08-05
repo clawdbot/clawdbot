@@ -208,6 +208,52 @@ describe("gateway --force helpers", () => {
     ]);
   });
 
+  it("continues when a discovered listener exits before it can be signaled", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(
+      ["p42", "cnode", "p99", "cssh", ""].join("\n"),
+    );
+    const gone = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    const killMock = vi.fn().mockImplementationOnce(() => {
+      throw gone;
+    });
+    process.kill = killMock;
+
+    expect(forceFreePort(18789)).toEqual<PortProcess[]>([
+      { pid: 42, command: "node" },
+      { pid: 99, command: "ssh" },
+    ]);
+    expect(killMock).toHaveBeenNthCalledWith(1, 42, "SIGTERM");
+    expect(killMock).toHaveBeenNthCalledWith(2, 99, "SIGTERM");
+  });
+
+  it("does not suppress listener ownership-guard errors", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(["p42", "cnode", ""].join("\n"));
+    const guardError = Object.assign(new Error("ownership verification failed"), {
+      code: "ESRCH",
+    });
+    const killMock = vi.fn();
+    process.kill = killMock;
+
+    expect(() =>
+      forceFreePort(18789, {
+        beforeSignal: () => {
+          throw guardError;
+        },
+      }),
+    ).toThrow(guardError);
+    expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves real signal permission failures", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(["p42", "cnode", ""].join("\n"));
+    const denied = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    process.kill = vi.fn(() => {
+      throw denied;
+    });
+
+    expect(() => forceFreePort(18789)).toThrow(/failed to kill pid 42/);
+  });
+
   it("retries until the port is free", async () => {
     vi.useFakeTimers();
     let call = 0;

@@ -46,7 +46,7 @@ function isWatchableExitJob(job: CronJob): job is OnExitCronJob {
 
 export function createCronExitWatchers(params: {
   getProcessSupervisor: () => ProcessSupervisor;
-  persistCompletion: (jobId: string) => Promise<void>;
+  persistCompletion: (job: OnExitCronJob) => Promise<(() => void) | void>;
   fireOnExit: (job: CronJob, exit: CronExitResult) => void | Promise<void>;
   logger: Logger;
   shell?: { command: string; argsFor: (command: string) => string[] };
@@ -183,8 +183,9 @@ export function createCronExitWatchers(params: {
       // Persist the terminal one-shot state BEFORE firing. FAIL CLOSED: if the
       // store write fails we do NOT wake — waking without a persisted terminal
       // state would let a gateway restart re-arm and re-run the command.
+      let releaseCompletion: (() => void) | void;
       try {
-        await params.persistCompletion(job.id);
+        releaseCompletion = await params.persistCompletion(slot.job);
       } catch (err) {
         if (owns()) {
           active.delete(job.id);
@@ -196,27 +197,31 @@ export function createCronExitWatchers(params: {
         return;
       }
       slot.terminalPersisting = false;
-      if (!owns() || slot.cancelled) {
-        if (active.get(job.id) === slot) {
-          active.delete(job.id);
-        }
-        return;
-      }
-      slot.fired = true;
       try {
-        await params.fireOnExit(slot.job, {
-          exitCode: exit.exitCode,
-          reason: exit.reason,
-          stdout: exit.stdout,
-          stderr: exit.stderr,
-          timedOut: exit.timedOut,
-          noOutputTimedOut: exit.noOutputTimedOut,
-        });
-      } catch (err) {
-        params.logger.warn(
-          { err: String(err), jobId: job.id },
-          "cron-exit: fireOnExit after exit failed",
-        );
+        if (!owns() || slot.cancelled) {
+          if (active.get(job.id) === slot) {
+            active.delete(job.id);
+          }
+          return;
+        }
+        slot.fired = true;
+        try {
+          await params.fireOnExit(slot.job, {
+            exitCode: exit.exitCode,
+            reason: exit.reason,
+            stdout: exit.stdout,
+            stderr: exit.stderr,
+            timedOut: exit.timedOut,
+            noOutputTimedOut: exit.noOutputTimedOut,
+          });
+        } catch (err) {
+          params.logger.warn(
+            { err: String(err), jobId: job.id },
+            "cron-exit: fireOnExit after exit failed",
+          );
+        }
+      } finally {
+        releaseCompletion?.();
       }
     })().finally(() => {
       slot.lifecycleSettled = true;

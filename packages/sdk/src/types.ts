@@ -87,8 +87,14 @@ export type EnvironmentCreateParams = {
   idempotencyKey: string;
 };
 
+export type WorkerEnvironmentProfileSummary = {
+  id: string;
+  providerId: string;
+};
+
 export type EnvironmentsListResult = {
   environments: EnvironmentSummary[];
+  profiles?: WorkerEnvironmentProfileSummary[];
 };
 
 export type WorkspaceSelection = {
@@ -373,7 +379,7 @@ export type RunCreateParams = AgentRunParams;
 
 export type AgentsCreateParams = {
   name: string;
-  workspace: string;
+  workspace?: string;
   model?: string;
   emoji?: string;
   avatar?: string;

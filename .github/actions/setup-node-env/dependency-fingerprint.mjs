@@ -39,6 +39,7 @@ const INSTALL_INPUT_FILES = [
   "pnpmfile.cjs",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
   ".github/actions/setup-node-env/sticky-importers.sh",
+  ".github/actions/setup-node-env/verify-importers.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
@@ -54,7 +55,7 @@ function canonicalize(value) {
   }
   return Object.fromEntries(
     Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, child]) => [key, canonicalize(child)]),
   );
 }
@@ -127,10 +128,10 @@ function trackedPackageManifests(workspace) {
   return result.stdout
     .split("\0")
     .filter((entry) => entry === "package.json" || entry.endsWith("/package.json"))
-    .sort();
+    .toSorted();
 }
 
-export function computeDependencyFingerprint({ workspace, frozenLockfile }) {
+function computeDependencyFingerprint({ workspace, frozenLockfile }) {
   const hash = createHash("sha256");
   addRecord(hash, "contract", "frozen-lockfile", String(frozenLockfile));
 
@@ -144,7 +145,7 @@ export function computeDependencyFingerprint({ workspace, frozenLockfile }) {
     try {
       manifest = JSON.parse(source);
     } catch (error) {
-      throw new Error(`invalid JSON in ${relativePath}: ${error.message}`);
+      throw new Error(`invalid JSON in ${relativePath}: ${error.message}`, { cause: error });
     }
     return { manifest, relativePath };
   });

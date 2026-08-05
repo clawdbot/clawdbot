@@ -1,7 +1,9 @@
 // Discord plugin module implements reply delivery behavior.
 import { formatReasoningMessage, resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
+  listMessageReceiptPlatformIds,
   sendDurableMessageBatch,
   type OutboundDeliveryFormattingOptions,
   type OutboundIdentity,
@@ -51,6 +53,23 @@ export function formatDiscordReplyDeliveryFailure(params: {
     .filter(Boolean)
     .join(" ");
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
+}
+
+type DiscordReplySkipReason = "aborted before delivery" | "internal-only payload";
+
+export function formatDiscordReplySkip(params: {
+  kind: "tool" | "block" | "final";
+  reason: DiscordReplySkipReason;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply skipped (${params.reason}): ${context}`;
 }
 
 function resolveTargetChannelId(target: string): string | undefined {
@@ -218,7 +237,10 @@ export async function deliverDiscordReply(params: {
     kind: params.kind,
   }).map(formatDiscordReasoningPayload);
   if (payloads.length === 0) {
-    return;
+    return {
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" as const },
+    };
   }
 
   const send = await sendDurableMessageBatch({
@@ -246,11 +268,33 @@ export async function deliverDiscordReply(params: {
       requesterAccountId: params.accountId,
     }),
   });
-  if (send.status === "failed" || send.status === "partial_failed") {
+  if (send.status === "failed") {
     throw send.error;
   }
-  const results = send.status === "sent" ? send.results : [];
-  if (results.length === 0) {
+  if (send.status === "suppressed") {
+    const hookEffect = send.payloadOutcomes?.find(
+      (outcome) => outcome.status === "suppressed",
+    )?.hookEffect;
+    return {
+      visibleReplySent: false,
+      suppression: {
+        reason: send.reason,
+        ...(hookEffect?.cancelReason ? { cancelReason: hookEffect.cancelReason } : {}),
+        ...(hookEffect?.metadata ? { metadata: hookEffect.metadata } : {}),
+      },
+    };
+  }
+  if (send.results.length === 0) {
     throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
   }
+  const deliveryResult = {
+    messageIds: listMessageReceiptPlatformIds(send.receipt),
+    receipt: send.receipt,
+    visibleReplySent: true as const,
+  };
+  if (send.status === "partial_failed") {
+    // Accepted receipts must survive failure so dispatch never replays visible chunks.
+    throw createChannelPartialDeliveryError(send.error, deliveryResult);
+  }
+  return deliveryResult;
 }

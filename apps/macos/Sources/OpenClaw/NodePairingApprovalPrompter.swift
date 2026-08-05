@@ -566,30 +566,22 @@ final class NodePairingApprovalPrompter {
 
     private static func probeSSH(user: String, host: String, port: Int) async -> Bool {
         let options = self.silentPairingSSHOptions
-        return await Task.detached(priority: .utility) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-
-            guard let target = CommandResolver.makeSSHTarget(user: user, host: host, port: port) else {
-                return false
-            }
-            let args = CommandResolver.sshArguments(
-                target: target,
-                identity: "",
-                options: options,
-                remoteCommand: ["/usr/bin/true"])
-            process.arguments = args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-
-            do {
-                _ = try process.runAndReadToEnd(from: pipe)
-            } catch {
-                return false
-            }
-            return process.terminationStatus == 0
-        }.value
+        guard let target = CommandResolver.makeSSHTarget(user: user, host: host, port: port) else {
+            return false
+        }
+        let args = CommandResolver.sshArguments(
+            target: target,
+            identity: "",
+            options: options,
+            remoteCommand: ["/usr/bin/true"])
+        do {
+            return try await BoundedProcess.run(
+                path: "/usr/bin/ssh",
+                arguments: args,
+                timeout: 8).terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     private var shouldPoll: Bool {

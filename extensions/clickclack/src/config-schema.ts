@@ -12,7 +12,9 @@ const ClickClackAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
+    apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
     tokenFile: z.string().optional(),
     workspace: z.string().optional(),
@@ -21,13 +23,34 @@ const ClickClackAccountConfigSchema = z
     replyMode: z.enum(["agent", "model"]).optional(),
     model: z.string().optional(),
     systemPrompt: z.string().optional(),
-    timeoutSeconds: z.number().int().min(1).max(3_600).optional(),
     toolsAllow: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
     agentActivity: z.boolean().optional(),
     commandMenu: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    mentionPatterns: z.array(z.string()).optional(),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+            mentionPatterns: z.array(z.string()).optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    discussions: z
+      .object({
+        enabled: z.boolean().optional(),
+        workspace: z.string().optional(),
+        controlUrlBase: z.string().url().optional(),
+        section: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

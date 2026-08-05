@@ -1,6 +1,7 @@
 // Telegram message/session/prompt pipeline shared by bot handler registrars.
 import type { Message } from "grammy/types";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
@@ -69,19 +70,17 @@ export function createTelegramHandlerMessageRuntime({
   const { resolveTelegramSessionState, resolvePromptContextAmbientWatermark } = sessionRuntime;
   const {
     recordMessageForReplyChain,
+    resolveCachedMessageThreadId,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,
-  } = createTelegramMessageContextRuntime(
-    {
-      cfg,
-      accountId,
-      opts,
-      telegramCfg,
-      telegramDeps,
-    },
-    sessionRuntime,
-  );
+  } = createTelegramMessageContextRuntime({
+    cfg,
+    accountId,
+    opts,
+    telegramCfg,
+    telegramDeps,
+  });
   const {
     normalizePromptContextMinTimestampMs,
     promptContextBoundaryOptions,
@@ -130,6 +129,7 @@ export function createTelegramHandlerMessageRuntime({
           mediaRef = media
             ? {
                 path: media.path,
+                kind: media.kind,
                 ...(media.contentType ? { contentType: media.contentType } : {}),
                 ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
               }
@@ -337,9 +337,16 @@ export function createTelegramHandlerMessageRuntime({
         const promptMediaPath = entry.mediaPath
           ? resolveTelegramPromptMediaPath(entry.mediaPath)
           : undefined;
+        // Stored kinds are typed non-unknown; MIME inference fills gaps and
+        // collapses an "unknown" inference to document for this deliverable-only surface.
+        const inferredKind = kindFromMime(entry.mediaType);
+        const mediaKind =
+          entry.mediaKind ??
+          (inferredKind && inferredKind !== "unknown" ? inferredKind : "document");
         if (entry.messageId && entry.mediaPath && promptMediaPath) {
           promptContextMediaByMessageId.set(entry.messageId, {
             path: promptMediaPath,
+            kind: mediaKind,
             ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
           });
         }
@@ -418,6 +425,7 @@ export function createTelegramHandlerMessageRuntime({
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,
+    resolveCachedMessageThreadId,
     processMessageWithReplyChain,
   };
 }

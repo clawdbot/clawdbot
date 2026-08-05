@@ -1,6 +1,8 @@
 import { createServer, get } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
+import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
 const blockingWorkerUrl = new URL(
@@ -14,14 +16,22 @@ const blockingWorkerUrl = new URL(
   `)}`,
 );
 
+const silentBlockingWorkerUrl = new URL(
+  `data:text/javascript,${encodeURIComponent(`
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {}
+  `)}`,
+);
+
 function emptyDetection(): SetupInferenceDetection {
   return {
     candidates: [],
     unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
-    recommendedInstalls: [],
-    workspace: "/tmp/work",
+    prepareOptions: [],
+    recommendedInstalls: listRecommendedToolInstalls(),
+    workspace: DEFAULT_AGENT_WORKSPACE_DIR,
     setupComplete: false,
   };
 }
@@ -87,6 +97,7 @@ describe("isolated setup inference detection", () => {
         partialDetection: fallback,
       },
       timeoutMs: 100,
+      fallbackEnv: {},
     });
     const startedAt = performance.now();
     const response = await requestHealth(`http://127.0.0.1:${address.port}/health`);
@@ -95,8 +106,69 @@ describe("isolated setup inference detection", () => {
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toEqual({ ok: true, status: "live" });
     expect(elapsedMs).toBeLessThan(500);
-    await expect(pending).resolves.toEqual(fallback);
+    const detection = await pending;
+    expect(detection).toMatchObject({
+      candidates: fallback.candidates,
+      unavailableCandidates: fallback.unavailableCandidates,
+      manualProviders: fallback.manualProviders,
+      authOptions: fallback.authOptions,
+      recommendedInstalls: fallback.recommendedInstalls,
+      workspace: fallback.workspace,
+      setupComplete: fallback.setupComplete,
+    });
+    expect(detection.prepareOptions ?? []).toEqual([]);
     expect(performance.now() - pendingStartedAt).toBeLessThan(1_000);
+  });
+
+  it("preserves ambient API keys when detection times out", async () => {
+    const { detectSetupInferenceIsolated } = await loadDetectionModule();
+
+    const detection = await detectSetupInferenceIsolated({
+      workerUrl: blockingWorkerUrl,
+      workerData: {
+        blockMs: 10_000,
+        detection: emptyDetection(),
+        partialDetection: emptyDetection(),
+      },
+      timeoutMs: 50,
+      fallbackEnv: {
+        OPENAI_API_KEY: "test-openai-key",
+        ANTHROPIC_API_KEY: "test-anthropic-key",
+      },
+    });
+
+    expect(detection.candidates).toEqual([
+      {
+        kind: "openai-api-key",
+        brandId: "openai",
+        modelRef: "openai/gpt-5.6",
+        label: "OpenAI API key",
+        detail: "OPENAI_API_KEY set",
+        credentials: true,
+        recommended: false,
+      },
+      {
+        kind: "anthropic-api-key",
+        brandId: "anthropic",
+        modelRef: "anthropic/claude-opus-5",
+        label: "Anthropic API key",
+        detail: "ANTHROPIC_API_KEY set",
+        credentials: true,
+        recommended: false,
+      },
+    ]);
+  });
+
+  it("omits prepare choices when detection times out without a partial result", async () => {
+    const { detectSetupInferenceIsolated } = await loadDetectionModule();
+
+    const detection = await detectSetupInferenceIsolated({
+      workerUrl: silentBlockingWorkerUrl,
+      timeoutMs: 50,
+      fallbackEnv: {},
+    });
+
+    expect(detection.prepareOptions).toBeUndefined();
   });
 
   it("coalesces concurrent detections behind one bounded worker", async () => {

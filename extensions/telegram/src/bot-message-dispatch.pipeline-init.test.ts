@@ -8,16 +8,29 @@ import {
   dispatchWithContext,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
-import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 
 describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
+  it("keeps Telegram typing below its client expiry without a per-message cutoff", async () => {
+    await dispatchWithContext({ context: createContext() });
+
+    expect(createChannelMessageReplyPipeline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        typing: expect.objectContaining({
+          keepaliveIntervalMs: 4_000,
+          maxDurationMs: 0,
+        }),
+      }),
+    );
+  });
+
   it("cleans delivery correlation when reply-pipeline initialization fails", async () => {
     const sessionKey = "agent:main:telegram:direct:pipeline-init-failure";
     const statusReactionController = createStatusReactionController();
     const reactionApi = vi.fn(async () => undefined);
     const runtime = createRuntime();
     runtime.error = vi.fn(() => {
-      notifyTelegramInboundEventOutboundSuccess({
+      telegramInboundEventDelivery.notify({
         sessionKey,
         to: "123",
         accountId: "default",
@@ -35,20 +48,14 @@ describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
         } as TelegramMessageContext["ctxPayload"],
         statusReactionController: statusReactionController as never,
         reactionApi,
-        removeAckAfterReply: true,
       }),
-      cfg: {
-        messages: {
-          statusReactions: {
-            timing: { errorHoldMs: 0 },
-          },
-        },
-      },
       runtime,
       suppressFailureFallback: true,
     });
 
-    await vi.waitFor(() => expect(statusReactionController.restoreInitial).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(statusReactionController.restoreInitial).toHaveBeenCalled();
+    });
     expect(reactionApi).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,6 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.gateway.QuestionAnswers
-import ai.openclaw.app.gateway.QuestionAnswersAnswersValue
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
@@ -326,7 +325,7 @@ class ChatReaderScrollControllerTest {
             answered.record.copy(
               answers =
                 QuestionAnswers(
-                  mapOf("choice" to QuestionAnswersAnswersValue(listOf("Yes"))),
+                  mapOf("choice" to listOf("Yes")),
                 ),
             ),
         ),

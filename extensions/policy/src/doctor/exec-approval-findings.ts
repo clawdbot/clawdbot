@@ -1,6 +1,10 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  EXEC_APPROVALS_POLICY_DOCUMENT_NAME,
+  EXEC_APPROVALS_POLICY_URI,
+} from "../exec-approvals-uri.js";
 import type { PolicyEvidence, PolicyExecApprovalEvidence } from "../policy-state.js";
 import { execApprovalsPolicyShapeFinding } from "./access-shapes.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
@@ -138,10 +142,10 @@ function execApprovalsFileFindings(
       {
         checkId: CHECK_IDS.policyExecApprovalsMissing,
         severity: "error",
-        message: "exec-approvals.json evidence is required by policy but was not found.",
+        message: `${EXEC_APPROVALS_POLICY_DOCUMENT_NAME} evidence is required by policy but was not found.`,
         source: "policy",
         path: params.displayName,
-        target: "oc://exec-approvals.json",
+        target: EXEC_APPROVALS_POLICY_URI,
         requirement: `oc://${params.policyDocName}/${
           requireFile ? `${params.requirementBase}/requireFile` : params.requirementBase
         }`,
@@ -165,7 +169,7 @@ function execApprovalsFileFindings(
       path: params.file.displayName,
       target: `oc://${params.file.ocDocName}`,
       requirement: `oc://${params.policyDocName}/${params.requirementBase}`,
-      fixHint: "Fix exec-approvals.json so it is valid JSON.",
+      fixHint: `Fix ${EXEC_APPROVALS_POLICY_DOCUMENT_NAME} so it is valid JSON.`,
     },
   ];
 }
@@ -369,13 +373,13 @@ function execApprovalFinding(
     readonly fixHint: string;
   },
 ): HealthFinding {
-  const target = entry?.source ?? "oc://exec-approvals.json";
+  const target = entry?.source ?? EXEC_APPROVALS_POLICY_URI;
   return {
     checkId: params.checkId,
     severity: "error",
     message: params.message,
     source: "policy",
-    path: "exec-approvals.json",
+    path: EXEC_APPROVALS_POLICY_DOCUMENT_NAME,
     ocPath: target,
     target,
     requirement: params.requirement,

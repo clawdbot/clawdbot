@@ -30,12 +30,8 @@ const A2UI_READY_TIMEOUT: Duration = Duration::from_secs(6);
 const A2UI_READY_INTERVAL: Duration = Duration::from_millis(100);
 const A2UI_READY_EVAL_TIMEOUT: Duration = Duration::from_millis(100);
 
-const A2UI_INDEX: &[u8] = include_bytes!(
-    "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/index.html"
-);
-const A2UI_BUNDLE: &[u8] = include_bytes!(
-    "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js"
-);
+const A2UI_INDEX: &[u8] = include_bytes!(env!("OPENCLAW_CANVAS_A2UI_INDEX_HTML"));
+const A2UI_BUNDLE: &[u8] = include_bytes!(env!("OPENCLAW_CANVAS_A2UI_BUNDLE_JS"));
 
 const ACTION_BRIDGE_SCRIPT: &str = r#"
 (() => {

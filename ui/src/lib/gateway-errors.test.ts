@@ -1,5 +1,7 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { isMissingOperatorReadScopeError } from "./gateway-errors.ts";
+import { GatewayRequestError } from "../api/gateway.ts";
+import { isMissingOperatorReadScopeError, isWizardNotFoundError } from "./gateway-errors.ts";
 
 function gatewayRequestError(params: { code: string; message: string; details?: unknown }): Error {
   return Object.assign(new Error(params.message), {
@@ -11,6 +13,45 @@ function gatewayRequestError(params: { code: string; message: string; details?: 
 }
 
 describe("gateway error helpers", () => {
+  it("classifies structured missing-wizard errors", () => {
+    expect(
+      isWizardNotFoundError(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "localized or changed public copy",
+          details: { code: "WIZARD_NOT_FOUND" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isWizardNotFoundError({
+        gatewayCode: "INVALID_REQUEST",
+        details: { code: "WIZARD_NOT_FOUND" },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unrelated errors and malformed missing-wizard details", () => {
+    expect(
+      isWizardNotFoundError({
+        gatewayCode: "UNAVAILABLE",
+        details: { code: "WIZARD_NOT_FOUND" },
+      }),
+    ).toBe(false);
+    expect(
+      isWizardNotFoundError({
+        gatewayCode: "INVALID_REQUEST",
+        details: { code: "UNKNOWN_AGENT_ID" },
+      }),
+    ).toBe(false);
+    expect(
+      isWizardNotFoundError({ gatewayCode: "INVALID_REQUEST", message: "wizard not found" }),
+    ).toBe(false);
+    for (const details of [null, "WIZARD_NOT_FOUND", [], { code: 42 }]) {
+      expect(isWizardNotFoundError({ gatewayCode: "INVALID_REQUEST", details })).toBe(false);
+    }
+  });
+
   it("classifies structured read-scope failures without message parsing", () => {
     expect(
       isMissingOperatorReadScopeError(

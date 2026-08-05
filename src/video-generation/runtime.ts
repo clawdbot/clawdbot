@@ -99,7 +99,7 @@ function buildNoVideoGenerationModelConfiguredMessage(
   const listProviders = deps.listProviders ?? listVideoGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "video-generation",
-    modelConfigKey: "videoGenerationModel",
+    modelConfigKey: "mediaModels.video",
     providers: listProviders(cfg),
     getProviderEnvVars: deps.getProviderEnvVars,
   });
@@ -121,10 +121,10 @@ export async function generateVideo(
   const logger = deps.log ?? log;
   const requestedTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.videoGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.video);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.video,
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
     agentDir: params.agentDir,
@@ -321,15 +321,27 @@ export async function generateVideo(
       if (!Array.isArray(result.videos) || result.videos.length === 0) {
         throw new Error("Video generation provider returned no videos.");
       }
-      for (const [index, video] of result.videos.entries()) {
+      const videos = result.videos.map((video, index) => {
+        if (video.buffer?.byteLength === 0) {
+          if (video.url) {
+            // URL-only video is valid; remove the unusable buffer so callers do not
+            // prefer it and persist zero bytes instead of delivering the URL.
+            const { buffer: _emptyBuffer, ...urlOnlyVideo } = video;
+            return urlOnlyVideo;
+          }
+          throw new Error(
+            `Video generation provider returned an empty video buffer at index ${index}.`,
+          );
+        }
         if (!video.buffer && !video.url) {
           throw new Error(
             `Video generation provider returned an undeliverable asset at index ${index}: neither buffer nor url is set.`,
           );
         }
-      }
+        return video;
+      });
       return {
-        videos: result.videos,
+        videos,
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,

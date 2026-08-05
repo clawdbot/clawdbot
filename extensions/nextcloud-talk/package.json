@@ -24,8 +24,19 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "nextcloud-talk",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "NEXTCLOUD_TALK_BOT_SECRET",
+            "NEXTCLOUD_TALK_API_PASSWORD"
+          ]
+        }
+      },
       "label": "Nextcloud Talk",
       "selectionLabel": "Nextcloud Talk (self-hosted)",
       "docsPath": "/channels/nextcloud-talk",
@@ -36,7 +47,17 @@
         "nc"
       ],
       "order": 65,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": { "fields": [
+        { "key": "baseUrl", "kind": "string", "cli": { "flags": "--base-url <url>", "description": "Nextcloud base URL" } },
+        { "key": "url", "kind": "string", "cli": { "flags": "--url <url>", "description": "Legacy Nextcloud base URL alias" } },
+        { "key": "secret", "kind": "string", "sensitive": true, "cli": { "flags": "--secret <secret>", "description": "Nextcloud Talk bot secret" } },
+        { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <secret>", "description": "Legacy Nextcloud bot secret alias" } },
+        { "key": "password", "kind": "string", "sensitive": true, "cli": { "flags": "--password <secret>", "description": "Legacy Nextcloud bot secret alias" } },
+        { "key": "secretFile", "kind": "string", "sensitive": true, "cli": { "flags": "--secret-file <path>", "description": "Nextcloud Talk bot secret file" } },
+        { "key": "tokenFile", "kind": "string", "sensitive": true, "cli": { "flags": "--token-file <path>", "description": "Legacy Nextcloud bot secret file alias" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use Nextcloud Talk environment credentials" } }
+      ] }
     },
     "install": {
       "npmSpec": "@openclaw/nextcloud-talk",

@@ -7,7 +7,7 @@ import {
   type SandboxFsStat,
   type SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveMxcReadOnlySkillMounts,
   type MxcReadOnlySkillMount,
@@ -57,12 +57,13 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
-  async readFile(params: { filePath: string; cwd?: string }): Promise<Buffer> {
+  async readFile(params: { filePath: string; cwd?: string; maxBytes?: number }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     return (await (
       await fsRoot(target.mount.hostRoot)
     ).readBytes(target.mountRelativePath, {
       hardlinks: "reject",
+      ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
     })) as Buffer;
   }
 
@@ -83,6 +84,33 @@ class MxcFsBridge implements SandboxFsBridge {
     ).write(target.mountRelativePath, buffer, {
       mkdir: params.mkdir !== false,
     });
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveTarget(params);
+    this.ensureWritable(target, "create files");
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    try {
+      await (
+        await fsRoot(target.mount.hostRoot)
+      ).create(target.mountRelativePath, buffer, {
+        mkdir: params.mkdir !== false,
+      });
+      return "created";
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") {
+        return "exists";
+      }
+      throw error;
+    }
   }
 
   async mkdirp(params: { filePath: string; cwd?: string }): Promise<void> {

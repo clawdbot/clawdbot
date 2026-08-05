@@ -1,7 +1,7 @@
 import { SpanStatusCode } from "@opentelemetry/api";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "../api.js";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   addUpstreamRequestIdSpanEvent,
   assignGenAiModelCallAttrs,
@@ -38,8 +38,8 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
   const modelCallMetricAttrs = (evt: ModelCallLifecycleDiagnosticEvent) => ({
     "openclaw.provider": evt.provider,
     "openclaw.model": evt.model,
-    "openclaw.api": lowCardinalityAttr(evt.api),
-    "openclaw.transport": lowCardinalityAttr(evt.transport),
+    "openclaw.api": normalizeDiagnosticValue(evt.api),
+    "openclaw.transport": normalizeDiagnosticValue(evt.transport),
     "openclaw.model_call.observation_unit": modelCallObservationUnit(evt),
   });
   const genAiModelCallMetricAttrs = (
@@ -47,8 +47,8 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     errorType?: string,
   ) => ({
     "gen_ai.operation.name": genAiOperationName(evt.api, evt.observationUnit),
-    "gen_ai.provider.name": lowCardinalityAttr(evt.provider),
-    "gen_ai.request.model": lowCardinalityAttr(evt.model),
+    "gen_ai.provider.name": normalizeDiagnosticValue(evt.provider),
+    "gen_ai.request.model": normalizeDiagnosticValue(evt.model),
     ...(errorType ? { "error.type": errorType } : {}),
   });
   const recordGenAiModelCallDuration = (
@@ -152,12 +152,12 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     metadata: DiagnosticEventMetadata,
     modelContent?: OtelModelCallContent,
   ) => {
-    const errorType = lowCardinalityAttr(evt.errorCategory, "other");
+    const errorType = normalizeDiagnosticValue(evt.errorCategory, "other");
     const metricAttrs = {
       ...modelCallMetricAttrs(evt),
       "openclaw.errorCategory": errorType,
       ...(evt.failureKind
-        ? { "openclaw.failureKind": lowCardinalityAttr(evt.failureKind, "other") }
+        ? { "openclaw.failureKind": normalizeDiagnosticValue(evt.failureKind, "other") }
         : {}),
     };
     modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
@@ -173,7 +173,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       "error.type": errorType,
     };
     if (evt.failureKind) {
-      spanAttrs["openclaw.failureKind"] = lowCardinalityAttr(evt.failureKind, "other");
+      spanAttrs["openclaw.failureKind"] = normalizeDiagnosticValue(evt.failureKind, "other");
     }
     assignGenAiModelCallAttrs(spanAttrs, evt);
     if (evt.api) {

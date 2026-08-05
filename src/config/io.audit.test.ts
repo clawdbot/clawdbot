@@ -11,6 +11,7 @@ import {
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
   resolveLegacyConfigAuditLogPath,
+  sanitizeConfigAuditRecord,
   scrubConfigAuditLog,
 } from "./io.audit.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
@@ -89,6 +90,24 @@ describe("config io audit helpers", () => {
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
+  });
+
+  it("sanitizes external records without adding write-process fields", () => {
+    const record = sanitizeConfigAuditRecord({
+      ts: "2026-07-18T00:00:00.000Z",
+      source: "config-io",
+      event: "config.external",
+      detectedBy: "watch",
+      configPath: "/tmp/openclaw.json",
+      previousHash: "previous",
+      nextHash: null,
+      valid: false,
+      issues: ["gateway.port: expected number"],
+    });
+
+    expect(record).not.toHaveProperty("argv");
+    expect(record).not.toHaveProperty("execArgv");
+    expect(record).toHaveProperty("issues", ["gateway.port: expected number"]);
   });
 
   afterAll(async () => {

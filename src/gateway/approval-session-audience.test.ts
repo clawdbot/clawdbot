@@ -33,6 +33,7 @@ vi.mock("../agents/subagent-registry-read.js", () => ({
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
+  loadSessionEntryReadOnly: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
 }));
 
 beforeEach(() => {

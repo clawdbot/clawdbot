@@ -2,6 +2,7 @@
 
 // Summarizes GitHub Actions run/job timings for CI analysis.
 import { execFileSync } from "node:child_process";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 
@@ -101,7 +102,7 @@ function isPnpmStoreWarmupGatedJobName(name) {
     name === "build-artifacts" ||
     name === "check-docs" ||
     name === "check-guards" ||
-    name === "check-shrinkwrap" ||
+    name === "check-npm-lock" ||
     name === "check-prod-types" ||
     name === "check-lint" ||
     name === "check-dependencies" ||
@@ -503,6 +504,6 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main();
 }

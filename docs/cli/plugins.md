@@ -42,10 +42,10 @@ openclaw plugins disable <id>
 openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]
-openclaw plugins doctor
+openclaw plugins doctor [--json]
 openclaw plugins init <id> [--name <name>] [--type tool|provider] [--directory <path>]
 openclaw plugins build [--entry <path>] [--check]
-openclaw plugins validate [--entry <path>]
+openclaw plugins validate [--entry <path>] [--json]
 openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json]
 openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
@@ -85,8 +85,9 @@ id for the default output directory and package naming. Tool scaffolds use
 `plugins build` imports the built entry, reads its static tool metadata, writes
 `openclaw.plugin.json`, and keeps `package.json`'s `openclaw.extensions` aligned.
 `plugins validate` checks that the generated manifest, package metadata, and
-current entry export still agree. See [Tool Plugins](/plugins/tool-plugins) for
-the full authoring workflow.
+current entry export still agree. Pass `--json` for a machine-readable
+validation result. See [Tool Plugins](/plugins/tool-plugins) for the full
+authoring workflow.
 
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry, so the workflow also works with the published CLI. Use
@@ -182,7 +183,9 @@ non-npm sources are not rewritten.
   <Accordion title="Config includes and invalid-config repair">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-    If config is invalid during install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only documented install-time exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+
+    When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 
   </Accordion>
   <Accordion title="--force confirmation and reinstall vs update">
@@ -399,13 +402,14 @@ For runtime hook debugging:
 
 - `openclaw plugins inspect <id> --runtime --json` shows registered hooks and diagnostics from a module-loaded inspection pass. Runtime inspection never installs dependencies; use `openclaw doctor --fix` to clean legacy dependency state or recover missing downloadable plugins that are referenced by config.
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway URL/profile, service/process hints, config path, and RPC health.
-- Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- If a hook-only plugin is absent from runtime inspection, confirm its [hook startup intent](/tools/plugin#plugin-hooks): either manifest `activation.onCapabilities: ["hook"]` with explicit plugin enablement, or a startup-signaling `plugins.entries.<id>.hooks` policy such as `allowConversationAccess: true`. Global disable, deny, and restrictive allowlists still win.
+- Non-bundled conversation hooks (`before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
 ### Plugin index
 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the shared SQLite state database under the active OpenClaw state directory. The `installed_plugin_index` row stores durable `installRecords` metadata, including records for broken or missing plugin manifests, plus a manifest-derived cold registry cache used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
 
-When OpenClaw sees shipped legacy `plugins.installs` records in config, runtime reads treat them as compatibility input without rewriting `openclaw.json`. Explicit plugin writes and `openclaw doctor --fix` move those records into the plugin index and remove the config key when config writes are allowed; if either write fails, the config records are kept so the install metadata is not lost.
+`plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite installed-plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
 
 ## Uninstall
 
@@ -416,7 +420,7 @@ openclaw plugins uninstall <id> --keep-files
 openclaw plugins uninstall <id> --force
 ```
 
-`uninstall` removes plugin records from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and linked `plugins.load.paths` entries when applicable. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
+`uninstall` removes plugin records from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
 `uninstall` prints a preview of what will be removed, then prompts `Uninstall plugin "<id>"?` before making changes. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
@@ -436,7 +440,7 @@ openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in `hooks.internal.installs`. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
+Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in shared SQLite state. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
@@ -452,7 +456,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the configured `update.channel` when it syncs trusted official plugin records to the official catalog target, so beta-channel installs can stay on the beta release line instead of being silently normalized to stable/latest.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the canonical registry-channel resolver when it syncs trusted official plugin records to the official catalog target. An installed beta core therefore keeps official plugins on the beta release line when `update.channel` is unset, matching the core updater instead of silently normalizing them to stable/latest. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
 
     `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates.
 
@@ -503,9 +507,13 @@ The `--json` flag outputs a machine-readable report suitable for scripting and a
 
 ```bash
 openclaw plugins doctor
+openclaw plugins doctor --json
 ```
 
-`doctor` reports plugin load errors, manifest/discovery diagnostics, compatibility notices, and stale plugin config references such as missing plugin slots. When the install tree and plugin config are clean it prints `No plugin issues detected.` If stale config remains but the install tree is otherwise healthy, the summary says so instead of implying full plugin health.
+`doctor` reports plugin load errors, manifest/discovery diagnostics, compatibility notices, and stale plugin config references such as missing plugin slots. It loads plugin modules without activating plugins and does not query the running Gateway. When these local checks pass, it prints `Plugin discovery, module loading, compatibility, and configuration checks passed. Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.` The [health command](/cli/health) reads current runtime quarantine and fallback state from the Gateway. If stale config remains but the install tree is otherwise healthy, the summary says so instead of implying full plugin health.
+
+With `--json`, the same discovery, compatibility, and configuration diagnostics
+are returned as one machine-readable object.
 
 If a configured plugin is present on disk but blocked by the loader's path-safety checks, config validation keeps the plugin entry and reports it as `present but blocked`. Fix the preceding blocked-plugin diagnostic, such as path ownership or world-writable permissions, instead of removing the `plugins.entries.<id>` or `plugins.allow` config.
 
@@ -523,11 +531,7 @@ The local plugin registry is OpenClaw's persisted cold read model for installed 
 
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
 
-`openclaw doctor --fix` also repairs registry-adjacent managed npm drift: if an orphaned or recovered `@openclaw/*` package under a managed plugin npm project or the legacy flat managed npm root shadows a bundled plugin, doctor removes that stale package and rebuilds the registry so startup validates against the bundled manifest. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` resolve after updates or npm repairs.
-
-<Warning>
-`OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY=1` is a deprecated break-glass compatibility switch for registry read failures. Prefer `plugins registry --refresh` or `openclaw doctor --fix`; the env fallback is only for emergency startup recovery while the migration rolls out.
-</Warning>
+`openclaw doctor --fix` also repairs registry-adjacent managed npm drift. If an orphaned or recovered `@openclaw/*` package under a managed plugin npm project or the legacy flat managed npm root shadows a bundled plugin, doctor removes that stale package and rebuilds the registry so startup validates against the bundled manifest. When an authoritative install record selects one managed generation but older flat or generation directories remain, doctor retires those stale trees for pruning after the gateway restarts. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` resolve after updates or npm repairs.
 
 ## Marketplace
 
@@ -562,6 +566,25 @@ credentials, query strings, or fragments. Unpinned refreshes can report a
 hosted snapshot or bundled fallback result without failing the command. Pinned
 refreshes fail unless they accept a fresh hosted payload, and successful hosted
 refreshes fail if OpenClaw cannot persist the validated snapshot.
+
+The built-in `clawhub-public` profile expects payload identity
+`clawhub-official`. OpenClaw will bundle ClawHub's production public key after
+ClawHub generates and hands off that key. Until then, the built-in profile does
+not grant signed-feed install authority. Public keys must come from a trusted
+release or operator channel, not from a key endpoint on the feed host.
+
+OpenClaw verifies the DSSE envelope and, when a profile declares `feedId`,
+requires the decoded payload ID to match it. The built-in `clawhub-public`
+profile always declares its identity, preventing a valid document for another
+feed from being replayed through that profile.
+
+During the staged rollout, existing custom signed profiles that omit `feedId`
+retain signature verification without payload-identity binding. New custom
+profiles should declare `feedId`. The feed-profile configuration surface is
+landing separately with the presentation metadata needed by Control UI; its
+Doctor diagnostic must ask the operator to supply a missing identity and must
+not infer one from the feed URL. This trust binding does not restore the retired
+root `marketplaces` key.
 
 ## Related
 

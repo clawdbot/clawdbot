@@ -27,13 +27,15 @@ const DEFAULT_SQL_OUTPUT = ".artifacts/sqlite-session-transcript-schema-baseline
 const DEFAULT_HASH_OUTPUT = "docs/.generated/sqlite-session-transcript-schema-baseline.sha256";
 
 const TARGET_TABLES = new Set([
-  "sessions",
-  "session_routes",
+  "session_nodes",
+  "session_windows",
+  "session_members",
   "conversations",
   "session_conversations",
-  "session_entries",
   "transcript_events",
+  "transcript_rewrite_watermarks",
   "transcript_event_identities",
+  "session_transcript_index_state",
   "session_transcript_active_events",
 ]);
 

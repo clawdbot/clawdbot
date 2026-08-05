@@ -9,7 +9,6 @@ const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
   OPENCLAW_LOCAL_CHECK: "1",
   OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-  OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
 };
 const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
 
@@ -43,13 +42,20 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+export function resolveBuildEnv(
+  env?: NodeJS.ProcessEnv,
+  buildCacheRoot?: string,
+): NodeJS.ProcessEnv | undefined {
   const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
   const nextNodeOptions = resolveBuildNodeOptions(currentNodeOptions);
-  if (nextNodeOptions === currentNodeOptions) {
+  if (nextNodeOptions === currentNodeOptions && !buildCacheRoot) {
     return env;
   }
-  return { ...env, NODE_OPTIONS: nextNodeOptions };
+  return {
+    ...env,
+    NODE_OPTIONS: nextNodeOptions,
+    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+  };
 }
 
 export function resolveInstallEnv(

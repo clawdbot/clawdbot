@@ -17,9 +17,14 @@ export function readBundledPluginAssetHooks(options?: Record<string, unknown>): 
  */
 export function runBundledPluginAssetHooks(options?: Record<string, unknown>): Promise<void>;
 /**
- * Parses `--phase` and repeated `--plugin` flags for asset hook scripts.
+ * Lists declared generated source-tree outputs that differ from the committed bytes.
+ */
+export function listStaleGeneratedPluginAssets(options?: Record<string, unknown>): string[];
+/**
+ * Parses `--phase`, repeated `--plugin`, and `--check` flags for asset hook scripts.
  */
 export function parseBundledPluginAssetArgs(argv: unknown): {
+  check: boolean;
   phase: unknown;
   plugins: unknown[];
 };

@@ -296,9 +296,11 @@ export function resolveMemoryWikiConfig(
 export function resolveMemoryWikiConfiguredAgentIds(
   appConfig: OpenClawConfig | undefined,
 ): string[] {
-  const configured = appConfig?.agents?.list ?? [];
-  const ids = configured.flatMap((entry) => {
-    const rawId = entry?.id?.trim();
+  const configuredIds = appConfig?.agents?.entries
+    ? Object.keys(appConfig.agents.entries)
+    : (appConfig?.agents?.list ?? []).map((entry) => entry.id);
+  const ids = configuredIds.flatMap((entryId) => {
+    const rawId = entryId.trim();
     if (!rawId) {
       return [];
     }

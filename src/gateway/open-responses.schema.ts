@@ -201,6 +201,14 @@ export const CreateResponseBodySchema = z
     instructions: z.string().optional(),
     tools: z.array(ToolDefinitionSchema).optional(),
     tool_choice: ToolChoiceSchema.optional(),
+    // The SDK sends its plain-text default explicitly; structured formats must
+    // stay rejected until the runtime actually enforces their contracts.
+    text: z
+      .object({
+        format: z.object({ type: z.literal("text") }).strict(),
+      })
+      .strict()
+      .optional(),
     stream: z.boolean().optional(),
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
@@ -271,7 +279,14 @@ export type OutputItem = z.infer<typeof OutputItemSchema>;
 
 const UsageSchema = z.object({
   input_tokens: z.number().int().nonnegative(),
+  input_tokens_details: z.object({
+    cached_tokens: z.number().int().nonnegative(),
+    cache_write_tokens: z.number().int().nonnegative(),
+  }),
   output_tokens: z.number().int().nonnegative(),
+  output_tokens_details: z.object({
+    reasoning_tokens: z.number().int().nonnegative(),
+  }),
   total_tokens: z.number().int().nonnegative(),
 });
 

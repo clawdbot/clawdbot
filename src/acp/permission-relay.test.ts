@@ -99,12 +99,14 @@ describe("ACP permission relay helpers", () => {
           command: "echo raw",
           host: "gateway",
           sessionKey: "agent:main:main",
+          toolCallId: "tool-raw",
         },
       }),
     ).toEqual({
       approvalId: "approval-raw",
       command: "echo raw",
       host: "gateway",
+      toolCallId: "tool-raw",
     });
 
     expect(parseGatewayExecApprovalRequestEventPayload({ id: "approval-raw" })).toBeNull();

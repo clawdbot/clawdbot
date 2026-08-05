@@ -241,12 +241,12 @@ describe("IRC durable ingress", () => {
         const pausing = ingress.pause().then(() => {
           pauseSettled = true;
         });
-        await connection.accept(CHANNEL_LINE, "bot");
+        const secondAdmission = connection.accept(CHANNEL_LINE, "bot");
         await Promise.resolve();
         expect(pauseSettled).toBe(false);
 
         releaseDispatch.resolve();
-        await pausing;
+        await Promise.all([pausing, secondAdmission]);
         expect(dispatch).toHaveBeenCalledOnce();
         expect(await queue.listPending({ limit: "all" })).toEqual([
           expect.objectContaining({

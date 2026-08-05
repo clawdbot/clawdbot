@@ -19,18 +19,17 @@ import {
 import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
-  AgentApprovalEventData,
   AgentCommandOutputEventData,
   AgentItemEventData,
   AgentPatchSummaryEventData,
-} from "../infra/agent-events.js";
+} from "../infra/agent-activity-events.js";
 import {
   emitAgentApprovalEvent,
   emitAgentCommandOutputEvent,
-  emitAgentEvent,
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
-} from "../infra/agent-events.js";
+} from "../infra/agent-activity-events.js";
+import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
@@ -56,6 +55,7 @@ import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  readMessageToolSourceReplyText,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingTool,
@@ -90,6 +90,7 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
+import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
@@ -106,6 +107,7 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./tools/ask-user-tool.js";
+import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -596,7 +598,8 @@ function isOpenClawCronAddShellCommand(args: unknown): boolean {
   return (
     (isOpenClawExecutable(tokens[commandIndex]) ||
       (packageRunner.acceptsPackageSpec && isOpenClawPackageSpec(tokens[commandIndex]))) &&
-    normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" &&
+    (normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" ||
+      normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "automations") &&
     (action === "add" || action === "create") &&
     !actionArgs.some((token) => token === "-h" || token === "--help")
   );
@@ -738,19 +741,25 @@ function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
 ) {
-  const seen = new Set(ctx.state.pendingToolMediaUrls);
+  const seen = new Set(ctx.state.pendingToolMediaUrls.map((url) => url.trim()));
   for (const mediaUrl of mediaReply.mediaUrls) {
-    if (seen.has(mediaUrl)) {
+    const normalized = mediaUrl.trim();
+    if (!normalized) {
       continue;
     }
-    seen.add(mediaUrl);
-    ctx.state.pendingToolMediaUrls.push(mediaUrl);
+    if (mediaReply.trustedLocalMedia) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
+    } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ctx.state.pendingToolMediaUrls.push(normalized);
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
-  }
-  if (mediaReply.trustedLocalMedia) {
-    ctx.state.pendingToolTrustedLocalMedia = true;
   }
 }
 
@@ -853,6 +862,21 @@ async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  const recordApprovalPromptDeliveryFailure = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+    const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+    ctx.state.lastToolError = (
+      ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx)
+    )({
+      toolName,
+      meta: approvalMeta,
+      executionStarted: false,
+      outcome: "failure",
+      failure: { error: `Approval prompt delivery failed: ${message}` },
+    }).lastToolError;
+    ctx.state.deterministicApprovalPromptSent = false;
+  };
   const hasStructuredMedia = Boolean(
     result &&
     typeof result === "object" &&
@@ -885,8 +909,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-    } catch {
-      ctx.state.deterministicApprovalPromptSent = false;
+    } catch (error) {
+      recordApprovalPromptDeliveryFailure(error);
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
@@ -914,8 +938,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-    } catch {
-      ctx.state.deterministicApprovalPromptSent = false;
+    } catch (error) {
+      recordApprovalPromptDeliveryFailure(error);
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
@@ -1231,7 +1255,10 @@ export function handleToolExecutionStart(
             return ctx.params.onToolResult?.(
               buildAgentHarnessQuestionPromptPayload({
                 questionId,
-                questions,
+                questions: questions.map(({ questionId: id, ...question }) => ({
+                  ...question,
+                  id,
+                })),
                 options: { intro: "Question for you:" },
               }),
             );
@@ -1385,6 +1412,13 @@ export async function handleToolExecutionEnd(
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
   const isToolError = observerIsError && !approvalUnavailable;
+  if (!isToolError) {
+    const channelView = readMcpAppChannelView(result);
+    if (channelView) {
+      // A later successful app result supersedes the earlier launch target.
+      ctx.state.latestMcpAppChannelView = channelView;
+    }
+  }
   try {
     ctx.params.onAgentToolResult?.({
       toolName,
@@ -1538,22 +1572,31 @@ export async function handleToolExecutionEnd(
     });
     ctx.trimMessagingToolSent();
   }
+  const deliveredCurrentSourceReply =
+    didDeliverMessagingResult &&
+    isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      args: startArgs,
+      result,
+      isError: isToolError,
+    });
+  if (deliveredCurrentSourceReply) {
+    ctx.state.messageToolOnlySourceReplyDelivered = true;
+    const sourceReplyText = readMessageToolSourceReplyText(startArgs);
+    const normalizedSourceReplyText = sourceReplyText
+      ? normalizeTextForComparison(sourceReplyText)
+      : "";
+    if (normalizedSourceReplyText) {
+      ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+      ctx.trimMessagingToolSent();
+    }
+    ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+  }
   if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
-    }
-    if (
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
-        toolName,
-        args: startArgs,
-        result,
-        isError: isToolError,
-      })
-    ) {
-      ctx.state.messageToolOnlySourceReplyDelivered = true;
-      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
@@ -1564,7 +1607,7 @@ export async function handleToolExecutionEnd(
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&
-    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+    ((isAutomationsToolName(toolName) && isCronAddAction(startArgs)) ||
       (isExecToolName(toolName) && didShellCronAddSucceed(startArgs, result)))
   ) {
     ctx.state.successfulCronAdds += 1;

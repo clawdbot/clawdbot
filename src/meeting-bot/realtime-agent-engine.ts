@@ -100,6 +100,7 @@ export async function startMeetingAgentRealtimeEngine(params: {
   };
 
   const writeOutputAudio = async (audio: Buffer) => {
+    params.transport.beginOutput?.();
     harness.outputActivity.markPlaybackStarted();
     harness.recordOutputAudio(audio);
     await params.transport.writeOutput(audio);

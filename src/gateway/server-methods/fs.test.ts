@@ -122,6 +122,7 @@ describe("fs.listDir", () => {
       nodeRegistry: {
         get: vi.fn().mockReturnValue({
           connId: "conn-1",
+          pairingGeneration: "generation-1",
           nodeId: "macbook",
           platform: "macos",
           deviceFamily: "Mac",
@@ -141,6 +142,7 @@ describe("fs.listDir", () => {
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "macbook",
       expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command: "fs.listDir",
       params: {},
     });
@@ -149,7 +151,7 @@ describe("fs.listDir", () => {
   it("rejects node listings blocked by the live command policy", async () => {
     const invoke = vi.fn();
     const context = {
-      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: ["fs.listDir"] } } }),
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: ["fs.listDir"] } } } }),
       nodeRegistry: {
         get: vi.fn().mockReturnValue({
           connId: "conn-1",

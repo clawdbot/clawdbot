@@ -53,13 +53,15 @@ export type DeviceAuthToken = {
  * silently and cannot collide with another machine's records. "trusted-cidr"
  * and "ssh-verified" are also non-interactive but cross hosts, so they are
  * never pruned automatically (display metadata is not a machine identity).
- * "owner" and "bootstrap" approvals required a user action and are never
- * pruned.
+ * "trusted-proxy" records were approved from an authenticated proxy identity.
+ * "owner" and "bootstrap" approvals required a user action. None of these
+ * cross-host or interactive approval kinds are pruned automatically.
  */
 export type PairedDeviceApprovalKind =
   | "owner"
   | "silent"
   | "trusted-cidr"
+  | "trusted-proxy"
   | "ssh-verified"
   | "bootstrap";
 

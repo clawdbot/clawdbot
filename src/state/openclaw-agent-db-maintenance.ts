@@ -1,14 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
+import { ensureMemoryChunkProvenance } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
 import {
-  MEMORY_INDEX_SOURCES_TABLE,
-  MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
-} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+  ensureMemoryRecallMetadataSchema,
+  hasLegacyMemoryRecallMetadataColumns,
+} from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  assertSqliteSchemaContains,
-  type SqliteSchemaCompatibility,
-} from "../infra/sqlite-schema-contract.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -17,30 +15,19 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   assertExistingAgentSchemaOwner,
+  assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
-const OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY = {
-  allowedColumnDefinitions: {
-    "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
-  },
-  optionalCanonicalTriggerGroups: [
-    {
-      tableName: MEMORY_INDEX_SOURCES_TABLE,
-      triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
-    },
-  ],
-} satisfies SqliteSchemaCompatibility;
-
-/** Require the exact agent owner and schema before offline file maintenance. */
-export function assertOpenClawAgentDatabaseForMaintenance(
+/** Require exact agent ownership without requiring the latest schema. */
+export function assertOpenClawAgentDatabaseOwner(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
-): void {
+): NonNullable<ReturnType<typeof readExistingAgentSchemaMeta>> {
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
   if (!metadata) {
@@ -49,6 +36,20 @@ export function assertOpenClawAgentDatabaseForMaintenance(
     );
   }
   assertExistingAgentSchemaOwner(metadata, agentId, options.pathname);
+  if (metadata.agentId !== agentId) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} belongs to agent ${metadata.agentId}; requested agent ${agentId}.`,
+    );
+  }
+  return metadata;
+}
+
+/** Require the exact agent owner and schema before offline file maintenance. */
+export function assertOpenClawAgentDatabaseForMaintenance(
+  database: DatabaseSync,
+  options: { agentId: string; pathname: string },
+): void {
+  const metadata = assertOpenClawAgentDatabaseOwner(database, options);
 
   const userVersion = readSqliteUserVersion(database);
   if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
@@ -69,22 +70,16 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  assertSqliteSchemaContains(
-    database,
-    options.pathname,
-    OPENCLAW_AGENT_SCHEMA_SQL,
-    OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY,
-  );
+  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
 }
 
-/** Upgrade a supported older owned schema before strict offline maintenance. */
+/** Upgrade or repair a supported owned schema before strict offline maintenance. */
 export function migrateOpenClawAgentDatabaseForMaintenance(options: {
   agentId: string;
   pathname: string;
 }): void {
   const agentId = normalizeAgentId(options.agentId);
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(options.pathname);
+  const database = openNodeSqliteDatabase(options.pathname);
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const metadata = readExistingAgentSchemaMeta(database);
@@ -95,6 +90,9 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
     assertSupportedAgentSchemaVersion(database, options.pathname);
     const userVersion = readSqliteUserVersion(database);
     const metadataVersion = metadata.schemaVersion;
+    const hasCurrentVersion =
+      userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
+      metadataVersion === OPENCLAW_AGENT_SCHEMA_VERSION;
     const hasSupportedOlderVersion =
       userVersion >= 1 &&
       userVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
@@ -102,7 +100,38 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
       metadataVersion === userVersion &&
       metadataVersion >= 1 &&
       metadataVersion < OPENCLAW_AGENT_SCHEMA_VERSION;
-    if (!hasSupportedOlderVersion) {
+    if (!hasCurrentVersion && !hasSupportedOlderVersion) {
+      return;
+    }
+    if (hasCurrentVersion) {
+      const hadLegacyRecallMetadata = hasLegacyMemoryRecallMetadataColumns(database);
+      const hadLegacyProvenanceTrigger = Boolean(
+        database
+          .prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+          )
+          .get(),
+      );
+      if (hadLegacyRecallMetadata || hadLegacyProvenanceTrigger) {
+        ensureMemoryRecallMetadataSchema(database);
+        ensureMemoryChunkProvenance(database);
+        database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      }
+      repairCanonicalSqliteIndexes(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
+        // The maintenance contract is the runtime owner/schema contract plus
+        // an exact user_version gate, so table drift rolls this savepoint back.
+        validateAfterRepair: () =>
+          assertOpenClawAgentDatabaseForMaintenance(database, {
+            agentId,
+            pathname: options.pathname,
+          }),
+      });
+      ensureMemoryRecallMetadataSchema(database);
+      ensureMemoryChunkProvenance(database);
+      assertOpenClawAgentDatabaseForMaintenance(database, {
+        agentId,
+        pathname: options.pathname,
+      });
       return;
     }
     ensureOpenClawAgentDatabaseSchema(database, {

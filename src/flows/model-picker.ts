@@ -1,7 +1,7 @@
 // Model picker flow lets users select provider models for config defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentConfig, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
@@ -9,15 +9,14 @@ import {
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../agents/model-catalog-visibility.js";
-import { loadModelCatalogSnapshot } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import { createModelPickerVisibleProviderPredicate } from "../agents/model-picker-visibility.js";
 import {
   createProviderAuthChecker,
   type ProviderModelAuthChecker,
 } from "../agents/model-provider-auth.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
+import { createModelPickerVisibleProviderPredicate } from "../agents/model-runtime-aliases.js";
 import {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
@@ -29,6 +28,7 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { openAIModelCatalogRoutePolicy } from "../agents/openai-model-routes.js";
+import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
@@ -107,6 +107,7 @@ type PromptDefaultModelParams = {
   loadCatalog?: boolean;
   browseCatalogOnDemand?: boolean;
   preferredProvider?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -135,6 +136,26 @@ function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
   return Object.keys(models)
     .map((key) => key.trim())
     .filter((key) => key.length > 0);
+}
+
+function resolveModelPickerConfig(cfg: OpenClawConfig, agentId?: string): OpenClawConfig {
+  const agent = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  if (agent?.model === undefined && agent?.models === undefined) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        ...(agent.model !== undefined ? { model: agent.model } : {}),
+        ...(agent.models !== undefined
+          ? { models: { ...cfg.agents?.defaults?.models, ...agent.models } }
+          : {}),
+      },
+    },
+  };
 }
 
 function toPickerCatalogEntry(
@@ -195,7 +216,7 @@ function loadPickerModelCatalog(
         }
         return opts.providerScoped
           ? snapshot([])
-          : loadModelCatalogSnapshot({
+          : loadPreparedModelCatalogSnapshot({
               config: cfg,
             });
       });
@@ -212,7 +233,7 @@ function loadPickerModelCatalog(
       return Promise.resolve(snapshot([]));
     }
   }
-  return loadModelCatalogSnapshot({
+  return loadPreparedModelCatalogSnapshot({
     config: cfg,
   });
 }
@@ -783,6 +804,7 @@ export async function promptDefaultModel(
   params: PromptDefaultModelParams,
 ): Promise<PromptDefaultModelResult> {
   const cfg = params.config;
+  const pickerConfig = resolveModelPickerConfig(cfg, params.agentId);
   const pickerAgentDir = resolvePickerAgentDir({
     cfg,
     ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
@@ -798,10 +820,10 @@ export async function promptDefaultModel(
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
     : undefined;
-  const configuredRaw = resolveConfiguredModelRaw(cfg);
+  const configuredRaw = resolveConfiguredModelRaw(pickerConfig);
   const useStaticModelNormalization = !loadCatalog || browseCatalogOnDemand;
   const resolved = resolveConfiguredModelRef({
-    cfg,
+    cfg: pickerConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: useStaticModelNormalization ? false : undefined,
@@ -954,7 +976,7 @@ export async function promptDefaultModel(
   }
 
   const aliasIndex = buildModelAliasIndex({
-    cfg,
+    cfg: pickerConfig,
     defaultProvider: DEFAULT_PROVIDER,
   });
   const hasAuth = createProviderAuthChecker({
@@ -968,7 +990,7 @@ export async function promptDefaultModel(
     env: params.env,
   });
   const models = await resolvePickerLogicalCatalog({
-    cfg,
+    cfg: pickerConfig,
     catalog,
     routeVariants: catalogSnapshot.routeVariants,
     defaultProvider: DEFAULT_PROVIDER,
@@ -1733,4 +1755,5 @@ function mergeFallbackSelection(params: {
   }
   return fallbacks;
 }
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

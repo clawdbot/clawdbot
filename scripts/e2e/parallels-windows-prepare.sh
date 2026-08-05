@@ -166,10 +166,31 @@ PY
 }
 
 run_windows_installer() {
+  local argv_base64
+  argv_base64="$(
+    python3 -c 'import base64, json, subprocess, sys; print(base64.b64encode(json.dumps({"executable": sys.argv[1], "argumentLine": subprocess.list2cmdline(sys.argv[2:])}).encode()).decode())' "$@"
+  )"
+  local guest_script
+  guest_script="
+    \$invocation = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${argv_base64}')) | ConvertFrom-Json
+    \$executable = [string]\$invocation.executable
+    \$process = Start-Process -FilePath \$executable -ArgumentList ([string]\$invocation.argumentLine) -NoNewWindow -Wait -PassThru
+    \$installerExitCode = \$process.ExitCode
+    switch (\$installerExitCode) {
+      0 { exit 0 }
+      1641 { exit 105 }
+      3010 { exit 194 }
+      default {
+        Write-Error ('Windows installer failed with exit code ' + \$installerExitCode + ': ' + \$executable)
+        exit 1
+      }
+    }
+  "
   local exit_code=0
-  run_bounded 1800 "$@" || exit_code=$?
-  # Windows success-with-reboot codes cross the POSIX boundary modulo 256.
-  # Accept 1641/3010 only for explicit DISM/installer calls; preserve all other failures.
+  run_bounded 1800 prlctl exec "$VM_NAME" powershell.exe \
+    -NoProfile -ExecutionPolicy Bypass -Command "$guest_script" || exit_code=$?
+  # Parallels collapses native Windows exit codes above 255 to 255. Normalize the two
+  # installer success-with-reboot codes in the guest so every other failure stays fatal.
   case "$exit_code" in
     0) return 0 ;;
     105) WINDOWS_REBOOT_STARTED=1; return 0 ;;
@@ -408,12 +429,12 @@ ensure_wsl_features() {
   local changed=0
   if [[ "$(feature_state Microsoft-Windows-Subsystem-Linux)" != "Enabled" ]]; then
     say "Enabling Microsoft-Windows-Subsystem-Linux"
-    run_windows_installer prlctl exec "$VM_NAME" dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+    run_windows_installer dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
     changed=1
   fi
   if [[ "$(feature_state VirtualMachinePlatform)" != "Enabled" ]]; then
     say "Enabling VirtualMachinePlatform"
-    run_windows_installer prlctl exec "$VM_NAME" dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+    run_windows_installer dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
     changed=1
   fi
   if [[ "$changed" == "1" ]]; then
@@ -438,9 +459,28 @@ raise SystemExit("No matching signed WSL MSI asset found")
 ' "$arch"
 }
 
+get_wsl_default_version() {
+  guest_user_ps "Get-ItemPropertyValue 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Lxss' -Name DefaultVersion -ErrorAction SilentlyContinue" |
+    tr -d '\r' |
+    tail -n 1
+}
+
+ensure_wsl_default_version() {
+  local attempt
+  for attempt in $(seq 1 40); do
+    guest_user_cmd 'wsl.exe --set-default-version 2' >/dev/null 2>&1 || true
+    if [[ "$(get_wsl_default_version)" == "2" ]]; then
+      say "WSL default version ready"
+      return
+    fi
+    sleep 3
+  done
+  die "WSL default version did not become 2 within 120 seconds"
+}
+
 ensure_wsl_package() {
   if guest_user_cmd 'wsl.exe --version' >/dev/null 2>&1; then
-    guest_user_cmd 'wsl.exe --set-default-version 2' >/dev/null
+    ensure_wsl_default_version
     return
   fi
   local guest_arch asset_arch url signature wsl_msi
@@ -457,13 +497,12 @@ ensure_wsl_package() {
   run_bounded 720 prlctl exec "$VM_NAME" curl.exe -fL --connect-timeout 20 --max-time 600 "$url" -o "$wsl_msi" || die "WSL download transport exceeded 12 minutes"
   signature="$(guest_system_ps "\$signature = Get-AuthenticodeSignature '${wsl_msi}'; if (\$signature.Status -eq 'Valid' -and \$signature.SignerCertificate.Subject -match 'Microsoft Corporation') { 'Valid' } else { \$signature.Status.ToString() + ': ' + \$signature.SignerCertificate.Subject }" | tr -d '\r' | tail -n 1)"
   [[ "$signature" == "Valid" ]] || die "WSL MSI signature was not valid Microsoft code: $signature"
-  run_windows_installer prlctl exec "$VM_NAME" msiexec.exe /i 'C:\ProgramData\OpenClawPrerequisiteInstallers\WSL.msi' /qn /norestart '/L*v' 'C:\Windows\Temp\openclaw-wsl-install.log'
+  run_windows_installer msiexec.exe /i 'C:\ProgramData\OpenClawPrerequisiteInstallers\WSL.msi' /qn /norestart '/L*v' 'C:\Windows\Temp\openclaw-wsl-install.log'
   finish_installer_reboot
-  guest_user_cmd 'wsl.exe --version' >/dev/null || {
-    guest_system_ps "Get-Content 'C:/Windows/Temp/openclaw-wsl-install.log' -Tail 80" >&2 || true
-    die "WSL package install did not produce a working wsl.exe"
-  }
-  guest_user_cmd 'wsl.exe --set-default-version 2' >/dev/null
+  # Parallels can return from the MSI client before the Windows Installer service
+  # finishes publishing wsl.exe. Match the bounded readiness check used by Git and Node.
+  wait_for_check WSL 'wsl.exe --version'
+  ensure_wsl_default_version
   guest_system_ps "Remove-Item -LiteralPath '${wsl_msi}','C:/Windows/Temp/openclaw-wsl-install.log' -Force -ErrorAction SilentlyContinue"
 }
 
@@ -509,8 +548,8 @@ winget_download() {
   version="${manifest_fact%%|*}"
   WINGET_EXPECTED_HASH="${manifest_fact#*|}"
   local download_dir="${GUEST_PROFILE//\//\\}\\Downloads\\OpenClawPrereqs"
-  guest_user_ps "Remove-Item -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs' -Recurse -Force -ErrorAction SilentlyContinue"
-  guest_user_cmd "if not exist \"${download_dir}\" mkdir \"${download_dir}\" & winget.exe download --id ${package_id} -e --version \"${version}\" --scope machine --download-directory \"${download_dir}\" --accept-source-agreements --accept-package-agreements --disable-interactivity"
+  guest_user_ps "if (Test-Path -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs') { Remove-Item -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs' -Recurse -Force }"
+  guest_user_cmd "if not exist \"${download_dir}\" mkdir \"${download_dir}\" & winget.exe download --source winget --id ${package_id} -e --version \"${version}\" --scope machine --download-directory \"${download_dir}\" --accept-source-agreements --accept-package-agreements --disable-interactivity"
 }
 
 downloaded_installer() {
@@ -573,7 +612,7 @@ ensure_git() {
   [[ -n "$installer" ]] || die "winget did not download the Git installer"
   installer="$(stage_installer "$installer" Git 'Johannes Schindelin|Open Source Developer|Git for Windows' "$WINGET_EXPECTED_HASH")"
   say "Installing Git"
-  run_windows_installer prlctl exec "$VM_NAME" "$installer" /VERYSILENT /NORESTART /SP- /ALLUSERS
+  run_windows_installer "$installer" /VERYSILENT /NORESTART /SP- /ALLUSERS
   finish_installer_reboot
   wait_for_check Git 'where git.exe'
 }
@@ -588,7 +627,7 @@ ensure_node() {
   [[ -n "$installer" ]] || die "winget did not download the Node.js installer"
   installer="$(stage_installer "$installer" NodeJS 'OpenJS Foundation' "$WINGET_EXPECTED_HASH")"
   say "Installing Node.js LTS"
-  run_windows_installer prlctl exec "$VM_NAME" msiexec.exe /i "$installer" /qn /norestart
+  run_windows_installer msiexec.exe /i "$installer" /qn /norestart
   finish_installer_reboot
   wait_for_check Node.js 'where node.exe'
 }
@@ -605,7 +644,7 @@ verify_baseline() {
   guest_user_cmd 'wsl.exe --status' || die "WSL status failed"
   guest_system_ps "if (-not (Get-CimInstance Win32_ComputerSystem).HypervisorPresent) { throw 'Windows hypervisor is not active; WSL 2 workloads cannot start' }"
   local wsl_default
-  wsl_default="$(guest_user_ps "Get-ItemPropertyValue 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Lxss' -Name DefaultVersion -ErrorAction SilentlyContinue" | tr -d '\r' | tail -n 1)"
+  wsl_default="$(get_wsl_default_version)"
   [[ "$wsl_default" == "2" ]] || die "WSL default version is ${wsl_default:-unset}, expected 2"
   assert_clean_product_state
   assert_no_pending_reboot
@@ -631,7 +670,7 @@ prepare() {
   ensure_node
   cleanup_installers
   restart_guest
-  guest_user_cmd 'wsl.exe --set-default-version 2' >/dev/null
+  ensure_wsl_default_version
   verify_baseline
   create_snapshot "$BASELINE_SNAPSHOT" "E2E-ready OpenClaw Windows baseline with WSL 2, Git, Node/npm, and no OpenClaw product state."
   say "Baseline ready: $BASELINE_SNAPSHOT"

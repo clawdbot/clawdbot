@@ -2,38 +2,19 @@
  * Auth-profile source probes for runtime and persisted stores.
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
-import fs from "node:fs";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
-import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "./path-resolve.js";
-import { coerceLegacyAuthStore, coercePersistedAuthProfileStore } from "./persisted.js";
+import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
+import { coercePersistedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreSnapshot,
   hasAnyRuntimeAuthProfileStoreSource,
 } from "./runtime-snapshots.js";
-import { readPersistedAuthProfileStateRaw, readPersistedAuthProfileStoreRaw } from "./sqlite.js";
+import {
+  inspectPersistedAuthProfileStoreRaw,
+  readPersistedAuthProfileStateRaw,
+  resolveAuthProfileDatabasePath,
+} from "./sqlite.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
-
-// Auth-profile source checks look at runtime snapshots, JSON compatibility
-// files, legacy files, and SQLite stores without materializing secret values.
-function hasStoredAuthProfileFiles(agentDir?: string): boolean {
-  return (
-    fs.existsSync(resolveAuthStorePath(agentDir)) ||
-    fs.existsSync(resolveAuthStatePath(agentDir)) ||
-    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
-  );
-}
-
-function readJsonFile(pathname: string): unknown {
-  try {
-    return JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
-  } catch {
-    return null;
-  }
-}
 
 function normalizeProvider(provider: string): string {
   return provider.trim().toLowerCase();
@@ -62,7 +43,7 @@ function isEligibleProviderCredential(rawCredential: unknown, expectedProvider: 
 }
 
 function coerceRawStoreProfiles(raw: unknown): Record<string, AuthProfileCredential> | null {
-  return coercePersistedAuthProfileStore(raw)?.profiles ?? coerceLegacyAuthStore(raw);
+  return coercePersistedAuthProfileStore(raw)?.profiles ?? null;
 }
 
 function rawStoreHasProviderProfile(
@@ -93,6 +74,23 @@ function runtimeStoreHasProviderProfile(
   return rawStoreHasProviderProfile(store, provider, profileIds);
 }
 
+function canonicalStoreOwnsProviderRoute(
+  agentDir: string | undefined,
+  provider: string,
+  profileIds?: readonly string[],
+): boolean {
+  const inspection = inspectPersistedAuthProfileStoreRaw(agentDir);
+  if (inspection.status === "missing") {
+    return false;
+  }
+  if (inspection.status === "unreadable" || !coercePersistedAuthProfileStore(inspection.raw)) {
+    // A present but unreadable canonical row must route through the loader so
+    // AUTH_PROFILE_STORE_UNREADABLE fails closed before env/config fallback.
+    return true;
+  }
+  return rawStoreHasProviderProfile(inspection.raw, provider, profileIds);
+}
+
 /** Returns true when any local/runtime/main auth profile source exists. */
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
   if (hasLocalAuthProfileStoreSource(agentDir)) {
@@ -102,13 +100,13 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
     return true;
   }
 
-  const authPath = resolveAuthStorePath(agentDir);
-  const mainAuthPath = resolveAuthStorePath();
+  const authPath = resolveAuthProfileDatabasePath(agentDir);
+  const mainAuthPath = resolveAuthProfileDatabasePath();
   if (
     agentDir &&
     authPath !== mainAuthPath &&
-    (hasStoredAuthProfileFiles(undefined) ||
-      readPersistedAuthProfileStoreRaw(undefined) ||
+    (hasLegacyAuthProfileCredentialSource(undefined) ||
+      inspectPersistedAuthProfileStoreRaw(undefined).status !== "missing" ||
       readPersistedAuthProfileStateRaw(undefined))
   ) {
     return true;
@@ -122,12 +120,13 @@ export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
   if (runtimeStore && Object.keys(runtimeStore.profiles).length > 0) {
     return true;
   }
-  if (hasStoredAuthProfileFiles(agentDir)) {
+  if (hasLegacyAuthProfileCredentialSource(agentDir)) {
     return true;
   }
-  return Boolean(
-    readPersistedAuthProfileStoreRaw(agentDir) || readPersistedAuthProfileStateRaw(agentDir),
-  );
+  if (inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
+    return true;
+  }
+  return Boolean(readPersistedAuthProfileStateRaw(agentDir));
 }
 
 type AuthProfileSourceForProviderOptions = {
@@ -152,23 +151,13 @@ export function hasAuthProfileStoreSourceForProvider(
   if (runtimeStoreHasProviderProfile(localRuntimeStore, provider, profileIds)) {
     return true;
   }
-  if (
-    rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath(agentDir)), provider, profileIds)
-  ) {
+  // A retired credential source is intentionally opaque to runtime. Treat it
+  // as potentially owning the provider so the canonical loader can fail closed
+  // with AUTH_PROFILE_MIGRATION_REQUIRED instead of falling through to env auth.
+  if (hasLegacyAuthProfileCredentialSource(agentDir)) {
     return true;
   }
-  if (
-    rawStoreHasProviderProfile(
-      readJsonFile(resolveLegacyAuthStorePath(agentDir)),
-      provider,
-      profileIds,
-    )
-  ) {
-    return true;
-  }
-  if (
-    rawStoreHasProviderProfile(readPersistedAuthProfileStoreRaw(agentDir), provider, profileIds)
-  ) {
+  if (canonicalStoreOwnsProviderRoute(agentDir, provider, profileIds)) {
     return true;
   }
 
@@ -179,13 +168,8 @@ export function hasAuthProfileStoreSourceForProvider(
   if (runtimeStoreHasProviderProfile(mainRuntimeStore, provider, profileIds)) {
     return true;
   }
-  if (rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath()), provider, profileIds)) {
+  if (hasLegacyAuthProfileCredentialSource()) {
     return true;
   }
-  if (
-    rawStoreHasProviderProfile(readJsonFile(resolveLegacyAuthStorePath()), provider, profileIds)
-  ) {
-    return true;
-  }
-  return rawStoreHasProviderProfile(readPersistedAuthProfileStoreRaw(), provider, profileIds);
+  return canonicalStoreOwnsProviderRoute(undefined, provider, profileIds);
 }

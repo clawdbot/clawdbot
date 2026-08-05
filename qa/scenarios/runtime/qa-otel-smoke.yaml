@@ -5,9 +5,9 @@ scenario:
   surface: telemetry
   coverage:
     primary:
-      - telemetry.otel
+      - observability.otlp-http-traces-otel
     secondary:
-      - telemetry.plugin-sdk-runtime-exports
+      - observability.plugin-sdk-diagnostic-runtime-exports
   objective: Execute the bounded local OTLP runtime producer directly and publish its OpenTelemetry assertions through the shared QA script evidence writer.
   successCriteria:
     - QA Lab launches the runtime producer directly with a bounded local collector configuration.

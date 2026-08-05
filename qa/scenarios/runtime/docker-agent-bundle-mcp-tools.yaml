@@ -2,11 +2,11 @@ title: Docker agent bundle MCP tools
 
 scenario:
   id: docker-agent-bundle-mcp-tools
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.agent-sandbox-and-tooling
+  surface: containers
+  category: containers.agent-sandbox-and-tooling
   coverage:
     primary:
-      - docker.backed-agent-sandbox-support
+      - containers.docker-backed-agent-sandbox-support
   objective: Verify the package-installed Docker image can materialize bundled MCP tools for an agent run and apply tool policy inside the container-hosted runtime.
   successCriteria:
     - The functional Docker E2E image starts with an empty OpenClaw test state.

@@ -17,7 +17,16 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
     return undefined;
   }
-  return Buffer.from(encoded, "hex").toString("utf8");
+  // encodeNoticeTarget always writes the hex of a valid UTF-8 session key, so a
+  // payload that fails strict UTF-8 decoding is corrupt: fail closed instead of
+  // letting U+FFFD collisions acknowledge an unrelated watcher cursor.
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      Buffer.from(encoded, "hex"),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 // Terse on purpose: this line lands in model prompts, possibly repeatedly across

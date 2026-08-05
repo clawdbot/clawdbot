@@ -53,6 +53,7 @@ let lingeringGroupProcesses = [];
 let drainFailure;
 let drainFailureGroupStatus;
 let drainFailureNotificationOpen = false;
+let validationPhaseState = "unannounced";
 
 function delay(ms) {
   return new Promise((resolveDelay) => {
@@ -172,6 +173,18 @@ if (killDeadline) {
 }
 
 function consumeNotificationLine(line) {
+  if (line === "phase\tvalidation-started") {
+    // The FD is inherited by descendants, so phase messages are monotonic:
+    // no later writer may reopen validation after side effects have started.
+    if (validationPhaseState === "unannounced") {
+      validationPhaseState = "validation";
+    }
+    return;
+  }
+  if (line === "phase\tside-effects-started") {
+    validationPhaseState = "side-effects";
+    return;
+  }
   const [lockRef, ownerOid, extra] = line.split("\t");
   if (
     extra !== undefined ||
@@ -445,17 +458,29 @@ for (const [signal, handler] of signalHandlers) {
 }
 
 // PR commands must join all state-mutating children before returning. A clean
-// exit is that trusted completion signal; abnormal exits retain the lock because
-// an escaped child can outlive both the recorded group and notification pipe.
+// exit is the normal completion signal. A nonzero exit may also release while
+// the child explicitly remains in its pre-side-effect validation phase; every
+// other abnormal exit retains because an escaped child can outlive the group.
 const completedCleanly =
   childResult.code === 0 &&
   !receivedSignal &&
   !childResult.signal &&
   !notificationFailure &&
   !hadLingeringGroup;
+const failedDuringValidation =
+  validationPhaseState === "validation" &&
+  childResult.code !== null &&
+  childResult.code > 0 &&
+  // Shells encode signal termination as 128+signal. Retain conservatively for
+  // every such status, including signals scripts/pr does not trap itself.
+  childResult.code < 128 &&
+  !receivedSignal &&
+  !childResult.signal &&
+  !notificationFailure &&
+  !hadLingeringGroup;
 const retainedLocks = [];
 const releaseFailures = new Set();
-if (drained && completedCleanly) {
+if (drained && (completedCleanly || failedDuringValidation)) {
   for (const lock of locks.values()) {
     try {
       releaseLock(lock);

@@ -192,7 +192,7 @@ describe("security audit trust model findings", () => {
         name: "flags supported legacy open dm.policy",
         cfg: {
           channels: { discord: { dm: { policy: "open" } } },
-        } satisfies OpenClawConfig,
+        } as unknown as OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {
           const finding = findings.find(
             (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
@@ -223,7 +223,7 @@ describe("security audit trust model findings", () => {
               dm: { policy: "open" },
             },
           },
-        } satisfies OpenClawConfig,
+        } as unknown as OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {
           expect(
             findings.some((finding) =>
@@ -244,8 +244,8 @@ describe("security audit trust model findings", () => {
           );
           expect(finding?.severity).toBe("critical");
           expect(finding?.detail).toContain("channels.whatsapp.groupPolicy");
-          expect(finding?.detail).toContain("controlPlane=[cron]");
-          expect(finding?.detail).not.toContain("controlPlane=[gateway, cron]");
+          expect(finding?.detail).toContain("controlPlane=[automations]");
+          expect(finding?.detail).not.toContain("controlPlane=[automations, gateway]");
         },
       },
       {
@@ -278,7 +278,7 @@ describe("security audit trust model findings", () => {
             (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
           );
           expect(finding?.detail).toContain(
-            "agents.defaults (profile=messaging; controlPlane=[cron])",
+            "agents.defaults (profile=messaging; controlPlane=[automations])",
           );
         },
       },
@@ -288,7 +288,7 @@ describe("security audit trust model findings", () => {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false }, profile: "messaging" },
           agents: {
-            list: [{ id: "ops", tools: { profile: "messaging", alsoAllow: ["gateway"] } }],
+            entries: { ops: { tools: { profile: "messaging", alsoAllow: ["gateway"] } } },
           },
         } satisfies OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {
@@ -296,7 +296,7 @@ describe("security audit trust model findings", () => {
             (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
           );
           expect(finding?.detail).toContain(
-            "agents.list.ops (profile=messaging; controlPlane=[gateway])",
+            "agents.entries.ops (profile=messaging; controlPlane=[gateway])",
           );
           expect(finding?.detail).not.toContain("agents.defaults (profile=messaging");
         },

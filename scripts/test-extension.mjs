@@ -2,7 +2,10 @@
 
 // Runs the Vitest plan for one bundled plugin by id or path.
 import { formatErrorMessage } from "./lib/error-format.mjs";
-import { resolveExtensionTestPlan } from "./lib/extension-test-plan.mjs";
+import {
+  createExtensionTestProcessTargetChunks,
+  resolveExtensionTestPlan,
+} from "./lib/extension-test-plan.mjs";
 import {
   relativizeExtensionVitestArgs,
   relativizeExtensionVitestPath,
@@ -57,13 +60,29 @@ async function run() {
   }
 
   console.log(`[test-extension] Running ${plan.testFileCount} test files for ${plan.extensionId}`);
-  const exitCode = await runVitestBatch({
-    args: relativizeExtensionVitestArgs(passthroughArgs),
-    config: plan.config,
-    env: process.env,
-    targets: plan.roots.map((target) => relativizeExtensionVitestPath(target)),
-  });
-  process.exit(exitCode);
+  const targetChunks = createExtensionTestProcessTargetChunks(
+    plan.config,
+    plan.roots,
+    passthroughArgs,
+  );
+  let finalExitCode = 0;
+  for (const [index, targets] of targetChunks.entries()) {
+    if (targetChunks.length > 1) {
+      console.log(`[test-extension] Process chunk ${index + 1}/${targetChunks.length}`);
+    }
+    const exitCode = await runVitestBatch({
+      args: relativizeExtensionVitestArgs(passthroughArgs),
+      config: plan.config,
+      env: process.env,
+      targets: targets.map((target) => relativizeExtensionVitestPath(target)),
+    });
+    if (exitCode !== 0 && finalExitCode === 0) {
+      finalExitCode = exitCode;
+    }
+  }
+  if (finalExitCode !== 0) {
+    process.exit(finalExitCode);
+  }
 }
 
 if (isDirectScriptRun(import.meta.url)) {

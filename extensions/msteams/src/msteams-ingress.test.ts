@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 type IngressQueue = NonNullable<Parameters<typeof createMSTeamsIngress>[0]["queue"]>;
@@ -374,7 +375,9 @@ describe("Microsoft Teams durable ingress", () => {
       const deliveryGate = new Promise<void>((resolve) => {
         releaseDelivery = resolve;
       });
+      let deliverySignal: AbortSignal | undefined;
       const ingress = makeIngress(queue, async (_activity, lifecycle) => {
+        deliverySignal = lifecycle.abortSignal;
         await lifecycle.onAdopted();
         await deliveryGate;
       });
@@ -390,10 +393,75 @@ describe("Microsoft Teams durable ingress", () => {
         setTimeout(resolve, 50);
       });
       expect(stopped).toBe(false);
+      expect(deliverySignal?.aborted).toBe(false);
 
       releaseDelivery?.();
       await stopping;
       expect(stopped).toBe(true);
     });
+  });
+
+  it("returns after aborting a non-cooperative delivery at the stop grace", async () => {
+    vi.useFakeTimers();
+    try {
+      await withQueue(async (queue) => {
+        let markDeliveryStarted!: () => void;
+        const deliveryStarted = new Promise<void>((resolve) => {
+          markDeliveryStarted = resolve;
+        });
+        let deliverySignal: AbortSignal | undefined;
+        const ingress = makeIngress(queue, async (_activity, lifecycle) => {
+          deliverySignal = lifecycle.abortSignal;
+          markDeliveryStarted();
+          await new Promise<void>(() => {});
+        });
+        ingress.start();
+        await ingress.accept(activity({ id: "activity-stop-timeout" }));
+        await deliveryStarted;
+
+        const stopping = ingress.stop();
+        expect(deliverySignal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+        await stopping;
+
+        expect(deliverySignal?.aborted).toBe(true);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps stop terminal and shares its grace task", async () => {
+    vi.useFakeTimers();
+    try {
+      await withQueue(async (queue) => {
+        let markDeliveryStarted!: () => void;
+        const deliveryStarted = new Promise<void>((resolve) => {
+          markDeliveryStarted = resolve;
+        });
+        const dispatch = vi.fn(async () => {
+          markDeliveryStarted();
+          await new Promise<void>(() => {});
+        });
+        const ingress = makeIngress(queue, dispatch);
+        ingress.start();
+        await ingress.accept(activity({ id: "activity-terminal-stop" }));
+        await deliveryStarted;
+
+        const firstStop = ingress.stop();
+        expect(ingress.stop()).toBe(firstStop);
+        ingress.start();
+        await ingress.accept(activity({ id: "activity-after-stop-start" }));
+        await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+        await firstStop;
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect((await queue.listPending()).map((entry) => entry.id)).toContain(
+          "activity-after-stop-start",
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

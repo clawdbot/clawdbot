@@ -1,5 +1,5 @@
 // Xiaomi provider module implements model/runtime integration.
-import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -87,7 +87,7 @@ function normalizeXiaomiTtsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.xiaomi.apiKey",
+      path: "tts.providers.xiaomi.apiKey",
     }),
     baseUrl: normalizeXiaomiTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.XIAOMI_BASE_URL),
@@ -118,7 +118,7 @@ function readXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsPro
     apiKey:
       normalizeResolvedSecretInputString({
         value: config.apiKey,
-        path: "messages.tts.providers.xiaomi.apiKey",
+        path: "tts.providers.xiaomi.apiKey",
       }) ?? normalized.apiKey,
     baseUrl: normalizeXiaomiTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
     model: trimToUndefined(config.model) ?? trimToUndefined(config.modelId) ?? normalized.model,
@@ -245,7 +245,11 @@ function decodeXiaomiAudioData(body: unknown): Buffer {
   if (!audioData) {
     throw new Error("Xiaomi TTS API returned no audio data");
   }
-  return Buffer.from(audioData, "base64");
+  const canonicalAudio = canonicalizeBase64(audioData);
+  if (!canonicalAudio) {
+    throw new Error("Xiaomi TTS API returned malformed base64 audio data");
+  }
+  return Buffer.from(canonicalAudio, "base64");
 }
 
 async function xiaomiTTS(params: {

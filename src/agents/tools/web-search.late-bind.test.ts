@@ -183,7 +183,7 @@ describe("web_search late-bound runtime fallback", () => {
         ownerKind: "capability",
         ownerId: "web-search:brave",
         state: "unavailable",
-        paths: ["tools.web.search.brave.apiKey"],
+        paths: ["plugins.entries.brave.config.webSearch.apiKey"],
         refKeys: ["env:default:MISSING_BRAVE_KEY"],
         reason: "missing test ref",
       },

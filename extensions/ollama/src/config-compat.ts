@@ -1,5 +1,6 @@
 // Ollama helper module supports config compat behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_CLOUD_PROVIDER_ID } from "./defaults.js";
 
 type LegacyConfigRule = {
@@ -7,12 +8,6 @@ type LegacyConfigRule = {
   message: string;
   match: (value: unknown) => boolean;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function isRetiredOllamaCloudBaseUrl(value: unknown): value is string {
   if (typeof value !== "string" || !value.trim()) {
@@ -26,7 +21,7 @@ function isRetiredOllamaCloudBaseUrl(value: unknown): value is string {
 }
 
 function findRetiredOllamaCloudBaseUrl(provider: unknown): { key: "baseUrl" | "baseURL" } | null {
-  const record = asRecord(provider);
+  const record = asObjectRecord(provider);
   if (!record) {
     return null;
   }
@@ -59,11 +54,11 @@ function migrateOllamaCloudRetiredBaseUrl(config: OpenClawConfig): {
   }
 
   const nextConfig = structuredClone(config);
-  const nextModels = asRecord(nextConfig.models) ?? {};
+  const nextModels = asObjectRecord(nextConfig.models) ?? {};
   nextConfig.models = nextModels as OpenClawConfig["models"];
-  const nextProviders = asRecord(nextModels.providers) ?? {};
+  const nextProviders = asObjectRecord(nextModels.providers) ?? {};
   nextModels.providers = nextProviders;
-  const nextProvider = asRecord(nextProviders[OLLAMA_CLOUD_PROVIDER_ID]) ?? {};
+  const nextProvider = asObjectRecord(nextProviders[OLLAMA_CLOUD_PROVIDER_ID]) ?? {};
   nextProviders[OLLAMA_CLOUD_PROVIDER_ID] = nextProvider;
 
   const canonicalBaseUrl = nextProvider.baseUrl;

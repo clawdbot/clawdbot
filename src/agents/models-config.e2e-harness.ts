@@ -90,7 +90,6 @@ export function unsetEnv(vars: string[]) {
 
 /** Ambient env vars cleared by implicit provider discovery tests. */
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
-  "OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS",
   "VITEST",
   "NODE_ENV",
   "AI_GATEWAY_API_KEY",

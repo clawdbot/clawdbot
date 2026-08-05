@@ -1,7 +1,7 @@
 // Doctor warnings and repairs for redundant bundled plugin load path aliases.
 import path from "node:path";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   buildBundledPluginLoadPathAliases,
@@ -21,7 +21,8 @@ type BundledPluginLoadPathHit = {
 };
 
 function resolveBundledWorkspaceDir(cfg: OpenClawConfig): string | undefined {
-  return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? undefined;
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  return defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
 }
 
 function isOpenClawNodeModulesPackageRoot(packageRoot: string): boolean {

@@ -15,13 +15,19 @@ import {
 } from "./workspace-manifest.js";
 import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
-import { applyStagedWorkerWorkspace, assertWorkspaceResultStable } from "./workspace-reconcile.js";
+import {
+  applyStagedWorkerWorkspace,
+  changedEntryPaths,
+  inspectAcceptedWorkerWorkspace,
+  type WorkerWorkspaceApplyResult,
+} from "./workspace-reconcile.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
 // Match managed-worktree refs/openclaw/snapshots: deleting the owning ref is
 // sufficient; unreachable objects may remain until normal Git GC.
 const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";
 const WORKER_RESULT_CANDIDATE_REF_PREFIX = "refs/openclaw/worker-result-candidates";
+const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
@@ -33,35 +39,12 @@ function gitCommand(cwd: string, args: string[]): string[] {
   return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
 }
 
-function sameEntry(
-  left: WorkerWorkspaceManifestEntry | undefined,
-  right: WorkerWorkspaceManifestEntry | undefined,
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function changedPaths(
-  base: WorkerWorkspaceManifest,
-  current: WorkerWorkspaceManifest,
-): Set<string> {
-  const baseByPath = new Map(
-    reconciliationEntries(base.entries).map((entry) => [entry.path, entry]),
-  );
-  const currentByPath = new Map(
-    reconciliationEntries(current.entries).map((entry) => [entry.path, entry]),
-  );
-  return new Set(
-    [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
-      (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
-    ),
-  );
-}
-
 export function workerWorkspaceTransferPaths(
   current: WorkerWorkspaceManifest,
   base: WorkerWorkspaceManifest,
 ): string[] {
-  const changed = changedPaths(base, current);
+  // Staging is directory-agnostic because it transfers file and symlink bytes only.
+  const changed = changedEntryPaths(base, current);
   const paths = reconciliationEntries(current.entries)
     .filter((entry) => changed.has(entry.path))
     .map((entry) => {
@@ -92,7 +75,7 @@ async function requireGit(cwd: string, args: string[]): Promise<string> {
 function requireWorkerResultStorageRef(ref: string): string {
   if (
     !new RegExp(
-      `^(?:${WORKER_RESULT_REF_PREFIX}|${WORKER_RESULT_CANDIDATE_REF_PREFIX})/[A-Za-z0-9-]+$`,
+      `^(?:${WORKER_RESULT_REF_PREFIX}|${WORKER_RESULT_CANDIDATE_REF_PREFIX}|${WORKER_RESULT_CLEANUP_REF_PREFIX})/[A-Za-z0-9-]+$`,
       "u",
     ).test(ref)
   ) {
@@ -118,6 +101,15 @@ export function workerWorkspaceResultRef(claimId: string): string {
 export function preparedWorkerWorkspaceResultRef(stagedResultRef: string): string {
   const ref = requireWorkerResultRef(stagedResultRef);
   return `${WORKER_RESULT_CANDIDATE_REF_PREFIX}/${ref.slice(WORKER_RESULT_REF_PREFIX.length + 1)}`;
+}
+
+export function cleanupWorkerWorkspaceResultRef(stagedResultRef: string): string {
+  const ref = requireWorkerResultRef(stagedResultRef);
+  return `${WORKER_RESULT_CLEANUP_REF_PREFIX}/${ref.slice(WORKER_RESULT_REF_PREFIX.length + 1)}`;
+}
+
+export function isWorkerWorkspaceResultCleanupRef(ref: string): boolean {
+  return ref.startsWith(`${WORKER_RESULT_CLEANUP_REF_PREFIX}/`);
 }
 
 async function hasGitAdminPath(root: string): Promise<boolean> {
@@ -262,7 +254,7 @@ async function stageWorkerWorkspaceResult(params: {
       `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
     );
   }
-  const changed = changedPaths(base, current);
+  const changed = changedEntryPaths(base, current);
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
   let totalBytes = 0;
   for (const [index, entry] of entries.entries()) {
@@ -440,25 +432,37 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   root: string;
   stagedResultRef: string;
   expectedBaseManifestRef: string;
+  alreadyAccepted?: boolean;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
-}): Promise<{ manifestRef: string; changed: boolean; verifyLocalStable(): Promise<void> }> {
+  publishAcceptedManifest?: (accepted: {
+    manifestRef: string;
+    manifest: WorkerWorkspaceManifest;
+    conflictPaths: string[];
+  }) => Promise<void>;
+}): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
   const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
-  if (staged.baseManifestRef !== params.expectedBaseManifestRef) {
-    if (staged.currentManifestRef !== params.expectedBaseManifestRef) {
+  if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
+    // An acceptance marker proves the mutations already ran even when omitted
+    // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
+    // A base advance proves the same commit-before-acceptance crash window.
+    const accepted = await inspectAcceptedWorkerWorkspace({
+      root,
+      expectedManifestRef: params.expectedBaseManifestRef,
+      allowAdvancedLocalState: true,
+      base: staged.base,
+      current: staged.current,
+    });
+    if (!accepted) {
       throw new Error("Cloud workspace staged result does not match the placement base");
     }
-    // The workspace-base commit and local tree precede fence acceptance. A crash
-    // between them must make replay a stable no-op, not strand the durable result.
-    await assertWorkspaceResultStable({ root, base: staged.base, current: staged.current });
+    params.journal.commit(accepted.manifestRef);
     return {
-      manifestRef: staged.currentManifestRef,
-      changed: changedPaths(staged.base, staged.current).size > 0,
-      verifyLocalStable: async () =>
-        await assertWorkspaceResultStable({ root, base: staged.base, current: staged.current }),
+      ...accepted,
+      changed: changedEntryPaths(staged.base, staged.current).size > 0,
     };
   }
-  const changed = changedPaths(staged.base, staged.current);
+  const changed = changedEntryPaths(staged.base, staged.current);
   const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
   try {
     for (const entry of reconciliationEntries(staged.current.entries)) {
@@ -480,7 +484,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         await materializeStagedEntry({ root: stagingRoot, entry, content });
       }
     }
-    await applyStagedWorkerWorkspace({
+    const applied = await applyStagedWorkerWorkspace({
       root,
       stagingRoot,
       baseManifestRef: staged.baseManifestRef,
@@ -488,16 +492,12 @@ export async function applyStagedWorkerWorkspaceResult(params: {
       base: staged.base,
       current: staged.current,
       journal: params.journal,
+      publishAcceptedManifest: params.publishAcceptedManifest,
     });
+    return { ...applied, changed: changed.size > 0 };
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true });
   }
-  return {
-    manifestRef: staged.currentManifestRef,
-    changed: changed.size > 0,
-    verifyLocalStable: async () =>
-      await assertWorkspaceResultStable({ root, base: staged.base, current: staged.current }),
-  };
 }
 
 async function prepareRequestedWorkerWorkspaceResult(params: {
@@ -506,8 +506,15 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
+  publishAcceptedManifest?: (accepted: {
+    manifestRef: string;
+    manifest: WorkerWorkspaceManifest;
+    conflictPaths: string[];
+  }) => Promise<void>;
 }): Promise<{
   applyPreparedStagedResult(): Promise<void>;
+  getAppliedWorkspaceResult(): WorkerWorkspaceApplyResult | undefined;
+  verifyLocalStable(): Promise<void>;
   publishStagedResult(): Promise<void>;
   discardPreparedStagedResult(): Promise<void>;
 }> {
@@ -516,6 +523,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     throw new Error("Cloud workspace durable result staging was not requested");
   }
   const candidateRef = preparedWorkerWorkspaceResultRef(stagedResult.ref);
+  let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
   await stageWorkerWorkspaceResult({
     root: params.request.localPath,
     stagingRoot: params.stagingRoot,
@@ -528,12 +536,20 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   return {
     applyPreparedStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
-      await applyStagedWorkerWorkspaceResult({
+      appliedWorkspaceResult = await applyStagedWorkerWorkspaceResult({
         root,
         stagedResultRef: candidateRef,
         expectedBaseManifestRef: params.request.baseManifestRef,
         journal: params.request.journal,
+        publishAcceptedManifest: params.publishAcceptedManifest,
       });
+    },
+    getAppliedWorkspaceResult: () => appliedWorkspaceResult,
+    verifyLocalStable: async () => {
+      if (!appliedWorkspaceResult) {
+        throw new Error("Cloud workspace staged result has not been applied");
+      }
+      await appliedWorkspaceResult.verifyLocalStable();
     },
     publishStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
@@ -562,6 +578,55 @@ export async function deleteStagedWorkerWorkspaceResult(params: {
   await requireGit(root, ["update-ref", "-d", stagedResultRef]);
   if (stagedResultRef.startsWith(`${WORKER_RESULT_REF_PREFIX}/`)) {
     await requireGit(root, ["update-ref", "-d", preparedWorkerWorkspaceResultRef(stagedResultRef)]);
+  }
+}
+
+export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
+  root: string;
+  stagedResultRef: string;
+}): Promise<string> {
+  const root = await fs.realpath(params.root);
+  const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
+  const cleanupRef = cleanupWorkerWorkspaceResultRef(stagedResultRef);
+  const commit = await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
+  // The temporary cleanup namespace survives the SQLite fence removal. Either
+  // side of this two-step move is therefore discoverable after a crash.
+  await requireGit(root, ["update-ref", cleanupRef, commit]);
+  await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
+  return cleanupRef;
+}
+
+export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
+  root: string;
+  cleanupRef: string;
+  stagedResultRef: string;
+}): Promise<void> {
+  const root = await fs.realpath(params.root);
+  const cleanupRef = requireWorkerResultStorageRef(params.cleanupRef);
+  if (!isWorkerWorkspaceResultCleanupRef(cleanupRef)) {
+    throw new Error("Cloud workspace cleanup result reference is invalid");
+  }
+  const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
+  const commit = await requireGit(root, ["rev-parse", `${cleanupRef}^{commit}`]);
+  await requireGit(root, ["update-ref", stagedResultRef, commit]);
+  await requireGit(root, ["update-ref", "-d", cleanupRef]);
+}
+
+export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
+  root: string;
+  retainedRefs?: ReadonlySet<string>;
+}): Promise<void> {
+  const root = await fs.realpath(params.root);
+  const output = await requireGit(root, [
+    "for-each-ref",
+    "--format=%(refname)",
+    `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`,
+  ]);
+  for (const cleanupRef of output.split("\n").filter(Boolean)) {
+    requireWorkerResultStorageRef(cleanupRef);
+    if (!params.retainedRefs?.has(cleanupRef)) {
+      await requireGit(root, ["update-ref", "-d", cleanupRef]);
+    }
   }
 }
 

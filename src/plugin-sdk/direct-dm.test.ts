@@ -75,7 +75,7 @@ function createDirectDmRuntime() {
   };
 }
 
-describe("plugin-sdk/direct-dm", () => {
+describe("channel-inbound direct-message helpers", () => {
   it("resolves inbound DM access and command auth through one helper", async () => {
     const result = await resolveInboundDirectDmAccessWithRuntime({
       cfg: baseCfg,

@@ -17,7 +17,7 @@ vi.mock("../agents/subagent-registry-read.js", async () => {
   };
 });
 
-vi.mock("./session-subagent-reactivation.runtime.js", () => ({
+vi.mock("../agents/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
 }));
 
@@ -39,9 +39,12 @@ describe("reactivateCompletedSubagentSession", () => {
       task: "current ended task",
       cleanup: "keep" as const,
       createdAt: 20,
-      startedAt: 21,
-      endedAt: 22,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 21,
+        endedAt: 22,
+        outcome: { status: "ok" as const },
+      },
     };
 
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
@@ -79,9 +82,12 @@ describe("reactivateCompletedSubagentSession", () => {
       task: "stale original task",
       cleanup: "keep" as const,
       createdAt: 30,
-      startedAt: 31,
-      endedAt: 32,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 31,
+        endedAt: 32,
+        outcome: { status: "ok" as const },
+      },
     };
 
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
@@ -114,9 +120,12 @@ describe("reactivateCompletedSubagentSession", () => {
       task: "stale original task",
       cleanup: "keep" as const,
       createdAt: 40,
-      startedAt: 41,
-      endedAt: 42,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 41,
+        endedAt: 42,
+        outcome: { status: "ok" as const },
+      },
     };
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);

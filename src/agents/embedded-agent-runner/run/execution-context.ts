@@ -1,4 +1,5 @@
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { SessionSuspensionParams } from "../../session-suspension.js";
 import { resolveRunWorkspaceDir } from "../../workspace-run.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
@@ -30,4 +31,5 @@ export type PreparedEmbeddedRunInput = {
   laneController: ReturnType<typeof createEmbeddedRunLaneController>;
   lifecycleGeneration: NonNullable<RunEmbeddedAgentParams["lifecycleGeneration"]>;
   suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 };

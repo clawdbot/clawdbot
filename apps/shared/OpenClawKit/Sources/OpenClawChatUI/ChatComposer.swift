@@ -1,3 +1,4 @@
+import CoreTransferable
 import Foundation
 import Observation
 import SwiftUI
@@ -16,6 +17,23 @@ import UIKit
 /// Sendable. This wrapper is only used for one detached JPEG encoding pass.
 private struct OpenClawSendableCameraImage: @unchecked Sendable {
     let value: UIImage
+}
+
+private struct OpenClawVideoTransfer: Sendable, Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { video in
+            SentTransferredFile(video.url)
+        } importing: { received in
+            let fileExtension = received.file.pathExtension
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-picker-video-\(UUID().uuidString)")
+                .appendingPathExtension(fileExtension.isEmpty ? "mov" : fileExtension)
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return OpenClawVideoTransfer(url: destination)
+        }
+    }
 }
 #endif
 
@@ -133,7 +151,7 @@ struct OpenClawChatComposer: View {
             }
             .fileImporter(
                 isPresented: self.fileImporterPresentation,
-                allowedContentTypes: [.image],
+                allowedContentTypes: OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes,
                 allowsMultipleSelection: true,
                 onCompletion: { result in
                     let owner = self.fileImporterOwner
@@ -144,7 +162,7 @@ struct OpenClawChatComposer: View {
                 isPresented: self.photoPickerPresentation,
                 selection: self.$pickerItems,
                 maxSelectionCount: 8,
-                matching: .images)
+                matching: .any(of: [.images, .videos]))
             .onChange(of: self.pickerItems) { _, items in
                 guard !items.isEmpty else { return }
                 let owner = self.photoPickerOwner
@@ -186,7 +204,7 @@ struct OpenClawChatComposer: View {
     private var lifecycleComposer: some View {
         self.recorderLifecycleComposer
             .onChange(of: self.presentationOwner) { _, _ in
-                self.cancelActiveDictation()
+                ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 #if !os(macOS)
                 self.showsPhotoPicker = false
                 self.showsFileImporter = false
@@ -204,7 +222,7 @@ struct OpenClawChatComposer: View {
                 self.stageCompletedVoiceNoteIfNeeded()
             }
             .onDisappear {
-                self.cancelActiveDictation()
+                ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 #if !os(macOS)
                 self.showsPhotoPicker = false
                 self.showsFileImporter = false
@@ -355,6 +373,9 @@ struct OpenClawChatComposer: View {
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
+                    if self.viewModel.sessionBranches.count > 1 {
+                        self.branchMenu
+                    }
                     if self.showsSessionSwitcher {
                         self.sessionPicker
                         if self.viewModel.showsThinkingPicker {
@@ -572,14 +593,68 @@ struct OpenClawChatComposer: View {
                     .tag(session.key)
             }
         } label: {
-            Text("Session")
+            Text("Thread")
                 .font(OpenClawChatTypography.captionSemiBold)
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 160, alignment: .leading)
-        .help("Session")
+        .help("Thread")
+    }
+
+    private var branchMenu: some View {
+        Menu {
+            ForEach(self.viewModel.sessionBranches) { branch in
+                Button {
+                    guard !branch.active else { return }
+                    Task { await self.viewModel.switchToBranch(branch.leafEntryId) }
+                } label: {
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(self.branchTitle(branch))
+                                .font(OpenClawChatTypography.captionSemiBold)
+                            Text(self.branchMetadata(branch))
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if branch.active {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+                .disabled(branch.active)
+            }
+            .task {
+                await self.viewModel.refreshSessionBranchesForMenuPresentation()
+            }
+        } label: {
+            Image(systemName: "arrow.triangle.branch")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Branches")
+        .accessibilityLabel("Branches")
+        .disabled(!self.viewModel.canSwitchSessionBranch)
+    }
+
+    private func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {
+        let headline = branch.headline.trimmingCharacters(in: .whitespacesAndNewlines)
+        return headline.isEmpty ? String(localized: "Untitled branch") : headline
+    }
+
+    private func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
+        var parts = [Self.branchMessageCount(branch.messageCount)]
+        if let updatedAt = branch.updatedAt,
+           let date = try? Date(updatedAt, strategy: .iso8601)
+        {
+            parts.append(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func branchMessageCount(_ count: Int) -> String {
+        String(AttributedString(localized: "^[\(count) message](inflect: true)").characters)
     }
 
     @ViewBuilder
@@ -591,7 +666,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 CompactChatAttachmentLabel()
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
@@ -603,7 +678,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 Image(systemName: "paperclip")
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -616,7 +691,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 CompactChatAttachmentLabel()
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
@@ -628,7 +703,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 Image(systemName: "paperclip")
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -696,10 +771,18 @@ struct OpenClawChatComposer: View {
 
             HStack(alignment: .center, spacing: 8) {
                 if let talkControl {
-                    self.talkButton(talkControl)
+                    ChatTalkButton(
+                        control: talkControl,
+                        sessionKey: self.viewModel.sessionKey,
+                        helpText: self.talkHelpText(talkControl),
+                        style: .full)
+                    if ChatCameraFlipButton.isAvailable(for: talkControl) {
+                        ChatCameraFlipButton(control: talkControl, size: 32)
+                    }
                 }
                 if self.showsConnectionPill {
-                    self.connectionPill
+                    ChatConnectionPill(
+                        isConnected: self.viewModel.healthOK || (self.talkControl?.isGatewayConnected ?? false))
                 }
                 Spacer(minLength: 0)
                 self.sendButton
@@ -743,6 +826,10 @@ struct OpenClawChatComposer: View {
         HStack(alignment: .center, spacing: 4) {
             self.cleanAttachmentMenu
 
+            if self.viewModel.sessionBranches.count > 1 {
+                self.branchMenu
+            }
+
             self.editorOverlay
                 .frame(maxWidth: .infinity, minHeight: self.cleanControlHeight, alignment: .leading)
                 .layoutPriority(1)
@@ -756,13 +843,20 @@ struct OpenClawChatComposer: View {
                     isComposerEnabled: self.isComposerEnabled,
                     isAttachmentInputEnabled: self.isAttachmentInputEnabled,
                     onCancelDictation: {
-                        self.cancelActiveDictation()
+                        ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                     },
                     onStartDictation: {
                         if let dictationControl = self.dictationControl {
-                            self.startDictation(dictationControl)
+                            ChatDictationActions.start(
+                                dictationControl,
+                                task: self.$dictationTask,
+                                viewModel: self.viewModel)
                         }
                     })
+            }
+
+            if let talkControl, ChatCameraFlipButton.isAvailable(for: talkControl) {
+                ChatCameraFlipButton(control: talkControl, size: self.cleanControlHeight)
             }
 
             self.cleanTrailingControl
@@ -779,7 +873,13 @@ struct OpenClawChatComposer: View {
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive),
             let talkControl
         {
-            self.compactTalkButton(talkControl)
+            ChatTalkButton(
+                control: talkControl,
+                sessionKey: self.viewModel.sessionKey,
+                helpText: self.talkHelpText(talkControl),
+                style: .compact(
+                    controlHeight: self.cleanControlHeight,
+                    iconControlSize: self.cleanIconControlSize))
         } else {
             sendButton
                 .frame(width: cleanControlHeight, height: cleanControlHeight)
@@ -793,149 +893,12 @@ struct OpenClawChatComposer: View {
             self.voiceNoteControl?.recorder.isRequestingPermission == true
     }
 
-    /// Local capture and realtime Talk share one microphone, so the Talk affordance
-    /// must yield until dictation or voice-note capture releases audio ownership.
-    nonisolated static func showsCompactTalkControl(
-        hasDraftToSend: Bool,
-        hasBlockingRunActivity: Bool,
-        isLocalVoiceCaptureActive: Bool) -> Bool
-    {
-        !hasDraftToSend && !hasBlockingRunActivity && !isLocalVoiceCaptureActive
-    }
-
-    private func talkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
-        Button {
-            talkControl.toggle(self.viewModel.sessionKey)
-        } label: {
-            HStack(spacing: 6) {
-                ChatTalkButtonGlyph(control: talkControl)
-                    .font(OpenClawChatTypography.captionSemiBold)
-                Text(talkControl.isEnabled ? "Stop" : "Talk")
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(talkControl.isEnabled ? .white : .primary)
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background {
-                Capsule()
-                    .fill(self.talkButtonFill(talkControl))
-            }
-            .overlay {
-                Capsule()
-                    .strokeBorder(self.talkButtonStroke(talkControl), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
-        .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.talkAccessibilityValue(talkControl))
-        .accessibilityIdentifier("chat-realtime-control")
-        .help(self.talkHelpText(talkControl))
-        .chatTalkInputDeviceMenu(talkControl)
-    }
-
-    private func startDictation(_ control: OpenClawChatDictationControl) {
-        guard self.dictationTask == nil else { return }
-        let session = self.viewModel.currentSessionSnapshot()
-        self.dictationTask = Task { @MainActor in
-            defer { self.dictationTask = nil }
-            do {
-                guard let transcript = try await control.start(), !transcript.isEmpty else { return }
-                try Task.checkCancellation()
-                self.viewModel.appendDictationTranscript(transcript, for: session)
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled else { return }
-                self.viewModel.setDictationError(error, for: session)
-            }
-        }
-    }
-
-    private func cancelActiveDictation() {
-        guard self.dictationTask != nil else { return }
-        self.dictationTask?.cancel()
-        self.dictationControl?.cancel()
-    }
-
-    private func compactTalkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
-        Button {
-            talkControl.toggle(self.viewModel.sessionKey)
-        } label: {
-            ChatTalkButtonGlyph(control: talkControl)
-                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(.white)
-                .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
-                // Prominent filled circle so the mic reads as the primary action,
-                // mirroring the send button it swaps with once a draft exists.
-                .background {
-                    Circle()
-                        .fill(talkControl.isEnabled
-                            ? self.talkButtonFill(talkControl)
-                            : AnyShapeStyle(OpenClawChatTheme.accent))
-                        .opacity(talkControl.isGatewayConnected || talkControl.isEnabled ? 1 : 0.4)
-                }
-                .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
-        .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.talkAccessibilityValue(talkControl))
-        .accessibilityIdentifier("chat-realtime-control")
-        .help(self.talkHelpText(talkControl))
-        .chatTalkInputDeviceMenu(talkControl)
-    }
-
-    private func talkButtonFill(_ talkControl: OpenClawChatTalkControl) -> AnyShapeStyle {
-        if talkControl.isEnabled {
-            return AnyShapeStyle(OpenClawChatTheme.userBubble)
-        }
-        if !talkControl.isGatewayConnected {
-            return AnyShapeStyle(Color.secondary.opacity(0.12))
-        }
-        return OpenClawChatTheme.subtleCard
-    }
-
-    private func talkButtonStroke(_ talkControl: OpenClawChatTalkControl) -> Color {
-        if talkControl.isEnabled {
-            return Color.white.opacity(0.18)
-        }
-        return OpenClawChatTheme.composerBorder
-    }
-
-    private func talkAccessibilityValue(_ talkControl: OpenClawChatTalkControl) -> String {
-        let status = talkControl.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = talkControl.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        return [status, provider].filter { !$0.isEmpty }.joined(separator: ", ")
-    }
-
     private func talkHelpText(_ talkControl: OpenClawChatTalkControl) -> String {
         if !talkControl.isGatewayConnected, !talkControl.isEnabled {
             return "Connect the gateway before starting realtime chat"
         }
         let action = talkControl.isEnabled ? "Stop" : "Start"
         return "\(action) realtime chat for \(self.activeSessionLabel)"
-    }
-
-    private var connectionPill: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.connectionOK ? .green : .orange)
-                .frame(width: 7, height: 7)
-            Text(self.connectionStatusText)
-                .font(OpenClawChatTypography.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, self.composerChrome == .clean ? 0 : 8)
-        .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
-        .background {
-            if self.composerChrome == .full {
-                Capsule()
-                    .fill(OpenClawChatTheme.subtleCard)
-            }
-        }
     }
 
     private var activeSessionLabel: String {
@@ -975,6 +938,32 @@ struct OpenClawChatComposer: View {
                 .onChange(of: self.viewModel.input) { _, _ in
                     self.updateSlashPopoverPresentation()
                 }
+            #elseif os(iOS)
+            ChatComposerTextViewIOS(
+                text: self.$viewModel.input,
+                shouldFocus: self.isFocused,
+                isEnabled: self.isComposerEnabled,
+                minHeight: self.textMinHeight,
+                maxHeight: self.textMaxHeight,
+                onFocusChange: { focused in
+                    self.isFocused = focused
+                },
+                onHistoryUp: {
+                    !self.isSlashPopoverPresented && self.viewModel.recallPreviousInput(caretOnFirstLine: $0)
+                },
+                onHistoryDown: { !self.isSlashPopoverPresented && self.viewModel.recallNextInput() })
+                .padding(.horizontal, self.cleanFieldTextInset)
+                .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
+                .onChange(of: self.isFocused) { _, focused in
+                    if focused {
+                        self.updateSlashPopoverPresentation()
+                    } else {
+                        self.setSlashPanelPresented(false)
+                    }
+                }
             #else
             TextField(
                 "",
@@ -1001,6 +990,19 @@ struct OpenClawChatComposer: View {
                     } else {
                         self.setSlashPanelPresented(false)
                     }
+                }
+                // SwiftUI exposes neither the caret row nor soft-wrap geometry.
+                // Start recall only from an empty draft; an active recall can
+                // still walk both directions through the shared state machine.
+                .onKeyPress(.upArrow) {
+                    guard !self.isSlashPopoverPresented else { return .ignored }
+                    return self.viewModel.recallPreviousInput(caretOnFirstLine: false)
+                        ? .handled
+                        : .ignored
+                }
+                .onKeyPress(.downArrow) {
+                    guard !self.isSlashPopoverPresented else { return .ignored }
+                    return self.viewModel.recallNextInput() ? .handled : .ignored
                 }
             #endif
         }
@@ -1272,7 +1274,7 @@ extension OpenClawChatComposer {
 extension OpenClawChatComposer {
     @ViewBuilder
     private var sendButton: some View {
-        if self.viewModel.pendingRunCount > 0, !self.viewModel.hasDraftToSend {
+        if self.viewModel.pendingRunCount > 0, self.shouldShowStopButton {
             Button {
                 self.viewModel.abort()
             } label: {
@@ -1454,14 +1456,6 @@ extension OpenClawChatComposer {
         recorder.cancel()
     }
 
-    private var connectionStatusText: String {
-        self.connectionOK ? "Gateway connected" : "Connecting..."
-    }
-
-    private var connectionOK: Bool {
-        self.viewModel.healthOK || (self.talkControl?.isGatewayConnected ?? false)
-    }
-
     private var placeholderText: String {
         let trimmed = self.messagePlaceholder?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? "Message…" : trimmed
@@ -1471,10 +1465,10 @@ extension OpenClawChatComposer {
     private func pickFilesMac() {
         guard self.isAttachmentInputEnabled else { return }
         let panel = NSOpenPanel()
-        panel.title = "Select image attachments"
+        panel.title = "Select attachments"
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes
         panel.begin { resp in
             guard resp == .OK else { return }
             self.viewModel.addAttachments(urls: panel.urls)
@@ -1597,16 +1591,32 @@ extension OpenClawChatComposer {
                 guard self.viewModel === owner.viewModel,
                       owner.viewModel.isCurrentSession(owner.session)
                 else { break }
-                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
-                let type = item.supportedContentTypes.first ?? .image
-                let ext = type.preferredFilenameExtension ?? "jpg"
-                let mime = type.preferredMIMEType ?? "image/jpeg"
-                let name = "photo-\(UUID().uuidString.prefix(8)).\(ext)"
-                await owner.viewModel.addImageAttachment(
-                    data: data,
-                    fileName: name,
-                    mimeType: mime,
-                    for: owner.session)
+                let type = item.supportedContentTypes.first(where: {
+                    $0.conforms(to: .movie) || $0.conforms(to: .image)
+                }) ?? item.supportedContentTypes.first ?? .image
+                if type.conforms(to: .movie) {
+                    guard let transfer = try await item.loadTransferable(type: OpenClawVideoTransfer.self)
+                    else { continue }
+                    defer { try? FileManager.default.removeItem(at: transfer.url) }
+                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(
+                        contentType: type,
+                        transferredFileURL: transfer.url)
+                    let name = "video-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
+                    await owner.viewModel.addVideoAttachment(
+                        url: transfer.url,
+                        fileName: name,
+                        mimeType: metadata.mimeType,
+                        expectedSession: owner.session)
+                } else {
+                    guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
+                    let name = "photo-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
+                    await owner.viewModel.addImageAttachment(
+                        data: data,
+                        fileName: name,
+                        mimeType: metadata.mimeType,
+                        for: owner.session)
+                }
             } catch {
                 guard self.viewModel === owner.viewModel,
                       owner.viewModel.isCurrentSession(owner.session)
@@ -1617,6 +1627,13 @@ extension OpenClawChatComposer {
         self.pickerItems = []
     }
     #endif
+
+    /// Preserve text and image draft controls while keeping completed voice notes abortable.
+    private var shouldShowStopButton: Bool {
+        !self.viewModel.hasDraftToSend || self.viewModel.attachments.contains {
+            $0.mimeType == "audio/mp4" && $0.durationSeconds != nil
+        }
+    }
 
     private func sendDraftIfEnabled() {
         guard self.canSendMessage else { return }

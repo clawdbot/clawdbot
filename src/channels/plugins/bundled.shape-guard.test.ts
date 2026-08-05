@@ -71,6 +71,38 @@ function mockAlphaDistExtensionRuntime() {
   }));
 }
 
+function writeAlphaSdkAliasDistFixture(pluginDir: string, label: string) {
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "index.js"),
+    [
+      'import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";',
+      "export default defineBundledChannelEntry({",
+      "  id: 'alpha',",
+      "  name: 'Alpha',",
+      "  description: 'Alpha',",
+      "  importMetaUrl: import.meta.url,",
+      "  plugin: { specifier: './plugin.js', exportName: 'plugin' },",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "plugin.js"),
+    [
+      "export const plugin = {",
+      "  id: 'alpha',",
+      `  meta: { id: 'alpha', label: '${label}' },`,
+      "  capabilities: {},",
+      "  config: {},",
+      "};",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 function collectBundledChannelEntrypointOffenders(
   bundledPluginRoots: string[],
   isOffender: (source: string, filePath: string) => boolean,
@@ -403,36 +435,8 @@ describe("bundled channel entry shape guards", () => {
   it("falls back through the cached loader for package-local dist entries needing SDK aliases", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-package-dist-"));
     const pluginDir = path.join(root, "extensions", "alpha", "dist");
-    fs.mkdirSync(pluginDir, { recursive: true });
+    writeAlphaSdkAliasDistFixture(pluginDir, "Package dist Alpha");
     fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n', "utf8");
-    fs.writeFileSync(
-      path.join(pluginDir, "index.js"),
-      [
-        'import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";',
-        "export default defineBundledChannelEntry({",
-        "  id: 'alpha',",
-        "  name: 'Alpha',",
-        "  description: 'Alpha',",
-        "  importMetaUrl: import.meta.url,",
-        "  plugin: { specifier: './plugin.js', exportName: 'plugin' },",
-        "});",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "plugin.js"),
-      [
-        "export const plugin = {",
-        "  id: 'alpha',",
-        "  meta: { id: 'alpha', label: 'Package dist Alpha' },",
-        "  capabilities: {},",
-        "  config: {},",
-        "};",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
 
     vi.doMock("./bundled-root.js", () => ({
       resolveBundledChannelRootScope: () => ({
@@ -470,36 +474,8 @@ describe("bundled channel entry shape guards", () => {
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const pluginsRoot = path.join(root, "bundled-plugins");
     const pluginDir = path.join(pluginsRoot, "alpha", "dist");
-    fs.mkdirSync(pluginDir, { recursive: true });
+    writeAlphaSdkAliasDistFixture(pluginDir, "Direct dist Alpha");
     fs.writeFileSync(path.join(pluginsRoot, "package.json"), '{"type":"module"}\n', "utf8");
-    fs.writeFileSync(
-      path.join(pluginDir, "index.js"),
-      [
-        'import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";',
-        "export default defineBundledChannelEntry({",
-        "  id: 'alpha',",
-        "  name: 'Alpha',",
-        "  description: 'Alpha',",
-        "  importMetaUrl: import.meta.url,",
-        "  plugin: { specifier: './plugin.js', exportName: 'plugin' },",
-        "});",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "plugin.js"),
-      [
-        "export const plugin = {",
-        "  id: 'alpha',",
-        "  meta: { id: 'alpha', label: 'Direct dist Alpha' },",
-        "  capabilities: {},",
-        "  config: {},",
-        "};",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
 
     vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
       listBundledChannelPluginMetadata: () => [alphaChannelMetadata()],

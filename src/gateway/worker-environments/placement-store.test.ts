@@ -754,6 +754,15 @@ describe("worker session placement store", () => {
       store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/unsafe.claim"),
     ).toThrow("Worker workspace staged result reference is invalid");
     store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    store.recordWorkspaceResultConflict(claim, {
+      paths: [" z.txt ", "a.txt", "a.txt"],
+      stagedResultRef,
+    });
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict).toEqual({
+      paths: [" z.txt ", "a.txt"],
+      stagedResultRef,
+      totalCount: 2,
+    });
     expect(store.listPendingWorkspaceResults()).toMatchObject([
       { sessionId: active.sessionId, stagedResultRef },
     ]);
@@ -766,6 +775,35 @@ describe("worker session placement store", () => {
       { sessionId: active.sessionId, workspaceAcceptedAtMs: nowMs },
     ]);
     expect(store.completeWorkspaceResultAndReleaseTurn(claim)).toMatchObject({ turnClaim: null });
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict).toEqual({
+      paths: [" z.txt ", "a.txt"],
+      stagedResultRef,
+      totalCount: 2,
+    });
+    const laterClaim = store.claimTurn({
+      ...SESSION,
+      owner: claim.owner,
+      claimId: "later-clean-claim",
+      runId: "later-clean-run",
+    });
+    store.recordWorkspaceResultConflict(laterClaim, {
+      paths: Array.from(
+        { length: 300 },
+        (_, index) => `conflict-${index.toString().padStart(3, "0")}`,
+      ),
+      stagedResultRef: `refs/openclaw/worker-results/${laterClaim.claimId}`,
+    });
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict).toMatchObject({
+      totalCount: 300,
+      paths: expect.arrayContaining(["conflict-000", "conflict-255"]),
+    });
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict?.paths).toHaveLength(256);
+    store.recordWorkspaceResultConflict(laterClaim, undefined);
+    expect(store.get(SESSION.sessionId)).not.toHaveProperty("workspaceResultConflict");
+    store.releaseTurn(laterClaim);
+    expect(
+      createWorkerSessionPlacementStore({ database, now: () => nowMs }).get(SESSION.sessionId),
+    ).not.toHaveProperty("workspaceResultConflict");
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
@@ -996,7 +1034,17 @@ describe("worker session placement store", () => {
       claimId: "journal-claim",
       runId: "journal-run",
     });
+    store.markWorkspaceResultPending(claim);
+    const appliedManifestRef = active.workspaceBaseManifestRef;
+    store.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
+    expect(store.loadWorkspaceReconciliation(owner)).toMatchObject({
+      appliedManifestRef,
+    });
     store.updateWorkspaceBaseManifest({ claim, manifestRef: currentManifestRef });
+    expect(store.loadWorkspaceReconciliation(owner)).toMatchObject({
+      appliedManifestRef: currentManifestRef,
+    });
+    store.acceptWorkspaceResult(claim);
     expect(store.loadWorkspaceReconciliation(owner)).toBeUndefined();
   });
 });

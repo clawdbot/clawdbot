@@ -5,8 +5,8 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
-import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -33,8 +33,6 @@ export type ConfigSetOptions = {
   providerEnv?: string[];
   providerPassEnv?: string[];
   providerTrustedDir?: string[];
-  providerAllowInsecurePath?: boolean;
-  providerAllowSymlinkCommand?: boolean;
   batchJson?: string;
   batchFile?: string;
 };
@@ -48,12 +46,25 @@ export type ConfigSetBatchEntry = {
 
 const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
-export function readConfigMutationFileSync(filePath: string): string {
+export function readConfigMutationFileSync(
+  filePath: string,
+  sourceLabel: "--batch-file" | "--file",
+): string {
   // These explicit CLI file flags have historically followed user-provided
   // symlinks. Pin the opened descriptor, then bound the read without changing that contract.
   const fd = fs.openSync(filePath, "r");
   try {
-    return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+    try {
+      return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new RangeError(
+          `${sourceLabel} exceeds the 8 MiB supported maximum (${CONFIG_MUTATION_FILE_MAX_BYTES} bytes): ${filePath}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   } finally {
     fs.closeSync(fd);
   }
@@ -84,9 +95,7 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
     opts.providerJsonOnly ||
     opts.providerEnv?.length ||
     opts.providerPassEnv?.length ||
-    opts.providerTrustedDir?.length ||
-    opts.providerAllowInsecurePath ||
-    opts.providerAllowSymlinkCommand,
+    opts.providerTrustedDir?.length,
   );
 }
 
@@ -102,6 +111,9 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   const parsed = parseJson5Raw(raw, sourceLabel);
   if (!Array.isArray(parsed)) {
     throw new Error(`${sourceLabel} must be a JSON array.`);
+  }
+  if (parsed.length === 0) {
+    throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
   const out: ConfigSetBatchEntry[] = [];
   for (const [index, entry] of parsed.entries()) {
@@ -153,7 +165,7 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   }
   let raw: string;
   try {
-    raw = readConfigMutationFileSync(pathname);
+    raw = readConfigMutationFileSync(pathname, "--batch-file");
   } catch (err) {
     if (hasErrnoCode(err, "ENOENT")) {
       throw new Error(`--batch-file not found: ${pathname}`, { cause: err });

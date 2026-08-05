@@ -7,13 +7,20 @@ import {
   normalizeCommandBody,
   resolveTextCommand,
 } from "../commands-registry.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import { shouldHandleTextCommands } from "../commands-text-routing.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { resolveCommandContextText } from "./context-text.js";
 import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 
 export function shouldBypassPluginOwnedBindingForCommand(
-  ctx: FinalizedMsgContext,
+  ctx: FinalizedRuntimeMsgContext,
   cfg: OpenClawConfig,
 ): boolean {
+  // Command authorization is a trust boundary. Reject malformed runtime context
+  // before command-turn normalization can coerce a truthy value.
+  if (ctx.CommandAuthorized !== undefined && typeof ctx.CommandAuthorized !== "boolean") {
+    return false;
+  }
   const commandTurn = resolveCommandTurnContext(ctx);
   if (
     (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
@@ -24,13 +31,35 @@ export function shouldBypassPluginOwnedBindingForCommand(
   if (isNativeCommandTurn(commandTurn) && commandTurn.authorized) {
     return true;
   }
-  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
+  const isAuthorizedTextCommand =
+    (commandTurn.kind === "text-slash" && commandTurn.authorized) ||
+    (commandTurn.kind === "normal" &&
+      typeof ctx.CommandAuthorized === "boolean" &&
+      ctx.CommandAuthorized);
+  if (
+    !isAuthorizedTextCommand ||
+    !shouldHandleTextCommands({
+      cfg,
+      surface: ctx.Surface ?? ctx.Provider ?? "",
+      commandSource: ctx.CommandSource,
+    })
+  ) {
     return false;
   }
-  const commandBody = normalizeCommandBody(commandTurn.body ?? ctx.CommandBody ?? "", {
+  const commandBody = normalizeCommandBody(commandTurn.body ?? resolveCommandContextText(ctx), {
     botUsername: ctx.BotUsername,
   });
   if (!commandBody.startsWith("/")) {
+    return false;
+  }
+  if (
+    matchPluginCommand(commandBody, {
+      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
+    })
+  ) {
+    return true;
+  }
+  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
     return false;
   }
   if (resolveTextCommand(commandBody)) {
@@ -45,9 +74,5 @@ export function shouldBypassPluginOwnedBindingForCommand(
   ) {
     return true;
   }
-  return Boolean(
-    matchPluginCommand(commandBody, {
-      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
-    }),
-  );
+  return false;
 }

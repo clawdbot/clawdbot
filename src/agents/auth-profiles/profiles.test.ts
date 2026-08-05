@@ -20,6 +20,7 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
   promoteAuthProfileInOrder,
+  removeAuthProfilesAcrossOwnerStores,
   removeAuthProfilesWithLock,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
@@ -1326,6 +1327,43 @@ describe("promoteAuthProfileInOrder", () => {
       });
       expect(loadAuthProfileStoreForRuntime(agentDir).profiles["openrouter:oauth"]).toBeUndefined();
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood).toBeUndefined();
+    });
+  });
+
+  it("removes an inherited profile from the owning main store too", async () => {
+    await withAuthProfileTestState("openclaw-auth-remove-owner-", async ({ agentDirFor }) => {
+      const mainAgentDir = agentDirFor("main");
+      const customAgentDir = agentDirFor("custom");
+      fs.mkdirSync(mainAgentDir, { recursive: true });
+      fs.mkdirSync(customAgentDir, { recursive: true });
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai",
+        access: "inherited-access",
+        refresh: "inherited-refresh",
+        expires: Date.now() + 60_000,
+      };
+      saveAuthProfileStore(
+        { version: AUTH_STORE_VERSION, profiles: { "openai:shared": credential } },
+        mainAgentDir,
+      );
+      saveAuthProfileStore(
+        { version: AUTH_STORE_VERSION, profiles: { "openai:shared": credential } },
+        customAgentDir,
+      );
+
+      const removed = await removeAuthProfilesAcrossOwnerStores({
+        agentDir: customAgentDir,
+        profileIds: ["openai:shared"],
+      });
+
+      expect(removed).toBe(true);
+      expect(
+        loadAuthProfileStoreForRuntime(customAgentDir).profiles["openai:shared"],
+      ).toBeUndefined();
+      expect(
+        loadAuthProfileStoreForRuntime(mainAgentDir).profiles["openai:shared"],
+      ).toBeUndefined();
     });
   });
 

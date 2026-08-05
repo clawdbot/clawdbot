@@ -29,6 +29,12 @@ const plistUnescape = (value: string): string =>
     .replaceAll("&lt;", "<")
     .replaceAll("&amp;", "&");
 
+export function parseLaunchdPlistLabel(contents: string): string | null {
+  const match = contents.match(/<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i);
+  const rawLabel = match?.at(1);
+  return rawLabel === undefined ? null : plistUnescape(rawLabel).trim() || null;
+}
+
 type ReadLaunchAgentProgramArgumentsOptions = {
   expectedEnvironmentWrapperPath?: string;
   expectedEnvironmentFilePath?: string;

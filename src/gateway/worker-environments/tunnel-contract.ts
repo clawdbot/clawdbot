@@ -1,7 +1,17 @@
 import type { SpawnResult } from "../../process/exec.js";
-import type { WorkerWorkspaceReconciliationJournalAdapter } from "./workspace-reconcile.js";
+import type {
+  WorkerWorkspaceApplyResult,
+  WorkerWorkspaceReconciliationJournalAdapter,
+} from "./workspace-reconcile.js";
 
 export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+
+export class WorkerTunnelOwnerDisconnectedError extends Error {
+  constructor() {
+    super("Worker tunnel owner is no longer connected");
+    this.name = "WorkerTunnelOwnerDisconnectedError";
+  }
+}
 
 export type WorkerTunnelRequest = {
   environmentId: string;
@@ -47,6 +57,8 @@ export type WorkerWorkspaceReconcileResult = {
   verifyLocalStable(): Promise<void>;
   /** Apply the prepared candidate locally without making it restart-authoritative. */
   applyPreparedStagedResult?(): Promise<void>;
+  /** Return the accepted local manifest and any keep-local conflicts after apply. */
+  getAppliedWorkspaceResult?(): WorkerWorkspaceApplyResult | undefined;
   /** Publish the verified candidate for restart recovery. */
   publishStagedResult?(): Promise<void>;
   discardPreparedStagedResult?(): Promise<void>;

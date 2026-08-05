@@ -2,11 +2,11 @@ title: Docker gateway network access
 
 scenario:
   id: docker-gateway-network
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.container-operations
+  surface: containers
+  category: containers.container-operations
   coverage:
     primary:
-      - docker.compose-network-access
+      - containers.docker-compose-network-access
   objective: Verify container-network access and the packaged Gateway suspension lifecycle, including loopback admin control and same-container restart recovery.
   successCriteria:
     - The gateway container starts on an isolated Docker network with token auth.

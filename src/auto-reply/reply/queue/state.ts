@@ -1,5 +1,6 @@
 // Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import {
@@ -37,6 +38,8 @@ type FollowupQueueState = {
     count: number;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];
+    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
+    summaryLines: string[];
     /** Weak source mapping keeps concurrent summary consumption identity-safe. */
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
@@ -64,6 +67,22 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
+export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
+  const seen = new Set<string>();
+  for (const key of keys) {
+    const cleaned = normalizeOptionalString(key);
+    if (!cleaned || seen.has(cleaned)) {
+      continue;
+    }
+    seen.add(cleaned);
+    const queue = getExistingFollowupQueue(cleaned);
+    if (queue && (queue.items.length > 0 || queue.inFlight.size > 0 || queue.droppedCount > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 type SummaryElisionCapState = Pick<
   FollowupQueueState,
   "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions"
@@ -85,6 +104,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
         continue;
       }
       const [source] = entry.sources.splice(sourceIndex, 1);
+      entry.summaryLines.splice(sourceIndex, 1);
       entry.count = entry.sources.length;
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
@@ -185,6 +205,7 @@ export function refreshQueuedFollowupSession(params: {
   nextSessionFile?: string;
   nextProvider?: string;
   nextModel?: string;
+  nextRouteResolution?: ModelFallbackRouteResolution;
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
@@ -206,10 +227,10 @@ export function refreshQueuedFollowupSession(params: {
     Boolean(params.previousSessionId) &&
     Boolean(params.nextSessionId) &&
     params.previousSessionId !== params.nextSessionId;
+  const hasNextModelRoute =
+    typeof params.nextProvider === "string" || typeof params.nextModel === "string";
   const shouldRewriteModelSelection =
-    typeof params.nextProvider === "string" ||
-    typeof params.nextModel === "string" ||
-    Object.hasOwn(params, "nextModelOverrideSource");
+    hasNextModelRoute || Object.hasOwn(params, "nextModelOverrideSource");
   const shouldRewriteSelection =
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
@@ -237,6 +258,9 @@ export function refreshQueuedFollowupSession(params: {
       if (typeof params.nextModel === "string") {
         run.model = params.nextModel;
       }
+      if (hasNextModelRoute) {
+        run.requestedRouteResolution = params.nextRouteResolution ?? "raw";
+      }
       if (shouldRewriteModelSelection) {
         delete run.hasAutoFallbackProvenance;
       }
@@ -251,6 +275,7 @@ export function refreshQueuedFollowupSession(params: {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
       }
       if (params.nextThinking) {
+        run.thinkingCatalog = params.nextThinking.catalog;
         const explicitLevel = normalizeThinkLevel(params.nextThinking.level);
         run.thinkLevel = explicitLevel
           ? resolveSupportedThinkingLevel({

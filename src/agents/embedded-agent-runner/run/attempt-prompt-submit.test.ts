@@ -132,4 +132,72 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(activeSession.agent.streamFn).toBe(baseStreamFn);
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
   });
+
+  it("caps oversized MCP tool results at the provider boundary", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const oversized = "x".repeat(5 * 1024 * 1024);
+    const small = "small MCP result";
+    activeSession.agent.state.messages = [
+      { role: "user", content: "call MCP tools", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "mcp-huge-call",
+        toolName: "huge__return_text",
+        content: [{ type: "text", text: oversized }],
+        isError: false,
+        details: { mcpServer: "huge", mcpTool: "return_text" },
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "mcp-small-call",
+        toolName: "huge__small_text",
+        content: [{ type: "text", text: small }],
+        isError: false,
+        details: { mcpServer: "huge", mcpTool: "small_text" },
+        timestamp: 3,
+      },
+    ] as AgentMessage[];
+    let providerMessages: AgentMessage[] = [];
+    activeSession.agent.streamFn = ((_model, context) => {
+      providerMessages = (context as { messages: AgentMessage[] }).messages;
+      return undefined as never;
+    }) as StreamFn;
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+      },
+    });
+
+    type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+    const hugeResult = providerMessages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "mcp-huge-call",
+    );
+    const smallResult = providerMessages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "mcp-small-call",
+    );
+    expect(hugeResult?.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/more characters truncated/),
+    });
+    expect(hugeResult?.content[0]?.type === "text" ? hugeResult.content[0].text.length : 0).toBe(
+      input.toolResultMaxChars,
+    );
+    expect(smallResult?.content).toEqual([{ type: "text", text: small }]);
+    const originalHugeResult = activeSession.messages[1];
+    expect(originalHugeResult?.role).toBe("toolResult");
+    expect(
+      originalHugeResult?.role === "toolResult" ? originalHugeResult.content : undefined,
+    ).toEqual([{ type: "text", text: oversized }]);
+  });
 });
