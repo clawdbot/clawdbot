@@ -21,7 +21,7 @@ export type OfficialExternalPluginRepairHint = {
   repairHint: string;
 };
 
-export type MissingOfficialExternalChannelPluginRepairHint = OfficialExternalPluginRepairHint & {
+type MissingOfficialExternalChannelPluginRepairHint = OfficialExternalPluginRepairHint & {
   channelId: string;
 };
 
