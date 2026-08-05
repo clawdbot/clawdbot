@@ -274,6 +274,27 @@ describe("legacy channel pairing state migration", () => {
     });
   });
 
+  it("leaves nonliteral default filename suffixes unresolved", async () => {
+    const { env, sourceDir } = await createFixture();
+    const filePath = path.join(sourceDir, "telegram-DEFAULT-allowFrom.json");
+    writeJson(filePath, { version: 1, allowFrom: ["1003"] });
+
+    const detected = detectLegacyChannelPairingState({
+      sourceDir,
+      configuredAccountIds: { telegram: ["default"] },
+    });
+    const result = migrateLegacyChannelPairingState({ detected, env });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Legacy channel allowFrom channel/account is unresolved; left in place",
+      ),
+    ]);
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({});
+  });
+
   it("does not infer default accounts for external channels", async () => {
     const { env, sourceDir } = await createFixture();
     const filePath = path.join(sourceDir, "custom-channel-default-allowFrom.json");

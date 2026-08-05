@@ -138,6 +138,9 @@ function parseAllowFromFilename(
     const matchingAccountIds = (accountIds[channel] ?? []).filter((accountId) => {
       try {
         safeAccountKey(accountId);
+        if (accountId === DEFAULT_ACCOUNT_ID && accountKey !== DEFAULT_ACCOUNT_ID) {
+          return false;
+        }
         return accountId.toLowerCase() === accountKey.toLowerCase();
       } catch {
         // One invalid configured candidate must not abort every legacy migration.
