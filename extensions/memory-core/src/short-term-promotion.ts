@@ -149,7 +149,9 @@ export async function rankShortTermPromotionCandidates(
 
     const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
-    const uniqueQueries = entry.queryHashes?.length ?? 0;
+    // Only provenance-qualified interactive recalls count as user-query
+    // diversity. Legacy queryHashes are ambiguous and therefore fail closed.
+    const uniqueQueries = entry.userQueryHashes?.length ?? 0;
     // Recall-day spacing has its own consolidation component below; it must not
     // substitute for distinct query contexts at the query-diversity gate.
     if (uniqueQueries < minUniqueQueries) {
