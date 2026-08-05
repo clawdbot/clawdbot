@@ -1852,6 +1852,7 @@
                     "pages": [
                       "cli/approvals",
                       "cli/browser",
+                      "cli/commands",
                       "cli/cron",
                       "cli/flows",
                       "cli/node",
