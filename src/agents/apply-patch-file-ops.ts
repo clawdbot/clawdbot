@@ -1,7 +1,15 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
-import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
-import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
+import path from "node:path";
+import {
+  openRootFileFollowingParents,
+  type RootFileOpenResult,
+} from "../infra/boundary-file-read.js";
+import {
+  canonicalPathFromExistingAncestor,
+  FsSafeError,
+  root as fsRoot,
+} from "../infra/fs-safe.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -100,11 +108,29 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
   }
 
   const rootPromise = fsRoot(options.cwd);
+  // Mirror the read path: canonicalize contained symlink parents so a patch
+  // that reads through a directory alias can also mutate through it. Escaping
+  // aliases still fail the containment check against the canonical root.
+  const toCanonicalMutationRelative = async (
+    filePath: string,
+    pathOptions?: { allowRoot?: boolean },
+  ): Promise<string> => {
+    const absolute = path.resolve(options.cwd, filePath);
+    let canonicalAbsolute = absolute;
+    try {
+      const canonicalParent = await canonicalPathFromExistingAncestor(path.dirname(absolute));
+      canonicalAbsolute = path.join(canonicalParent, path.basename(absolute));
+    } catch {
+      // Keep the lexical path; the containment check below owns the failure.
+    }
+    const canonicalCwd = await fs.realpath(options.cwd).catch(() => options.cwd);
+    return toRelativeSandboxPath(canonicalCwd, canonicalAbsolute, pathOptions);
+  };
   return withPatchMemoryWriteProvenance({
     observer: options.memoryWriteProvenance,
     operations: {
       readFile: async (filePath) => {
-        const opened = await openRootFile({
+        const opened = await openRootFileFollowingParents({
           absolutePath: filePath,
           rootPath: options.cwd,
           boundaryLabel: "workspace root",
@@ -117,11 +143,11 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
         }
       },
       writeFile: async (filePath, content) => {
-        const relative = toRelativeSandboxPath(options.cwd, filePath);
+        const relative = await toCanonicalMutationRelative(filePath);
         await (await rootPromise).write(relative, content, { encoding: "utf8" });
       },
       createFileExclusive: async (filePath, content) => {
-        const relative = toRelativeSandboxPath(options.cwd, filePath);
+        const relative = await toCanonicalMutationRelative(filePath);
         try {
           await (await rootPromise).create(relative, content, { encoding: "utf8" });
           return "created";
@@ -139,11 +165,11 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
         }
       },
       remove: async (filePath) => {
-        const relative = toRelativeSandboxPath(options.cwd, filePath);
+        const relative = await toCanonicalMutationRelative(filePath);
         await (await rootPromise).remove(relative);
       },
       mkdirp: async (dir) => {
-        const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
+        const relative = await toCanonicalMutationRelative(dir, { allowRoot: true });
         const root = await rootPromise;
         if (relative === "" || relative === ".") {
           await root.ensureRoot();

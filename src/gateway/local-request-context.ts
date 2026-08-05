@@ -137,6 +137,9 @@ function createLocalGatewayRequestContext(
         config: params.getRuntimeConfig(),
         readOnly: true,
       })?.entries,
+    readChatMetadata: async () => {
+      throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
+    },
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,

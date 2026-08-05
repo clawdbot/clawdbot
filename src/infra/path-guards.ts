@@ -22,7 +22,9 @@ export {
 export function normalizeWindowsPathPreservingCase(input: string): string {
   // Mirrors normalizeWindowsPathForComparison step for step, minus the lowercasing,
   // so the only behavior that shifts is the case of the characters handed back.
-  const normalized = path.win32.normalize(input).trim();
+  // fs-safe 0.5.2 keeps surrounding whitespace (it can disguise reserved names),
+  // so this mirror must not trim either.
+  const normalized = path.win32.normalize(input);
   if (!normalized.startsWith("\\\\?\\")) {
     return normalized;
   }

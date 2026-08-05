@@ -69,6 +69,7 @@ import {
   validateJsonSchemaValue,
 } from "./browser-tool.runtime.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
+import { resolveBrowserNavigationTimeoutMs } from "./browser/act-policy.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
@@ -846,6 +847,10 @@ export function createBrowserTool(opts?: {
         case "navigate": {
           const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
+          const timeoutMs =
+            requestedTimeoutMs === undefined
+              ? undefined
+              : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
           const result = proxyRequest
             ? await proxyRequest({
                 method: "POST",
@@ -854,11 +859,14 @@ export function createBrowserTool(opts?: {
                 body: {
                   url: targetUrl,
                   targetId,
+                  timeoutMs,
                 },
+                timeoutMs,
               })
             : await browserToolDeps.browserNavigate(baseUrl, {
                 url: targetUrl,
                 targetId,
+                timeoutMs,
                 profile,
               });
           const navigatedTargetId =

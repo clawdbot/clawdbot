@@ -415,7 +415,10 @@ When `appGuidedDiscovery` is true, the matching provider auth method must expose
 `appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
 read-only: no login, model pull, download, or config write. Preparation rechecks
 the exact selected model and returns a config proposal; OpenClaw live-tests that
-proposal in isolation and commits it only after success.
+proposal in isolation and commits it only after success. A provider can also
+expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
+when the local service is reachable but no model qualifies for automatic setup.
+The availability probe is also read-only.
 
 ## commandAliases reference
 
@@ -1142,7 +1145,7 @@ At startup/reload, OpenClaw resolves that provider by loading current plugin man
 
 Only `source: "exec"` presets are currently supported. `command` must be `${node}`, and `args[0]` must be a `./` plugin-root-relative resolver script. OpenClaw materializes it at startup/reload to the current Node executable and the absolute in-plugin script path. Node options such as `--require`, `--import`, `--loader`, `--env-file`, `--eval`, and `--print` are not part of the manifest preset contract. Operators who need non-Node commands can configure standalone manual exec providers directly.
 
-OpenClaw derives `trustedDirs` for manifest presets from the plugin root and, for `${node}` presets, the current Node executable directory. Manifest-authored `trustedDirs` are ignored. Other exec provider options such as `timeoutMs`, `noOutputTimeoutMs`, `maxOutputBytes`, `jsonOnly`, `env`, `passEnv`, and `allowInsecurePath` pass through to the normal SecretRef exec provider config.
+OpenClaw derives `trustedDirs` for manifest presets from the plugin root and, for `${node}` presets, the current Node executable directory. Manifest-authored `trustedDirs` are ignored. Other exec provider options such as `timeoutMs`, `noOutputTimeoutMs`, `maxOutputBytes`, `jsonOnly`, `env`, and `passEnv` pass through to the normal SecretRef exec provider config.
 
 ## modelPricing reference
 

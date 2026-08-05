@@ -924,6 +924,52 @@ describe("createVideoGenerateTool", () => {
     expect(delivered.reaction).toBeUndefined();
   });
 
+  it("rolls back earlier video saves after sequential persistence fails", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        { buffer: Buffer.from("saved"), mimeType: "video/mp4", fileName: "saved.mp4" },
+        { buffer: Buffer.from("failed"), mimeType: "video/mp4", fileName: "failed.mp4" },
+      ],
+    });
+    const terminalError = new Error("video persistence failed");
+    const savedMedia = {
+      path: "/tmp/saved.mp4",
+      id: "saved.mp4",
+      size: 5,
+      contentType: "video/mp4",
+    };
+    const saveMediaBuffer = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValueOnce(savedMedia)
+      .mockRejectedValueOnce(terminalError);
+    const deleteMediaBuffer = vi
+      .spyOn(mediaStore, "deleteMediaBuffer")
+      .mockRejectedValueOnce(new Error("video cleanup failed"));
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await expect(tool.execute("call-partial-save", { prompt: "two videos" })).rejects.toBe(
+      terminalError,
+    );
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(2);
+    expect(deleteMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("saved.mp4", "tool-video-generation");
+  });
+
   it("falls back to the provider URL when generated video persistence exceeds the media cap", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "fal",
@@ -1595,7 +1641,7 @@ describe("createVideoGenerateTool", () => {
     });
   });
 
-  it("rejects image-to-video when the provider disables that mode", async () => {
+  it("defers disabled primary modes to the fallback-aware runtime", async () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
       {
         id: "video-plugin",
@@ -1611,7 +1657,7 @@ describe("createVideoGenerateTool", () => {
         }),
       },
     ]);
-    const generateSpy = vi.spyOn(videoGenerationRuntime, "generateVideo");
+    const generateSpy = mockSavedVideoResult();
 
     const tool = createVideoGenerateTool({
       config: asConfig({
@@ -1626,13 +1672,64 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    await expect(
-      tool.execute("call-1", {
-        prompt: "lobster timelapse",
-        image: "data:image/png;base64,cG5n",
+    await tool.execute("call-1", {
+      prompt: "lobster timelapse",
+      image: "data:image/png;base64,cG5n",
+    });
+
+    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
+    expect(request.inputImages).toHaveLength(1);
+  });
+
+  it("defers model-specific reference limits to runtime overlays", async () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "video-plugin",
+        defaultModel: "r2v",
+        models: ["r2v"],
+        capabilities: {
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 1,
+          },
+        },
+        catalogByModel: {
+          r2v: {
+            modes: ["imageToVideo"],
+            capabilities: {
+              imageToVideo: {
+                enabled: true,
+                maxInputImages: 5,
+              },
+            },
+          },
+        },
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/r2v" },
+          },
+        },
       }),
-    ).rejects.toThrow("video-plugin does not support image-to-video reference inputs.");
-    expect(generateSpy).not.toHaveBeenCalled();
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-r2v", {
+      prompt: "animate both references",
+      images: ["data:image/png;base64,cG5n", "data:image/png;base64,cG5nMg=="],
+    });
+
+    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
+    expect(request.inputImages).toHaveLength(2);
   });
 
   it("warns when optional provider overrides are ignored", async () => {

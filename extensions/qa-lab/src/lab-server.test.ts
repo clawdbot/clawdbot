@@ -457,6 +457,7 @@ describe("qa-lab server", () => {
       expect.objectContaining({
         alternateModel: "openai/gpt-5.6-luna",
         channelDriver: "crabline",
+        controlUiEnabled: true,
         primaryModel: "openai/gpt-5.6-luna",
         providerMode: "live-frontier",
         scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],

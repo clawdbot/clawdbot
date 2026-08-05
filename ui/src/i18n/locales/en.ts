@@ -832,6 +832,7 @@ export const en: TranslationMap = {
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
     forkSession: "Fork",
+    forkedSession: "Forked thread",
     openChat: "Open chat",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
@@ -999,6 +1000,7 @@ export const en: TranslationMap = {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
+      updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
       title: "Channels",
@@ -4949,6 +4951,11 @@ export const en: TranslationMap = {
       chatOnly: "Chat only",
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
+      loadingModels: "Loading models…",
+      refreshingModels: "Refreshing models…",
+      modelsUnavailable: "Models unavailable",
+      modelsRefreshFailed: "Couldn’t refresh models",
+      noModelsAvailable: "No models available",
       providerModels: "{provider} models",
       resetReasoning: "Reset to default ({level})",
       useDefaultReasoning: "Use default reasoning ({level})",

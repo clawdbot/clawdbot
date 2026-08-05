@@ -801,6 +801,7 @@ export async function startQaLabServer(
               const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
+                controlUiEnabled: true,
                 repoRoot,
                 outputDir: createQaRunOutputDir(repoRoot),
                 channelDriver: selection.channelDriver,

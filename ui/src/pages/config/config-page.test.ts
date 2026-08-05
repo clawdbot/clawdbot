@@ -490,12 +490,13 @@ describe("ConfigPage session observer models", () => {
 
 describe("ConfigPage curated mutation eligibility", () => {
   it.each([
-    ["offline", { connected: false }, ["operator.admin"], false],
-    ["read-only operator", { connected: true }, ["operator.read"], false],
-    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false],
-    ["app update", { connected: true }, ["operator.admin"], true],
-    ["idle administrator", { connected: true }, ["operator.admin"], false],
-  ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning) => {
+    ["offline", { connected: false }, ["operator.admin"], false, true],
+    ["read-only operator", { connected: true }, ["operator.read"], false, true],
+    ["config.set absent", { connected: true }, ["operator.admin"], false, false],
+    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false, true],
+    ["app update", { connected: true }, ["operator.admin"], true, true],
+    ["idle administrator", { connected: true }, ["operator.admin"], false, true],
+  ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning, canSet) => {
     const page = new ConfigPage();
     const state = page as unknown as {
       context: ApplicationContext;
@@ -503,6 +504,7 @@ describe("ConfigPage curated mutation eligibility", () => {
     };
     state.context = {
       runtimeConfig: {
+        canSet,
         state: {
           configLoading: false,
           configSaving: false,

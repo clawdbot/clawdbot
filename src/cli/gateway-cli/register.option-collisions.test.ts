@@ -135,6 +135,23 @@ function firstGatewayStatusCall() {
   return gatewayStatusCommand.mock.calls[0] ?? [];
 }
 
+function expectLocalGatewayCall(method: string, port: number, params?: unknown) {
+  expect(defaultRuntime.error.mock.calls).toEqual([]);
+  expect(callGatewayCli).toHaveBeenCalledTimes(1);
+  const [actualMethod, opts, actualParams] = firstGatewayCall();
+  expect(actualMethod).toBe(method);
+  if (params !== undefined) {
+    expect(actualParams).toEqual(params);
+  }
+  const gatewayOpts = opts as
+    | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
+    | undefined;
+  expect(gatewayOpts?.localPortOverride).toBe(port);
+  expect(gatewayOpts?.config).toEqual({
+    gateway: { mode: "local", port },
+  });
+}
+
 describe("gateway register option collisions", () => {
   const sharedProgram: Command = new Command();
 
@@ -186,6 +203,20 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "projects gateway call --port into local config",
+      argv: ["gateway", "call", "health", "--port", "19084", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("health", 19084, {});
+      },
+    },
+    {
+      name: "inherits parent --port for gateway call",
+      argv: ["gateway", "--port", "19085", "call", "health", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("health", 19085);
+      },
+    },
+    {
       name: "forwards --token to gateway probe when parent and child option names collide",
       argv: ["gateway", "probe", "--token", "tok_probe", "--json"],
       assert: () => {
@@ -217,34 +248,14 @@ describe("gateway register option collisions", () => {
       name: "projects gateway health --port into local config",
       argv: ["gateway", "health", "--port", "19081", "--json"],
       assert: () => {
-        expect(defaultRuntime.error.mock.calls).toEqual([]);
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts] = firstGatewayCall();
-        expect(method).toBe("health");
-        const gatewayOpts = opts as
-          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
-          | undefined;
-        expect(gatewayOpts?.localPortOverride).toBe(19081);
-        expect(gatewayOpts?.config).toEqual({
-          gateway: { mode: "local", port: 19081 },
-        });
+        expectLocalGatewayCall("health", 19081);
       },
     },
     {
       name: "inherits parent --port for gateway health",
       argv: ["gateway", "--port", "19083", "health", "--json"],
       assert: () => {
-        expect(defaultRuntime.error.mock.calls).toEqual([]);
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts] = firstGatewayCall();
-        expect(method).toBe("health");
-        const gatewayOpts = opts as
-          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
-          | undefined;
-        expect(gatewayOpts?.localPortOverride).toBe(19083);
-        expect(gatewayOpts?.config).toEqual({
-          gateway: { mode: "local", port: 19083 },
-        });
+        expectLocalGatewayCall("health", 19083);
       },
     },
     {
@@ -270,6 +281,19 @@ describe("gateway register option collisions", () => {
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it("rejects combining --url and --port for gateway call", async () => {
+    await sharedProgram.parseAsync(
+      ["gateway", "call", "health", "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json"],
+      { from: "user" },
+    );
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      "Gateway call failed: Error: Use either --url or --port, not both.",
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("uses the effective local port config for gateway health auth diagnostics", async () => {

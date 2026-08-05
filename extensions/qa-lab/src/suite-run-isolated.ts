@@ -139,8 +139,8 @@ export async function runQaFlowSuiteIsolated(
     if (params?.channelDriver === "live") {
       // The parent only renders aggregate artifacts. Release its live credentials
       // before child workers acquire the same exclusive transport lease.
-      parentTransportCleaned = true;
       await transportFactoryResult.cleanupWithoutGateway();
+      parentTransportCleaned = true;
     }
     updateScenarioRun();
     const workerStartStaggerMs =

@@ -763,6 +763,24 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("claims invalid encoded session keys on a listening Gateway", async () => {
+    await withGatewayHarness(async (harness) => {
+      for (const encodedSessionKey of ["%20", "%zz"]) {
+        const response = await fetch(
+          `http://127.0.0.1:${harness.port}/sessions/${encodedSessionKey}/history`,
+        );
+        const body = await response.json();
+        expect(response.status).toBe(400);
+        expect(body).toEqual({
+          error: {
+            type: "invalid_request_error",
+            message: "invalid session key",
+          },
+        });
+      }
+    });
+  });
+
   test("keeps standalone delivery-mirror rows in direct REST history", async () => {
     const { storePath } = await seedSession({ text: "visible history" });
     await appendTranscriptMessage({

@@ -38,7 +38,7 @@ install. Channels marked "official plugin" install with one command
 - [Reef](/channels/reef) - Reef channel setup: guarded, end-to-end-encrypted messaging between OpenClaw agents of different people (bundled plugin).
 - [Signal](/channels/signal) - Signal support via signal-cli (native daemon or bbernhard container), setup paths, and number model (official plugin).
 - [Slack](/channels/slack) - Slack setup and runtime behavior (Socket Mode, HTTP Request URLs, and relay mode) (official plugin).
-- [SMS](/channels/sms) - Twilio SMS channel setup, access controls, and webhook configuration (official plugin).
+- [SMS](/channels/sms) - Twilio SMS/MMS setup, access controls, webhooks, and delivery status (official plugin).
 - [Synology Chat](/channels/synology-chat) - Synology Chat webhook setup and OpenClaw config (official plugin).
 - [Telegram](/channels/telegram) - Telegram bot support status, capabilities, and configuration (bundled plugin).
 - [Tlon](/channels/tlon) - Tlon/Urbit support status, capabilities, and configuration (official plugin).

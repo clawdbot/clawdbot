@@ -14,6 +14,7 @@ import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
   NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  QUEUE_CAP_REJECTION_TEXT,
 } from "./dispatch-from-config.payloads.js";
 import {
   clearPendingFinalDeliveryAfterSuccess,
@@ -36,6 +37,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     isRoutedReplyDelivered,
     markInboundDedupeReplayUnsafe,
     noVisibleReplyFallbackDirected,
+    pendingContinuation,
     replyResult,
     replyRoute,
     routeReplyToOriginating,
@@ -265,7 +267,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   // ledger intentionally does not own. Directedness gates both the fallback and
   // eligibility: only a turn that positively addressed the bot may surface a
   // visible failure notice.
-  const replyAcceptedByActiveRun = state.replyOperationRunState.admission?.status === "accepted";
+  const replyAdmission = state.replyOperationRunState.admission;
+  const replyAcceptedByActiveRun = replyAdmission?.status === "accepted";
+  const queueCapRejected =
+    replyAdmission?.status === "skipped" && replyAdmission.reason === "queue-cap";
   const noVisibleReplyFallbackAllowed = () =>
     noVisibleReplyFallbackDirected &&
     !suppressDelivery &&
@@ -273,6 +278,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     state.sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
     !deliberateSilentTerminalReply &&
+    !pendingContinuation &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery() &&
@@ -288,14 +294,16 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
-  // The agent-result classifier owns terminal silence; carry that fact here
-  // because reply payloads are filtered projections and cannot safely rederive it.
+  // The agent-result classifier owns deliberate silence and pending continuation;
+  // carry those facts here because filtered reply payloads cannot safely rederive either.
   // An aborted or timed-out settle leaves delivery state unknown; admission
   // then keeps its legacy trust and the turn ends without a fallback.
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
     try {
       throwIfDispatchOperationAborted();
-      const fallbackPayload: ReplyPayload = { text: NO_VISIBLE_REPLY_FALLBACK_TEXT };
+      const fallbackPayload: ReplyPayload = {
+        text: queueCapRejected ? QUEUE_CAP_REJECTION_TEXT : NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      };
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),
         kind: "final",
@@ -345,14 +353,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   counts.final += routedFinalCount;
   state.commitInboundDedupeIfClaimed();
-  state.recordAgentDispatchCompleted("completed");
-  state.recordProcessed(
-    "completed",
-    state.bindingState.pluginFallbackReason
-      ? { reason: state.bindingState.pluginFallbackReason }
-      : undefined,
+  const dispatchOutcome = queueCapRejected ? "skipped" : "completed";
+  const dispatchReason = queueCapRejected ? "queue-cap" : state.bindingState.pluginFallbackReason;
+  state.recordAgentDispatchCompleted(
+    dispatchOutcome,
+    dispatchReason ? { reason: dispatchReason } : undefined,
   );
-  state.markIdle("message_completed");
+  state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
+  state.markIdle(queueCapRejected ? "message_queue_cap_rejected" : "message_completed");
   state.completeDispatchReplyOperation();
   return {
     status: "complete" as const,
@@ -375,7 +383,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !getObservedReplyDelivery() &&
       !replyAcceptedByActiveRun &&
       !emptyFinalAllowedAsSilent &&
-      !deliberateSilentTerminalReply
+      !deliberateSilentTerminalReply &&
+      !pendingContinuation
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),

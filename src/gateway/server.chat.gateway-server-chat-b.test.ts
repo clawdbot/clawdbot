@@ -26,11 +26,8 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
-import {
-  captureCurrentPluginMetadataSnapshotState,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -904,7 +901,14 @@ describe("gateway server chat", () => {
           }),
         ]),
       );
-      expect(startup.payload?.metadata?.commands).toBeUndefined();
+      expect(startup.payload?.metadata?.commands).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "model",
+            textAliases: expect.arrayContaining(["/model"]),
+          }),
+        ]),
+      );
       expect(startup.payload?.messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -916,7 +920,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.startup memoizes config projections and invalidates them on config change", async () => {
+  test("chat.startup memoizes agent projections and invalidates them on config change", async () => {
     openDirectChatSession();
     testState.agentConfig = {
       model: { primary: "test-provider/memo-model" },
@@ -957,29 +961,24 @@ describe("gateway server chat", () => {
         expect(responses[0]?.ok).toBe(true);
         return responses[0]?.payload as {
           agentsList?: { agents?: Array<{ id?: string; name?: string }> };
-          metadata?: { models?: Array<{ id?: string; name?: string }> };
         };
       };
 
       const first = await requestStartup();
       const second = await requestStartup();
       expect(second.agentsList).toBe(first.agentsList);
-      expect(second.metadata).toBe(first.metadata);
 
       runtimeConfig = { ...runtimeConfig, logging: { level: "debug" } };
       const staleCatalog = await requestStartup();
-      expect(staleCatalog.metadata).toBeUndefined();
 
       catalogConfig = runtimeConfig;
       const afterReload = await requestStartup();
       expect(afterReload.agentsList).not.toBe(first.agentsList);
       expect(afterReload.agentsList).not.toBe(staleCatalog.agentsList);
-      expect(afterReload.metadata).not.toBe(first.metadata);
 
       catalog = [{ id: "memo-model", name: "Refreshed Memo Model", provider: "test-provider" }];
       const afterCatalogRefresh = await requestStartup();
       expect(afterCatalogRefresh.agentsList).not.toBe(afterReload.agentsList);
-      expect(afterCatalogRefresh.metadata).not.toBe(afterReload.metadata);
     } finally {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
@@ -1071,68 +1070,6 @@ describe("gateway server chat", () => {
       expect(
         (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
       ).toBe(undefined);
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
-    } finally {
-      testState.sessionStorePath = undefined;
-    }
-  });
-
-  test("chat.startup keeps model metadata for an equivalent config replacement", async () => {
-    const initialConfig = {
-      agents: {
-        defaults: { models: { "test/initial": {} } },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
-    const equivalentConfig = structuredClone(initialConfig);
-    let currentConfig = initialConfig;
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => currentConfig,
-      loadGatewayModelCatalogSnapshot: vi.fn(async () => {
-        currentConfig = equivalentConfig;
-        return {
-          agentId: "main",
-          agentDir: "/tmp/chat-main-agent",
-          workspaceDir: "/tmp/chat-main-workspace",
-          config: initialConfig,
-          entries: [
-            {
-              id: "initial",
-              name: "Catalog Initial",
-              provider: "test",
-              contextWindow: 123_456,
-            },
-          ],
-          routeVariants: [],
-        };
-      }),
-    });
-    openDirectChatSession();
-    try {
-      await writeSessionStore({
-        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
-      });
-      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      await callDirectChat("chat.startup", {
-        id: "startup-config-equivalent",
-        params: { sessionKey: "main" },
-        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
-        context,
-      });
-
-      expect(responses[0]?.ok).toBe(true);
-      expect(
-        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
-      ).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "initial",
-            provider: "test",
-            name: "Catalog Initial",
-            contextWindow: 123_456,
-          }),
-        ]),
-      );
       expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
     } finally {
       testState.sessionStorePath = undefined;
@@ -1238,7 +1175,7 @@ describe("gateway server chat", () => {
         },
       },
       async (state) => {
-        const previousPluginMetadata = captureCurrentPluginMetadataSnapshotState();
+        let releasePluginMetadata: () => boolean = () => false;
         openDirectChatSession();
         try {
           const config = {
@@ -1352,7 +1289,18 @@ describe("gateway server chat", () => {
             entries: [subscriptionRoute],
             routeVariants: [subscriptionRoute, platformRoute],
           };
+          const { loadAuthProfileStoreForRuntime } = await import("../agents/auth-profiles.js");
+          const { resolveAgentDir } = await import("../agents/agent-scope.js");
+          const preparedAuthStore = loadAuthProfileStoreForRuntime(
+            resolveAgentDir(config, "work"),
+            {
+              inheritedAuthDir: resolveAgentDir(config, "main"),
+              readOnly: true,
+            },
+          );
           const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+          const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
+            await import("./server-methods/models-list-result.js");
           const context = createDirectChatContext({
             loadGatewayModelCatalogSnapshot: vi
               .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
@@ -1364,18 +1312,53 @@ describe("gateway server chat", () => {
                 ...catalogSnapshot,
               }),
             getRuntimeConfig: () => config,
+            readChatMetadata: vi.fn(
+              async ({
+                agentId,
+                sessionEntry,
+              }: Parameters<GatewayRequestContext["readChatMetadata"]>[0]) => {
+                const profileId = sessionEntry?.authProfileOverride?.trim();
+                const profileSource = sessionEntry?.authProfileOverrideSource;
+                const legacyUserProfile =
+                  profileSource === undefined &&
+                  sessionEntry?.authProfileOverrideCompactionCount === undefined;
+                const projector = createGatewayAgentModelCatalogProjector({
+                  cfg: config,
+                  agentId,
+                  snapshot: catalogSnapshot,
+                  preparedAuthStore,
+                  ...(profileId ? { preferredProfileId: profileId } : {}),
+                  ...(profileId && (profileSource === "user" || legacyUserProfile)
+                    ? { lockedProfileId: profileId }
+                    : {}),
+                });
+                return {
+                  ...(await buildModelsListResult({
+                    context,
+                    agentId,
+                    params: { view: "configured" },
+                    preloadedCatalog: {
+                      agentId,
+                      config,
+                      snapshot: catalogSnapshot,
+                    },
+                    preloadedOnly: true,
+                    catalogProjector: projector,
+                  })),
+                  swarmEnabled: false,
+                };
+              },
+            ),
           });
-          const { createGatewayAgentModelCatalogProjector } =
-            await import("./server-methods/models-list-result.js");
           const persistedConfig = getRuntimeConfig();
           // Direct handlers bypass Gateway startup, so publish its process-lifecycle handoff once.
           // Otherwise every route projector rediscovers the full plugin metadata graph.
           const pluginMetadata = resolvePluginMetadataSnapshot({ config, env: process.env });
-          setCurrentPluginMetadataSnapshot(pluginMetadata, {
+          releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(pluginMetadata, {
             config,
             compatibleConfigs: [persistedConfig],
             env: process.env,
-          });
+          }).release;
           expect(persistedConfig.auth?.order?.openai).toEqual([
             "openai:api",
             "openai:chatgpt",
@@ -1480,13 +1463,13 @@ describe("gateway server chat", () => {
           }
         } finally {
           testState.sessionStorePath = undefined;
-          restoreCurrentPluginMetadataSnapshotState(previousPluginMetadata);
+          releasePluginMetadata();
         }
       },
     );
   });
 
-  test("chat.startup omits metadata when configured model visibility needs full discovery", async () => {
+  test("chat.startup serves prepared metadata when configured visibility needs full discovery", async () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await writeGatewayConfig({
         agents: {
@@ -1509,12 +1492,19 @@ describe("gateway server chat", () => {
       });
       await connectOk(ws);
 
-      const startup = await rpcReq<{ metadata?: unknown }>(ws, "chat.startup", {
-        sessionKey: "main",
-      });
+      const startup = await rpcReq<{
+        metadata?: { models?: Array<{ id?: string; provider?: string }> };
+      }>(ws, "chat.startup", { sessionKey: "main" });
 
       expect(startup.ok).toBe(true);
-      expect(startup.payload?.metadata).toBeUndefined();
+      expect(startup.payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "gpt-main",
+            provider: "openai",
+          }),
+        ]),
+      );
     });
   });
 
@@ -1566,6 +1556,16 @@ describe("gateway server chat", () => {
       } as unknown as OpenClawConfig;
       await writeGatewayConfig(config);
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const readChatMetadata = vi.fn(async () => ({
+        models: [
+          {
+            id: "MiniMax-M2.7-highspeed",
+            name: "MiniMax M2.7 Highspeed",
+            provider: "minimax",
+          },
+        ],
+        swarmEnabled: false,
+      }));
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
@@ -1594,6 +1594,7 @@ describe("gateway server chat", () => {
             };
           }),
         getRuntimeConfig: () => config,
+        readChatMetadata,
       });
       await callDirectChat("chat.startup", {
         id: "startup-agent-scoped-metadata",
@@ -1605,6 +1606,12 @@ describe("gateway server chat", () => {
       });
 
       expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+      expect(readChatMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "work",
+          sessionEntry: expect.objectContaining({ sessionId: "sess-work" }),
+        }),
+      );
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -1697,6 +1704,80 @@ describe("gateway server chat", () => {
           }),
         ]),
       );
+    });
+  });
+
+  test("chat.metadata preserves configured models when text commands require exec approvals migration", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.6-luna",
+            },
+            models: {
+              "openai/gpt-5.6-luna": {},
+              "openai/gpt-5.6-terra": {},
+            },
+          },
+          entries: {
+            main: { default: true },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [
+                { id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+                { id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
+              ],
+            },
+          },
+        },
+      });
+      await connectOk(ws);
+
+      const legacyExecApprovalsPath = path.join(
+        autoCleanupTempDirs.make("openclaw-chat-metadata-exec-approvals-"),
+        "exec-approvals.json",
+      );
+      const commandsListResult = await import("./server-methods/commands-list-result.js");
+      vi.spyOn(commandsListResult, "buildCommandsListResult").mockImplementationOnce(() => {
+        throw new ExecApprovalsMigrationRequiredError(legacyExecApprovalsPath);
+      });
+
+      const metadata = await rpcReq<{
+        commands?: Array<{ name?: string }>;
+        models?: Array<{ id?: string; provider?: string }>;
+      }>(ws, "chat.metadata", { agentId: "main" });
+
+      expect(metadata.ok).toBe(true);
+      expect(metadata.payload?.commands).toBeUndefined();
+      expect(metadata.payload?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" }),
+          expect.objectContaining({ id: "gpt-5.6-terra", provider: "openai" }),
+        ]),
+      );
+    });
+  });
+
+  test("chat.metadata remains unavailable when configured models fail", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await connectOk(ws);
+      const modelsListResult = await import("./server-methods/models-list-result.js");
+      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValue(
+        new Error("configured model catalog unavailable"),
+      );
+
+      const metadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+
+      expect(metadata.ok).toBe(false);
+      expect(metadata.error).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("configured model catalog unavailable"),
+      });
     });
   });
 
@@ -3903,10 +3984,12 @@ describe("gateway server chat", () => {
         getRuntimeConfig: () => ({}),
       });
       let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
+      let onQueueDisposition: InternalGetReplyOptions["onFollowupQueueDisposition"];
       const dispatchRelease = createDeferred();
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        turnAdoptionLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.turnAdoptionLifecycle;
+        const replyOptions = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+        turnAdoptionLifecycle = replyOptions?.turnAdoptionLifecycle;
+        onQueueDisposition = replyOptions?.onFollowupQueueDisposition;
         turnAdoptionLifecycle?.onDeferred?.();
         await dispatchRelease.promise;
         return {};
@@ -3961,6 +4044,17 @@ describe("gateway server chat", () => {
       );
       expect(finalEvents).toHaveLength(1);
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
+
+      onQueueDisposition?.("queue-cap-old");
+      expect(context.logGateway.info).toHaveBeenCalledWith(
+        "chat queue turn intentionally skipped",
+        {
+          runId: "idem-queued-followup",
+          sessionKey: "agent:main:main",
+          outcome: "skipped",
+          reason: "queue-cap-old",
+        },
+      );
 
       context.dedupe.delete("chat:idem-queued-followup");
       const replayRespond = vi.fn() as RespondFn;

@@ -869,6 +869,33 @@ describe("qa suite", () => {
     });
   });
 
+  it.each([
+    { surface: "channel", explicit: undefined, expected: false },
+    { surface: "channel", explicit: true, expected: true },
+    { surface: "control-ui", explicit: undefined, expected: true },
+    { surface: "control-ui", explicit: false, expected: false },
+  ])(
+    "preserves an explicit Control UI override for isolated $surface scenarios",
+    ({ surface, explicit, expected }) => {
+      const scenario = makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface });
+
+      expect(
+        qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
+          repoRoot: "/repo",
+          outputDir: "/repo/.artifacts/qa-e2e/scenarios/isolated-control-ui-ownership",
+          providerMode: "mock-openai",
+          transportId: "qa-channel",
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          alternateModel: "mock-openai/gpt-5.6-luna-alt",
+          fastMode: true,
+          scenario,
+          startLab: vi.fn(),
+          ...(explicit === undefined ? {} : { input: { controlUiEnabled: explicit } }),
+        }).controlUiEnabled,
+      ).toBe(expected);
+    },
+  );
+
   it("enables Control UI only for Control UI scenarios unless explicitly overridden", () => {
     const channelScenario = makeQaSuiteTestScenario("channel-baseline", { surface: "channel" });
     const controlUiScenario = makeQaSuiteTestScenario("control-ui-roundtrip", {
@@ -891,6 +918,12 @@ describe("qa suite", () => {
         scenarios: [channelScenario],
       }),
     ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        explicit: false,
+        scenarios: [controlUiScenario],
+      }),
+    ).toBe(false);
   });
 
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {

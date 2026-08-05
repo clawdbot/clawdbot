@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
-import { cleanOldMedia } from "../media/store.js";
+import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
@@ -32,6 +32,13 @@ import {
   HEALTH_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
+import {
+  MEDIA_CLEANUP_STOP_TIMEOUT_MS,
+  type MediaCleanupStopResult,
+  registerMediaCleanupDrain,
+  waitForMediaCleanupDrains,
+  waitForMediaCleanupDrainsToSettle,
+} from "./server-media-cleanup-lifecycle.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
@@ -73,6 +80,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
+  runManagedOutgoingMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
   runSkillCuratorSweep?: () => Promise<unknown>;
   registerSkillUsageTracking?: () => () => void;
@@ -80,7 +88,8 @@ export function startGatewayMaintenanceTimers(params: {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
-  mediaCleanup: ReturnType<typeof setInterval> | null;
+  startMediaCleanup: () => void;
+  stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval>;
   skillCuratorCleanup: () => void;
 } {
@@ -309,23 +318,38 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
-  if (typeof params.mediaCleanupTtlMs !== "number") {
-    return {
-      tickInterval,
-      healthInterval,
-      dedupeCleanup,
-      mediaCleanup: null,
-      worktreeCleanup,
-      skillCuratorCleanup,
-    };
-  }
+  const playbackTranscodeCacheCleanupLoader = createLazyPromiseLoader(async () => {
+    try {
+      await prunePlaybackTranscodeCache();
+    } catch (err) {
+      params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
+    } finally {
+      playbackTranscodeCacheCleanupLoader.clear();
+    }
+  });
+  const runManagedOutgoingMediaGc =
+    params.runManagedOutgoingMediaGc ??
+    (async () => {
+      const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
+      return await cleanupManagedOutgoingMediaRecords();
+    });
+  const managedOutgoingCleanupLoader = createLazyPromiseLoader(async () => {
+    try {
+      await runManagedOutgoingMediaGc();
+    } catch (err) {
+      params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
+    } finally {
+      managedOutgoingCleanupLoader.clear();
+    }
+  });
 
   let mediaCleanupInFlight: Promise<void> | null = null;
-  const runMediaCleanup = () => {
-    if (mediaCleanupInFlight) {
+  const runConfiguredMediaCleanup = () => {
+    const ttlMs = params.mediaCleanupTtlMs;
+    if (typeof ttlMs !== "number" || mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
-    mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
+    mediaCleanupInFlight = cleanOldMedia(ttlMs, {
       recursive: true,
       pruneEmptyDirs: true,
     })
@@ -338,17 +362,68 @@ export function startGatewayMaintenanceTimers(params: {
     return mediaCleanupInFlight;
   };
 
-  const mediaCleanup = setInterval(() => {
-    void runMediaCleanup();
-  }, 60 * 60_000);
-
-  void runMediaCleanup();
+  let mediaCleanupInterval: ReturnType<typeof setInterval> | undefined;
+  let mediaCleanupStopped = false;
+  const runMediaMaintenance = () => {
+    if (mediaCleanupStopped) {
+      return;
+    }
+    // Playback and managed outgoing have fixed owner lifecycles and must not
+    // depend on the optional attachment-retention sweep being configured or healthy.
+    void playbackTranscodeCacheCleanupLoader.load();
+    void managedOutgoingCleanupLoader.load();
+    void runConfiguredMediaCleanup();
+  };
+  let mediaCleanupStartPromise: Promise<void> | undefined;
+  const startMediaCleanup = () => {
+    if (mediaCleanupStopped || mediaCleanupInterval || mediaCleanupStartPromise) {
+      return;
+    }
+    // Gateway readiness must not wait on a prior stuck generation. Defer only
+    // this cleanup owner until the process-wide drain fence is clear.
+    mediaCleanupStartPromise = waitForMediaCleanupDrainsToSettle().then(() => {
+      mediaCleanupStartPromise = undefined;
+      if (mediaCleanupStopped || mediaCleanupInterval) {
+        return;
+      }
+      mediaCleanupInterval = setInterval(runMediaMaintenance, 60 * 60_000);
+      runMediaMaintenance();
+    });
+  };
+  let stopMediaCleanupPromise: Promise<MediaCleanupStopResult> | undefined;
+  const stopMediaCleanup = () => {
+    stopMediaCleanupPromise ??= (async () => {
+      mediaCleanupStopped = true;
+      if (mediaCleanupInterval) {
+        clearInterval(mediaCleanupInterval);
+        mediaCleanupInterval = undefined;
+      }
+      const pending = [
+        playbackTranscodeCacheCleanupLoader.peek(),
+        managedOutgoingCleanupLoader.peek(),
+        mediaCleanupInFlight,
+      ].filter((promise): promise is Promise<void> => promise !== undefined && promise !== null);
+      if (pending.length > 0) {
+        registerMediaCleanupDrain(Promise.allSettled(pending).then(() => undefined));
+      }
+      return await waitForMediaCleanupDrains({
+        timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS,
+        onTimeout: () => {
+          params.logHealth.error(
+            `media cleanup drain exceeded ${MEDIA_CLEANUP_STOP_TIMEOUT_MS}ms; retaining shared state until cleanup settles`,
+          );
+        },
+      });
+    })();
+    return stopMediaCleanupPromise;
+  };
 
   return {
     tickInterval,
     healthInterval,
     dedupeCleanup,
-    mediaCleanup,
+    startMediaCleanup,
+    stopMediaCleanup,
     worktreeCleanup,
     skillCuratorCleanup,
   };

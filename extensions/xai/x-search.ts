@@ -176,7 +176,8 @@ export function createXSearchTool(options?: {
     return null;
   }
 
-  return createXSearchToolDefinition(async (_toolCallId: string, args: Record<string, unknown>) => {
+  return createXSearchToolDefinition(async (_toolCallId, args, signal) => {
+    signal?.throwIfAborted();
     const apiKey = await resolveXSearchApiKey({
       sourceConfig: options?.config,
       runtimeConfig: runtimeConfig ?? undefined,
@@ -239,6 +240,7 @@ export function createXSearchTool(options?: {
       inlineCitations,
       maxTurns,
       options: xSearchOptions,
+      ...(signal ? { signal } : {}),
     });
     const payload = buildXaiXSearchPayload({
       query,
@@ -247,6 +249,7 @@ export function createXSearchTool(options?: {
       content: result.content,
       citations: result.citations,
       inlineCitations: result.inlineCitations,
+      truncated: result.truncated,
       options: xSearchOptions,
     });
     writeCache(

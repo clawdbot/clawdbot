@@ -6,6 +6,7 @@ import path from "node:path";
 
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
+const DEFAULT_LOCAL_GO_MAX_PROCS = 2;
 const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
 const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildinfo";
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -137,10 +138,16 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
     );
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources, "auto")) {
+  const resolvedHostResources = resolveHostResources(hostResources);
+  if (shouldThrottleLocalHeavyChecks(nextEnv, resolvedHostResources, "auto")) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
 
+    if (!nextEnv.GOMAXPROCS) {
+      nextEnv.GOMAXPROCS = String(
+        Math.min(DEFAULT_LOCAL_GO_MAX_PROCS, Math.max(1, resolvedHostResources.logicalCpuCount)),
+      );
+    }
     if (!nextEnv.GOGC) {
       nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
     }

@@ -17,11 +17,8 @@ import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
-import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -137,17 +134,12 @@ const suiteTempRootTracker = createSuiteTempRootTracker({
   prefix: "setup-inference-test-",
 });
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
-let preparedPluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
 let inMemoryAuthProfileStores = new Map<string, AuthProfileStore>();
 
 beforeAll(async () => {
   pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
     materializedMainRuntimeConfig,
   );
-  preparedPluginMetadataSnapshot = resolvePluginMetadataSnapshot({
-    config: materializedMainRuntimeConfig,
-    env: process.env,
-  });
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
@@ -302,7 +294,7 @@ function withSuiteFixtures<
   if (!deps.readCodexCliActiveApiKey) {
     deps.readCodexCliActiveApiKey = () => null;
   }
-  deps.resolvePluginMetadataSnapshot ??= bindPreparedPluginMetadataSnapshot;
+  deps.resolvePluginMetadataSnapshot ??= pluginMetadataSnapshot?.bind;
   if (!useRealAuthProfileStore) {
     deps.updateAuthProfileStoreWithLock ??= updateInMemoryAuthProfileStoreWithLock;
     deps.loadPersistedAuthProfileStore ??= loadInMemoryPersistedAuthProfileStore;
@@ -313,7 +305,7 @@ function withSuiteFixtures<
     const readConfigFileSnapshot = deps.readConfigFileSnapshot;
     deps.readConfigFileSnapshot = (async (...args: Parameters<typeof readConfigFileSnapshot>) => {
       const snapshot = await readConfigFileSnapshot(...args);
-      bindPreparedPluginMetadataSnapshot({
+      pluginMetadataSnapshot?.bind({
         config: snapshot.runtimeConfig ?? snapshot.config,
         env: process.env,
       });
@@ -440,7 +432,7 @@ async function verifySetupInferenceConfig(
   },
 ): ReturnType<typeof verifySetupInferenceConfigImpl> {
   const { useRealAuthProfileStore = false, ...verifyParams } = params;
-  bindPreparedPluginMetadataSnapshot({ config: verifyParams.config, env: process.env });
+  pluginMetadataSnapshot?.bind({ config: verifyParams.config, env: process.env });
   return verifySetupInferenceConfigImpl({
     runtime,
     ...verifyParams,
@@ -533,41 +525,6 @@ function mockCodexRuntimeInstall(installRecord?: PluginInstallRecord) {
     installed: true,
     status: "installed" as const,
   })) as never;
-}
-
-function requirePreparedPluginMetadataSnapshot() {
-  if (!preparedPluginMetadataSnapshot) {
-    throw new Error("setup inference plugin metadata fixture was not initialized");
-  }
-  return preparedPluginMetadataSnapshot;
-}
-
-function bindPreparedPluginMetadataSnapshot(
-  params: Parameters<typeof resolvePluginMetadataSnapshot>[0],
-) {
-  const prepared = requirePreparedPluginMetadataSnapshot();
-  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-  const index =
-    prepared.index.policyHash === policyHash ? prepared.index : { ...prepared.index, policyHash };
-  const snapshot = {
-    ...prepared,
-    index,
-    policyHash,
-    configFingerprint: resolvePluginControlPlaneFingerprint({
-      config: params.config,
-      env: params.env,
-      index,
-      policyHash,
-      workspaceDir: params.workspaceDir,
-    }),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  };
-  setCurrentPluginMetadataSnapshot(snapshot, {
-    config: params.config,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-  });
-  return snapshot;
 }
 
 function activateCodexSetup(params: Omit<TestSetupInferenceActivationParams, "kind">) {
@@ -1266,6 +1223,38 @@ describe("detectSetupInference", () => {
     expect(probeLocalCommand).toHaveBeenCalledWith("pi");
     expect(probeLocalCommand).toHaveBeenCalledWith("opencode");
     expect(probeLocalCommand).not.toHaveBeenCalledWith("agy");
+  });
+
+  it("keeps lower-version capability-compatible CLI wrappers available for activation", async () => {
+    vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
+      {
+        kind: "claude-cli",
+        modelRef: "claude-cli/claude-opus-5",
+        label: "Claude Code",
+        detail:
+          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime.",
+        credentials: true,
+      },
+    ]);
+
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices: () => [],
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+    });
+
+    expect(detection.candidates).toEqual([
+      {
+        brandId: "claude",
+        credentials: true,
+        detail:
+          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime.",
+        kind: "claude-cli",
+        label: "Claude Code",
+        modelRef: "claude-cli/claude-opus-5",
+        recommended: false,
+      },
+    ]);
+    expect(detection.unavailableCandidates).toEqual([]);
   });
 });
 
@@ -2631,6 +2620,120 @@ describe("activateSetupInference", () => {
       expect(configHarness.current()).toMatchObject({
         agents: { defaults: { model: `openai/gpt-5.5@${activatedProfileId}` } },
       });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("runs provider-owned local setup from an app-guided discovery choice", async () => {
+    const { stateDir, initialConfig } = await createMainAgentFixture();
+    const runAuth = vi.fn(async () => ({
+      profiles: [
+        {
+          profileId: "ollama:default",
+          credential: {
+            type: "api_key" as const,
+            provider: "ollama",
+            key: "ollama-local",
+          },
+        },
+      ],
+      configPatch: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama" as const,
+              apiKey: "ollama-local",
+              models: [],
+            },
+          },
+        },
+      },
+    }));
+    const detect = vi.fn(async () => ({
+      modelRef: "ollama/qwen3.5:4b",
+      detail: "qwen3.5:4b at http://127.0.0.1:11434",
+    }));
+    const prepare = vi.fn(async () => ({
+      profiles: [],
+      defaultModel: "ollama/qwen3.5:4b",
+      configPatch: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama" as const,
+              apiKey: "ollama-local",
+              models: [],
+            },
+          },
+        },
+      },
+    }));
+    const provider: ProviderPlugin = {
+      id: "ollama",
+      label: "Ollama",
+      pluginId: "ollama",
+      auth: [
+        {
+          id: "local",
+          label: "Ollama",
+          kind: "custom",
+          run: runAuth,
+          appGuidedSetup: { detect, prepare },
+        },
+      ],
+    };
+    const runEmbeddedAgent = vi.fn(
+      async (params: SuccessfulRunParams & { authProfileId?: string }) =>
+        successfulRun("ollama", "qwen3.5:4b", params),
+    );
+    const configHarness = createConfigTransformHarness(initialConfig);
+
+    try {
+      const result = await activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "ollama",
+        workspace: "/tmp/openclaw-workspace",
+        prompter: { note: vi.fn(async () => {}) } as never,
+        deps: {
+          readConfigFileSnapshot: mockConfigSnapshot(initialConfig, {
+            includeMetadata: true,
+          }),
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "ollama",
+            providerId: "ollama",
+            methodId: "local",
+            choiceId: "ollama",
+            choiceLabel: "Ollama",
+            appGuidedDiscovery: true,
+          }),
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, modelRef: "ollama/qwen3.5:4b" });
+      expect(runAuth).toHaveBeenCalledOnce();
+      expect(detect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            models: {
+              providers: {
+                ollama: expect.objectContaining({
+                  baseUrl: "http://127.0.0.1:11434",
+                  apiKey: "ollama-local",
+                }),
+              },
+            },
+          }),
+        }),
+      );
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ modelRef: "ollama/qwen3.5:4b" }),
+      );
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }

@@ -26,7 +26,6 @@ import {
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -402,6 +401,14 @@ export async function handleChatSend(
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.
+                onFollowupQueueDisposition: (reason) => {
+                  context.logGateway.info("chat queue turn intentionally skipped", {
+                    runId: clientRunId,
+                    sessionKey,
+                    outcome: "skipped",
+                    reason,
+                  });
+                },
                 turnAdoptionLifecycle: {
                   // Gateway cancel identity only — share collect key via ownerKey.
                   admission: "cancel-only",
@@ -409,7 +416,7 @@ export async function handleChatSend(
                   onAdopted: async () => {},
                   onDeferred: () => {
                     queuedFollowupEnqueued = registerQueuedChatTurn({
-                      chatQueuedTurns: ensureChatQueuedTurns(context),
+                      chatQueuedTurns: context.chatQueuedTurns,
                       runId: clientRunId,
                       controller: activeRunAbort.controller,
                       sessionId: backingSessionId ?? clientRunId,
@@ -422,14 +429,14 @@ export async function handleChatSend(
                   },
                   onCancellationRetired: () => {
                     retireQueuedChatTurnCancellation(
-                      ensureChatQueuedTurns(context),
+                      context.chatQueuedTurns,
                       clientRunId,
                       activeRunAbort.controller,
                     );
                   },
                   onSettled: () => {
                     completeQueuedChatTurn(
-                      ensureChatQueuedTurns(context),
+                      context.chatQueuedTurns,
                       clientRunId,
                       activeRunAbort.controller,
                     );

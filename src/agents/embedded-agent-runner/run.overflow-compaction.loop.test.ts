@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -7,7 +7,8 @@ import {
 import { dispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 
 const mocks = vi.hoisted(() => ({
-  runAttempt: vi.fn(async () => ({ terminal: { kind: "ok" } })),
+  runAttempt: vi.fn(),
+  settleRequesterAfterSessionSpawns: vi.fn(),
 }));
 
 vi.mock("../delegation-capability.js", () => ({
@@ -30,8 +31,13 @@ vi.mock("./run/attempt-exec-approval-continuation.js", () => ({
   })),
 }));
 
-vi.mock("./run/backend.js", () => ({
-  runEmbeddedAttemptWithBackend: mocks.runAttempt,
+vi.mock("../harness/selection.js", () => ({
+  runAgentHarnessAttempt: mocks.runAttempt,
+  runAgentHarnessSettledTurnFinalization: vi.fn(),
+}));
+
+vi.mock("../subagent-registry.js", () => ({
+  settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
 vi.mock("./run/plugin-harness-prompt-images.js", () => ({
@@ -120,6 +126,11 @@ function makeDispatchInput(
 }
 
 describe("embedded run retry dispatch", () => {
+  beforeEach(() => {
+    mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
+    mocks.settleRequesterAfterSessionSpawns.mockReset();
+  });
+
   it("preserves caller-owned session and unsafe replay state on the next attempt", async () => {
     const sessionManager = { owner: "caller" };
     const replayState = observeReplayMetadata(
@@ -137,5 +148,33 @@ describe("embedded run retry dispatch", () => {
     expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
     expect(result.preparedAttempt.initialReplayState).toBe(replayState);
     expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
+    expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "settles accepted spawns before a late post-compaction abort (yielded: %s)",
+    async (yieldDetected) => {
+      const postCompactionAbortError = new Error("post-compaction loop detected");
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.control.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
+      const acceptedSessionSpawns = [
+        { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+      ];
+      mocks.runAttempt.mockResolvedValueOnce({
+        terminal: { kind: "ok" },
+        agentHarnessId: "codex",
+        yieldDetected,
+        acceptedSessionSpawns,
+      });
+
+      await expect(dispatchEmbeddedRunAttempt(input)).rejects.toBe(postCompactionAbortError);
+
+      expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
+        requesterSessionKey: "agent:main:session-1",
+        requesterTurnRunId: "run-1",
+        requesterYielded: yieldDetected,
+        acceptedSessionSpawns,
+      });
+    },
+  );
 });

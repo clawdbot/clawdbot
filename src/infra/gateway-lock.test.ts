@@ -958,7 +958,7 @@ describe("gateway lock", () => {
     openSpy.mockRestore();
   });
 
-  it("closes handle and removes lock file when writeFile fails after open succeeds", async () => {
+  it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const { stateLockPath } = resolveLockPath(env);
@@ -983,7 +983,9 @@ describe("gateway lock", () => {
     });
 
     expect(close).toHaveBeenCalledTimes(1);
-    await expect(fs.access(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    // fs-safe 0.5.2 failure cleanup removes the lock file only when it matches
+    // the snapshot fs-safe wrote itself; this out-of-band file is preserved.
+    await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
 
     openSpy.mockRestore();
   });

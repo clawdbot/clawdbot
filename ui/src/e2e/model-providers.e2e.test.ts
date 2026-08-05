@@ -371,7 +371,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       models: { providers: { openai: providerConfig(redactedConfigValue) } },
     };
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "models.probe"],
+      featureMethods: ["chat.metadata", "chat.startup", "config.patch", "models.probe"],
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {

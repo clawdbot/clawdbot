@@ -65,6 +65,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 export type { GatewayConnectionDetails };
 
 export type GatewayRequestFunction = <T = Record<string, unknown>>(
@@ -806,29 +807,15 @@ async function resolveGatewayTlsFingerprint(params: {
   opts: CallGatewayBaseOptions;
   context: ResolvedGatewayCallContext;
   url: string;
+  urlSource: string;
 }): Promise<string | undefined> {
-  const { opts, context, url } = params;
-  const useLocalTls =
-    context.config.gateway?.tls?.enabled === true &&
-    !context.urlOverrideSource &&
-    !context.remoteUrl &&
-    url.startsWith("wss://");
-  const tlsRuntime = useLocalTls
-    ? await gatewayCallDeps.loadGatewayTlsRuntime(context.config.gateway?.tls)
-    : undefined;
-  const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
-  const remoteTlsFingerprint =
-    // Env overrides may still inherit configured remote TLS pinning for private cert deployments.
-    // CLI overrides remain explicit-only and intentionally skip config remote TLS to avoid
-    // accidentally pinning against caller-supplied target URLs.
-    context.isRemoteMode && context.urlOverrideSource !== "cli"
-      ? trimToUndefined(context.remote?.tlsFingerprint)
-      : undefined;
-  return (
-    overrideTlsFingerprint ||
-    remoteTlsFingerprint ||
-    (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined)
-  );
+  return await resolveGatewayConnectionTlsFingerprint({
+    config: params.context.config,
+    url: params.url,
+    urlSource: params.urlSource,
+    explicitTlsFingerprint: params.opts.tlsFingerprint,
+    loadGatewayTlsRuntime: gatewayCallDeps.loadGatewayTlsRuntime,
+  });
 }
 
 function formatGatewayCloseError(
@@ -1196,7 +1183,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
-  const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
+  const tlsFingerprint = await resolveGatewayTlsFingerprint({
+    opts,
+    context,
+    url,
+    urlSource: connectionDetails.urlSource,
+  });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
   const authMode = resolveGatewayCallAuth(context.config).mode;
@@ -1299,6 +1291,7 @@ export async function buildGatewayProbeConnectionDetails(
     opts: callOpts,
     context,
     url: connectionDetails.url,
+    urlSource: connectionDetails.urlSource,
   });
   return {
     ...connectionDetails,
