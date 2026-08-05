@@ -63,7 +63,9 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     issues: [] as Array<{ path: string; message: string }>,
   })),
 );
-const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
+const findDoctorLegacyConfigIssues = vi.hoisted(() =>
+  vi.fn((_raw: unknown, _sourceRaw?: unknown): LegacyConfigIssue[] => []),
+);
 const addDoctorLegacyIssues = vi.hoisted(() =>
   vi.fn((snapshot: ConfigFileSnapshot): ConfigFileSnapshot => {
     if (!snapshot.exists) {
