@@ -241,8 +241,8 @@ export async function startPluginServices(params: {
       (stopPromise ??= Promise.resolve().then(async () => {
         const reversed = running.toReversed();
         const diagnosticsExporters = reversed.filter((entry) => entry.diagnosticsExporter);
-        const failures: unknown[] = [];
-        const stopServices = async (services: typeof reversed) => {
+        const exporterFailures: unknown[] = [];
+        const stopServices = async (services: typeof reversed, failures?: unknown[]) => {
           for (const entry of services) {
             await stopService(entry, failures);
           }
@@ -252,12 +252,17 @@ export async function startPluginServices(params: {
           // Producers stop first; this barrier preserves their queued tail before exporters detach.
           await waitForDiagnosticEventsDrained();
         }
-        await stopServices(diagnosticsExporters);
-        if (failures.length === 1) {
-          throw failures[0];
+        // Ordinary plugin cleanup stays warn-and-continue. Trusted diagnostics
+        // exporter failures propagate because they can mean telemetry was lost.
+        await stopServices(diagnosticsExporters, exporterFailures);
+        if (exporterFailures.length === 1) {
+          throw exporterFailures[0];
         }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "multiple plugin services failed to stop");
+        if (exporterFailures.length > 1) {
+          throw new AggregateError(
+            exporterFailures,
+            "multiple diagnostics exporters failed to stop",
+          );
         }
       })),
   };

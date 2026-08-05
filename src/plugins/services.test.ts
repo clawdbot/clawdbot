@@ -171,8 +171,10 @@ describe("startPluginServices", () => {
     expectServiceLifecycleState({ starts, stops, contexts, config });
   });
 
-  it("drains diagnostics after producers stop and before exporters detach", async () => {
+  it("drains producer diagnostics before exporters stop and propagates exporter failures", async () => {
     const order: string[] = [];
+    const producerError = new Error("producer stop failed");
+    const exporterError = new Error("exporter stop failed");
     let unsubscribe: () => void = () => undefined;
     const registry = createRegistry(
       [
@@ -186,6 +188,7 @@ describe("startPluginServices", () => {
               level: "INFO",
               message: "queued during producer shutdown",
             });
+            throw producerError;
           },
         },
       ],
@@ -193,6 +196,19 @@ describe("startPluginServices", () => {
       "workspace",
     );
     registry.services.push(
+      ...createRegistry(
+        [
+          {
+            id: "diagnostics-prometheus",
+            start: () => undefined,
+            stop: () => {
+              order.push("prometheus");
+            },
+          },
+        ],
+        "diagnostics-prometheus",
+        "bundled",
+      ).services,
       ...createRegistry(
         [
           {
@@ -205,8 +221,9 @@ describe("startPluginServices", () => {
               });
             },
             stop: () => {
-              order.push("exporter");
+              order.push("otel");
               unsubscribe();
+              throw exporterError;
             },
           },
         ],
@@ -219,10 +236,15 @@ describe("startPluginServices", () => {
       registry,
       config: createServiceConfig(),
     });
-    await handle.stop();
+
+    await expect(handle.stop()).rejects.toBe(exporterError);
     await waitForDiagnosticEventsDrained();
 
-    expect(order).toEqual(["producer", "event", "exporter"]);
+    expect(order).toEqual(["producer", "event", "otel", "prometheus"]);
+    expect(mockedLogger.warn.mock.calls).toEqual([
+      ["plugin service stop failed (producer): Error: producer stop failed"],
+      ["plugin service stop failed (diagnostics-otel): Error: exporter stop failed"],
+    ]);
   });
 
   it("rolls back partially started services before starting their siblings", async () => {
@@ -534,7 +556,7 @@ describe("startPluginServices", () => {
     await handle.stop();
   });
 
-  it("attempts every service stop and reports independent failures", async () => {
+  it("attempts every ordinary service stop and preserves warn-and-continue failures", async () => {
     const stopOk = vi.fn();
     const firstError = new Error("first stop failed");
     const secondError = new Error("second stop failed");
@@ -557,7 +579,7 @@ describe("startPluginServices", () => {
       ],
     });
 
-    const stopError = await handle.stop().catch((error: unknown) => error);
+    await expect(handle.stop()).resolves.toBeUndefined();
 
     expect(mockedLogger.error.mock.calls).toEqual([
       [
@@ -572,10 +594,6 @@ describe("startPluginServices", () => {
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopFirst).toHaveBeenCalledOnce();
     expect(stopSecond).toHaveBeenCalledOnce();
-    expect(stopError).toBeInstanceOf(AggregateError);
-    expect(stopError).toMatchObject({
-      errors: [secondError, firstError],
-    });
   });
 
   it("continues starting siblings when rollback also fails", async () => {
