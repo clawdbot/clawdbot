@@ -563,13 +563,13 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
 /** Renders loaded OpenClaw skill prompts as Codex collaboration instructions. */
 export function renderCodexSkillsCollaborationInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
-  skillsPrompt?: string;
+  codexSkillsPrompt?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
     return undefined;
   }
-  return params.skillsPrompt?.trim()
-    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
+  return params.codexSkillsPrompt?.trim()
+    ? ["## OpenClaw Skills", "", params.codexSkillsPrompt.trim()].join("\n")
     : undefined;
 }
 

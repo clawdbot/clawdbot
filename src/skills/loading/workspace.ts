@@ -54,7 +54,7 @@ import {
 } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { formatSkillsForPrompt, type Skill, type SkillPromptProjection } from "./skill-contract.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
 
@@ -1352,7 +1352,7 @@ function truncateSkillDescription(description: string, maxChars: number): string
  */
 export function formatSkillsCompact(
   skills: Skill[],
-  opts?: { descriptionMaxChars?: number },
+  opts?: { descriptionMaxChars?: number; projection?: SkillPromptProjection },
 ): string {
   if (skills.length === 0) {
     return "";
@@ -1361,12 +1361,17 @@ export function formatSkillsCompact(
     0,
     Math.floor(opts?.descriptionMaxChars ?? COMPACT_DESCRIPTION_MAX_CHARS),
   );
+  const omitVersions = opts?.projection === "codex";
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     descriptionMaxChars > 0
       ? "Use the read tool to load a skill's file when the task matches its name or description."
       : "Use the read tool to load a skill's file when the task matches its name.",
-    "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+    ...(omitVersions
+      ? []
+      : [
+          "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+        ]),
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -1384,7 +1389,7 @@ export function formatSkillsCompact(
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
     }
-    if (skill.promptVersion) {
+    if (!omitVersions && skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }
     lines.push("  </skill>");
@@ -1422,6 +1427,7 @@ function buildRenderedSkillsPrompt(params: {
   total: number;
   format: SkillsPromptFormat;
   includeLimitNote?: boolean;
+  projection?: SkillPromptProjection;
 }): string {
   // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
   // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
@@ -1439,8 +1445,9 @@ function buildRenderedSkillsPrompt(params: {
     params.format.kind === "compact"
       ? formatSkillsCompact(params.skills, {
           descriptionMaxChars: params.format.descriptionMaxChars,
+          projection: params.projection,
         })
-      : formatSkillsForPrompt(params.skills);
+      : formatSkillsForPrompt(params.skills, { projection: params.projection });
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 
@@ -1449,6 +1456,7 @@ function applySkillsPromptLimits(params: {
   config?: OpenClawConfig;
   agentId?: string;
   remoteNote?: string;
+  projection?: SkillPromptProjection;
 }): string {
   const limits = resolveSkillsLimits(params.config, params.agentId);
   const total = params.skills.length;
@@ -1470,6 +1478,7 @@ function applySkillsPromptLimits(params: {
         total,
         format,
         includeLimitNote,
+        projection: params.projection,
       });
       if (prompt.length <= limits.maxSkillsPromptChars) {
         return prompt;
@@ -1564,9 +1573,18 @@ export function buildWorkspaceSkillSnapshot(
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
+  const codexPrompt =
+    eligible.length === 0
+      ? ""
+      : resolveWorkspaceSkillPromptState(workspaceDir, {
+          ...opts,
+          entries: eligible,
+          projection: "codex",
+        }).prompt;
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
+    codexPrompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       skillKey: resolveSkillKey(entry.skill, entry),
@@ -1605,6 +1623,7 @@ type WorkspaceSkillBuildOptions = {
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
   eligibility?: SkillEligibilityContext;
+  projection?: SkillPromptProjection;
 };
 
 function resolveEffectiveWorkspaceSkillFilter(
@@ -1656,6 +1675,7 @@ function resolveWorkspaceSkillPromptState(
     config: opts?.config,
     agentId: opts?.agentId,
     remoteNote,
+    projection: opts?.projection,
   });
   return { eligible, prompt, resolvedSkills };
 }

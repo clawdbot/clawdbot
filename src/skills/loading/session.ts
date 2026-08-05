@@ -9,7 +9,10 @@ import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ig
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
+import {
+  formatSkillsForPrompt as formatSkillContractForPrompt,
+  type SkillPromptProjection,
+} from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
 /** Max name length per spec */
@@ -268,9 +271,12 @@ function loadSkillFromFile(
  * Skills with disableModelInvocation=true are excluded from the prompt
  * (they can only be invoked explicitly via /skill:name commands).
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
+export function formatSkillsForPrompt(
+  skills: Skill[],
+  opts?: { projection?: SkillPromptProjection },
+): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillContractForPrompt(visibleSkills);
+  return formatSkillContractForPrompt(visibleSkills, opts);
 }
 
 interface LoadSkillsOptions {

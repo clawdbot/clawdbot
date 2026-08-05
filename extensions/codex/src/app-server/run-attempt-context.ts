@@ -158,7 +158,7 @@ export async function prepareCodexAttemptContext(
   });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
     attempt: runtimeParams,
-    skillsPrompt: params.skillsSnapshot?.prompt,
+    codexSkillsPrompt: params.skillsSnapshot?.codexPrompt,
   });
   const promptState = {
     promptText: params.prompt,

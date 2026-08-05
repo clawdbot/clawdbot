@@ -11,6 +11,7 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./workspace.js";
 
 vi.mock("./plugin-skills.js", () => ({
@@ -242,6 +243,28 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(afterVersion).toMatch(/^sha256:[a-f0-9]{16}$/);
     expect(afterVersion).not.toBe(beforeVersion);
     expect(after.prompt).toContain("If a skill's <version> differs from a previous turn");
+  });
+
+  it("produces a version-free codexPrompt while keeping the default prompt versioned", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "versioned"),
+      name: "versioned",
+      description: "Versioned skill",
+      body: "# versioned\nfirst body\n",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir);
+
+    expect(snapshot.prompt).toContain("<version>");
+    expect(snapshot.prompt).toContain("If a skill's <version> differs from a previous turn");
+    expect(snapshot.prompt).toContain("<name>versioned</name>");
+    expect(snapshot.codexPrompt).toContain("<name>versioned</name>");
+    expect(snapshot.codexPrompt).not.toContain("<version>");
+    expect(snapshot.codexPrompt).not.toContain(
+      "If a skill's <version> differs from a previous turn",
+    );
+    expect(snapshot.promptFormatVersion).toBe(WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION);
   });
 
   it("truncates the skills prompt when it exceeds the configured char budget", async () => {

@@ -1,6 +1,8 @@
 // Skill contract types describe loaded skill metadata, sources, and prompt surfaces.
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 
+export type SkillPromptProjection = "default" | "codex";
+
 export interface Skill {
   name: string;
   description: string;
@@ -35,14 +37,22 @@ function escapeXml(str: string): string {
  * package root on the cold skills path. Visibility policy is applied upstream
  * before calling this helper.
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
+export function formatSkillsForPrompt(
+  skills: Skill[],
+  opts?: { projection?: SkillPromptProjection },
+): string {
   if (skills.length === 0) {
     return "";
   }
+  const omitVersions = opts?.projection === "codex";
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     "Use the read tool to load a skill's file when the task matches its description.",
-    "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+    ...(omitVersions
+      ? []
+      : [
+          "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+        ]),
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -55,7 +65,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
     }
-    if (skill.promptVersion) {
+    if (!omitVersions && skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }
     lines.push("  </skill>");

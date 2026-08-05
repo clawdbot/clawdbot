@@ -1683,6 +1683,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     params.skillsSnapshot = {
       prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      codexPrompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
       skills: [],
     };
     const run = runCodexAppServerAttempt(params);
@@ -3597,6 +3598,7 @@ describe("runCodexAppServerAttempt", () => {
     params.bootstrapContextRunKind = "cron";
     params.skillsSnapshot = {
       prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      codexPrompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
       skills: [],
     };
     const run = runCodexAppServerAttempt(params);
@@ -3639,6 +3641,7 @@ describe("runCodexAppServerAttempt", () => {
     params.bootstrapContextRunKind = "cron";
     params.skillsSnapshot = {
       prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      codexPrompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
       skills: [],
     };
     const run = runCodexAppServerAttempt(params);

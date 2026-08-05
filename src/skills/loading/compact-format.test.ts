@@ -149,6 +149,50 @@ describe("formatSkillsCompact", () => {
   });
 });
 
+describe("codex projection", () => {
+  it("omits version rows and reminder from the full catalog", () => {
+    const skills = [
+      { ...makeSkill("weather", "Get weather data"), promptVersion: "sha256:abc123" },
+      makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
+    ];
+    const out = formatSkillsForPrompt(skills, { projection: "codex" });
+    expect(out).toContain("<name>weather</name>");
+    expect(out).toContain("<description>Get weather data</description>");
+    expect(out).toContain("<location>/skills/weather/SKILL.md</location>");
+    expect(out).not.toContain("<version>");
+    expect(out).not.toContain("If a skill's <version> differs from a previous turn");
+    expect(formatSkillsForPrompt(skills)).toContain("<version>sha256:abc123</version>");
+    expect(formatSkillsForPrompt(skills)).toContain(
+      "If a skill's <version> differs from a previous turn",
+    );
+  });
+
+  it("omits version rows and reminder from the compact catalog", () => {
+    const skills = [
+      { ...makeSkill("weather", "Get weather data"), promptVersion: "sha256:abc123" },
+    ];
+    const out = formatSkillsCompact(skills, { projection: "codex" });
+    expect(out).toContain("<name>weather</name>");
+    expect(out).toContain("<description>Get weather data</description>");
+    expect(out).toContain("<location>/skills/weather/SKILL.md</location>");
+    expect(out).not.toContain("<version>");
+    expect(out).not.toContain("If a skill's <version> differs from a previous turn");
+    expect(formatSkillsCompact(skills)).toContain("<version>sha256:abc123</version>");
+    expect(formatSkillsCompact(skills)).toContain(
+      "If a skill's <version> differs from a previous turn",
+    );
+  });
+
+  it("preserves location notes in the codex projection", () => {
+    const out = formatSkillsForPrompt(
+      [{ ...makeSkill("remote", "Remote skill"), locationNote: "Load with exec host=node." }],
+      { projection: "codex" },
+    );
+    expect(out).toContain("<location_note>Load with exec host=node.</location_note>");
+    expect(out).not.toContain("<version>");
+  });
+});
+
 describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   let envSnapshot: SkillsHomeEnvSnapshot;
 
