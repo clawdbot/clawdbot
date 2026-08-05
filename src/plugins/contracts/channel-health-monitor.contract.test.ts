@@ -55,6 +55,35 @@ function rejectsKey(schema: JsonSchemaLike | undefined, key: string): boolean {
   return !Object.hasOwn(schema.properties ?? {}, key);
 }
 
+/**
+ * Resolves a property's sub-schema across composed alternatives. The parent key
+ * existing is not the documented contract; `healthMonitor.enabled` is, and a
+ * strict empty object would satisfy the parent check while refusing that leaf.
+ */
+function propertySchema(
+  schema: JsonSchemaLike | undefined,
+  key: string,
+): JsonSchemaLike | undefined {
+  if (!schema) {
+    return undefined;
+  }
+  const direct = asSchema(schema.properties?.[key]);
+  if (direct) {
+    return direct;
+  }
+  for (const branch of [
+    ...(schema.anyOf ?? []),
+    ...(schema.oneOf ?? []),
+    ...(schema.allOf ?? []),
+  ]) {
+    const nested = propertySchema(asSchema(branch), key);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
 function schemaFor(channelId: string): JsonSchemaLike | undefined {
   return asSchema(
     GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find((entry) => entry.channelId === channelId)
@@ -72,6 +101,31 @@ describe("channel healthMonitor contract", () => {
     (channelId) => {
       const accounts = asSchema(schemaFor(channelId)?.properties?.accounts);
       expect(rejectsKey(asSchema(accounts?.additionalProperties), "healthMonitor")).toBe(false);
+    },
+  );
+
+  it.each(HEALTH_MONITOR_CHANNELS)(
+    "%s accepts the documented channels.<id>.healthMonitor.enabled leaf",
+    (channelId) => {
+      const healthMonitor = propertySchema(schemaFor(channelId), "healthMonitor");
+      expect(healthMonitor, `${channelId} exposes no healthMonitor schema`).toBeDefined();
+      expect(rejectsKey(healthMonitor, "enabled")).toBe(false);
+    },
+  );
+
+  it.each(HEALTH_MONITOR_CHANNELS)(
+    "%s accepts the documented accounts.<account>.healthMonitor.enabled leaf",
+    (channelId) => {
+      const accounts = asSchema(schemaFor(channelId)?.properties?.accounts);
+      const accountEntry = asSchema(accounts?.additionalProperties);
+      if (!accountEntry) {
+        // Single-account channels publish no accounts envelope; the channel-scope
+        // assertion above already covers the documented override for them.
+        return;
+      }
+      const healthMonitor = propertySchema(accountEntry, "healthMonitor");
+      expect(healthMonitor, `${channelId} account entry exposes no healthMonitor`).toBeDefined();
+      expect(rejectsKey(healthMonitor, "enabled")).toBe(false);
     },
   );
 });
