@@ -4579,7 +4579,9 @@ describe("diagnostics-otel service", () => {
     expect(recoveryAgeRecord?.[0]).toBe(13_000);
     expect(recoveryAgeRecord?.[1]?.["openclaw.status"]).toBe("released");
     expect(firstCounterAddCall("openclaw.session.maintenance.pruned")).toStrictEqual([3, {}]);
-    expect(telemetryState.counters.get("openclaw.session.maintenance.pruned")?.add).toHaveBeenCalledTimes(1);
+    expect(
+      telemetryState.counters.get("openclaw.session.maintenance.pruned")?.add,
+    ).toHaveBeenCalledTimes(1);
     expect(telemetryState.counters.get("openclaw.talk.event")?.add).toHaveBeenCalledWith(1, {
       "openclaw.talk.brain": "agent-consult",
       "openclaw.talk.event_type": "input.audio.delta",

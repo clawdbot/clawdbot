@@ -157,13 +157,10 @@ export function createDiagnosticsMetrics(
     unit: "ms",
     description: "Age of sessions selected for recovery",
   });
-  const sessionMaintenancePrunedCounter = createCounter(
-    "openclaw.session.maintenance.pruned",
-    {
-      unit: "1",
-      description: "Cron run sessions pruned by session maintenance",
-    },
-  );
+  const sessionMaintenancePrunedCounter = createCounter("openclaw.session.maintenance.pruned", {
+    unit: "1",
+    description: "Cron run sessions pruned by session maintenance",
+  });
   const talkEventCounter = createCounter("openclaw.talk.event", {
     unit: "1",
     description: "Talk events emitted by type",
