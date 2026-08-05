@@ -757,7 +757,7 @@ describe("resolveInFlightRunSnapshot", () => {
 
   // Most cases request with requestedKey === canonicalKey; default canonical to
   // the requested key unless a case exercises the requested/canonical split.
-  const snap = (p: {
+  const resolveSnap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
     chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
@@ -782,6 +782,13 @@ describe("resolveInFlightRunSnapshot", () => {
       defaultAgentId: p.defaultAgentId,
     });
   };
+  const snap = (p: Parameters<typeof resolveSnap>[0]) => {
+    const result = resolveSnap(p);
+    if (result) {
+      Reflect.deleteProperty(result, "startedAt");
+    }
+    return result;
+  };
 
   it("returns the live assistant text of a matching active run", () => {
     const result = snap({
@@ -790,6 +797,16 @@ describe("resolveInFlightRunSnapshot", () => {
       sessionKey: "agent:main:tui-x",
     });
     expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+  });
+
+  it("returns the authoritative run start timestamp", () => {
+    const startedAtMs = 1_234;
+    const result = resolveSnap({
+      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s", { startedAtMs })]]),
+      chatRunBuffers: new Map(),
+      sessionKey: "agent:main:s",
+    });
+    expect(result?.startedAt).toBe(startedAtMs);
   });
 
   it("returns the active run plan snapshot with buffered text", () => {
@@ -1006,11 +1023,11 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial", plan },
+        snapshot: { runId: "run-1", text: "partial", startedAt: 1_000, plan },
         messages: [],
         maxBytes: 1_000,
       }),
-    ).toEqual({ runId: "run-1", text: "partial", plan });
+    ).toEqual({ runId: "run-1", text: "partial", startedAt: 1_000, plan });
   });
 
   it("drops oversized in-flight text but keeps the run id for adoption", () => {

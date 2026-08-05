@@ -89,6 +89,7 @@ export type RestartRecoveryCandidate = {
 type InFlightRunSnapshot = {
   runId: string;
   text: string;
+  startedAt?: number;
   plan?: ChatRunPlanSnapshot;
   events?: AgentEventPayload[];
 };
@@ -371,6 +372,7 @@ export function resolveInFlightRunSnapshot(params: {
   return {
     runId: best.runId,
     text: projected.suppress ? "" : projected.text,
+    startedAt: best.startedAtMs,
     ...(plan ? { plan } : {}),
     ...(events?.length ? { events } : {}),
   };
@@ -395,6 +397,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   let bounded: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
+    ...(params.snapshot.startedAt !== undefined ? { startedAt: params.snapshot.startedAt } : {}),
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };

@@ -519,6 +519,7 @@ describe("gateway server chat", () => {
         ).toEqual({
           runId: "run-active",
           text: "partial reply",
+          startedAt: 1_000,
           plan: {
             explanation: "Replay on reconnect",
             steps: [{ step: "Reconnect clients", status: "in_progress" }],
@@ -639,6 +640,7 @@ describe("gateway server chat", () => {
         ).toEqual({
           runId: "run-active",
           text: "",
+          startedAt: 1_000,
           events: [
             {
               runId: "run-active",
