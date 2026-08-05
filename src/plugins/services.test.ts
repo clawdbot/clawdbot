@@ -173,7 +173,7 @@ describe("startPluginServices", () => {
 
   it("drains diagnostics after producers stop and before exporters detach", async () => {
     const order: string[] = [];
-    let unsubscribe = () => undefined;
+    let unsubscribe: () => void = () => undefined;
     const registry = createRegistry(
       [
         {
