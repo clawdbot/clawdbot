@@ -7,6 +7,7 @@
  */
 
 import { resolveNodeRequireFromMeta } from "../../logging/node-require.js";
+import { classifyLoadedProviderFailoverReason } from "../../plugins/provider-error-runtime.js";
 import type { FailoverReason } from "./types.js";
 
 type ProviderErrorPattern = {
@@ -86,6 +87,14 @@ type ProviderRuntimeHooks = {
 };
 
 const requireProviderRuntime = resolveNodeRequireFromMeta(import.meta.url);
+const isSourceProviderErrorModule = new URL(import.meta.url).pathname.endsWith(
+  "/src/agents/embedded-agent-helpers/provider-error-patterns.ts",
+);
+// Bundled code must only probe the package-internal stable entry. Falling
+// through to ../../ from dist/ could load an unrelated file outside the package.
+const PROVIDER_RUNTIME_SPECIFIER = isSourceProviderErrorModule
+  ? "../../plugins/provider-runtime.js"
+  : "./plugins/provider-runtime.js";
 let cachedProviderRuntimeHooks: ProviderRuntimeHooks | null | undefined;
 
 const PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE =
@@ -103,7 +112,7 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
   }
   try {
     const loaded = requireProviderRuntime(
-      "../../plugins/provider-runtime.js",
+      PROVIDER_RUNTIME_SPECIFIER,
     ) as unknown as ProviderRuntimeHooks;
     cachedProviderRuntimeHooks = {
       classifyProviderFailoverReasonWithPlugin: ({ provider, context }) =>
@@ -150,10 +159,11 @@ export function matchesProviderContextOverflow(errorMessage: string): boolean {
   if (!looksLikeProviderContextOverflowCandidate(errorMessage)) {
     return false;
   }
+  const context = { errorMessage };
   const runtimeHooks = resolveProviderRuntimeHooks();
   return (
     runtimeHooks?.matchesProviderContextOverflowWithPlugin({
-      context: { errorMessage },
+      context,
     }) === true || PROVIDER_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage))
   );
 }
@@ -162,6 +172,15 @@ export function classifyProviderPluginError(
   input: string | ProviderSpecificErrorContext,
 ): FailoverReason | null {
   const context = normalizeProviderSpecificErrorContext(input);
+  if (context.provider) {
+    const loaded = classifyLoadedProviderFailoverReason({
+      provider: context.provider,
+      context,
+    });
+    if (loaded.matched) {
+      return loaded.reason;
+    }
+  }
   const runtimeHooks = resolveProviderRuntimeHooks();
   return (
     runtimeHooks?.classifyProviderFailoverReasonWithPlugin({

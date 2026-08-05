@@ -66,6 +66,7 @@ import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
+import { classifyAnthropicFailoverReason } from "./provider-failover.js";
 import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
 import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
 import { isAnthropicOAuthApiKey, wrapAnthropicProviderStream } from "./stream-wrappers.js";
@@ -77,17 +78,6 @@ type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
 
 const PROVIDER_ID = "anthropic";
 
-// Anthropic-native error descriptors stay with the Anthropic provider hook.
-function classifyAnthropicFailoverDescriptor(value: string | undefined) {
-  switch (value?.trim().toUpperCase()) {
-    case "RATE_LIMIT_ERROR":
-      return "rate_limit" as const;
-    case "API_ERROR":
-      return "server_error" as const;
-    default:
-      return undefined;
-  }
-}
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-5";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
@@ -1132,8 +1122,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       (!isAnthropicMandatoryClaude5Model(modelId) ||
         normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
-    classifyFailoverReason: ({ code, errorType }) =>
-      classifyAnthropicFailoverDescriptor(errorType) ?? classifyAnthropicFailoverDescriptor(code),
+    classifyFailoverReason: classifyAnthropicFailoverReason,
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
       return isAnthropicMythos5Model(contractModelId) &&

@@ -12,12 +12,29 @@ installProcessWarningFilter();
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry.js");
+const providerRuntimeEntryPath = path.join(repoRoot, "dist", "plugins", "provider-runtime.js");
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);
+assert.ok(
+  fs.existsSync(providerRuntimeEntryPath),
+  `missing provider runtime output: ${providerRuntimeEntryPath}`,
+);
 
-const { clearPluginCommands, getPluginCommandSpecs, loadOpenClawPlugins, matchPluginCommand } =
-  await import(pathToFileURL(smokeEntryPath).href);
+const {
+  classifyFailoverReason,
+  clearPluginCommands,
+  getPluginCommandSpecs,
+  loadOpenClawPlugins,
+  matchPluginCommand,
+} = await import(pathToFileURL(smokeEntryPath).href);
+const providerRuntime = await import(pathToFileURL(providerRuntimeEntryPath).href);
 
 assert.equal(typeof loadOpenClawPlugins, "function", "built loader export missing");
+assert.equal(typeof classifyFailoverReason, "function", "failover classifier export missing");
+assert.equal(
+  typeof providerRuntime.classifyProviderFailoverReasonWithPlugin,
+  "function",
+  "provider failover runtime export missing",
+);
 assert.equal(typeof clearPluginCommands, "function", "clearPluginCommands missing");
 assert.equal(typeof getPluginCommandSpecs, "function", "getPluginCommandSpecs missing");
 assert.equal(typeof matchPluginCommand, "function", "matchPluginCommand missing");
@@ -85,6 +102,17 @@ fs.writeFileSync(
     `  id: ${JSON.stringify(pluginId)},`,
     "  configSchema: emptyPluginConfigSchema(),",
     "  register(api) {",
+    "    api.registerProvider({",
+    "      id: 'build-smoke-provider',",
+    "      label: 'Build Smoke Provider',",
+    "      hookAliases: ['build-smoke-cli'],",
+    "      auth: [],",
+    "      classifyFailoverReason({ provider, errorMessage }) {",
+    "        return provider === 'build-smoke-cli' && errorMessage === 'smoke usage limit'",
+    "          ? 'rate_limit'",
+    "          : undefined;",
+    "      },",
+    "    });",
     "    api.registerCommand({",
     "      name: 'pair',",
     "      description: 'Pair a device',",
@@ -145,5 +173,10 @@ assert.ok(match, "canonical built command registry did not receive the command")
 assert.equal(match.args, "now");
 const result = await match.command.handler({ args: match.args });
 assert.deepEqual(result, { text: "paired:now" });
+assert.equal(
+  classifyFailoverReason("smoke usage limit", { provider: "build-smoke-cli" }),
+  "rate_limit",
+  "built failover classifier did not resolve the provider runtime hook",
+);
 
 process.stdout.write("[build-smoke] built plugin singleton smoke passed\n");

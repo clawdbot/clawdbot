@@ -167,6 +167,7 @@ describe("tsdown config", () => {
       "provider-dispatcher.runtime",
       "plugins/hook-runner-global",
       "plugins/provider-discovery.runtime",
+      "plugins/provider-runtime",
       "plugins/provider-runtime.runtime",
       "plugins/runtime/index",
       "plugins/synthetic-auth.runtime",

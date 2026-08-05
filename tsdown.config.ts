@@ -314,6 +314,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "commands/status.summary.runtime": "src/status/summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
+    // Provider error classification is synchronous and loaded only on demand.
+    // Keep a stable built entry for the source/dist bridge in provider-error-patterns.
+    "plugins/provider-runtime": "src/plugins/provider-runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
     "web-fetch/runtime": "src/web-fetch/runtime.ts",
     "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
