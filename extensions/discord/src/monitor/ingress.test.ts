@@ -230,6 +230,50 @@ describe("Discord durable ingress", () => {
     });
   });
 
+  it("admits a second same-lane message while the first is still deferred, without waiting for adoption", async () => {
+    await withQueue(async (queue) => {
+      const dispatched: string[] = [];
+      const lifecycles = new Map<string, DiscordIngressLifecycle>();
+      const dispatch = vi.fn(async (event: { id: string }, lifecycle: DiscordIngressLifecycle) => {
+        dispatched.push(event.id);
+        lifecycles.set(event.id, lifecycle);
+        return { kind: "deferred" as const };
+      });
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {} as never,
+        runtime: runtime(),
+        queue,
+        dispatch,
+      });
+      monitor.start();
+      try {
+        // Same channel_id: both messages share a lane.
+        const first = createRawMessage("2001", "channel-shared");
+        const second = createRawMessage("2002", "channel-shared");
+        await monitor.accept(first);
+        await monitor.accept(second);
+
+        // deferredLaneOccupancy: "release" frees the channel lane as soon as
+        // the first claim defers (before adoption), so the second message is
+        // dispatched without waiting for the first to be adopted. Holding the
+        // lane (the drain default) would guillotine it instead. Same defect
+        // and fix as #101335 (Telegram) and #119382 (WhatsApp).
+        await vi.waitFor(() => expect(dispatched).toEqual(["2001", "2002"]));
+
+        const firstLifecycle = lifecycles.get("2001");
+        const secondLifecycle = lifecycles.get("2002");
+        if (!firstLifecycle || !secondLifecycle) {
+          throw new Error("expected both dispatch lifecycles");
+        }
+        await firstLifecycle.onAdopted();
+        await secondLifecycle.onAdopted();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("dead-letters a permanent Discord authentication failure", async () => {
     await withQueue(async (queue) => {
       const monitor = createDiscordIngressMonitor({

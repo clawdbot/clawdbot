@@ -300,6 +300,45 @@ describe("Mattermost durable ingress", () => {
     });
   });
 
+  it("admits a second same-lane post while the first is still deferred, without waiting for adoption", async () => {
+    await withQueue(async (queue) => {
+      const dispatched: string[] = [];
+      const lifecycles = new Map<string, MattermostIngressLifecycle>();
+      const dispatch = vi.fn((post, _payload, lifecycle) => {
+        dispatched.push(post.id);
+        lifecycles.set(post.id, lifecycle);
+        return { kind: "deferred" } as const;
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        // Same channel_id: both posts share a lane.
+        await monitor.receive(
+          postedEvent({ postId: "post-lane-a", channelId: "channel-shared", message: "a" }),
+        );
+        await monitor.receive(
+          postedEvent({ postId: "post-lane-b", channelId: "channel-shared", message: "b" }),
+        );
+
+        // deferredLaneOccupancy: "release" frees the channel lane as soon as
+        // the first claim defers (before adoption), so the second post is
+        // dispatched without waiting for the first to be adopted. Holding
+        // the lane (the drain default) would guillotine it instead. Same
+        // defect and fix as #101335 (Telegram) and #119382 (WhatsApp).
+        await vi.waitFor(() => expect(dispatched).toEqual(["post-lane-a", "post-lane-b"]));
+
+        const firstLifecycle = lifecycles.get("post-lane-a");
+        const secondLifecycle = lifecycles.get("post-lane-b");
+        if (!firstLifecycle || !secondLifecycle) {
+          throw new Error("expected both dispatch lifecycles");
+        }
+        await firstLifecycle.onAdopted();
+        await secondLifecycle.onAdopted();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("does not let ignored post_edited events tombstone a later posted event", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async (_post, _payload, lifecycle) => {

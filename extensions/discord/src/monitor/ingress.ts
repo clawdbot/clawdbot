@@ -156,6 +156,13 @@ export function createDiscordIngressMonitor(params: {
         }
         return null;
       },
+      // The lane is per-channel and dispatch can defer into the reply/turn
+      // debouncer while a merge window is open. Holding the lane during that
+      // wait (the drain default) blocks every other message in the same
+      // channel from being admitted, so a same-lane follow-up guillotines
+      // instead of merging. Same defect and fix as #101335 (Telegram) and
+      // #119382 (WhatsApp).
+      deferredLaneOccupancy: "release",
       onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
     },
     onError: (error) =>
