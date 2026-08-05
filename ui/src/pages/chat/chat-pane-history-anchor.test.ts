@@ -57,4 +57,72 @@ describe("chat pane history anchor", () => {
     expect(scrollToMessage).toHaveBeenCalledWith("historical-hit");
     expect(order).toEqual(["cancel", "anchor", "consume"]);
   });
+
+  it("restores current history and reports an unavailable anchor", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [],
+        sessionId: "session-history",
+        sessionInfo: { key: "agent:main:current", kind: "direct", updatedAt: 1 },
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "current visible message" }],
+            __openclaw: { id: "current-message", seq: 2 },
+          },
+        ],
+        sessionId: "session-current",
+        sessionInfo: { key: "agent:main:current", kind: "direct", updatedAt: 2 },
+      });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: { setModelOverride: vi.fn() } as unknown as SessionCapability,
+    });
+    const anchorPane = pane as TestChatPane & {
+      historyAnchor?: { messageId: string; sessionId: string };
+      loadHistoryAnchorIfNeeded: () => void;
+      onHistoryAnchorConsumed: () => void;
+      transcript: { scrollToMessage: (messageId: string) => boolean };
+    };
+    anchorPane.active = true;
+    anchorPane.historyAnchor = {
+      sessionId: "session-history",
+      messageId: "missing-message",
+    };
+    anchorPane.onHistoryAnchorConsumed = vi.fn(() => {
+      anchorPane.historyAnchor = undefined;
+    });
+    vi.spyOn(anchorPane.transcript, "scrollToMessage").mockReturnValue(false);
+    Object.defineProperty(anchorPane, "updateComplete", {
+      configurable: true,
+      value: Promise.resolve(true),
+    });
+
+    anchorPane.loadHistoryAnchorIfNeeded();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(state.lastError).toBe(
+        "The selected transcript message is no longer available. Showing the current thread.",
+      ),
+    );
+    expect(anchorPane.onHistoryAnchorConsumed).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      sessionId: "session-history",
+      messageId: "missing-message",
+    });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("sessionId");
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("messageId");
+    expect(state.chatHistoryAnchorActive).toBe(false);
+    expect(state.chatMessages).toEqual([
+      expect.objectContaining({
+        content: [{ type: "text", text: "current visible message" }],
+      }),
+    ]);
+    expect(state.chatError).toBe(state.lastError);
+  });
 });

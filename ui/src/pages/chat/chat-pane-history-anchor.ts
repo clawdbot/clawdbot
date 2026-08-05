@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { cancelChatScroll } from "./scroll.ts";
@@ -15,7 +16,8 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
     if (!this.active || !state?.connected || !state.client) {
       return;
     }
-    const requestKey = `${this.connectionGeneration}\0${state.sessionKey}\0${anchor.sessionId}\0${anchor.messageId}`;
+    const sessionKey = state.sessionKey;
+    const requestKey = `${this.connectionGeneration}\0${sessionKey}\0${anchor.sessionId}\0${anchor.messageId}`;
     if (this.historyAnchorRequestKey === requestKey) {
       return;
     }
@@ -37,7 +39,23 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
         cancelChatScroll(state);
         if (this.transcript.scrollToMessage(anchor.messageId)) {
           this.onHistoryAnchorConsumed?.();
+          return;
         }
+
+        this.onHistoryAnchorConsumed?.();
+        const currentHistory = await loadChatHistory(state, { deferBranches: true });
+        if (
+          !currentHistory ||
+          !this.isConnected ||
+          this.state !== state ||
+          state.sessionKey !== sessionKey
+        ) {
+          return;
+        }
+        const message = t("chat.historyAnchorUnavailable");
+        state.lastError = message;
+        state.chatError = message;
+        state.requestUpdate?.();
       },
     );
   }
