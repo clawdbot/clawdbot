@@ -370,6 +370,7 @@ describe("program routes", () => {
 
   it("does not fast-route sessions subcommands", () => {
     expect(findRoutedCommand(["sessions", "cleanup"])).toBeNull();
+    expect(findRoutedCommand(["sessions", "diagnose"])).toBeNull();
   });
 
   it("does not match unknown routes", () => {

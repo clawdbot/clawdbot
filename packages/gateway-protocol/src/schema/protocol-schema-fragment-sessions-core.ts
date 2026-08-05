@@ -1,4 +1,5 @@
 import * as sessionsCatalog from "./sessions-catalog.js";
+import * as sessionsDiagnose from "./sessions-diagnose.js";
 import * as sessions from "./sessions.js";
 
 export const SessionCoreProtocolSchemas = {
@@ -22,6 +23,8 @@ export const SessionCoreProtocolSchemas = {
   SessionsPreviewParams: sessions.SessionsPreviewParamsSchema,
   SessionsDescribeParams: sessions.SessionsDescribeParamsSchema,
   SessionsResolveParams: sessions.SessionsResolveParamsSchema,
+  SessionsDiagnoseParams: sessionsDiagnose.SessionsDiagnoseParamsSchema,
+  SessionsDiagnoseResult: sessionsDiagnose.SessionsDiagnoseResultSchema,
   SessionsSearchHit: sessions.SessionsSearchHitSchema,
   SessionsSearchParams: sessions.SessionsSearchParamsSchema,
   SessionsSearchResult: sessions.SessionsSearchResultSchema,

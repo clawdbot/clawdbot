@@ -117,6 +117,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
 type ReplyTurnAdmissionParams = {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   expectedSessionId?: string;
   expectedActiveOperation?: ReplyOperation;
   storePath?: string;
@@ -294,6 +295,7 @@ async function admitReplyTurnWithWaitSignal(
           operation = createReplyOperation({
             sessionKey: params.sessionKey,
             sessionId,
+            agentId: params.agentId,
             resetTriggered: params.resetTriggered,
             routeThreadId: params.routeThreadId,
             upstreamAbortSignal: params.upstreamAbortSignal,

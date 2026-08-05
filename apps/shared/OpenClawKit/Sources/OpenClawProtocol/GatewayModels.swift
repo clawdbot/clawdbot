@@ -4724,6 +4724,102 @@ public struct SessionsResolveParams: Codable, Sendable {
     }
 }
 
+public struct SessionsDiagnoseParams: Codable, Sendable {
+    public let key: String?
+    public let sessionid: String?
+    public let label: String?
+    public let agentid: String?
+    public let includeglobal: Bool?
+    public let includeunknown: Bool?
+    public let tail: Int?
+
+    public init(
+        key: String? = nil,
+        sessionid: String? = nil,
+        label: String? = nil,
+        agentid: String? = nil,
+        includeglobal: Bool? = nil,
+        includeunknown: Bool? = nil,
+        tail: Int? = nil)
+    {
+        self.key = key
+        self.sessionid = sessionid
+        self.label = label
+        self.agentid = agentid
+        self.includeglobal = includeglobal
+        self.includeunknown = includeunknown
+        self.tail = tail
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case sessionid = "sessionId"
+        case label
+        case agentid = "agentId"
+        case includeglobal = "includeGlobal"
+        case includeunknown = "includeUnknown"
+        case tail
+    }
+}
+
+public struct SessionsDiagnoseResult: Codable, Sendable {
+    public let ok: Bool
+    public let ts: Int
+    public let outcome: AnyCodable
+    public let selector: [String: AnyCodable]
+    public let chosenbecause: String?
+    public let summary: [String: AnyCodable]
+    public let session: [String: AnyCodable]
+    public let live: [String: AnyCodable]
+    public let transcript: [String: AnyCodable]?
+    public let delivery: [String: AnyCodable]?
+    public let findings: [[String: AnyCodable]]
+    public let nextchecks: [String]
+
+    public init(
+        ok: Bool,
+        ts: Int,
+        outcome: AnyCodable,
+        selector: [String: AnyCodable],
+        chosenbecause: String? = nil,
+        summary: [String: AnyCodable],
+        session: [String: AnyCodable],
+        live: [String: AnyCodable],
+        transcript: [String: AnyCodable]? = nil,
+        delivery: [String: AnyCodable]? = nil,
+        findings: [[String: AnyCodable]],
+        nextchecks: [String])
+    {
+        self.ok = ok
+        self.ts = ts
+        self.outcome = outcome
+        self.selector = selector
+        self.chosenbecause = chosenbecause
+        self.summary = summary
+        self.session = session
+        self.live = live
+        self.transcript = transcript
+        self.delivery = delivery
+        self.findings = findings
+        self.nextchecks = nextchecks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case ts
+        case outcome
+        case selector
+        case chosenbecause = "chosenBecause"
+        case summary
+        case session
+        case live
+        case transcript
+        case delivery
+        case findings
+        case nextchecks = "nextChecks"
+    }
+}
+
 public struct SessionsSearchHit: Codable, Sendable {
     public let sessionkey: String
     public let sessionid: String

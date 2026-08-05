@@ -280,9 +280,10 @@ describe("createEmbeddedAttemptRunAbort", () => {
         runId: "run-timeout",
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-timeout",
-        sessionKey: "agent:main",
+        sessionKey: "global",
       },
       getQueueHandle: () => queueHandle,
+      hookAgentId: "work",
       isProbeSession: false,
       log: { warn: vi.fn() },
       runAbortController,
@@ -303,8 +304,9 @@ describe("createEmbeddedAttemptRunAbort", () => {
     expect(mocks.markActiveEmbeddedRunAbandoned).toHaveBeenCalledWith({
       sessionId: "session-timeout",
       handle: queueHandle,
-      sessionKey: "agent:main",
+      sessionKey: "global",
       sessionFile: "/tmp/session.jsonl",
+      agentId: "work",
       reason: "timeout",
     });
     expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);

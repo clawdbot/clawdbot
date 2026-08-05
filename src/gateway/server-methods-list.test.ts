@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-31)).toEqual([
+    expect(listGatewayMethods().slice(-32)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -98,6 +98,7 @@ describe("listGatewayMethods", () => {
       "tasks.retry",
       "tasks.dismiss",
       "audit.run.inspect",
+      "sessions.diagnose",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -130,6 +131,11 @@ describe("listGatewayMethods", () => {
   it("advertises session workspace reveal", () => {
     expect(listGatewayMethods()).toContain("sessions.files.reveal");
     expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");
+  });
+
+  it("advertises read-only session diagnosis", () => {
+    expect(listGatewayMethods()).toContain("sessions.diagnose");
+    expect(coreGatewayHandlers["sessions.diagnose"]).toBeTypeOf("function");
   });
 
   it("advertises the versioned activity audit method", () => {
@@ -165,7 +171,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-38)).toEqual([
+    expect(coreMethods.slice(-39)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -204,10 +210,12 @@ describe("listGatewayMethods", () => {
       "tasks.retry",
       "tasks.dismiss",
       "audit.run.inspect",
+      "sessions.diagnose",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
     expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
+    expect(methods.indexOf("sessions.diagnose")).toBe(methods.indexOf("audit.run.inspect") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

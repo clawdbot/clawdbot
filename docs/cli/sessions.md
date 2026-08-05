@@ -46,6 +46,58 @@ for a smaller/larger window or `--limit all` when you intentionally need the
 full store. JSON responses include `totalCount`, `limitApplied`, and `hasMore`
 when callers need to show that more rows exist.
 
+## Diagnose a session
+
+Diagnose one session from live Gateway and stored evidence:
+
+```bash
+openclaw sessions diagnose
+openclaw sessions diagnose --session-key "agent:main:telegram:direct:123"
+openclaw sessions diagnose --session-id "<session-id>" --json
+openclaw sessions diagnose --label "ops-triage"
+openclaw sessions diagnose --agent work --timeout 15000
+openclaw sessions diagnose --tail 80
+```
+
+`openclaw sessions diagnose` is read-only. It does not reset, abort, release,
+migrate, repair, or modify session state. Without a selector, it chooses the
+most relevant active or contradictory session first, then the newest stored
+session, and prints why that target was selected.
+
+Selectors are exclusive: pass only one of `--session-key`, `--session-id`, or
+`--label`. When `--session-id` or `--label` matches multiple rows, diagnose
+returns an error and asks you to rerun with the exact session key.
+
+Options:
+
+- `--session-key <key>` diagnoses one exact session key.
+- `--session-id <id>` diagnoses one stored session id when it resolves to a
+  single row.
+- `--label <label>` diagnoses one labeled session when it resolves to a single
+  row.
+- `--agent <id>` scopes lookup to one configured agent store.
+- `--tail <count>` controls bounded transcript metadata reads. The default is
+  `30`; valid values are `1` through `200`.
+- `--timeout <ms>` sets the Gateway request timeout. The default is `10000`.
+- `--json` prints the raw `sessions.diagnose` result.
+
+Use `diagnose` when a session looks stuck, silent, queued, or done without an
+obvious delivery result. It combines Gateway active-run metadata, embedded-run
+state, diagnostic activity, command-lane counts, stored session status, and
+bounded transcript metadata. It does not check channel/provider connectivity;
+use `openclaw status --deep` or `openclaw health --verbose` for process and
+transport health.
+
+Finding codes include `active_run_visible`, `active_progress_fresh`,
+`last_progress_stale`, `queued_without_active_run`,
+`stale_diagnostic_tool`, `store_terminal_but_live_processing`,
+`lane_blocked`, `transcript_unresolved`, `delivery_uncertain`,
+`session_not_found`, and `unknown_low_confidence`. Text output groups the
+result into Session, Live State, Findings, Evidence, and Next Checks. JSON
+output is the Gateway `sessions.diagnose` result.
+
+## Session discovery details
+
 RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
 discovery source but return only rows for agents currently present in config.
 Control UI uses that mode by default so deleted or disk-only agent stores do

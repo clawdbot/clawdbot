@@ -7,16 +7,25 @@ import type {
 } from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,
+  isReplyRunActiveForSessionId,
+  isReplyRunActiveForSessionIdAndAgent,
   listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
+  resolveActiveReplyRunSessionIdForAgent,
   type ReplyBackendQueueMessageOptions,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
+import { isUnscopedSessionKeySentinel, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+
+function normalizeEmbeddedSessionFileKey(sessionFile: string | undefined): string | undefined {
+  const normalized = sessionFile?.trim();
+  return normalized || undefined;
+}
 
 /**
  * Shared process state for embedded-agent runs, queues, and snapshots.
@@ -60,6 +69,7 @@ export type AbandonedEmbeddedRun = {
   sessionId: string;
   sessionKey?: string;
   sessionFile?: string;
+  agentId?: string;
   abandonedAtMs: number;
   reason: "timeout";
 };
@@ -73,9 +83,12 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
+  sessionIdsByAgentScopedFallbackKey: new Map<string, string>(),
   sessionIdsByFile: new Map<string, string>(),
   abandonedRunsBySessionId: new Map<string, AbandonedEmbeddedRun>(),
+  abandonedRunsByAgentScopedFallbackKey: new Map<string, AbandonedEmbeddedRun>(),
   abandonedRunSessionIdsByKey: new Map<string, string>(),
+  abandonedRunSessionIdsByAgentScopedFallbackKey: new Map<string, string>(),
   abandonedRunSessionIdsByFile: new Map<string, string>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
 }));
@@ -101,21 +114,134 @@ export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS =
 export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
   embeddedRunState.sessionIdsByKey ??
   (embeddedRunState.sessionIdsByKey = new Map<string, string>());
+export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY =
+  embeddedRunState.sessionIdsByAgentScopedFallbackKey ??
+  (embeddedRunState.sessionIdsByAgentScopedFallbackKey = new Map<string, string>());
 export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
   embeddedRunState.sessionIdsByFile ??
   (embeddedRunState.sessionIdsByFile = new Map<string, string>());
 export const ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID =
   embeddedRunState.abandonedRunsBySessionId ??
   (embeddedRunState.abandonedRunsBySessionId = new Map<string, AbandonedEmbeddedRun>());
+export const ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY =
+  embeddedRunState.abandonedRunsByAgentScopedFallbackKey ??
+  (embeddedRunState.abandonedRunsByAgentScopedFallbackKey = new Map<
+    string,
+    AbandonedEmbeddedRun
+  >());
 export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
   embeddedRunState.abandonedRunSessionIdsByKey ??
   (embeddedRunState.abandonedRunSessionIdsByKey = new Map<string, string>());
+export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY =
+  embeddedRunState.abandonedRunSessionIdsByAgentScopedFallbackKey ??
+  (embeddedRunState.abandonedRunSessionIdsByAgentScopedFallbackKey = new Map<string, string>());
 export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
   embeddedRunState.abandonedRunSessionIdsByFile ??
   (embeddedRunState.abandonedRunSessionIdsByFile = new Map<string, string>());
 export const EMBEDDED_RUN_WAITERS =
   embeddedRunState.waiters ??
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
+
+// `global` and `unknown` are per-agent store rows but process-wide runtime keys.
+// Diagnostics need the agent side index so one agent's fallback run is not
+// attributed to another agent's row.
+export function resolveEmbeddedRunAgentScopedFallbackIndexKey(params: {
+  sessionKey?: string;
+  agentId?: string;
+}): string | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  const agentId = params.agentId?.trim();
+  if (!sessionKey || !agentId || !isUnscopedSessionKeySentinel(sessionKey)) {
+    return undefined;
+  }
+  return `${normalizeAgentId(agentId)}:${sessionKey.toLowerCase()}`;
+}
+
+function resolveOnlyAgentScopedFallbackSessionId(
+  map: ReadonlyMap<string, string>,
+  sessionKey: string,
+  legacySessionId?: string,
+): { found: boolean; sessionId?: string } {
+  const suffix = `:${sessionKey.toLowerCase()}`;
+  let resolvedSessionId: string | undefined;
+  let found = false;
+  const addSessionId = (sessionId: string): { ambiguous: true } | undefined => {
+    if (!found) {
+      resolvedSessionId = sessionId;
+      found = true;
+      return undefined;
+    }
+    return resolvedSessionId === sessionId ? undefined : { ambiguous: true };
+  };
+  if (legacySessionId) {
+    addSessionId(legacySessionId);
+  }
+  for (const [scopedKey, sessionId] of map) {
+    if (!scopedKey.endsWith(suffix)) {
+      continue;
+    }
+    if (addSessionId(sessionId)?.ambiguous) {
+      return { found: true };
+    }
+  }
+  return found ? { found: true, sessionId: resolvedSessionId } : { found: false };
+}
+
+function listAgentScopedFallbackSessionKeys(map: ReadonlyMap<string, string>): string[] {
+  const keys = new Set<string>();
+  for (const scopedKey of map.keys()) {
+    if (scopedKey.endsWith(":global")) {
+      keys.add("global");
+    } else if (scopedKey.endsWith(":unknown")) {
+      keys.add("unknown");
+    }
+  }
+  return [...keys];
+}
+
+export function resolveActiveEmbeddedRunSessionIdByKey(
+  sessionKey: string,
+  agentId?: string,
+): string | undefined {
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey,
+    agentId,
+  });
+  if (scopedFallbackKey) {
+    return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey);
+  }
+  if (isUnscopedSessionKeySentinel(sessionKey)) {
+    const scoped = resolveOnlyAgentScopedFallbackSessionId(
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
+      sessionKey,
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey),
+    );
+    return scoped.found ? scoped.sessionId : undefined;
+  }
+  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey);
+}
+
+function resolveAbandonedEmbeddedRunSessionIdByKey(
+  sessionKey: string,
+  agentId?: string,
+): string | undefined {
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey,
+    agentId,
+  });
+  if (scopedFallbackKey) {
+    return ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey);
+  }
+  if (isUnscopedSessionKeySentinel(sessionKey)) {
+    const scoped = resolveOnlyAgentScopedFallbackSessionId(
+      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
+      sessionKey,
+      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey),
+    );
+    return scoped.found ? scoped.sessionId : undefined;
+  }
+  return ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey);
+}
 
 function evictPriorLifecycleEmbeddedRuns(): void {
   const staleHandles = new Set<EmbeddedAgentQueueHandle>();
@@ -146,6 +272,14 @@ function evictPriorLifecycleEmbeddedRuns(): void {
   for (const [sessionKey, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
     if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(sessionKey);
+    }
+  }
+  for (const [
+    sessionKey,
+    sessionId,
+  ] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY) {
+    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.delete(sessionKey);
     }
   }
   for (const [sessionFile, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
@@ -198,6 +332,9 @@ export function listActiveEmbeddedRunSessionKeys(): string[] {
   return [
     ...new Set([
       ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys(),
+      ...listAgentScopedFallbackSessionKeys(
+        ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
+      ),
       ...listActiveReplyRunSessionKeys(),
     ]),
   ].toSorted((a, b) => a.localeCompare(b));
@@ -209,6 +346,7 @@ export function listActiveEmbeddedRunSessionIds(): string[] {
     ...new Set([
       ...ACTIVE_EMBEDDED_RUNS.keys(),
       ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.values(),
+      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.values(),
       ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.values(),
       ...listActiveReplyRunSessionIds(),
     ]),
@@ -237,6 +375,311 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
   }
   return (
     resolveActiveReplyRunSessionId(normalizedSessionKey) ??
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
+    resolveActiveEmbeddedRunSessionIdByKey(normalizedSessionKey)
   );
+}
+
+type EmbeddedRunDiagnosticSnapshot = {
+  active: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  streaming?: boolean;
+  compacting?: boolean;
+  transcriptCommitWait?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  hasTranscriptSnapshot?: boolean;
+  abandoned?: {
+    sessionId: string;
+    sessionKey?: string;
+    abandonedAtMs: number;
+    reason: AbandonedEmbeddedRun["reason"];
+  };
+};
+
+function resolveEmbeddedRunDiagnosticSessionId(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+  agentId?: string;
+}): string | undefined {
+  const sessionId = params.sessionId?.trim();
+  const sessionKey = params.sessionKey?.trim();
+  if (sessionKey) {
+    const embeddedSessionId = resolveActiveEmbeddedRunSessionIdByKey(sessionKey, params.agentId);
+    const activeSessionId =
+      params.agentId && isUnscopedSessionKeySentinel(sessionKey)
+        ? (resolveActiveReplyRunSessionIdForAgent(sessionKey, params.agentId) ?? embeddedSessionId)
+        : (resolveActiveReplyRunSessionId(sessionKey) ?? embeddedSessionId);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
+  }
+  const sessionFile = params.sessionFile?.trim();
+  const sessionFileKey = normalizeEmbeddedSessionFileKey(sessionFile);
+  if (sessionFile) {
+    const activeSessionId = sessionFileKey
+      ? ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey)
+      : undefined;
+    if (activeSessionId) {
+      return activeSessionId;
+    }
+  }
+  if (
+    sessionId &&
+    isReplyRunActiveForDiagnosticIdentity({
+      sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    })
+  ) {
+    return sessionId;
+  }
+  if (sessionKey) {
+    const abandonedSessionId = resolveAbandonedEmbeddedRunSessionIdByKey(
+      sessionKey,
+      params.agentId,
+    );
+    if (abandonedSessionId) {
+      return abandonedSessionId;
+    }
+  }
+  if (sessionFileKey) {
+    const abandonedSessionId = sessionFileKey
+      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey)
+      : undefined;
+    if (abandonedSessionId) {
+      return abandonedSessionId;
+    }
+  }
+  const hasConflictingActiveIndex =
+    sessionId !== undefined &&
+    hasConflictingEmbeddedRunDiagnosticIndex({
+      sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(sessionFileKey ? { sessionFileKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    });
+  if (
+    sessionId &&
+    (ACTIVE_EMBEDDED_RUNS.has(sessionId) ||
+      isReplyRunActiveForDiagnosticIdentity({
+        sessionId,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      })) &&
+    !hasConflictingActiveIndex
+  ) {
+    return sessionId;
+  }
+  if (sessionId && !hasConflictingActiveIndex) {
+    return sessionId;
+  }
+  return undefined;
+}
+
+function isReplyRunActiveForDiagnosticIdentity(params: {
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+}): boolean {
+  if (params.sessionKey && params.agentId && isUnscopedSessionKeySentinel(params.sessionKey)) {
+    return isReplyRunActiveForSessionIdAndAgent(params.sessionId, params.agentId);
+  }
+  return isReplyRunActiveForSessionId(params.sessionId);
+}
+
+function hasConflictingEmbeddedRunDiagnosticIndex(params: {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFileKey?: string;
+  agentId?: string;
+}): boolean {
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (scopedFallbackKey) {
+    const scopedSessionId =
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey);
+    if (scopedSessionId && scopedSessionId !== params.sessionId) {
+      return true;
+    }
+  } else if (
+    params.sessionKey &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(params.sessionKey) &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(params.sessionKey) !== params.sessionId
+  ) {
+    return true;
+  }
+  if (
+    params.sessionFileKey &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(params.sessionFileKey) &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(params.sessionFileKey) !== params.sessionId
+  ) {
+    return true;
+  }
+  for (const [sessionKey, indexedSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
+    if (
+      indexedSessionId === params.sessionId &&
+      params.sessionKey &&
+      sessionKey !== params.sessionKey
+    ) {
+      return true;
+    }
+  }
+  for (const [sessionFileKey, indexedSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
+    if (
+      indexedSessionId === params.sessionId &&
+      params.sessionFileKey &&
+      sessionFileKey !== params.sessionFileKey
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasActiveEmbeddedRunDiagnosticOwnership(params: {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFileKey?: string;
+  agentId?: string;
+}): boolean {
+  if (!ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
+    return false;
+  }
+  if (
+    params.sessionFileKey &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(params.sessionFileKey) === params.sessionId
+  ) {
+    return true;
+  }
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (scopedFallbackKey) {
+    return (
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey) ===
+      params.sessionId
+    );
+  }
+  if (params.sessionKey && isUnscopedSessionKeySentinel(params.sessionKey)) {
+    const scoped = resolveOnlyAgentScopedFallbackSessionId(
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
+      params.sessionKey,
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(params.sessionKey),
+    );
+    if (scoped.found) {
+      return scoped.sessionId === params.sessionId;
+    }
+  }
+  if (
+    params.sessionKey &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(params.sessionKey) === params.sessionId
+  ) {
+    return true;
+  }
+  return !hasConflictingEmbeddedRunDiagnosticIndex(params);
+}
+
+function resolveEmbeddedRunDiagnosticAbandonment(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFileKey?: string;
+  agentId?: string;
+}): AbandonedEmbeddedRun | undefined {
+  const matchesDiagnosticIdentity = (run: AbandonedEmbeddedRun): boolean => {
+    if (params.sessionId && run.sessionId !== params.sessionId) {
+      return false;
+    }
+    const runFileKey = normalizeEmbeddedSessionFileKey(run.sessionFile);
+    return !params.sessionFileKey || !runFileKey || runFileKey === params.sessionFileKey;
+  };
+  const scopedFallbackKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (scopedFallbackKey) {
+    const scopedRun = ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.get(scopedFallbackKey);
+    if (scopedRun && matchesDiagnosticIdentity(scopedRun)) {
+      return scopedRun;
+    }
+    const sessionRun = params.sessionId
+      ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(params.sessionId)
+      : undefined;
+    if (sessionRun && !matchesDiagnosticIdentity(sessionRun)) {
+      return undefined;
+    }
+    const sessionRunScopedKey = resolveEmbeddedRunAgentScopedFallbackIndexKey({
+      sessionKey: sessionRun?.sessionKey,
+      agentId: sessionRun?.agentId,
+    });
+    if (sessionRunScopedKey) {
+      return sessionRunScopedKey === scopedFallbackKey ? sessionRun : undefined;
+    }
+    const sessionRunFileKey = normalizeEmbeddedSessionFileKey(sessionRun?.sessionFile);
+    return params.sessionFileKey && sessionRunFileKey === params.sessionFileKey
+      ? sessionRun
+      : undefined;
+  }
+  return params.sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(params.sessionId) : undefined;
+}
+
+/** Projects embedded run state for read-only diagnostics without exposing prompts or messages. */
+export function getEmbeddedRunDiagnosticSnapshot(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+  agentId?: string;
+}): EmbeddedRunDiagnosticSnapshot {
+  const sessionId = resolveEmbeddedRunDiagnosticSessionId(params);
+  const sessionFile = params.sessionFile?.trim();
+  const sessionFileKey = normalizeEmbeddedSessionFileKey(sessionFile);
+  const activeOwnership =
+    sessionId &&
+    hasActiveEmbeddedRunDiagnosticOwnership({
+      sessionId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(sessionFileKey ? { sessionFileKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    });
+  const handle = activeOwnership ? ACTIVE_EMBEDDED_RUNS.get(sessionId) : undefined;
+  const abandoned = resolveEmbeddedRunDiagnosticAbandonment({
+    sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(sessionFileKey ? { sessionFileKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+  const replyRunActive = sessionId
+    ? isReplyRunActiveForDiagnosticIdentity({
+        sessionId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      })
+    : false;
+  return {
+    active: Boolean(handle) || replyRunActive,
+    ...(sessionId ? { sessionId } : {}),
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(handle ? { streaming: handle.isStreaming() } : {}),
+    ...(handle ? { compacting: handle.isCompacting() } : {}),
+    ...(handle?.supportsTranscriptCommitWait !== undefined
+      ? { transcriptCommitWait: handle.supportsTranscriptCommitWait }
+      : {}),
+    ...(handle?.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: handle.sourceReplyDeliveryMode }
+      : {}),
+    ...(sessionId ? { hasTranscriptSnapshot: ACTIVE_EMBEDDED_RUN_SNAPSHOTS.has(sessionId) } : {}),
+    ...(abandoned
+      ? {
+          abandoned: {
+            sessionId: abandoned.sessionId,
+            ...(abandoned.sessionKey ? { sessionKey: abandoned.sessionKey } : {}),
+            abandonedAtMs: abandoned.abandonedAtMs,
+            reason: abandoned.reason,
+          },
+        }
+      : {}),
+  };
 }

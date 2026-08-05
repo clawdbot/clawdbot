@@ -120,6 +120,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     activeSession,
     attempt,
     getQueueHandle: () => queueHandleRef.current,
+    hookAgentId: input.stream.hookAgentId,
     isProbeSession,
     log,
     runAbortController: input.runAbortController,

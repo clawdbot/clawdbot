@@ -76,6 +76,7 @@ import {
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { sessionDiagnoseHandlers } from "./sessions-diagnose.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import {
   filterSessionStoreToConfiguredAgents,
@@ -86,6 +87,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
+  ...sessionDiagnoseHandlers,
   "sessions.search": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
       return;

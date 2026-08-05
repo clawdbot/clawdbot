@@ -144,6 +144,7 @@ export async function admitFollowupTurn(params: {
   const admission = await admitReplyTurn({
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
+    agentId: run.agentId,
     expectedSessionId: initialEntry?.sessionId,
     storePath: params.defaults.storePath,
     kind: "queued_followup",

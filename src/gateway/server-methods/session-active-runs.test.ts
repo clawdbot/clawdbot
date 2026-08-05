@@ -1,5 +1,5 @@
 // Tests gateway active-run matching by logical session key and backing id.
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   abortEmbeddedAgentRun,
@@ -14,11 +14,13 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import {
+  collectTrackedActiveSessionRunSnapshot,
   collectTrackedActiveSessionRuns,
   hasTrackedActiveSessionRun,
   hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
+import type { GatewayRequestContext } from "./types.js";
 
 it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   const context = {
@@ -71,9 +73,44 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   }
 });
 
-it("matches session-id-only gateway runs during archive admission", () => {
-  const context = {
-    chatAbortControllers: new Map([
+function contextWithRuns(
+  runs: Array<
+    [
+      string,
+      {
+        sessionId?: string;
+        sessionKey?: string;
+        agentId?: string;
+        ownerConnId?: string;
+        kind?: "chat-send" | "agent";
+        startedAtMs?: number;
+        expiresAtMs?: number;
+        controlUiVisible?: boolean;
+        projectSessionActive?: boolean;
+        projectSessionTerminalPending?: boolean;
+        projectSessionTerminalPersisted?: boolean;
+      },
+    ]
+  >,
+): Partial<Pick<GatewayRequestContext, "chatAbortControllers">> {
+  return {
+    chatAbortControllers: new Map(
+      runs.map(([runId, run]) => [
+        runId,
+        {
+          controller: new AbortController(),
+          startedAtMs: 1_000,
+          expiresAtMs: 10_000,
+          ...run,
+        },
+      ]),
+    ) as GatewayRequestContext["chatAbortControllers"],
+  };
+}
+
+describe("session active runs", () => {
+  it("matches session-id-only gateway runs during archive admission", () => {
+    const context = contextWithRuns([
       [
         "run-1",
         {
@@ -82,23 +119,21 @@ it("matches session-id-only gateway runs during archive admission", () => {
           projectSessionActive: true,
         },
       ],
-    ]),
-  } as never;
+    ]);
 
-  expect(
-    hasVisibleActiveSessionRun({
-      context,
-      requestedKey: "agent:main:child",
-      canonicalKey: "agent:main:child",
-      sessionId: "session-1",
-    }),
-  ).toBe(true);
-});
+    expect(
+      hasVisibleActiveSessionRun({
+        context,
+        requestedKey: "agent:main:child",
+        canonicalKey: "agent:main:child",
+        sessionId: "session-1",
+      }),
+    ).toBe(true);
+  });
 
-it("excludes the replacement run from an internal active-session check", () => {
-  const sessionKey = "agent:main:main";
-  const context = {
-    chatAbortControllers: new Map([
+  it("excludes the replacement run from an internal active-session check", () => {
+    const sessionKey = "agent:main:main";
+    const context = contextWithRuns([
       [
         "replacement-run",
         {
@@ -107,64 +142,399 @@ it("excludes the replacement run from an internal active-session check", () => {
           projectSessionActive: true,
         },
       ],
-    ]),
-  } as never;
+    ]);
 
-  expect(
-    hasTrackedActiveSessionRun({
-      context,
-      requestedKey: sessionKey,
-      canonicalKey: sessionKey,
-      excludeRunIds: new Set(["replacement-run"]),
-    }),
-  ).toBe(false);
-  expect(
-    hasTrackedActiveSessionRun({
-      context,
-      requestedKey: sessionKey,
-      canonicalKey: sessionKey,
-    }),
-  ).toBe(true);
-});
+    expect(
+      hasTrackedActiveSessionRun({
+        context,
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        excludeRunIds: new Set(["replacement-run"]),
+      }),
+    ).toBe(false);
+    expect(
+      hasTrackedActiveSessionRun({
+        context,
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+      }),
+    ).toBe(true);
+  });
 
-it("returns deterministic visible run ids for the selected session", () => {
-  const context = {
-    chatAbortControllers: new Map([
+  it("returns deterministic visible run ids for the selected session", () => {
+    const context = contextWithRuns([
       ["run-z", { sessionKey: "main" }],
       ["run-hidden", { sessionKey: "main", controlUiVisible: false }],
       ["run-other", { sessionKey: "other" }],
       ["run-a", { sessionKey: "main" }],
-    ]),
-  } as never;
+    ]);
 
-  expect(
-    resolveVisibleActiveSessionRunState({
-      context,
-      requestedKey: "main",
-      canonicalKey: "main",
-    }),
-  ).toEqual({ active: true, runIds: ["run-a", "run-z"] });
-});
-
-it("projects a lifecycle-owned worker run without widening event visibility", () => {
-  registerAgentRunContext("worker-run", {
-    isControlUiVisible: false,
-    projectSessionActive: true,
-    sessionId: "worker-session",
-    sessionKey: "agent:main:worker",
-  });
-  try {
     expect(
       resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: "agent:main:worker",
-        canonicalKey: "agent:main:worker",
-        sessionId: "worker-session",
+        context,
+        requestedKey: "main",
+        canonicalKey: "main",
       }),
-    ).toEqual({ active: true, runIds: [] });
-  } finally {
-    clearAgentRunContext("worker-run");
-  }
+    ).toEqual({ active: true, runIds: ["run-a", "run-z"] });
+  });
+
+  it("does not match a conflicting keyed run by session id alone", () => {
+    const context = contextWithRuns([
+      [
+        "run-other",
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:other",
+          agentId: "main",
+        },
+      ],
+    ]);
+
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+      }),
+    ).toEqual({ active: false, runIds: [] });
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+      }),
+    ).toEqual({ hasActiveRun: false, runs: [] });
+  });
+
+  it("does not match a session-id-only run from another agent", () => {
+    const context = contextWithRuns([
+      [
+        "run-work",
+        {
+          sessionId: "session-1",
+          agentId: "work",
+        },
+      ],
+    ]);
+
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+        defaultAgentId: "main",
+      }),
+    ).toEqual({ active: false, runIds: [] });
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+        defaultAgentId: "main",
+      }),
+    ).toEqual({ hasActiveRun: false, runs: [] });
+  });
+
+  it("projects a lifecycle-owned worker run without widening event visibility", () => {
+    registerAgentRunContext("worker-run", {
+      isControlUiVisible: false,
+      projectSessionActive: true,
+      sessionId: "worker-session",
+      sessionKey: "agent:main:worker",
+    });
+    try {
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: "agent:main:worker",
+          canonicalKey: "agent:main:worker",
+          sessionId: "worker-session",
+        }),
+      ).toEqual({ active: true, runIds: [] });
+      expect(
+        collectTrackedActiveSessionRunSnapshot({
+          context: {},
+          requestedKey: "agent:main:worker",
+          canonicalKey: "agent:main:worker",
+          sessionId: "worker-session",
+        }),
+      ).toEqual({ hasActiveRun: true, runs: [] });
+    } finally {
+      clearAgentRunContext("worker-run");
+    }
+  });
+
+  it("preserves unscoped unknown fallback behavior for lifecycle projections", () => {
+    registerAgentRunContext("unknown-run", {
+      isControlUiVisible: false,
+      projectSessionActive: true,
+      sessionId: "session-main",
+      sessionKey: "unknown",
+      agentId: "main",
+    });
+    try {
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: "unknown",
+          canonicalKey: "unknown",
+          sessionId: "session-work",
+          agentId: "work",
+          defaultAgentId: "main",
+        }),
+      ).toEqual({ active: true, runIds: [] });
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: "unknown",
+          canonicalKey: "unknown",
+          sessionId: "session-work",
+          agentId: "work",
+          defaultAgentId: "main",
+          scopeUnknownByAgent: true,
+        }),
+      ).toEqual({ active: false, runIds: [] });
+    } finally {
+      clearAgentRunContext("unknown-run");
+    }
+  });
+});
+
+describe("collectTrackedActiveSessionRunSnapshot", () => {
+  it("projects visible active runs without exposing abort controllers", () => {
+    const snapshot = collectTrackedActiveSessionRunSnapshot({
+      context: contextWithRuns([
+        [
+          "run-visible",
+          {
+            sessionId: "session-1",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            ownerConnId: "conn-1",
+            kind: "agent",
+            startedAtMs: 1_000,
+            expiresAtMs: 11_000,
+            projectSessionTerminalPending: true,
+          },
+        ],
+        [
+          "run-hidden",
+          {
+            sessionId: "session-hidden",
+            sessionKey: "agent:main:main",
+            controlUiVisible: false,
+          },
+        ],
+      ]),
+      requestedKey: "agent:main:main",
+      canonicalKey: "agent:main:main",
+      now: 6_000,
+    });
+
+    expect(snapshot).toEqual({
+      hasActiveRun: true,
+      runs: [
+        {
+          runId: "run-visible",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          ownerConnId: "conn-1",
+          kind: "agent",
+          startedAtMs: 1_000,
+          expiresAtMs: 11_000,
+          startedAgeMs: 5_000,
+          expiresInMs: 5_000,
+          terminalPending: true,
+        },
+      ],
+    });
+  });
+
+  it("projects visible runs that only carry the diagnosed session id", () => {
+    const snapshot = collectTrackedActiveSessionRunSnapshot({
+      context: contextWithRuns([
+        [
+          "run-id-only",
+          {
+            sessionId: "session-1",
+            agentId: "main",
+          },
+        ],
+      ]),
+      requestedKey: "agent:main:main",
+      canonicalKey: "agent:main:main",
+      sessionId: "session-1",
+      now: 6_000,
+    });
+
+    expect(snapshot).toMatchObject({
+      hasActiveRun: true,
+      runs: [
+        {
+          runId: "run-id-only",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        },
+      ],
+    });
+  });
+
+  it("projects visible runs that only carry the diagnosed session key", () => {
+    const snapshot = collectTrackedActiveSessionRunSnapshot({
+      context: contextWithRuns([
+        [
+          "run-key-only",
+          {
+            sessionKey: "agent:main:main",
+            agentId: "main",
+          },
+        ],
+      ]),
+      requestedKey: "agent:main:main",
+      canonicalKey: "agent:main:main",
+      sessionId: "session-1",
+      now: 6_000,
+    });
+
+    expect(snapshot).toMatchObject({
+      hasActiveRun: true,
+      runs: [
+        {
+          runId: "run-key-only",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        },
+      ],
+    });
+  });
+
+  it("matches global sessions by requested agent id", () => {
+    const context = contextWithRuns([
+      [
+        "run-main",
+        {
+          sessionId: "session-main",
+          sessionKey: "global",
+          agentId: "main",
+        },
+      ],
+      [
+        "run-work",
+        {
+          sessionId: "session-work",
+          sessionKey: "global",
+          agentId: "work",
+          projectSessionTerminalPersisted: true,
+        },
+      ],
+    ]);
+
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "global",
+        canonicalKey: "global",
+        agentId: "work",
+        defaultAgentId: "main",
+        now: 2_000,
+      }).runs,
+    ).toEqual([
+      expect.objectContaining({
+        runId: "run-work",
+        sessionId: "session-work",
+        terminalPersisted: true,
+      }),
+    ]);
+  });
+
+  it("keeps unknown fallback active runs unscoped by default", () => {
+    const context = contextWithRuns([
+      [
+        "run-main",
+        {
+          sessionId: "session-main",
+          sessionKey: "unknown",
+          agentId: "main",
+        },
+      ],
+      [
+        "run-work",
+        {
+          sessionId: "session-work",
+          sessionKey: "unknown",
+          agentId: "work",
+        },
+      ],
+    ]);
+
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "unknown",
+        canonicalKey: "unknown",
+        agentId: "work",
+        defaultAgentId: "main",
+        now: 2_000,
+      }).runs,
+    ).toEqual([
+      expect.objectContaining({
+        runId: "run-main",
+        sessionId: "session-main",
+        agentId: "main",
+      }),
+      expect.objectContaining({
+        runId: "run-work",
+        sessionId: "session-work",
+        agentId: "work",
+      }),
+    ]);
+  });
+
+  it("matches unknown fallback sessions by requested agent id when scoped", () => {
+    const context = contextWithRuns([
+      [
+        "run-main",
+        {
+          sessionId: "session-main",
+          sessionKey: "unknown",
+          agentId: "main",
+        },
+      ],
+      [
+        "run-work",
+        {
+          sessionId: "session-work",
+          sessionKey: "unknown",
+          agentId: "work",
+        },
+      ],
+    ]);
+
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "unknown",
+        canonicalKey: "unknown",
+        agentId: "work",
+        defaultAgentId: "main",
+        scopeUnknownByAgent: true,
+        now: 2_000,
+      }).runs,
+    ).toEqual([
+      expect.objectContaining({
+        runId: "run-work",
+        sessionId: "session-work",
+        agentId: "work",
+      }),
+    ]);
+  });
 });
 
 it("does not project a terminal reply operation retained for settlement as active", () => {

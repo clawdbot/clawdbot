@@ -52,6 +52,7 @@ const CURRENT_TRAIN_METHODS = [
   "sessions.catalog.read",
   "sessions.catalog.continue",
   "sessions.catalog.archive",
+  "sessions.diagnose",
   "approval.get",
   "approval.resolve",
   "approval.history",

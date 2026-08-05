@@ -198,6 +198,102 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
   );
 }
 
+type DiagnosticSessionStateSnapshot = {
+  present: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+  state?: SessionStateValue;
+  queueDepth?: number;
+  activeQueuedTurn?: boolean;
+  generation?: number;
+  lastActivityAgeMs?: number;
+  lastStuckWarnAgeMs?: number;
+  lastLongRunningWarnAgeMs?: number;
+  recentToolCalls?: number;
+  repeatedToolPattern?: {
+    toolName: string;
+    count: number;
+    lastAgeMs: number;
+  };
+  commandPolls?: Array<{
+    command: string;
+    count: number;
+    lastPollAgeMs: number;
+  }>;
+};
+
+function summarizeRepeatedToolPattern(
+  records: readonly ToolCallRecord[] | undefined,
+  now: number,
+): DiagnosticSessionStateSnapshot["repeatedToolPattern"] {
+  if (!records?.length) {
+    return undefined;
+  }
+  const buckets = new Map<string, { toolName: string; count: number; lastAt: number }>();
+  for (const record of records) {
+    const key = `${record.toolName}:${record.argsHash}:${record.resultHash ?? ""}`;
+    const bucket = buckets.get(key);
+    if (bucket) {
+      bucket.count += 1;
+      bucket.lastAt = Math.max(bucket.lastAt, record.timestamp);
+    } else {
+      buckets.set(key, { toolName: record.toolName, count: 1, lastAt: record.timestamp });
+    }
+  }
+  const repeated = Array.from(buckets.values())
+    .filter((bucket) => bucket.count > 1)
+    .toSorted((a, b) => b.count - a.count || b.lastAt - a.lastAt)[0];
+  return repeated
+    ? {
+        toolName: repeated.toolName,
+        count: repeated.count,
+        lastAgeMs: Math.max(0, now - repeated.lastAt),
+      }
+    : undefined;
+}
+
+/** Projects diagnostic session state for read-only user-facing diagnosis. */
+export function getDiagnosticSessionStateSnapshot(
+  ref: SessionRef,
+  now = Date.now(),
+): DiagnosticSessionStateSnapshot {
+  const state = peekDiagnosticSessionState(ref);
+  if (!state) {
+    return { present: false };
+  }
+  const commandPolls = state.commandPollCounts
+    ? Array.from(state.commandPollCounts.entries())
+        .map(([command, value]) => ({
+          command,
+          count: value.count,
+          lastPollAgeMs: Math.max(0, now - value.lastPollAt),
+        }))
+        .toSorted((a, b) => a.command.localeCompare(b.command))
+    : undefined;
+  const repeatedToolPattern = summarizeRepeatedToolPattern(state.toolCallHistory, now);
+  return {
+    present: true,
+    ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+    ...(state.sessionKey ? { sessionKey: state.sessionKey } : {}),
+    ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
+    state: state.state,
+    queueDepth: state.queueDepth,
+    ...(state.activeQueuedTurn !== undefined ? { activeQueuedTurn: state.activeQueuedTurn } : {}),
+    ...(state.generation !== undefined ? { generation: state.generation } : {}),
+    lastActivityAgeMs: Math.max(0, now - state.lastActivity),
+    ...(state.lastStuckWarnAgeMs !== undefined
+      ? { lastStuckWarnAgeMs: state.lastStuckWarnAgeMs }
+      : {}),
+    ...(state.lastLongRunningWarnAgeMs !== undefined
+      ? { lastLongRunningWarnAgeMs: state.lastLongRunningWarnAgeMs }
+      : {}),
+    ...(state.toolCallHistory?.length ? { recentToolCalls: state.toolCallHistory.length } : {}),
+    ...(repeatedToolPattern ? { repeatedToolPattern } : {}),
+    ...(commandPolls?.length ? { commandPolls } : {}),
+  };
+}
+
 /** Returns the current state count for pruning tests. */
 export function getDiagnosticSessionStateCountForTest(): number {
   return diagnosticSessionStates.size;

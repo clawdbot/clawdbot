@@ -1,6 +1,7 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
@@ -374,12 +375,14 @@ export function listAgentRunsForSession(params: {
 export type ProjectedAgentRunIndex = {
   sessionKeys: ReadonlySet<string>;
   sessionIds: ReadonlySet<string>;
+  runs: readonly Pick<AgentRunContext, "sessionKey" | "sessionId" | "agentId">[];
 };
 
 export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
   const state = getAgentRunRegistryState();
   const sessionKeys = new Set<string>();
   const sessionIds = new Set<string>();
+  const runs: Array<Pick<AgentRunContext, "sessionKey" | "sessionId" | "agentId">> = [];
   for (const context of state.contexts.values()) {
     if (
       context.projectSessionActive !== true ||
@@ -393,20 +396,60 @@ export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
     if (context.sessionId !== undefined) {
       sessionIds.add(context.sessionId);
     }
+    runs.push({
+      ...(context.sessionKey ? { sessionKey: context.sessionKey } : {}),
+      ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+      ...(context.agentId ? { agentId: normalizeAgentId(context.agentId) } : {}),
+    });
   }
-  return { sessionKeys, sessionIds };
+  return { sessionKeys, sessionIds, runs };
 }
 
 export function hasProjectedAgentRunForSession(params: {
   sessionKeys: readonly string[];
   sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
   index?: ProjectedAgentRunIndex;
 }): boolean {
   const index = params.index ?? buildProjectedAgentRunIndex();
-  return (
-    params.sessionKeys.some((sessionKey) => index.sessionKeys.has(sessionKey)) ||
-    (params.sessionId !== undefined && index.sessionIds.has(params.sessionId))
-  );
+  const targetAgentId = resolveProjectedRunTargetAgentId(params);
+  return index.runs.some((run) => {
+    const matchesSessionKey =
+      run.sessionKey !== undefined && params.sessionKeys.includes(run.sessionKey);
+    const matchesSessionId =
+      params.sessionId !== undefined &&
+      run.sessionId === params.sessionId &&
+      (run.sessionKey === undefined || matchesSessionKey);
+    const matchesAgent =
+      !run.agentId || !targetAgentId || normalizeAgentId(run.agentId) === targetAgentId;
+    return (matchesSessionKey || matchesSessionId) && matchesAgent;
+  });
+}
+
+function resolveProjectedRunTargetAgentId(params: {
+  sessionKeys: readonly string[];
+  agentId?: string;
+  defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
+}): string | undefined {
+  const onlyUnknownKeys =
+    params.sessionKeys.length > 0 &&
+    params.sessionKeys.every((sessionKey) => sessionKey === "unknown");
+  if (onlyUnknownKeys && params.scopeUnknownByAgent !== true) {
+    return undefined;
+  }
+  if (params.agentId) {
+    return normalizeAgentId(params.agentId);
+  }
+  for (const sessionKey of params.sessionKeys) {
+    const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (parsedAgentId) {
+      return normalizeAgentId(parsedAgentId);
+    }
+  }
+  return params.defaultAgentId ? normalizeAgentId(params.defaultAgentId) : undefined;
 }
 
 /** Clears context state for a run that has ended or been discarded. */

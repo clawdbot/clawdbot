@@ -154,6 +154,8 @@ export {
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
+  SessionsDiagnoseParamsSchema,
+  SessionsDiagnoseResultSchema,
   SessionFileBrowserEntrySchema,
   SessionFileBrowserResultSchema,
   SessionFileContentEncodingSchema,

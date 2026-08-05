@@ -16,6 +16,8 @@ import {
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
   validateSessionsListParams,
+  validateSessionsDiagnoseParams,
+  validateSessionsDiagnoseResult,
   validateSessionsCompanionAskParams,
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
@@ -135,6 +137,15 @@ describe("protocol export registries", () => {
     );
     expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
       schemaExportRegistry.SkillsProposalEventsListResultSchema,
+    );
+  });
+
+  it("registers session diagnosis schemas", () => {
+    expect(ProtocolSchemas.SessionsDiagnoseParams).toBe(
+      schemaExportRegistry.SessionsDiagnoseParamsSchema,
+    );
+    expect(ProtocolSchemas.SessionsDiagnoseResult).toBe(
+      schemaExportRegistry.SessionsDiagnoseResultSchema,
     );
   });
 });
@@ -378,6 +389,80 @@ describe("lazy protocol validators", () => {
       search({ limit: 26 }),
       { query: "" },
       { query: "x".repeat(4097) },
+    ]);
+  });
+
+  it("validates read-only session diagnosis params and result shape", () => {
+    expectAccepted(validateSessionsDiagnoseParams, [
+      {},
+      { key: "agent:main:main", tail: 30 },
+      { sessionId: "sess-1" },
+    ]);
+    expectRejected(validateSessionsDiagnoseParams, [
+      { key: "", tail: 30 },
+      { key: "agent:main:main", tail: 201 },
+      { key: "agent:main:main", transcriptPath: true },
+    ]);
+
+    expectAccepted(validateSessionsDiagnoseResult, [
+      {
+        ok: true,
+        ts: 1,
+        outcome: "diagnosed",
+        selector: { key: "agent:main:main" },
+        chosenBecause: "explicit key selector",
+        summary: {
+          state: "active",
+          confidence: "high",
+          headline: "A live Gateway or embedded run is visible for this session.",
+        },
+        session: {
+          found: true,
+          key: "agent:main:main",
+          agentId: "main",
+          sessionId: "sess-1",
+          kind: "direct",
+          updatedAt: 1,
+          hasActiveRun: true,
+        },
+        live: {
+          gatewayRun: {
+            hasActiveRun: true,
+            runs: [
+              {
+                runId: "run-1",
+                sessionId: "sess-1",
+                sessionKey: "agent:main:main",
+                startedAgeMs: 10,
+              },
+            ],
+          },
+          embeddedRun: { active: false, sessionId: "sess-1" },
+          diagnostic: { present: true, state: "processing", queueDepth: 0 },
+          lane: {
+            lane: "session:agent:main:main",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 1,
+            draining: false,
+            generation: 1,
+          },
+        },
+        transcript: {
+          resolved: true,
+          source: "sessionFile",
+          recentEventCount: 3,
+        },
+        findings: [
+          {
+            code: "active_run_visible",
+            severity: "info",
+            message: "A live Gateway or embedded run is visible for this session.",
+            evidence: ["gateway or embedded run projection is active"],
+          },
+        ],
+        nextChecks: ["openclaw sessions tail --session-key agent:main:main"],
+      },
     ]);
   });
 

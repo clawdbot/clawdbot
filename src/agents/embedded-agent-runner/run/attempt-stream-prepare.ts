@@ -429,7 +429,13 @@ export function prepareEmbeddedAttemptStream(input: {
     queueHandle,
     attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
   );
-  setActiveEmbeddedRun(attempt.sessionId, queueHandle, attempt.sessionKey, attempt.sessionFile);
+  setActiveEmbeddedRun(
+    attempt.sessionId,
+    queueHandle,
+    attempt.sessionKey,
+    attempt.sessionFile,
+    attempt.agentId ?? attempt.sessionTarget?.agentId ?? input.hookAgentId,
+  );
 
   return {
     subscription,

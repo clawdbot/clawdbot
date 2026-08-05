@@ -471,6 +471,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const adoption = await admitReplyTurn({
       sessionKey: commandTurnContinuationTargetKey,
       sessionId: providedReplyOperation.sessionId,
+      agentId,
       expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
       storePath,
       kind: "visible",

@@ -427,6 +427,73 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     });
 
   sessionsCmd
+    .command("diagnose")
+    .description("Diagnose one session from live Gateway and stored evidence")
+    .option("--session-key <key>", "Session key to diagnose")
+    .option("--session-id <id>", "Stored session id to diagnose")
+    .option("--label <label>", "Session label to diagnose")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--tail <count>", "Number of recent transcript events to summarize", "30")
+    .option("--timeout <ms>", "Gateway request timeout in milliseconds", "10000")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions diagnose", "Diagnose the most relevant active or recent session."],
+          [
+            "openclaw sessions diagnose --session-key agent:main:telegram:direct:owner",
+            "Diagnose one session key.",
+          ],
+          ["openclaw sessions diagnose --session-id <id> --json", "Machine-readable output."],
+          ["openclaw sessions diagnose --tail 80", "Include more bounded evidence metadata."],
+        ])}`,
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            agent?: string;
+            json?: boolean;
+            store?: string;
+            allAgents?: boolean;
+            active?: string;
+            limit?: string;
+            verbose?: boolean;
+          }
+        | undefined;
+      if (
+        rejectUnsupportedSessionsParentOptions(
+          "diagnose",
+          parentOpts,
+          ["store", "allAgents", "active", "limit", "verbose"],
+          "the gateway diagnoses from selectors and --agent",
+        )
+      ) {
+        return;
+      }
+      await runWithVerboseAndTimeout(
+        {
+          timeout: opts.timeout,
+        },
+        async ({ timeoutMs }) => {
+          const { sessionsDiagnoseCommand } = await import("../../commands/sessions-diagnose.js");
+          await sessionsDiagnoseCommand(
+            {
+              sessionKey: opts.sessionKey as string | undefined,
+              sessionId: opts.sessionId as string | undefined,
+              label: opts.label as string | undefined,
+              agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+              tail: opts.tail as string | undefined,
+              timeoutMs,
+              json: Boolean(opts.json || parentOpts?.json),
+            },
+            defaultRuntime,
+          );
+        },
+      );
+    });
+
+  sessionsCmd
     .command("tail")
     .description("Tail human-readable session trajectory progress")
     .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")

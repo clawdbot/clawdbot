@@ -19,6 +19,7 @@ import {
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
@@ -134,6 +135,8 @@ type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  /** Owner agent for fallback keys that do not encode the agent id. */
+  readonly agentId?: string;
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
   readonly routeThreadId?: string | number;
@@ -221,6 +224,7 @@ type ReplyRunRegistry = {
   begin(params: {
     sessionKey: string;
     sessionId: string;
+    agentId?: string;
     resetTriggered: boolean;
     routeThreadId?: string | number;
     upstreamAbortSignal?: AbortSignal;
@@ -331,6 +335,11 @@ function resolveReplyRunForCurrentSessionId(sessionId: string): ReplyOperation |
     return undefined;
   }
   return replyRunState.activeRunsByKey.get(sessionKey);
+}
+
+function normalizeReplyRunAgentId(agentId: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(agentId);
+  return normalized ? normalizeAgentId(normalized) : undefined;
 }
 
 function resolveReplyRunWaitKey(sessionId: string): string | undefined {
@@ -557,6 +566,7 @@ function markReplyRunDiagnosticProgress(params: {
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   resetTriggered: boolean;
   routeThreadId?: string | number;
   upstreamAbortSignal?: AbortSignal;
@@ -564,6 +574,7 @@ export function createReplyOperation(params: {
 }): ReplyOperation {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const sessionId = normalizeOptionalString(params.sessionId);
+  const agentId = normalizeReplyRunAgentId(params.agentId);
   if (!sessionKey) {
     throw new Error("Reply operations require a canonical sessionKey");
   }
@@ -689,6 +700,7 @@ export function createReplyOperation(params: {
     get sessionId() {
       return currentSessionId;
     },
+    ...(agentId ? { agentId } : {}),
     lifecycleGeneration,
     get routeThreadId() {
       return params.routeThreadId;
@@ -1224,12 +1236,29 @@ export function resolveActiveReplyRunSessionId(sessionKey: string): string | und
   return replyRunRegistry.resolveSessionId(sessionKey);
 }
 
+export function resolveActiveReplyRunSessionIdForAgent(
+  sessionKey: string,
+  agentId: string,
+): string | undefined {
+  const operation = replyRunRegistry.get(sessionKey);
+  const normalizedAgentId = normalizeReplyRunAgentId(agentId);
+  return operation && normalizedAgentId && operation.agentId === normalizedAgentId
+    ? operation.sessionId
+    : undefined;
+}
+
 export function resolveActiveReplyRunThreadId(sessionKey: string): string | number | undefined {
   return replyRunRegistry.get(sessionKey)?.routeThreadId;
 }
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
+}
+
+export function isReplyRunActiveForSessionIdAndAgent(sessionId: string, agentId: string): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  const normalizedAgentId = normalizeReplyRunAgentId(agentId);
+  return Boolean(operation && normalizedAgentId && operation.agentId === normalizedAgentId);
 }
 
 export function resolveReplyRunPhaseForSessionId(

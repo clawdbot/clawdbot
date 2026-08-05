@@ -618,7 +618,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
-    - `sessions.describe` returns one gateway session row for an exact session key.
+    - `sessions.describe` returns one Gateway session row for an exact session key.
+    - `sessions.diagnose` returns read-only stored and live evidence for one session, including bounded finding codes for queued, stale, contradictory, unresolved, and delivery-uncertain states.
     - `sessions.resolve` resolves or canonicalizes a session target.
     - `sessions.create` creates a new session entry. Optional `model` and `thinkingLevel` values persist the initial model and reasoning overrides atomically. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
     - `sessions.dispatch` (`operator.admin`) moves an existing local OpenClaw session with a session-owned managed worktree to a configured cloud-worker profile. Pass `{ key, profileId, agentId? }`. The method is absent when no worker profile is configured, closes local turn admission before draining active work, and returns only after placement reaches `active` worker ownership. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
@@ -633,6 +634,40 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Pass `sessionKey`, optional `agentId` when session selection is agent-scoped, and a transcript `messageId` previously surfaced through `chat.history`; the gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
     - `chat.toolTitles` returns short purpose titles for tool calls rendered in the Control UI (batched, max 24 items with bounded inputs). The feature is opt-in via `gateway.controlUi.toolTitles` (default off); disabled gateways answer `{ titles: {}, disabled: true }` with no model call so clients stop asking. When enabled, titles use standard utility-model routing: an explicitly configured `utilityModel` (an operator decision that, like all utility tasks, may send bounded task content to the chosen provider), else the session provider's declared small-model default so no new egress destination appears implicitly; an empty `utilityModel` disables them entirely. Titles never fall back to the primary model. Results cache in the per-agent state database keyed by tool name + input, so repeated views never re-bill the same calls.
     - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`. Interactive clients can pass `expectedLeafEntryId` with the active transcript-branch leaf they display, or `null` for an authoritative empty transcript; the Gateway rejects the send with `details.reason: "active-leaf-changed"` if another client switched branches first.
+
+  </Accordion>
+
+  <Accordion title="sessions.diagnose">
+    `sessions.diagnose` is a read-only `operator.read` method for explaining why
+    one session appears active, queued, stalled, done, unresolved, or unknown.
+    It does not reset, abort, release lanes, migrate stores, or modify
+    transcripts.
+
+    Params:
+
+    - `key?: string`, `sessionId?: string`, `label?: string`: choose at most one
+      primary selector. Omitting all selectors makes the Gateway choose the most
+      relevant active or contradictory stored session, then the newest stored
+      session.
+    - `agentId?: string`: scope lookup to one agent store.
+    - `includeGlobal?: boolean`, `includeUnknown?: boolean`: allow `global` or
+      `unknown` fallback rows during no-selector candidate selection.
+    - `tail?: number`: bounded transcript metadata window. Valid range is `1`
+      through `200`; the Gateway default is `30`.
+
+    Outcomes are `diagnosed`, `not_found`, or `no_sessions`. Ambiguous
+    `sessionId` or `label` matches fail the request so callers can rerun with an
+    exact session key instead of diagnosing the wrong row.
+
+    The result includes `summary`, `session`, `live`, optional `transcript`,
+    optional `delivery`, `findings`, and `nextChecks`. Stable finding codes
+    include `active_run_visible`, `active_progress_fresh`,
+    `last_progress_stale`, `queued_without_active_run`,
+    `stale_diagnostic_tool`, `store_terminal_but_live_processing`,
+    `lane_blocked`, `transcript_unresolved`, `delivery_uncertain`,
+    `session_not_found`, and `unknown_low_confidence`. Transcript bodies, tool
+    arguments, tool results, secrets, and local transcript file paths are not
+    part of the response contract.
 
   </Accordion>
 

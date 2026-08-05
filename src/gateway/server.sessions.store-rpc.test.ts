@@ -120,6 +120,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const methods = (hello as { features?: { methods?: string[] } }).features?.methods ?? [];
   expect(methods).toContain("sessions.list");
   expect(methods).toContain("sessions.preview");
+  expect(methods).toContain("sessions.diagnose");
   expect(methods).toContain("sessions.cleanup");
   expect(methods).toContain("sessions.patch");
   expect(methods).toContain("sessions.reset");
