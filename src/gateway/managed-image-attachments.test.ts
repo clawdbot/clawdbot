@@ -2239,6 +2239,37 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(deletedFixture.originalPath);
   });
 
+  it("uses the recorded owner for unscoped session keys", async () => {
+    const fixture = await createFixture(stateDir, {
+      agentId: "work",
+      sessionKey: "legacy-session",
+    });
+    getRuntimeConfigMock.mockReturnValue({
+      session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+    });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "agents", "work", "sessions", "sessions.json"),
+      entry: { sessionId: "sess-work", sessionFile: "/tmp/work.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${fixture.sessionKey}/${fixture.attachmentId}/full`,
+          },
+        ],
+      },
+    ]);
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("legacy-session", { agentId: "work" });
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+  });
+
   it("treats legacy unscoped global records as the configured default agent", async () => {
     getRuntimeConfigMock.mockReturnValue({
       agents: { list: [{ id: "main" }, { id: "work", default: true }] },

@@ -122,6 +122,9 @@ type SessionManagedOutgoingAttachmentIndexRead =
       reason: "database-missing" | "schema-missing" | "table-missing" | "read-failed";
     };
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
+type SessionStoreAvailabilityRead = ReturnType<
+  typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
+>;
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
   transcriptPath: string;
@@ -624,6 +627,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     string,
     SessionManagedOutgoingAttachmentIndex | null
   >();
+  const sessionStoreAvailabilityCache = new Map<string, SessionStoreAvailabilityRead>();
   for (const entry of entries) {
     const { record } = entry;
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
@@ -652,6 +656,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       const transcriptMatch = await recordMatchesTranscriptMessage(
         record,
         transcriptAttachmentIndexCache,
+        sessionStoreAvailabilityCache,
       );
       // Session-store unavailability is not proof that durable chat history no longer owns media.
       shouldDelete = transcriptMatch === "missing";
@@ -865,6 +870,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
   agentId?: string,
+  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
 ): Promise<SessionManagedOutgoingAttachmentIndexRead> {
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
@@ -873,11 +879,14 @@ async function getSessionManagedOutgoingAttachmentIndex(
   const cfg = getRuntimeConfig();
   const ownerAgentId =
     agentId ?? resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
-  const discovery = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId);
+  const discovery =
+    storeAvailabilityCache?.get(ownerAgentId) ??
+    resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId);
+  storeAvailabilityCache?.set(ownerAgentId, discovery);
   if (!discovery.available) {
     return { kind: "unavailable", reason: discovery.reason };
   }
-  const sessionOptions = sessionKey === "global" && agentId ? { agentId } : undefined;
+  const sessionOptions = { agentId: ownerAgentId };
   const loaded = loadSessionEntryReadOnly(sessionKey, sessionOptions);
   let entry = loaded.entry;
   if (!entry) {
@@ -995,6 +1004,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
 async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
 ): Promise<ManagedOutgoingTranscriptMatch> {
   if (!record.messageId) {
     return "missing";
@@ -1003,6 +1013,7 @@ async function recordMatchesTranscriptMessage(
     record.sessionKey,
     cache,
     record.agentId,
+    storeAvailabilityCache,
   );
   if (read.kind === "unavailable") {
     return "unavailable";
