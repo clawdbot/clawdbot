@@ -327,6 +327,7 @@ export type PluginRuntimeCore = {
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveSessionCatalogCreateTarget;
     resolveThinkingDefault: (params: {
       cfg: import("../../config/types.openclaw.js").OpenClawConfig;
       provider: string;
