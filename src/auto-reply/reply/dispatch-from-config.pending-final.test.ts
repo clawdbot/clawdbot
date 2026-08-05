@@ -221,7 +221,11 @@ describe("pending final delivery restart proof", () => {
 
     const entry = loadSessionEntry({ sessionKey, storePath });
     expect(entry?.pendingFinalDelivery?.kind).toBe("replayable");
-    expect(entry?.pendingFinalDelivery?.text).toContain("retry B");
+    expect(
+      entry?.pendingFinalDelivery?.kind === "replayable"
+        ? entry.pendingFinalDelivery.text
+        : undefined,
+    ).toContain("retry B");
   });
 
   it("does not replay a block-deduped payload when only a failed-before-deliver payload is present (#119162)", async () => {
@@ -266,7 +270,11 @@ describe("pending final delivery restart proof", () => {
 
     const entry = loadSessionEntry({ sessionKey, storePath });
     expect(entry?.pendingFinalDelivery?.kind).toBe("replayable");
-    expect(entry?.pendingFinalDelivery?.text).toBe("retry B");
-    expect(entry?.pendingFinalDelivery?.text).not.toContain("retry C");
+    const retryText =
+      entry?.pendingFinalDelivery?.kind === "replayable"
+        ? entry.pendingFinalDelivery.text
+        : undefined;
+    expect(retryText).toBe("retry B");
+    expect(retryText).not.toContain("retry C");
   });
 });
