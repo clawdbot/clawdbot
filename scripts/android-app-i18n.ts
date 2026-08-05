@@ -74,11 +74,13 @@ const WEAR_GENERATED_RESOURCE_RE =
   /^apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml$/;
 
 type NativeInventoryEntry = {
+  description?: string;
   id: string;
   kind: string;
   path: string;
+  semanticKey?: string;
   source: string;
-  surface: "android" | "apple";
+  surface: "android" | "apple" | "linux";
 };
 
 type NativeArtifactEntry = {
@@ -267,8 +269,36 @@ function escapeKotlin(value: string): string {
     .replaceAll("\n", "\\n");
 }
 
-function resourceKey(source: string): string {
-  return `${MANAGED_PREFIX}${createHash("sha256").update(source).digest("hex").slice(0, 16)}`;
+function shortDigest(value: string, length = 16): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, length);
+}
+
+export function resolveAndroidResourceKey(
+  source: string,
+  options: {
+    existingKey?: string;
+    occupiedKeys?: ReadonlySet<string>;
+    semanticKey?: string;
+  } = {},
+): string {
+  if (options.existingKey) {
+    return options.existingKey;
+  }
+  if (!options.semanticKey) {
+    return `${MANAGED_PREFIX}${shortDigest(source)}`;
+  }
+
+  const normalized = options.semanticKey
+    .replace(/^native\./u, "")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/gu, "_")
+    .replace(/^_+|_+$/gu, "")
+    .toLowerCase();
+  const base = `${MANAGED_PREFIX}${normalized || shortDigest(options.semanticKey)}`;
+  if (!options.occupiedKeys?.has(base)) {
+    return base;
+  }
+  return `${base}_${shortDigest(options.semanticKey, 12)}`;
 }
 
 function parseStrings(source: string): ResourceString[] {
@@ -1087,7 +1117,7 @@ async function readInventory(): Promise<NativeInventoryEntry[]> {
   const parsed = JSON.parse(await readFile(INVENTORY_PATH, "utf8")) as {
     entries?: NativeInventoryEntry[];
   };
-  return (parsed.entries ?? []).filter((entry) => entry.surface === "android");
+  return parsed.entries ?? [];
 }
 
 async function readArtifacts(): Promise<Map<string, NativeArtifactEntry[]>> {
@@ -1119,6 +1149,34 @@ function artifactEntriesById(
   artifactEntries: readonly NativeArtifactEntry[],
 ): Map<string, NativeArtifactEntry> {
   return new Map(artifactEntries.map((entry) => [entry.id, entry]));
+}
+
+export function selectSemanticArtifactTranslations(
+  source: string,
+  semanticKey: string | undefined,
+  inventoryEntries: readonly Pick<NativeInventoryEntry, "id" | "semanticKey" | "source">[],
+  artifactEntries: ReadonlyMap<string, { source: string; translated: string }>,
+): string[] {
+  if (!semanticKey) {
+    return [];
+  }
+  const translations: string[] = [];
+  for (const inventoryEntry of inventoryEntries) {
+    if (inventoryEntry.source !== source || inventoryEntry.semanticKey !== semanticKey) {
+      continue;
+    }
+    const artifactEntry = artifactEntries.get(inventoryEntry.id);
+    if (!artifactEntry) {
+      continue;
+    }
+    if (artifactEntry.source !== source) {
+      throw new Error(
+        `Android translation source drift for ${inventoryEntry.id}: ${JSON.stringify(artifactEntry.source)} != ${JSON.stringify(source)}`,
+      );
+    }
+    translations.push(artifactEntry.translated);
+  }
+  return translations;
 }
 
 export function selectExactArtifactTranslation(
@@ -1245,13 +1303,14 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   ]);
   const baseStrings = expectDefined(localeStrings[0], "English Android string resources");
   const translatedStrings = localeStrings.slice(1);
+  const androidInventory = inventory.filter((entry) => entry.surface === "android");
   const wearInventoryBySource = new Map(
-    inventory
+    androidInventory
       .filter((entry) => entry.path === WEAR_STRINGS_REPO_PATH)
       .map((entry) => [entry.source, entry]),
   );
   const thirdPartyInventoryBySource = new Map(
-    inventory
+    androidInventory
       .filter((entry) => entry.path === THIRD_PARTY_STRINGS_REPO_PATH)
       .map((entry) => [entry.source, entry]),
   );
@@ -1259,8 +1318,20 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     (entry) => !entry.key.startsWith(MANAGED_PREFIX),
   );
   const manualSourceToKey = new Map(manualBase.map((entry) => [entry.value, entry.key]));
+  const existingSourceToKey = new Map(
+    [...baseStrings.values()]
+      .filter((entry) => entry.key.startsWith(MANAGED_PREFIX))
+      .map((entry) => [decodeAndroidResourceValue(entry.rawValue), entry.key]),
+  );
   const entriesBySource = new Map<string, NativeInventoryEntry[]>();
+  const entriesBySemanticMessage = new Map<string, NativeInventoryEntry[]>();
   for (const entry of inventory) {
+    if (entry.semanticKey) {
+      const semanticMessage = `${entry.semanticKey}\u0000${entry.source}`;
+      const semanticEntries = entriesBySemanticMessage.get(semanticMessage) ?? [];
+      semanticEntries.push(entry);
+      entriesBySemanticMessage.set(semanticMessage, semanticEntries);
+    }
     if (entry.surface !== "android" || entry.kind === "resource-string") {
       continue;
     }
@@ -1279,21 +1350,64 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     }
   }
   const sourceToKey = new Map<string, string>();
-  for (const source of entriesBySource.keys()) {
-    sourceToKey.set(source, manualSourceToKey.get(source) ?? resourceKey(source));
+  const sourceToSemanticKey = new Map<string, string>();
+  const occupiedKeys = new Set(baseStrings.keys());
+  for (const [source, entries] of entriesBySource) {
+    const semanticKeys = [
+      ...new Set(entries.flatMap((entry) => (entry.semanticKey ? [entry.semanticKey] : []))),
+    ].toSorted(
+      (left, right) =>
+        Number(left.startsWith("native.")) - Number(right.startsWith("native.")) ||
+        compareText(left, right),
+    );
+    const semanticKey = semanticKeys[0];
+    if (semanticKey) {
+      sourceToSemanticKey.set(source, semanticKey);
+    }
+    const legacyKey = resolveAndroidResourceKey(source);
+    const semanticResourceKey = semanticKey
+      ? resolveAndroidResourceKey(source, { semanticKey })
+      : undefined;
+    const existingKey =
+      existingSourceToKey.get(source) ??
+      (baseStrings.has(legacyKey) ? legacyKey : undefined) ??
+      (semanticResourceKey && baseStrings.has(semanticResourceKey)
+        ? semanticResourceKey
+        : undefined);
+    const key =
+      manualSourceToKey.get(source) ??
+      resolveAndroidResourceKey(source, {
+        existingKey,
+        occupiedKeys,
+        semanticKey,
+      });
+    occupiedKeys.add(key);
+    sourceToKey.set(source, key);
   }
   const resources = new Map<string, string>();
   const contradictions: TranslationContradiction[] = [];
   for (const [localeIndex, locale] of NATIVE_I18N_LOCALES.entries()) {
     const manualTranslations = translatedStrings[localeIndex] ?? new Map();
-    const artifactTranslationsBySource = translationsBySource(artifacts.get(locale) ?? []);
+    const localeArtifacts = artifacts.get(locale) ?? [];
+    const localeArtifactsById = artifactEntriesById(localeArtifacts);
+    const artifactTranslationsBySource = translationsBySource(localeArtifacts);
     const generated = new Map<string, { source: string; value: string }>();
     for (const source of entriesBySource.keys()) {
       const key = sourceToKey.get(source);
       if (!key || !key.startsWith(MANAGED_PREFIX)) {
         continue;
       }
-      const translations = artifactTranslationsBySource.get(source) ?? [];
+      const semanticKey = sourceToSemanticKey.get(source);
+      const semanticTranslations = selectSemanticArtifactTranslations(
+        source,
+        semanticKey,
+        semanticKey ? (entriesBySemanticMessage.get(`${semanticKey}\u0000${source}`) ?? []) : [],
+        localeArtifactsById,
+      );
+      const translations =
+        semanticTranslations.length > 0
+          ? semanticTranslations
+          : (artifactTranslationsBySource.get(source) ?? []);
       const existingSource = decodeAndroidResourceValue(baseStrings.get(key)?.rawValue ?? "");
       const existingTranslation = decodeAndroidResourceValue(
         manualTranslations.get(key)?.rawValue ?? "",
@@ -1329,7 +1443,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     const wearManual = localizeManualStrings(
       wearBaseStrings,
       wearInventoryBySource,
-      artifactEntriesById(artifacts.get(locale) ?? []),
+      localeArtifactsById,
       "Wear",
     );
     resources.set(
@@ -1339,7 +1453,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     const thirdPartyManual = localizeManualStrings(
       thirdPartyBaseStrings,
       thirdPartyInventoryBySource,
-      artifactEntriesById(artifacts.get(locale) ?? []),
+      localeArtifactsById,
       "Android third-party",
     );
     resources.set(
@@ -1408,7 +1522,7 @@ function formatProblems(problems: Array<readonly [string, string[]]>): string {
  * by the post-merge locale refresh workflow, so a source PR may legitimately
  * carry stale generated output. Every other delta is real drift.
  */
-function onlyManagedRowsPending(current: string, expected: string): boolean {
+export function onlyManagedRowsPending(current: string, expected: string): boolean {
   const currentRows = new Map(parseStrings(current).map((entry) => [entry.key, entry]));
   const expectedRows = new Map(parseStrings(expected).map((entry) => [entry.key, entry]));
   for (const [key, entry] of currentRows) {
@@ -1419,7 +1533,10 @@ function onlyManagedRowsPending(current: string, expected: string): boolean {
       }
       continue;
     }
-    if (expectedEntry.attrs !== entry.attrs || expectedEntry.rawValue !== entry.rawValue) {
+    if (
+      (expectedEntry.attrs !== entry.attrs || expectedEntry.rawValue !== entry.rawValue) &&
+      !key.startsWith(MANAGED_PREFIX)
+    ) {
       return false;
     }
   }

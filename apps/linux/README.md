@@ -49,6 +49,23 @@ Desktop notifications use each platform's system notification service. macOS 13+
 
 On first run, release builds automatically install the stable CLI channel, while development builds ask for a release channel and preselect Development. After the CLI install, the app opens the local dashboard once with onboarding mode enabled. Reconnects and later app launches use the normal dashboard URL.
 
+## Localization
+
+The companion shares OpenClaw's canonical localization catalog and translation memory. Desktop-only
+messages are declared with stable semantic keys and translator descriptions in `ui/messages.json`;
+shared Control UI messages retain their existing keys. The generated `ui/locales.json` bundle is
+consumed by both the desktop WebViews and native Rust tray menus, status labels, and notifications.
+System language selection, regional fallbacks, right-to-left text, and English fallbacks work offline.
+
+After changing desktop messages or translations, regenerate and verify the bundled locale asset from
+the repository root:
+
+```bash
+node --import tsx apps/linux/ui/generate-locales.ts
+node --import tsx apps/linux/ui/generate-locales.ts --check
+node --test apps/linux/ui/i18n.test.mjs
+```
+
 ## Updates
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.

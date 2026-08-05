@@ -34,6 +34,12 @@ const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
+const SHARED_NATIVE_I18N_OWNERS = [
+  "scripts/lib/control-ui-i18n-catalog.ts",
+  "scripts/lib/control-ui-i18n-config.ts",
+  "scripts/lib/control-ui-i18n-shared-catalog.ts",
+  "scripts/lib/control-ui-i18n-sync-plan.ts",
+] as const;
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
 const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
@@ -111,6 +117,59 @@ function runWorkflowShellScript(
     for (const modulePath of modulePaths) {
       rmSync(modulePath, { force: true });
     }
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+function runLinuxLocaleBundleFixture(options: {
+  fullParityFails?: boolean;
+  generatorExists?: boolean;
+  sourceParityFails?: boolean;
+  strictNativeI18n: boolean;
+}) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-linux-locale-ci-"));
+  try {
+    const binDirectory = path.join(root, "bin");
+    const callsPath = path.join(root, "calls");
+    mkdirSync(binDirectory, { recursive: true });
+    writeFileSync(callsPath, "", "utf8");
+    const nodePath = path.join(binDirectory, "node");
+    writeFileSync(
+      nodePath,
+      [
+        "#!/bin/sh",
+        'printf "%s\\n" "$*" >> "$CALLS_PATH"',
+        'case "$*" in',
+        '  *--check-source) exit "$SOURCE_PARITY_EXIT" ;;',
+        '  *--check) exit "$FULL_PARITY_EXIT" ;;',
+        "esac",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(nodePath, 0o755);
+    if (options.generatorExists ?? true) {
+      const generatorPath = path.join(root, "apps", "linux", "ui", "generate-locales.ts");
+      mkdirSync(path.dirname(generatorPath), { recursive: true });
+      writeFileSync(generatorPath, "export {};\n", "utf8");
+    }
+
+    const step = readCiWorkflow().jobs["native-i18n"].steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Verify Linux desktop locale bundle",
+    );
+    const result = runWorkflowShellScript(step.run, {
+      cwd: root,
+      env: {
+        ...process.env,
+        CALLS_PATH: callsPath,
+        FULL_PARITY_EXIT: options.fullParityFails ? "1" : "0",
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        SOURCE_PARITY_EXIT: options.sourceParityFails ? "1" : "0",
+        STRICT_NATIVE_I18N: String(options.strictNativeI18n),
+      },
+    });
+    const calls = readFileSync(callsPath, "utf8").split("\n").filter(Boolean);
+    return { calls, output: `${result.stdout}${result.stderr}`, status: result.status };
+  } finally {
     rmSync(root, { force: true, recursive: true });
   }
 }
@@ -1105,6 +1164,7 @@ describe("ci workflow guards", () => {
     const workflow = parse(readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8"));
     const controlUiResolveBase = controlUiWorkflow.jobs["resolve-base"];
     const nativeResolveBase = workflow.jobs["resolve-base"];
+    const nativePlan = workflow.jobs.plan;
     const controlUiPreflight = controlUiWorkflow.jobs["publisher-preflight"];
     const nativePreflight = workflow.jobs["publisher-preflight"];
     const refresh = workflow.jobs.refresh;
@@ -1122,6 +1182,12 @@ describe("ci workflow guards", () => {
     const nativeValidationStep = nativeFinalize.steps.find(
       (step: { name?: string }) => step.name === "Validate native locale refresh",
     );
+    const linuxGeneratedStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh Linux desktop locale bundle",
+    );
+    const linuxValidationStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Validate Linux desktop locale bundle",
+    );
     const nativePublishStep = nativeFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
@@ -1136,7 +1202,27 @@ describe("ci workflow guards", () => {
     );
 
     expect(refresh.if).toBe(
-      "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success'",
+      "needs.resolve-base.result == 'success' && needs.plan.outputs.refresh == 'true' && needs.publisher-preflight.result == 'success'",
+    );
+    expect(nativePlan.needs).toBe("resolve-base");
+    expect(nativePlan.if).toBe("needs.resolve-base.result == 'success'");
+    expect(nativePlan.outputs).toEqual({
+      refresh: "${{ steps.plan.outputs.refresh }}",
+      reason: "${{ steps.plan.outputs.reason }}",
+    });
+    const nativePlanStep = nativePlan.steps.find(
+      (step: { name?: string }) => step.name === "Plan semantic native locale refresh",
+    );
+    expect(nativePlanStep.run).toBe("node scripts/lib/native-i18n-refresh-plan.mjs");
+    expect(nativePlanStep.env).toEqual({
+      BEFORE_SHA: "${{ github.event.before || '' }}",
+      EVENT_NAME: "${{ github.event_name }}",
+      HEAD_SHA: "${{ needs.resolve-base.outputs.sha }}",
+    });
+    expect(JSON.stringify(nativePlanStep)).not.toContain("secrets.");
+    expect(nativePreflight.needs).toEqual(["resolve-base", "plan"]);
+    expect(nativePreflight.if).toBe(
+      "needs.resolve-base.result == 'success' && needs.plan.outputs.refresh == 'true'",
     );
     expect(refresh.strategy.matrix.locale).toEqual(NATIVE_I18N_LOCALES);
     expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toBe(false);
@@ -1171,11 +1257,23 @@ describe("ci workflow guards", () => {
     });
     expect(workflow.on.workflow_dispatch?.inputs).toBeUndefined();
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
-    expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
-    expect(workflow.on.push.paths).toContain("apps/android/app/src/play/**");
-    expect(workflow.on.push.paths).toContain("apps/android/app/src/thirdParty/**");
-    expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
+    expect(workflow.on.push.paths).toContain("apps/linux/ui/messages.json");
+    expect(workflow.on.push.paths).toContain("apps/linux/ui/generate-locales.ts");
+    for (const sharedCatalogOwner of SHARED_NATIVE_I18N_OWNERS) {
+      expect(workflow.on.push.paths).toContain(sharedCatalogOwner);
+    }
+    expect(workflow.on.push.paths).toContain("scripts/lib/native-i18n-refresh-plan.mjs");
+    expect(workflow.on.push.paths).toContain("ui/src/i18n/locales/en.ts");
+    expect(workflow.on.push.paths).toContain("ui/src/i18n/locales/en-agents.ts");
+    expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/*.tm.jsonl");
+    expect(workflow.on.push.paths).not.toContain("apps/.i18n/native/**");
+    expect(workflow.on.push.paths).not.toContain("apps/android/app/src/main/**");
+    expect(workflow.on.push.paths).not.toContain("apps/android/app/src/play/**");
+    expect(workflow.on.push.paths).not.toContain("apps/android/app/src/thirdParty/**");
+    expect(workflow.on.push.paths).not.toContain("apps/android/wear/src/main/**");
+    expect(workflow.on.push.paths).not.toContain("apps/macos/Sources/**");
+    expect(workflow.on.push.paths).not.toContain("apps/ios/**");
     expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
     expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
     expect(refreshStep.run).toContain("run_refresh anthropic");
@@ -1192,6 +1290,16 @@ describe("ci workflow guards", () => {
       "node --import tsx scripts/native-app-i18n.ts sync --write",
     );
     expect(nativeValidationStep.run).toBe("node --import tsx scripts/native-app-i18n.ts check");
+    expect(linuxGeneratedStep.run).toBe("node --import tsx apps/linux/ui/generate-locales.ts");
+    expect(linuxValidationStep.run).toBe(
+      "node --import tsx apps/linux/ui/generate-locales.ts --check",
+    );
+    expect(nativeFinalize.steps.indexOf(linuxGeneratedStep)).toBeGreaterThan(
+      nativeFinalize.steps.indexOf(nativeGeneratedStep),
+    );
+    expect(nativeFinalize.steps.indexOf(linuxValidationStep)).toBeGreaterThan(
+      nativeFinalize.steps.indexOf(linuxGeneratedStep),
+    );
     expect(nativeFinalize.steps.map((step: { name?: string }) => step.name)).not.toContain(
       "Refresh Android native resources",
     );
@@ -1207,6 +1315,7 @@ describe("ci workflow guards", () => {
       "apps/android/wear/src/main/res/values*/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
       "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
+      "apps/linux/ui/locales.json",
       "apps/ios/Sources/*.lproj/InfoPlist.strings",
       "apps/ios/WatchApp/*.lproj/InfoPlist.strings",
       "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
@@ -1215,6 +1324,16 @@ describe("ci workflow guards", () => {
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/.i18n/native-source.json");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/linux/ui/messages.json");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain(
+      "apps/linux/ui/generate-locales.ts",
+    );
+    for (const sharedCatalogOwner of SHARED_NATIVE_I18N_OWNERS) {
+      expect(nativePublishStep.with["invalidation-paths"]).toContain(sharedCatalogOwner);
+    }
+    expect(nativePublishStep.with["invalidation-paths"]).toContain(
+      "scripts/lib/native-i18n-refresh-plan.mjs",
+    );
     expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/android/app/src/play");
     expect(nativePublishStep.with["invalidation-paths"]).toContain(
       "apps/android/app/src/thirdParty",
@@ -1312,8 +1431,10 @@ describe("ci workflow guards", () => {
     expect(controlUiResolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
 
     for (const preflight of [controlUiPreflight, nativePreflight]) {
-      expect(preflight.needs).toBe("resolve-base");
-      expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
+      if (preflight === controlUiPreflight) {
+        expect(preflight.needs).toBe("resolve-base");
+        expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
+      }
       expect(preflight.strategy).toBeUndefined();
       expect(preflight.steps).toHaveLength(3);
       const checkoutStep = preflight.steps.find(
@@ -1570,12 +1691,20 @@ describe("ci workflow guards", () => {
       );
 
       expect(ownerWorkflow.permissions.contents).toBe("read");
-      expect(refreshJob.needs).toEqual(["resolve-base", "publisher-preflight"]);
-      expect(finalizeJob.needs).toEqual(["resolve-base", "publisher-preflight", "refresh"]);
       const isNative = automationBranch.includes("native");
+      expect(refreshJob.needs).toEqual(
+        isNative
+          ? ["resolve-base", "plan", "publisher-preflight"]
+          : ["resolve-base", "publisher-preflight"],
+      );
+      expect(finalizeJob.needs).toEqual(
+        isNative
+          ? ["resolve-base", "plan", "publisher-preflight", "refresh"]
+          : ["resolve-base", "publisher-preflight", "refresh"],
+      );
       expect(finalizeJob.if).toBe(
         isNative
-          ? "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success'"
+          ? "needs.resolve-base.result == 'success' && needs.plan.outputs.refresh == 'true' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success'"
           : "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
       );
       expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
@@ -4784,6 +4913,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const sourceStep = localeJob.steps.find(
       (step: WorkflowStep) => step.name === "Verify native app i18n source",
     );
+    const linuxSourceStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify Linux desktop locale bundle",
+    );
     const parityStep = localeJob.steps.find(
       (step: WorkflowStep) => step.name === "Check native app generated locale parity",
     );
@@ -4794,12 +4926,79 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.jobs.preflight.outputs.strict_native_i18n).toContain(
       "steps.changed_scope.outputs.strict_native_i18n",
     );
+    expect(workflow.jobs.preflight.outputs.strict_native_i18n).toContain(
+      "github.event_name == 'workflow_dispatch' && 'true'",
+    );
     expect(sourceStep.run).toContain("pnpm native:i18n:verify");
     expect(sourceStep.run).toContain("Historical release targets");
+    expect(linuxSourceStep.env.STRICT_NATIVE_I18N).toBe(
+      "${{ needs.preflight.outputs.strict_native_i18n }}",
+    );
+    expect(linuxSourceStep.run).toContain("if [ -f apps/linux/ui/generate-locales.ts ]; then");
+    expect(linuxSourceStep.run).toContain(
+      "node --import tsx apps/linux/ui/generate-locales.ts --check-source",
+    );
+    expect(linuxSourceStep.run).toContain('if [ "${STRICT_NATIVE_I18N}" = "true" ]; then');
+    expect(linuxSourceStep.run).toContain(
+      "node --import tsx apps/linux/ui/generate-locales.ts --check",
+    );
+    expect(linuxSourceStep.run).toContain("Historical target predates");
+    expect(localeJob.steps.indexOf(linuxSourceStep)).toBeGreaterThan(
+      localeJob.steps.indexOf(sourceStep),
+    );
+    expect(localeJob.steps.indexOf(linuxSourceStep)).toBeLessThan(
+      localeJob.steps.indexOf(parityStep),
+    );
     expect(parityStep.if).toBe("${{ needs.preflight.outputs.strict_native_i18n == 'true' }}");
     expect(parityStep.run).toContain("pnpm native:i18n:check");
     expect(parityStep.run).not.toContain("pnpm android:i18n:check");
     expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
+  });
+
+  it("keeps Linux translated-bundle ownership with native locale automation", () => {
+    const controlUiTranslationPr = runLinuxLocaleBundleFixture({
+      fullParityFails: true,
+      strictNativeI18n: false,
+    });
+    expect(controlUiTranslationPr.status, controlUiTranslationPr.output).toBe(0);
+    expect(controlUiTranslationPr.calls).toEqual([
+      "--import tsx apps/linux/ui/generate-locales.ts --check-source",
+    ]);
+    expect(controlUiTranslationPr.output).toContain("Translated Linux bundle parity belongs");
+
+    const staleSemanticSource = runLinuxLocaleBundleFixture({
+      sourceParityFails: true,
+      strictNativeI18n: false,
+    });
+    expect(staleSemanticSource.status).toBe(1);
+    expect(staleSemanticSource.calls).toEqual([
+      "--import tsx apps/linux/ui/generate-locales.ts --check-source",
+    ]);
+
+    const staleGeneratedTranslation = runLinuxLocaleBundleFixture({
+      fullParityFails: true,
+      strictNativeI18n: true,
+    });
+    expect(staleGeneratedTranslation.status).toBe(1);
+    expect(staleGeneratedTranslation.calls).toEqual([
+      "--import tsx apps/linux/ui/generate-locales.ts --check-source",
+      "--import tsx apps/linux/ui/generate-locales.ts --check",
+    ]);
+
+    const strictGeneratedTranslation = runLinuxLocaleBundleFixture({ strictNativeI18n: true });
+    expect(strictGeneratedTranslation.status, strictGeneratedTranslation.output).toBe(0);
+    expect(strictGeneratedTranslation.calls).toEqual([
+      "--import tsx apps/linux/ui/generate-locales.ts --check-source",
+      "--import tsx apps/linux/ui/generate-locales.ts --check",
+    ]);
+
+    const historicalTarget = runLinuxLocaleBundleFixture({
+      generatorExists: false,
+      strictNativeI18n: true,
+    });
+    expect(historicalTarget.status, historicalTarget.output).toBe(0);
+    expect(historicalTarget.calls).toEqual([]);
+    expect(historicalTarget.output).toContain("Historical target predates");
   });
 
   it("keeps the hosted plugin-list memory allowance scoped to GitHub-hosted runners", () => {

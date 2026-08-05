@@ -1,5 +1,6 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
 use crate::gateway_operation_queue::GatewayOperationQueue;
+use crate::i18n;
 use crate::quickchat;
 use crate::DesktopState;
 use std::fs;
@@ -90,9 +91,15 @@ pub fn global_shortcuts_supported() -> bool {
 impl StatusLine {
     fn text(&self) -> String {
         match self.pending_count {
-            0 => format!("Gateway: {}", self.gateway),
-            1 => format!("Gateway: {} · 1 approval pending", self.gateway),
-            count => format!("Gateway: {} · {count} approvals pending", self.gateway),
+            0 => i18n::format("desktop.tray.status", &[("status", &self.gateway)]),
+            count => {
+                let count_text = count.to_string();
+                i18n::plural(
+                    "desktop.tray.pending",
+                    count,
+                    &[("status", &self.gateway), ("count", &count_text)],
+                )
+            }
         }
     }
 }
@@ -133,19 +140,32 @@ pub fn build(
     state: DesktopState,
     global_shortcuts_supported: bool,
 ) -> tauri::Result<TrayHandles> {
+    let checking = i18n::text("desktop.gateway.checking");
     let status = MenuItem::with_id(
         app,
         "gateway-status",
-        "Gateway: Checking…",
+        i18n::format("desktop.tray.status", &[("status", &checking)]),
         false,
         None::<&str>,
     )?;
-    let quickchat = MenuItem::with_id(app, QUICKCHAT_ID, "Quick Chat", true, None::<&str>)?;
-    let open = MenuItem::with_id(app, OPEN_ID, "Open Dashboard", true, None::<&str>)?;
+    let quickchat = MenuItem::with_id(
+        app,
+        QUICKCHAT_ID,
+        i18n::text("desktop.tray.quickChat"),
+        true,
+        None::<&str>,
+    )?;
+    let open = MenuItem::with_id(
+        app,
+        OPEN_ID,
+        i18n::text("desktop.tray.openDashboard"),
+        true,
+        None::<&str>,
+    )?;
     let check_updates = MenuItem::with_id(
         app,
         CHECK_UPDATES_ID,
-        "Check for Updates",
+        i18n::text("desktop.tray.checkForUpdates"),
         true,
         None::<&str>,
     )?;
@@ -159,7 +179,7 @@ pub fn build(
     let start_at_login = CheckMenuItem::with_id(
         app,
         START_AT_LOGIN_ID,
-        "Start at Login",
+        i18n::text("desktop.tray.startAtLogin"),
         true,
         autostart_enabled,
         None::<&str>,
@@ -172,7 +192,7 @@ pub fn build(
             CheckMenuItem::with_id(
                 app,
                 QUICKCHAT_SHORTCUT_ID,
-                "Quick Chat shortcut",
+                i18n::text("desktop.tray.quickChatShortcut"),
                 true,
                 initial_state.checked,
                 None::<&str>,
@@ -193,17 +213,41 @@ pub fn build(
             CheckMenuItem::with_id(
                 app,
                 GLOBAL_SHORTCUT_ID,
-                "Enable Global Shortcut",
+                i18n::text("desktop.tray.globalShortcut"),
                 true,
                 initial_state.checked,
                 None::<&str>,
             )
         })
         .transpose()?;
-    let start = MenuItem::with_id(app, START_ID, "Start Gateway", false, None::<&str>)?;
-    let stop = MenuItem::with_id(app, STOP_ID, "Stop Gateway", false, None::<&str>)?;
-    let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
-    let quit = MenuItem::with_id(app, QUIT_ID, "Quit OpenClaw", true, None::<&str>)?;
+    let start = MenuItem::with_id(
+        app,
+        START_ID,
+        i18n::text("desktop.tray.startGateway"),
+        false,
+        None::<&str>,
+    )?;
+    let stop = MenuItem::with_id(
+        app,
+        STOP_ID,
+        i18n::text("desktop.tray.stopGateway"),
+        false,
+        None::<&str>,
+    )?;
+    let restart = MenuItem::with_id(
+        app,
+        RESTART_ID,
+        i18n::text("desktop.tray.restartGateway"),
+        false,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(
+        app,
+        QUIT_ID,
+        i18n::text("desktop.tray.quit"),
+        true,
+        None::<&str>,
+    )?;
     let separator_one = PredefinedMenuItem::separator(app)?;
     let separator_two = PredefinedMenuItem::separator(app)?;
     let separator_three = PredefinedMenuItem::separator(app)?;
@@ -319,7 +363,7 @@ pub fn build(
         _tray: tray,
         status,
         status_line: Mutex::new(StatusLine {
-            gateway: "Checking…".to_string(),
+            gateway: checking,
             pending_count: 0,
         }),
         _quickchat: quickchat,
@@ -527,6 +571,21 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn gateway_status_copy_preserves_singular_and_plural_approvals() {
+        for (pending_count, expected) in [
+            (0, "Gateway: Connected"),
+            (1, "Gateway: Connected · 1 approval pending"),
+            (2, "Gateway: Connected · 2 approvals pending"),
+        ] {
+            let status = StatusLine {
+                gateway: "Connected".to_owned(),
+                pending_count,
+            };
+            assert_eq!(status.text(), expected);
+        }
+    }
 
     #[test]
     fn linux_shortcut_support_follows_x11_session_facts() {

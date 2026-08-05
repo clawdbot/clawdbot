@@ -3,6 +3,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import type { ControlUiSharedCatalog } from "../../scripts/lib/control-ui-i18n-shared-catalog.ts";
 import {
   assignNativeI18nIds,
   collectNativeI18nEntries,
@@ -31,6 +32,19 @@ function artifactEntry(
   return expectDefined(artifact.entries[index], context);
 }
 
+function sharedCatalogFixture(
+  sourceEntries: readonly (readonly [string, string])[],
+  translations: readonly (readonly [string, readonly (readonly [string, string])[]])[] = [],
+  descriptions: readonly (readonly [string, string])[] = [],
+): ControlUiSharedCatalog {
+  const source = new Map(sourceEntries);
+  return {
+    descriptions: new Map(descriptions),
+    source,
+    translations: new Map(translations.map(([locale, entries]) => [locale, new Map(entries)])),
+  };
+}
+
 describe("native app i18n inventory", () => {
   it("keeps IDs stable across extractor classification changes", () => {
     const candidate = {
@@ -44,12 +58,216 @@ describe("native app i18n inventory", () => {
     const reclassified = { ...candidate, kind: "ui-call-multiline", line: 20 };
 
     expect(assignNativeI18nIds([reclassified])[0]?.id).toBe(initial[0]?.id);
+    expect(initial[0]).not.toHaveProperty("line");
     expect(
       assignNativeI18nIds(
         [reclassified],
         [{ ...candidate, id: "native.apple.existing-translation" }],
       )[0]?.id,
     ).toBe("native.apple.existing-translation");
+  });
+
+  it("keeps registered ordering stable when extracted source lines move", () => {
+    const candidates = [
+      {
+        kind: "ui-call",
+        line: 10,
+        path: "apps/ios/Settings.swift",
+        source: "Zulu",
+        surface: "apple" as const,
+      },
+      {
+        kind: "ui-call",
+        line: 20,
+        path: "apps/ios/Settings.swift",
+        source: "Alpha",
+        surface: "apple" as const,
+      },
+    ];
+    const previous: NativeI18nEntry[] = [
+      {
+        id: "native.apple.zulu",
+        kind: "ui-call",
+        path: candidates[0]!.path,
+        source: "Zulu",
+        surface: "apple",
+      },
+      {
+        id: "native.apple.alpha",
+        kind: "ui-call",
+        path: candidates[1]!.path,
+        source: "Alpha",
+        surface: "apple",
+      },
+    ];
+
+    const shifted = assignNativeI18nIds(
+      [
+        { ...candidates[1]!, line: 1 },
+        { ...candidates[0]!, line: 999 },
+      ],
+      previous,
+    );
+
+    expect(shifted.map((entry) => entry.id)).toEqual(["native.apple.zulu", "native.apple.alpha"]);
+    expect(shifted.every((entry) => !("line" in entry))).toBe(true);
+  });
+
+  it("preserves the registered ID and semantic identity when an unambiguous source moves", () => {
+    const previous: NativeI18nEntry[] = [
+      {
+        id: "native.apple.registered",
+        kind: "ui-call",
+        path: "apps/ios/OldSettings.swift",
+        semanticKey: "settings.connect",
+        source: "Connect to Gateway",
+        surface: "apple",
+      },
+    ];
+    const [moved] = assignNativeI18nIds(
+      [
+        {
+          kind: "ui-call",
+          line: 42,
+          path: "apps/ios/NewSettings.swift",
+          source: "Connect to Gateway",
+          surface: "apple",
+        },
+      ],
+      previous,
+    );
+
+    expect(moved).toMatchObject({
+      id: "native.apple.registered",
+      semanticKey: "settings.connect",
+    });
+    expect(moved).not.toHaveProperty("line");
+  });
+
+  it("keeps Linux message IDs stable when their English wording changes", () => {
+    const original = {
+      description: "Gateway connection status while availability is being checked.",
+      kind: "semantic-message",
+      line: 0,
+      path: "apps/linux/ui/messages.json",
+      semanticKey: "desktop.gateway.checking",
+      source: "Checking…",
+      surface: "linux" as const,
+    };
+    const previous = assignNativeI18nIds([original]);
+    const updated = assignNativeI18nIds([{ ...original, source: "Checking gateway…" }], previous);
+
+    expect(updated[0]?.id).toBe(previous[0]?.id);
+    expect(updated[0]).toMatchObject({
+      description: original.description,
+      semanticKey: original.semanticKey,
+      source: "Checking gateway…",
+      surface: "linux",
+    });
+    expect(updated[0]).not.toHaveProperty("line");
+  });
+
+  it("shares only explicitly reviewed concepts and persists authored translator context", () => {
+    const shared = sharedCatalogFixture(
+      [
+        ["common.cancel", "Cancel"],
+        ["action.open", "Open"],
+        ["status.open", "Open"],
+      ],
+      [],
+      [["common.cancel", "Dismiss the current operation without saving."]],
+    );
+    const entries = assignNativeI18nIds(
+      [
+        {
+          kind: "ui-call",
+          line: 10,
+          path: "apps/ios/Settings.swift",
+          source: "Cancel",
+          surface: "apple",
+        },
+        {
+          kind: "ui-call",
+          line: 20,
+          path: "apps/ios/Settings.swift",
+          source: "Open",
+          surface: "apple",
+        },
+      ],
+      [],
+      shared,
+    );
+
+    expect(entries.find((entry) => entry.source === "Cancel")).toMatchObject({
+      description: "Dismiss the current operation without saving.",
+      semanticKey: "common.cancel",
+    });
+    expect(entries.find((entry) => entry.source === "Open")).not.toHaveProperty("semanticKey");
+  });
+
+  it("rejects inferred Test and Local identities while deliberately mapping reviewed statuses", () => {
+    const shared = sharedCatalogFixture([
+      ["common.connected", "Connected"],
+      ["another.connected", "Connected"],
+      ["common.justNow", "just now"],
+      ["common.loading", "Loading…"],
+      ["usage.loading.badge", "Loading"],
+      ["memoryPage.overview.health.test", "Test"],
+      ["usage.filters.timeZoneLocal", "Local"],
+    ]);
+    const candidates = ["Connected", "just now", "Loading…", "Loading", "Test", "Local"].map(
+      (source, index) => ({
+        kind: "ui-call",
+        line: index + 1,
+        path: "apps/ios/Settings.swift",
+        source,
+        surface: "apple" as const,
+      }),
+    );
+    const previous: NativeI18nEntry[] = [
+      {
+        id: "native.apple.old-test",
+        kind: "ui-call",
+        path: "apps/ios/Settings.swift",
+        semanticKey: "memoryPage.overview.health.test",
+        source: "Test",
+        surface: "apple",
+      },
+      {
+        id: "native.apple.old-local",
+        kind: "ui-call",
+        path: "apps/ios/Settings.swift",
+        semanticKey: "usage.filters.timeZoneLocal",
+        source: "Local",
+        surface: "apple",
+      },
+    ];
+    const entries = assignNativeI18nIds(candidates, previous, shared);
+    const semanticKeys = new Map(entries.map((entry) => [entry.source, entry.semanticKey]));
+
+    expect(semanticKeys.get("Connected")).toBe("common.connected");
+    expect(semanticKeys.get("just now")).toBe("common.justNow");
+    expect(semanticKeys.get("Loading…")).toBe("common.loading");
+    expect(semanticKeys.get("Loading")).toBe("usage.loading.badge");
+    expect(semanticKeys.get("Test")).toBeUndefined();
+    expect(semanticKeys.get("Local")).toBeUndefined();
+    expect(entries.find((entry) => entry.source === "Test")?.id).toBe("native.apple.old-test");
+    expect(entries.find((entry) => entry.source === "Local")?.id).toBe("native.apple.old-local");
+  });
+
+  it("rejects reviewed semantic mappings after canonical English changes", () => {
+    const candidate = {
+      kind: "ui-call",
+      line: 1,
+      path: "apps/ios/Settings.swift",
+      source: "Cancel",
+      surface: "apple" as const,
+    };
+    const shared = sharedCatalogFixture([["common.cancel", "Discard"]]);
+
+    expect(() => assignNativeI18nIds([candidate], [], shared)).toThrow(
+      'reviewed native localization mapping common.cancel must equal "Cancel"',
+    );
   });
 
   it("preserves registered IDs when Swift entries move between files", async () => {
@@ -315,12 +533,12 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["off", "Visible choice"]);
   });
 
-  it("collects stable Android and Apple UI entries", async () => {
+  it("collects stable Android, Apple, and source-owned Linux desktop UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
 
     expect(entries.length).toBeGreaterThan(100);
-    expect(surfaces).toEqual(new Set(["android", "apple"]));
+    expect(surfaces).toEqual(new Set(["android", "apple", "linux"]));
     expect(entries.every((entry) => entry.id.startsWith(`native.${entry.surface}.`))).toBe(true);
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(entries.length);
     expect(
@@ -354,6 +572,25 @@ describe("native app i18n inventory", () => {
             entry.path === "apps/android/wear/src/main/res/values/strings.xml",
         ),
     ).toBe(true);
+    const linuxEntries = entries.filter((entry) => entry.surface === "linux");
+    expect(linuxEntries.length).toBeGreaterThan(100);
+    expect(
+      linuxEntries.every(
+        (entry) =>
+          entry.path === "apps/linux/ui/messages.json" &&
+          entry.kind === "semantic-message" &&
+          entry.semanticKey?.startsWith("desktop.") &&
+          entry.description,
+      ),
+    ).toBe(true);
+    expect(linuxEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          semanticKey: "desktop.gateway.installCli",
+          source: "Install the OpenClaw CLI to continue.",
+        }),
+      ]),
+    );
     expect(
       entries.some(
         (entry) =>
@@ -649,6 +886,346 @@ describe("native app i18n inventory", () => {
     expect(NATIVE_I18N_LOCALES).toContain("sv");
   });
 
+  it("translates Linux desktop semantic messages with authored context and ICU arguments", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-linux-i18n-");
+    const entries: NativeI18nEntry[] = [
+      {
+        description: "Number of gateways discovered on the local network.",
+        id: "native.linux.discovery-found",
+        kind: "semantic-message",
+        path: "apps/linux/ui/messages.json",
+        semanticKey: "desktop.main.discoveryFound",
+        source: "{count} FOUND",
+        surface: "linux",
+      },
+    ];
+    const shared = sharedCatalogFixture([["desktop.main.discoveryFound", "{count} FOUND"]]);
+
+    try {
+      const result = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        sharedCatalog: shared,
+        translationsDir,
+        translate: async (pending) => {
+          expect(pending).toEqual([
+            expect.objectContaining({
+              description: "Number of gateways discovered on the local network.",
+              id: "native.linux.discovery-found",
+              semanticKey: "desktop.main.discoveryFound",
+              sourcePath: "apps/linux/ui/messages.json",
+            }),
+          ]);
+          return new Map([["native.linux.discovery-found", "{count} HITTADE"]]);
+        },
+      });
+      const artifact = JSON.parse(
+        await readFile(path.join(translationsDir, "sv.json"), "utf8"),
+      ) as NativeTranslationArtifact;
+
+      expect(result).toEqual({ changed: true, translated: 1 });
+      expect(artifact.entries[0]).toEqual({
+        id: "native.linux.discovery-found",
+        source: "{count} FOUND",
+        translated: "{count} HITTADE",
+      });
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("does not borrow a reviewed web translation for a different Linux semantic key", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-linux-i18n-identity-");
+    const entries: NativeI18nEntry[] = [
+      {
+        description: "Connection status for this desktop Gateway.",
+        id: "native.linux.gateway-connected",
+        kind: "semantic-message",
+        path: "apps/linux/ui/messages.json",
+        semanticKey: "desktop.gateway.connected",
+        source: "Connected",
+        surface: "linux",
+      },
+    ];
+    const shared = sharedCatalogFixture(
+      [
+        ["common.connected", "Connected"],
+        ["desktop.gateway.connected", "Connected"],
+      ],
+      [["de", [["common.connected", "Verbunden"]]]],
+    );
+
+    try {
+      const result = await syncNativeLocale("de", entries, {
+        glossary: [],
+        sharedCatalog: shared,
+        translationsDir,
+        translate: async (pending) => {
+          expect(pending).toEqual([
+            expect.objectContaining({
+              id: "native.linux.gateway-connected",
+              semanticKey: "desktop.gateway.connected",
+            }),
+          ]);
+          return new Map([["native.linux.gateway-connected", "Gateway verbunden"]]);
+        },
+      });
+      const artifact = JSON.parse(
+        await readFile(path.join(translationsDir, "de.json"), "utf8"),
+      ) as NativeTranslationArtifact;
+
+      expect(result).toEqual({ changed: true, translated: 1 });
+      expect(artifact.entries[0]?.translated).toBe("Gateway verbunden");
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("reuses an exact shared web translation without invoking the translation provider", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-shared-");
+    const entries: NativeI18nEntry[] = [
+      {
+        id: "native.apple.cancel",
+        kind: "ui-call",
+        path: "apps/ios/Settings.swift",
+        semanticKey: "common.cancel",
+        source: "Cancel",
+        surface: "apple",
+      },
+    ];
+    const shared = sharedCatalogFixture(
+      [["common.cancel", "Cancel"]],
+      [["sv", [["common.cancel", "Avbryt"]]]],
+    );
+
+    try {
+      const result = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        sharedCatalog: shared,
+        translationsDir,
+        translate: async () => {
+          throw new Error("a verified shared translation must not invoke the provider");
+        },
+      });
+      const artifact = JSON.parse(
+        await readFile(path.join(translationsDir, "sv.json"), "utf8"),
+      ) as NativeTranslationArtifact;
+
+      expect(result).toEqual({ changed: true, translated: 0 });
+      expect(artifact.entries).toEqual([
+        { id: "native.apple.cancel", source: "Cancel", translated: "Avbryt" },
+      ]);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("refreshes reviewed German shared translations without overwriting unmapped native copy", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-reviewed-");
+    const entries: NativeI18nEntry[] = [
+      {
+        id: "native.android.loading",
+        kind: "ui-call",
+        path: "apps/android/Settings.kt",
+        semanticKey: "usage.loading.badge",
+        source: "Loading",
+        surface: "android",
+      },
+      {
+        id: "native.apple.just-now",
+        kind: "ui-call",
+        path: "apps/ios/Settings.swift",
+        semanticKey: "common.justNow",
+        source: "just now",
+        surface: "apple",
+      },
+      {
+        id: "native.apple.test",
+        kind: "ui-call",
+        path: "apps/macos/Sources/OpenClaw/DebugSettings.swift",
+        source: "Test",
+        surface: "apple",
+      },
+    ];
+    const glossaryHash = createHash("sha256").update(JSON.stringify([])).digest("hex");
+    const artifactPath = path.join(translationsDir, "de.json");
+    const createSharedCatalog = (loading: string, justNow: string) =>
+      sharedCatalogFixture(
+        [
+          ["usage.loading.badge", "Loading"],
+          ["common.justNow", "just now"],
+          ["memoryPage.overview.health.test", "Test"],
+        ],
+        [
+          [
+            "de",
+            [
+              ["usage.loading.badge", loading],
+              ["common.justNow", justNow],
+              ["memoryPage.overview.health.test", "Prüfen"],
+            ],
+          ],
+        ],
+      );
+
+    try {
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "de",
+            glossaryHash,
+            entries: [
+              { id: "native.android.loading", source: "Loading", translated: "Loading" },
+              { id: "native.apple.just-now", source: "just now", translated: "soeben" },
+              { id: "native.apple.test", source: "Test", translated: "Testlauf" },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const failProvider = async () => {
+        throw new Error("reviewed shared translation refresh must not invoke the provider");
+      };
+      const first = await syncNativeLocale("de", entries, {
+        glossary: [],
+        sharedCatalog: createSharedCatalog("Wird geladen", "gerade eben"),
+        translationsDir,
+        translate: failProvider,
+      });
+      const initial = JSON.parse(await readFile(artifactPath, "utf8")) as NativeTranslationArtifact;
+
+      expect(first).toEqual({ changed: true, translated: 0 });
+      expect(initial.entries.map((entry) => entry.translated)).toEqual([
+        "Wird geladen",
+        "gerade eben",
+        "Testlauf",
+      ]);
+
+      const refreshed = await syncNativeLocale("de", entries, {
+        glossary: [],
+        sharedCatalog: createSharedCatalog("Ladevorgang läuft", "soeben aktualisiert"),
+        translationsDir,
+        translate: failProvider,
+      });
+      const updated = JSON.parse(await readFile(artifactPath, "utf8")) as NativeTranslationArtifact;
+
+      expect(refreshed).toEqual({ changed: true, translated: 0 });
+      expect(updated.entries.map((entry) => entry.translated)).toEqual([
+        "Ladevorgang läuft",
+        "soeben aktualisiert",
+        "Testlauf",
+      ]);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("does not reuse a different semantic translation for ambiguous identical English", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-context-");
+    const entries: NativeI18nEntry[] = [
+      {
+        id: "native.apple.open-status",
+        kind: "conditional-branch",
+        path: "apps/ios/Status.swift",
+        semanticKey: "status.open",
+        source: "Open",
+        surface: "apple",
+      },
+    ];
+    const shared = sharedCatalogFixture(
+      [
+        ["action.open", "Open"],
+        ["status.open", "Open"],
+      ],
+      [["sv", [["action.open", "Öppna"]]]],
+    );
+
+    try {
+      const result = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        sharedCatalog: shared,
+        translationsDir,
+        translate: async (pending) => {
+          expect(pending).toEqual([
+            expect.objectContaining({
+              description: "Apple conditional branch in Status.swift",
+              id: "native.apple.open-status",
+              semanticKey: "status.open",
+              sourcePath: "apps/ios/Status.swift",
+            }),
+          ]);
+          return new Map([["native.apple.open-status", "Öppen"]]);
+        },
+      });
+      const artifact = JSON.parse(
+        await readFile(path.join(translationsDir, "sv.json"), "utf8"),
+      ) as NativeTranslationArtifact;
+
+      expect(result).toEqual({ changed: true, translated: 1 });
+      expect(artifact.entries[0]?.translated).toBe("Öppen");
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("translates one shared semantic message once across Android and Apple", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-dedup-");
+    const entries: NativeI18nEntry[] = [
+      {
+        id: "native.android.retry",
+        kind: "ui-call",
+        path: "apps/android/Settings.kt",
+        semanticKey: "common.retry",
+        source: "Retry",
+        surface: "android",
+      },
+      {
+        id: "native.apple.retry",
+        kind: "ui-call",
+        path: "apps/ios/Settings.swift",
+        semanticKey: "common.retry",
+        source: "Retry",
+        surface: "apple",
+      },
+    ];
+    const shared = sharedCatalogFixture([["common.retry", "Retry"]]);
+
+    try {
+      const result = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        sharedCatalog: shared,
+        translationsDir,
+        translate: async (pending) => {
+          expect(pending).toHaveLength(1);
+          expect(pending[0]).toMatchObject({
+            id: "native.android.retry",
+            semanticKey: "common.retry",
+          });
+          return new Map([["native.android.retry", "Försök igen"]]);
+        },
+      });
+      const artifact = JSON.parse(
+        await readFile(path.join(translationsDir, "sv.json"), "utf8"),
+      ) as NativeTranslationArtifact;
+
+      expect(result).toEqual({ changed: true, translated: 2 });
+      expect(artifact.entries.map((entry) => entry.translated)).toEqual([
+        "Försök igen",
+        "Försök igen",
+      ]);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("creates a first-run locale artifact and leaves a complete artifact unchanged", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
@@ -656,7 +1233,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.android.hello",
         kind: "ui-call",
-        line: 1,
         path: "apps/android/example.kt",
         source: "Hello",
         surface: "android",
@@ -664,7 +1240,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.apple.request",
         kind: "ui-call",
-        line: 2,
         path: "apps/ios/example.swift",
         source: "Request ID: \\(requestId)",
         surface: "apple",
@@ -672,7 +1247,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.android.count",
         kind: "ui-call",
-        line: 3,
         path: "apps/android/example.kt",
         source: "Showing ${visibleApps.size} of ${apps.size}",
         surface: "android",
@@ -680,7 +1254,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.apple.permissions",
         kind: "ui-call",
-        line: 4,
         path: "apps/ios/example.swift",
         source: "\\(granted) of \\(total) permissions granted",
         surface: "apple",
@@ -721,10 +1294,9 @@ describe("native app i18n inventory", () => {
       expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
       expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
 
-      const movedEntries = entries.map((entry, index) => ({
+      const movedEntries = entries.map((entry) => ({
         ...entry,
         id: `${entry.id}.moved`,
-        line: index + 20,
       }));
       const moved = await syncNativeLocale("sv", movedEntries, {
         glossary: [],
@@ -767,7 +1339,6 @@ describe("native app i18n inventory", () => {
         {
           id: "native.apple.fallback",
           kind: "ui-call",
-          line: 1,
           path: "apps/ios/example.swift",
           source: "Try again",
           surface: "apple",
@@ -803,7 +1374,6 @@ describe("native app i18n inventory", () => {
         {
           id: "native.apple.ambiguous.current",
           kind: "ui-call",
-          line: 1,
           path: "apps/ios/example.swift",
           source: "Open",
           surface: "apple",
@@ -849,7 +1419,6 @@ describe("native app i18n inventory", () => {
         {
           id: "native.apple.partial.action.current",
           kind: "ui-call",
-          line: 1,
           path: "apps/ios/action.swift",
           source: "Open",
           surface: "apple",
@@ -857,7 +1426,6 @@ describe("native app i18n inventory", () => {
         {
           id: "native.apple.partial.state.current",
           kind: "ui-call",
-          line: 2,
           path: "apps/ios/state.swift",
           source: "Open",
           surface: "apple",
@@ -906,7 +1474,6 @@ describe("native app i18n inventory", () => {
         {
           id: "native.apple.open.action",
           kind: "ui-call",
-          line: 1,
           path: "apps/ios/action.swift",
           source: "Open",
           surface: "apple",
@@ -914,7 +1481,6 @@ describe("native app i18n inventory", () => {
         {
           id: "native.apple.open.state",
           kind: "ui-call",
-          line: 2,
           path: "apps/ios/state.swift",
           source: "Open",
           surface: "apple",
@@ -965,7 +1531,6 @@ describe("native app i18n inventory", () => {
         entry: {
           id: "native.android.certificate",
           kind: "ui-call",
-          line: 1,
           path: "apps/android/example.kt",
           source: "Old fingerprint: %1$s\nNew fingerprint: %2$s",
           surface: "android",
@@ -976,7 +1541,6 @@ describe("native app i18n inventory", () => {
         entry: {
           id: "native.apple.failure",
           kind: "ui-call",
-          line: 1,
           path: "apps/ios/example.swift",
           source: "Send failed: %@",
           surface: "apple",
@@ -987,12 +1551,22 @@ describe("native app i18n inventory", () => {
         entry: {
           id: "native.apple.percent",
           kind: "ui-call",
-          line: 1,
           path: "apps/ios/example.swift",
           source: "Context %@%% used",
           surface: "apple",
         },
         translated: "Kontext %@ används",
+      },
+      {
+        entry: {
+          id: "native.linux.discovery",
+          kind: "semantic-message",
+          path: "apps/linux/ui/messages.json",
+          semanticKey: "desktop.main.discoveryFound",
+          source: "{count} FOUND",
+          surface: "linux",
+        },
+        translated: "{total} HITTADE",
       },
     ] satisfies Array<{ entry: NativeI18nEntry; translated: string }>;
 
@@ -1018,7 +1592,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.android.greeting",
         kind: "ui-call",
-        line: 1,
         path: "apps/android/Greeting.kt",
         source: "Hello ${name}\nNext",
         surface: "android",
@@ -1026,7 +1599,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.apple.other",
         kind: "ui-call",
-        line: 1,
         path: "apps/ios/Other.swift",
         source: "Other",
         surface: "apple",
@@ -1147,7 +1719,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.android.language-picker",
         kind: "conditional-branch",
-        line: 89,
         path: "apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt",
         source: "OpenClaw translations · $languageTag",
         surface: "android",
@@ -1155,7 +1726,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.android.inspect",
         kind: "ui-call",
-        line: 1,
         path: "apps/android/Workshop.kt",
         source: "Inspect",
         surface: "android",
@@ -1163,7 +1733,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.apple.inspect",
         kind: "ui-call",
-        line: 1,
         path: "apps/ios/Workshop.swift",
         source: "Inspect",
         surface: "apple",
@@ -1171,7 +1740,6 @@ describe("native app i18n inventory", () => {
       {
         id: "native.android.voice-note",
         kind: "ui-call",
-        line: 1,
         path: "apps/android/Voice.kt",
         source: "Record voice note",
         surface: "android",

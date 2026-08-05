@@ -424,12 +424,33 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
   return lines.join("\n");
 }
 
+type ContextualTranslationBatchItem = TranslationBatchItem & {
+  description?: string;
+  semanticKey?: string;
+  sourcePath?: string;
+};
+
 export function buildBatchPrompt(
-  items: readonly TranslationBatchItem[],
+  items: readonly ContextualTranslationBatchItem[],
   validationError?: string,
 ): string {
   const payload = Object.fromEntries(items.map((item) => [item.key, item.text]));
   const lines = ["Translate this JSON object.", "Return ONLY a JSON object with the same keys."];
+  const contextualItems = items.flatMap((item) => {
+    const context = {
+      ...(item.semanticKey ? { semanticKey: item.semanticKey } : {}),
+      ...(item.description ? { description: item.description } : {}),
+      ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}),
+    };
+    return Object.keys(context).length > 0 ? [[item.key, context] as const] : [];
+  });
+  if (contextualItems.length > 0) {
+    lines.push(
+      "",
+      "Use this context to understand each message. Do not translate it or include it in the response:",
+      JSON.stringify(Object.fromEntries(contextualItems), null, 2),
+    );
+  }
   if (validationError) {
     lines.push(
       "",
@@ -490,8 +511,18 @@ function resolveBatchCharBudget(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BATCH_CHAR_BUDGET;
 }
 
-function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
-  return items.reduce((total, item) => total + item.key.length + item.text.length + 8, 2);
+function estimateBatchChars(items: readonly ContextualTranslationBatchItem[]): number {
+  return items.reduce(
+    (total, item) =>
+      total +
+      item.key.length +
+      item.text.length +
+      (item.description?.length ?? 0) +
+      (item.semanticKey?.length ?? 0) +
+      (item.sourcePath?.length ?? 0) +
+      8,
+    2,
+  );
 }
 
 type RunProcessOptions = {
@@ -803,10 +834,12 @@ function formatBatchLabel(context: TranslationBatchContext): string {
   return `${formatLocaleLabel(context.locale, context)} batch ${context.batchIndex}/${context.batchCount}${suffix}`;
 }
 
-function buildTranslationBatches(items: readonly TranslationBatchItem[]): TranslationBatchItem[][] {
-  const batches: TranslationBatchItem[][] = [];
+function buildTranslationBatches(
+  items: readonly ContextualTranslationBatchItem[],
+): ContextualTranslationBatchItem[][] {
+  const batches: ContextualTranslationBatchItem[][] = [];
   const budget = resolveBatchCharBudget();
-  let current: TranslationBatchItem[] = [];
+  let current: ContextualTranslationBatchItem[] = [];
   let currentChars = 2;
 
   for (const item of items) {
@@ -955,7 +988,7 @@ export function parseTranslationBatchReply(
 
 async function translateBatch(
   clientAccess: ClientAccess,
-  items: readonly TranslationBatchItem[],
+  items: readonly ContextualTranslationBatchItem[],
   context: TranslationBatchContext,
 ): Promise<Map<string, string>> {
   const batchLabel = formatBatchLabel(context);
@@ -1016,7 +1049,9 @@ async function translateBatch(
 }
 
 type NativeTranslationEntry = {
+  description?: string;
   id: string;
+  semanticKey?: string;
   source: string;
   sourcePath: string;
 };
@@ -1030,8 +1065,15 @@ export async function translateNativeEntries(
     throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
   }
   const pending = entries.map((entry) => ({
-    cacheKey: cacheKey(entry.id, hashControlUiTranslationText(entry.source), targetLocale),
+    cacheKey: cacheKey(
+      entry.semanticKey ?? entry.id,
+      hashControlUiTranslationText(entry.source),
+      targetLocale,
+    ),
+    description: entry.description,
     key: entry.id,
+    semanticKey: entry.semanticKey,
+    sourcePath: entry.sourcePath,
     text: entry.source,
     textHash: hashControlUiTranslationText(entry.source),
   }));

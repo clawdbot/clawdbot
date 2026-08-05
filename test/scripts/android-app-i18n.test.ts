@@ -7,10 +7,13 @@ import {
   escapeAndroidResourceValue,
   findUnusedAndroidResourceKeys,
   findUnlocalizedAndroidUiLiterals,
+  onlyManagedRowsPending,
   renderAndroidResourceValue,
+  resolveAndroidResourceKey,
   selectDeterministicTranslation,
   selectExactArtifactTranslation,
   selectGeneratedTranslation,
+  selectSemanticArtifactTranslations,
 } from "../../scripts/android-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 
@@ -187,6 +190,123 @@ describe("Android app i18n resources", () => {
   it("selects duplicate-source translations by frequency then stable text order", () => {
     expect(selectDeterministicTranslation("Source", ["Beta", "Alpha", "Beta"])).toBe("Beta");
     expect(selectDeterministicTranslation("Source", ["Beta", "Alpha"])).toBe("Alpha");
+  });
+
+  it("preserves shipped resource identifiers when semantic keys are introduced", () => {
+    expect(
+      resolveAndroidResourceKey("Connected", {
+        existingKey: "native_c3f5d8f11e677e54",
+        semanticKey: "common.connected",
+      }),
+    ).toBe("native_c3f5d8f11e677e54");
+    expect(
+      resolveAndroidResourceKey("$count providers", {
+        existingKey: "native_999e5fee2f7c2856",
+        semanticKey: "providers.count",
+      }),
+    ).toBe("native_999e5fee2f7c2856");
+  });
+
+  it("uses readable Android resource names for new semantic messages", () => {
+    expect(resolveAndroidResourceKey("Connected", { semanticKey: "common.connected" })).toBe(
+      "native_common_connected",
+    );
+    expect(
+      resolveAndroidResourceKey("Gateway status", { semanticKey: "overview.gatewayStatus" }),
+    ).toBe("native_overview_gateway_status");
+    expect(
+      resolveAndroidResourceKey("New message", {
+        semanticKey: "native.gateway.reconnect-failed",
+      }),
+    ).toBe("native_gateway_reconnect_failed");
+  });
+
+  it("allows only generator-owned Android rows to wait for post-merge refresh", () => {
+    const current = [
+      "<resources>",
+      '  <string name="manual_title">Manual title</string>',
+      '  <string name="native_common_open">Old generated translation</string>',
+      '  <string name="native_retired">Retired generated translation</string>',
+      "</resources>",
+    ].join("\n");
+    const expected = [
+      "<resources>",
+      '  <string name="manual_title">Manual title</string>',
+      '  <string name="native_common_open" formatted="false">Updated generated translation</string>',
+      '  <string name="native_common_close">New generated translation</string>',
+      "</resources>",
+    ].join("\n");
+
+    expect(onlyManagedRowsPending(current, expected)).toBe(true);
+    expect(
+      onlyManagedRowsPending(
+        current,
+        expected.replace(">Manual title</string>", ">Changed manual title</string>"),
+      ),
+    ).toBe(false);
+    expect(
+      onlyManagedRowsPending(
+        current,
+        expected.replace('  <string name="manual_title">Manual title</string>\n', ""),
+      ),
+    ).toBe(false);
+    expect(
+      onlyManagedRowsPending(
+        current,
+        expected.replace(
+          "</resources>",
+          '  <string name="manual_added">Unexpected manual row</string>\n</resources>',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("disambiguates semantic resource names without depending on English copy", () => {
+    const occupiedKeys = new Set(["native_common_open"]);
+    const first = resolveAndroidResourceKey("Open", {
+      occupiedKeys,
+      semanticKey: "common.open",
+    });
+    const second = resolveAndroidResourceKey("Open now", {
+      occupiedKeys,
+      semanticKey: "common.open",
+    });
+
+    expect(first).toMatch(/^native_common_open_[a-f0-9]{12}$/u);
+    expect(second).toBe(first);
+  });
+
+  it("shares translations across platforms only when semantic meaning matches", () => {
+    const inventory = [
+      { id: "native.android.action", semanticKey: "common.open", source: "Open" },
+      { id: "native.apple.action", semanticKey: "common.open", source: "Open" },
+      { id: "native.linux.action", semanticKey: "common.open", source: "Open" },
+      { id: "native.android.status", semanticKey: "gateway.status.open", source: "Open" },
+    ];
+    const artifacts = new Map([
+      ["native.android.action", { source: "Open", translated: "Öffnen" }],
+      ["native.apple.action", { source: "Open", translated: "Öffnen" }],
+      ["native.linux.action", { source: "Open", translated: "Öffnen" }],
+      ["native.android.status", { source: "Open", translated: "Geöffnet" }],
+    ]);
+
+    expect(selectSemanticArtifactTranslations("Open", "common.open", inventory, artifacts)).toEqual(
+      ["Öffnen", "Öffnen", "Öffnen"],
+    );
+    expect(
+      selectSemanticArtifactTranslations("Open", "gateway.status.open", inventory, artifacts),
+    ).toEqual(["Geöffnet"]);
+  });
+
+  it("rejects semantic translations whose English source no longer matches", () => {
+    expect(() =>
+      selectSemanticArtifactTranslations(
+        "Open",
+        "common.open",
+        [{ id: "native.android.action", semanticKey: "common.open", source: "Open" }],
+        new Map([["native.android.action", { source: "Closed", translated: "Geschlossen" }]]),
+      ),
+    ).toThrow("Android translation source drift");
   });
 
   it("prefers a translated candidate over repeated source fallbacks", () => {

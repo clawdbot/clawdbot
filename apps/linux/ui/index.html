@@ -23,7 +23,7 @@
             </div>
             <div class="update-actions">
               <button id="update-action" class="update-action hidden" type="button"></button>
-              <button id="update-dismiss" class="update-dismiss" type="button" aria-label="Dismiss update notice">×</button>
+              <button id="update-dismiss" class="update-dismiss" type="button" aria-label="Dismiss update notice" data-i18n-attr="aria-label:desktop.update.dismiss">×</button>
             </div>
           </div>
           <progress id="update-progress" class="update-progress hidden"></progress>
@@ -44,16 +44,16 @@
         </div>
 
         <div id="install-controls" class="controls hidden">
-          <label for="channel">Release channel</label>
+          <label for="channel" data-i18n="desktop.main.channelLabel">Release channel</label>
           <div class="control-row">
             <select id="channel">
-              <option value="stable">Stable</option>
-              <option value="beta">Beta</option>
-              <option value="dev">Development</option>
+              <option value="stable" data-i18n="desktop.main.channelStable">Stable</option>
+              <option value="beta" data-i18n="desktop.main.channelBeta">Beta</option>
+              <option value="dev" data-i18n="desktop.main.channelDevelopment">Development</option>
             </select>
-            <button id="install-button" class="primary">Install OpenClaw</button>
+            <button id="install-button" class="primary" data-i18n="desktop.main.installButton">Install OpenClaw</button>
           </div>
-          <p class="hint">Installs the CLI and managed Node runtime in ~/.openclaw.</p>
+          <p class="hint" data-i18n="desktop.main.installHint">Installs the CLI and managed Node runtime in ~/.openclaw.</p>
         </div>
 
         <div id="action-controls" class="controls hidden">
@@ -62,17 +62,17 @@
 
         <section id="discovery" class="discovery" aria-labelledby="discovery-title">
           <div class="discovery-head">
-            <span id="discovery-title">GATEWAYS ON THIS NETWORK</span>
+            <span id="discovery-title" data-i18n="desktop.main.discoveryHeading">GATEWAYS ON THIS NETWORK</span>
             <span id="discovery-status">SEARCHING</span>
           </div>
           <div id="gateway-list" class="gateway-list">
-            <p class="discovery-empty">Looking for nearby OpenClaw gateways…</p>
+            <p class="discovery-empty" data-i18n="desktop.main.discoveryEmpty">Looking for nearby OpenClaw gateways…</p>
           </div>
         </section>
 
         <div id="log-wrap" class="log-wrap hidden">
           <div class="log-head">
-            <span>INSTALL LOG</span>
+            <span data-i18n="desktop.main.installLog">INSTALL LOG</span>
             <span id="log-status">RUNNING</span>
           </div>
           <pre id="install-log"></pre>
@@ -80,11 +80,12 @@
       </section>
 
       <footer>
-        <span>LOCAL GATEWAY</span>
+        <span data-i18n="desktop.main.localGateway">LOCAL GATEWAY</span>
         <span class="footer-separator"></span>
-        <span>CLOSE TO TRAY</span>
+        <span data-i18n="desktop.main.closeToTray">CLOSE TO TRAY</span>
       </footer>
     </main>
+    <script src="i18n.js"></script>
     <script type="module" src="main.js"></script>
   </body>
 </html>

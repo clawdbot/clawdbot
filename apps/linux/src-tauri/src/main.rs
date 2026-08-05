@@ -6,6 +6,7 @@ mod gateway;
 mod gateway_device_identity;
 mod gateway_operation_queue;
 mod gateway_ws;
+mod i18n;
 mod installer;
 mod notify;
 mod operation_executor;

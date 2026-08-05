@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Shared app localization:** reuse stable Control UI message identities and translations across native apps and the Linux desktop companion, preserve translator context, and eliminate source-line churn and unnecessary locale refreshes.
 - **Plugin uninstall cleanup:** remove exact recorded install paths from `plugins.load.paths` for marketplace, npm, and other managed installs while preserving parent, child, prefix, and unrelated paths.
 - Fixed Crabbox hydration on unprivileged cloud sandboxes by falling back to a user-writable pnpm store when the shared `/var/cache/crabbox` cache is unavailable, preserving the hardlink import mode after hydration, and making Docker an explicit routed capability instead of an implicit install requirement.
 

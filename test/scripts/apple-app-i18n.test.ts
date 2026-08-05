@@ -73,7 +73,6 @@ describe("Apple app i18n catalogs", () => {
       entries: Array<{
         id: string;
         kind: string;
-        line: number;
         path: string;
         source: string;
         surface: string;
@@ -96,7 +95,6 @@ describe("Apple app i18n catalogs", () => {
       entries: Array<{
         id: string;
         kind: string;
-        line: number;
         path: string;
         source: string;
         surface: string;
@@ -138,7 +136,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.settings",
             kind: "ui-call",
-            line: 1,
             path: "apps/macos/Sources/OpenClaw/Settings.swift",
             source: "Settings",
             surface: "apple",
@@ -188,6 +185,249 @@ describe("Apple app i18n catalogs", () => {
     expect(voiceWake).toContain('format: String(localized: "Language %lld")');
   });
 
+  it("adds stable semantic translator context without changing Apple runtime lookup keys", () => {
+    const entries = [
+      {
+        description: "Settings action that opens a Gateway",
+        id: "native.apple.open-action",
+        kind: "ui-call",
+        path: "apps/ios/Sources/Settings.swift",
+        semanticKey: "common.open",
+        source: "Open",
+        surface: "apple",
+      },
+      {
+        description: "Gateway status indicating that a connection is open",
+        id: "native.apple.open-status",
+        kind: "ui-call",
+        path: "apps/ios/Sources/Gateway.swift",
+        semanticKey: "gateway.status.open",
+        source: "Open",
+        surface: "apple",
+      },
+    ];
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      { version: 1, entries },
+      [],
+    );
+
+    expect(Object.keys(build.catalog.strings ?? {})).toEqual(["Open"]);
+    expect(build.catalog.strings?.Open?.comment).toBe(
+      [
+        "OpenClaw translator context:",
+        "- Gateway status indicating that a connection is open",
+        "- Settings action that opens a Gateway",
+        "Message keys: common.open, gateway.status.open",
+      ].join("\n"),
+    );
+
+    const refreshed = buildIosCatalog(
+      build.catalog,
+      { version: 1, entries: [...entries].toReversed() },
+      [],
+    );
+    expect(refreshed.catalog).toEqual(build.catalog);
+  });
+
+  it("preserves authored translator notes and shipped translations across context refreshes", () => {
+    const existing = {
+      sourceLanguage: "en",
+      strings: {
+        Open: {
+          comment: "Action verb, not a store opening status.",
+          localizations: {
+            fr: { stringUnit: { state: "translated", value: "Ouvrir" } },
+          },
+        },
+      },
+      version: "1.0",
+    };
+    const inventory = {
+      version: 1,
+      entries: [
+        {
+          description: "Gateway Settings action",
+          id: "native.apple.open",
+          kind: "ui-call",
+          path: "apps/ios/Sources/Settings.swift",
+          semanticKey: "common.open",
+          source: "Open",
+          surface: "apple",
+        },
+      ],
+    };
+    const build = buildIosCatalog(existing, inventory, []);
+
+    expect(build.catalog.strings?.Open?.comment).toBe(
+      [
+        "Action verb, not a store opening status.",
+        "",
+        "OpenClaw translator context:",
+        "- Gateway Settings action",
+        "Message keys: common.open",
+      ].join("\n"),
+    );
+    expect(build.catalog.strings?.Open?.localizations?.fr?.stringUnit?.value).toBe("Ouvrir");
+    expect(buildIosCatalog(build.catalog, inventory, []).catalog).toEqual(build.catalog);
+  });
+
+  it("derives stable platform ownership when a message has no authored translator context", () => {
+    const build = buildMacosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.settings",
+            kind: "ui-modifier",
+            path: "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+            source: "General",
+            surface: "apple",
+          },
+        ],
+      },
+      [],
+    );
+
+    expect(build.catalog.strings?.General?.comment).toBe(
+      [
+        "OpenClaw translator context:",
+        "- macOS accessibility or interface label in GeneralSettings.swift",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps generated translator context bounded for strings shared by many screens", () => {
+    const entries = Array.from({ length: 6 }, (_, index) => ({
+      description: `Screen ${index + 1} action`,
+      id: `native.apple.save-${index + 1}`,
+      kind: "ui-call",
+      path: `apps/ios/Sources/Screen${index + 1}.swift`,
+      semanticKey: "common.save",
+      source: "Save",
+      surface: "apple",
+    }));
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      { version: 1, entries },
+      [],
+    );
+
+    expect(build.catalog.strings?.Save?.comment).toBe(
+      [
+        "OpenClaw translator context:",
+        "- Screen 1 action",
+        "- Screen 2 action",
+        "- Screen 3 action",
+        "- Screen 4 action",
+        "- 2 additional usage contexts",
+        "Message keys: common.save",
+      ].join("\n"),
+    );
+  });
+
+  it("reuses Android and Linux translations only when their semantic message and source both match", () => {
+    const inventory = {
+      version: 1,
+      entries: [
+        {
+          id: "native.apple.cancel",
+          kind: "ui-call",
+          path: "apps/ios/Sources/Settings.swift",
+          semanticKey: "common.cancel",
+          source: "Cancel",
+          surface: "apple",
+        },
+        {
+          id: "native.android.cancel",
+          kind: "ui-call",
+          path: "apps/android/app/src/main/Settings.kt",
+          semanticKey: "common.cancel",
+          source: "Cancel",
+          surface: "android",
+        },
+        {
+          id: "native.android.stop",
+          kind: "ui-call",
+          path: "apps/android/app/src/main/Tasks.kt",
+          semanticKey: "tasks.cancel",
+          source: "Cancel",
+          surface: "android",
+        },
+        {
+          id: "native.linux.cancel",
+          kind: "desktop-message",
+          path: "apps/linux/ui/i18n/en.json",
+          semanticKey: "common.cancel",
+          source: "Cancel",
+          surface: "linux",
+        },
+        {
+          id: "native.linux.desktop",
+          kind: "desktop-message",
+          path: "apps/linux/ui/i18n/en.json",
+          semanticKey: "desktop.window",
+          source: "Linux window",
+          surface: "linux",
+        },
+      ],
+    };
+    const sharedTranslation = {
+      version: 1,
+      locale: "fr",
+      entries: [
+        { id: "native.android.cancel", source: "Cancel", translated: "Annuler" },
+        { id: "native.android.stop", source: "Cancel", translated: "Abandonner" },
+      ],
+    };
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      inventory,
+      [sharedTranslation],
+    );
+
+    expect(build.catalog.strings?.Cancel?.localizations?.fr?.stringUnit).toEqual({
+      state: "translated",
+      value: "Annuler",
+    });
+    expect(build.contradictions).toEqual([]);
+    expect(build.catalog.strings).not.toHaveProperty("Linux window");
+
+    const desktopTranslation = buildIosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      inventory,
+      [
+        {
+          version: 1,
+          locale: "fr",
+          entries: [{ id: "native.linux.cancel", source: "Cancel", translated: "Annulation" }],
+        },
+      ],
+    );
+    expect(desktopTranslation.catalog.strings?.Cancel?.localizations?.fr?.stringUnit?.value).toBe(
+      "Annulation",
+    );
+
+    const ownedTranslation = buildIosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      inventory,
+      [
+        {
+          ...sharedTranslation,
+          entries: [
+            ...sharedTranslation.entries,
+            { id: "native.apple.cancel", source: "Cancel", translated: "Interrompre" },
+          ],
+        },
+      ],
+    );
+    expect(ownedTranslation.catalog.strings?.Cancel?.localizations?.fr?.stringUnit?.value).toBe(
+      "Interrompre",
+    );
+    expect(ownedTranslation.contradictions).toEqual([]);
+  });
+
   it("selects duplicate-source translations deterministically while preserving shipped translations", () => {
     const build = buildIosCatalog(
       {
@@ -206,7 +446,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.a",
             kind: "ui-call",
-            line: 1,
             path: "apps/ios/Sources/Example.swift",
             source: "Connect now",
             surface: "apple",
@@ -214,7 +453,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.b",
             kind: "ui-call",
-            line: 2,
             path: "apps/ios/Sources/Other.swift",
             source: "Connect now",
             surface: "apple",
@@ -222,7 +460,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.c",
             kind: "ui-call",
-            line: 3,
             path: "apps/ios/WatchApp/Sources/Example.swift",
             source: "Connect now",
             surface: "apple",
@@ -272,7 +509,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.a",
             kind: "ui-call",
-            line: 1,
             path: "apps/ios/Sources/Example.swift",
             source: "Connect now",
             surface: "apple",
@@ -313,7 +549,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.resume-a",
             kind: "ui-call",
-            line: 1,
             path: "apps/ios/Sources/Example.swift",
             source,
             surface: "apple",
@@ -321,7 +556,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.resume-b",
             kind: "ui-call",
-            line: 2,
             path: "apps/ios/Sources/Other.swift",
             source,
             surface: "apple",
@@ -355,7 +589,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.count",
             kind: "ui-localized-call",
-            line: 1,
             path: "apps/ios/Sources/Example.swift",
             source,
             surface: "apple",
@@ -388,7 +621,6 @@ describe("Apple app i18n catalogs", () => {
           {
             id: "native.apple.mixed-count",
             kind: "ui-localized-call",
-            line: 1,
             path: "apps/ios/Sources/Example.swift",
             source,
             surface: "apple",

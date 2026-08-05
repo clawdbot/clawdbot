@@ -16,6 +16,7 @@ because it does not provide `node:sqlite`.
 
 The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 
+- follows the system or browser language using the shared app localization catalog, with English as the fallback for missing translations
 - installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service

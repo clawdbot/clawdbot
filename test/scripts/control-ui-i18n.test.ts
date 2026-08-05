@@ -357,6 +357,77 @@ describe("control-ui-i18n process runner", () => {
     );
   });
 
+  it("preserves the existing context-free web translation prompt", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "common.open",
+        text: "Open",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(buildBatchPrompt(items)).toBe(
+      'Translate this JSON object.\nReturn ONLY a JSON object with the same keys.\n\n{\n  "common.open": "Open"\n}',
+    );
+  });
+
+  it("gives native translations semantic meaning and source context without changing output ids", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        description: "Action that opens an existing Gateway connection",
+        key: "native.apple.91a105faed454e5a",
+        semanticKey: "gateway.connection.open",
+        sourcePath: "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+        text: "Open",
+        textHash: "text-hash",
+      },
+      {
+        cacheKey: "status-cache-key",
+        description: "Status indicating the Gateway connection is open",
+        key: "native.apple.91a105faed454e5b",
+        semanticKey: "gateway.connection.openStatus",
+        sourcePath: "apps/macos/Sources/OpenClaw/GatewayStatus.swift",
+        text: "Open",
+        textHash: "text-hash",
+      },
+    ];
+
+    const prompt = buildBatchPrompt(items);
+
+    expect(prompt).toContain(
+      "Use this context to understand each message. Do not translate it or include it in the response:",
+    );
+    expect(prompt).toContain('"semanticKey": "gateway.connection.open"');
+    expect(prompt).toContain('"semanticKey": "gateway.connection.openStatus"');
+    expect(prompt).toContain('"description": "Action that opens an existing Gateway connection"');
+    expect(prompt).toContain('"description": "Status indicating the Gateway connection is open"');
+    expect(prompt).toContain('"sourcePath": "apps/macos/Sources/OpenClaw/GatewaySettings.swift"');
+    expect(prompt).toContain('"native.apple.91a105faed454e5a": "Open"');
+    expect(prompt).toContain('"native.apple.91a105faed454e5b": "Open"');
+  });
+
+  it("keeps contextual native retries focused on the exact validation error", () => {
+    const prompt = buildBatchPrompt(
+      [
+        {
+          cacheKey: "cache-key",
+          description: "Gateway connection count",
+          key: "native.apple.connectionCount",
+          semanticKey: "gateway.connections.count",
+          sourcePath: "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
+          text: "Open ({count})",
+          textHash: "text-hash",
+        },
+      ],
+      "de:native.apple.connectionCount expected {count} got {}",
+    );
+
+    expect(prompt).toContain('"description": "Gateway connection count"');
+    expect(prompt).toContain("de:native.apple.connectionCount expected {count} got {}");
+  });
+
   it("ships no recorded English fallbacks", () => {
     const metaDir = path.resolve("ui/src/i18n/.i18n");
     const fallbacks = readdirSync(metaDir)

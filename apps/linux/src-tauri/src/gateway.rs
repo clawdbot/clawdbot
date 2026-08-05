@@ -1,5 +1,6 @@
 use crate::cli::OpenClawCli;
 use crate::gateway_ws::GatewayWsConfig;
+use crate::i18n;
 use serde::{Deserialize, Serialize};
 use std::thread;
 use std::time::Duration;
@@ -25,8 +26,8 @@ impl GatewaySnapshot {
             installed: false,
             running: false,
             reachable: false,
-            status: "CLI required".to_string(),
-            detail: Some("Install the OpenClaw CLI to continue.".to_string()),
+            status: i18n::text("desktop.gateway.cliRequired"),
+            detail: Some(i18n::text("desktop.gateway.installCli")),
         }
     }
 
@@ -36,7 +37,7 @@ impl GatewaySnapshot {
             installed: true,
             running: false,
             reachable: false,
-            status: "Reconnecting".to_string(),
+            status: i18n::text("desktop.gateway.reconnecting"),
             detail: Some(detail.into()),
         }
     }
@@ -153,13 +154,13 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
         })
         .or_else(|| (!running).then(|| format!("Gateway service is {runtime_status}.")));
     let status = if reachable {
-        "Connected".to_string()
+        i18n::text("common.connected")
     } else if !installed {
-        "Not installed".to_string()
+        i18n::text("desktop.gateway.notInstalled")
     } else if running {
-        "Unavailable".to_string()
+        i18n::text("desktop.gateway.unavailable")
     } else {
-        "Stopped".to_string()
+        i18n::text("desktop.gateway.stopped")
     };
 
     Ok(GatewaySnapshot {

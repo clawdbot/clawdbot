@@ -1,4 +1,5 @@
 use crate::gateway_ws::{AgentsListResult, ChatSendResult, GatewayClient};
+use crate::i18n;
 use crate::quickchat_widgets::QuickChatWidgetState;
 use crate::{tray, DesktopState};
 use serde::Serialize;
@@ -464,7 +465,7 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         QUICKCHAT_LABEL,
         WebviewUrl::App("quickchat.html".into()),
     )
-    .title("Quick Chat")
+    .title(i18n::text("desktop.quickchat.title"))
     .inner_size(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT)
     .decorations(false)
     .transparent(true)

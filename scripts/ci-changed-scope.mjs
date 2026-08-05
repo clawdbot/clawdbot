@@ -47,7 +47,7 @@ const IOS_BUILD_RE =
   /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.mjs|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
-  /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
+  /^(apps\/linux\/|src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 const WINDOWS_SCOPE_RE =
   /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.test)?|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mjs|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:direct-run\.mjs|format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
@@ -56,7 +56,7 @@ const WINDOWS_TEST_SCOPE_RE =
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|shared-catalog|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
@@ -67,12 +67,13 @@ export class NativeGeneratedArtifactsMixedError extends Error {}
 const CHROMIUM_UI_TEST_SCOPE_RE =
   /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$|package\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
-  /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
-// Android base resources are co-owned: source PRs edit their English content,
-// while the generator rewrites managed sections. Treat them as generated only
-// alongside a hard-generated artifact so neither ownership path blocks the other.
+  /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/linux\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n|native-i18n-locales)\.ts$|scripts\/lib\/(?:control-ui-i18n-(?:catalog|config|shared-catalog|sync-plan)\.ts|native-i18n-refresh-plan\.mjs)$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|control-ui-i18n(?:-shared-catalog|-sync-plan)?|native-app-i18n|native-i18n-refresh-plan)\.test\.ts$|ui\/src\/i18n\/(?:locales\/en(?:-agents)?\.ts|\.i18n\/[^/]+\.(?:tm\.jsonl|json))$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
+// Android base resources and the Linux bundle are co-owned: source PRs may
+// introduce their semantic inputs and runnable bundles together, while locale
+// automation refreshes translations. Classify them as generated companions
+// only alongside a hard-generated artifact.
 const NATIVE_COOWNED_GENERATED_I18N_RE =
-  /^apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml$/;
+  /^(?:apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml|apps\/linux\/ui\/locales\.json)$/;
 const NATIVE_HARD_GENERATED_I18N_RE =
   /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/android\/app\/src\/thirdParty\/res\/values-[^/]+\/accessibility_strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings)$/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =

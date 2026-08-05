@@ -1,4 +1,5 @@
 use crate::cli::OpenClawCli;
+use crate::i18n;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::process::Output;
@@ -18,14 +19,11 @@ pub struct PendingApproval {
 
 impl PendingApproval {
     pub fn notification_body(&self) -> String {
-        let kind = match self.kind {
-            ApprovalKind::Node => "Node",
-            ApprovalKind::Device => "Device",
+        let key = match self.kind {
+            ApprovalKind::Node => "desktop.notifications.nodePairing",
+            ApprovalKind::Device => "desktop.notifications.devicePairing",
         };
-        format!(
-            "{kind} pairing request from {} — open the dashboard to approve",
-            self.label
-        )
+        i18n::format(key, &[("name", &self.label)])
     }
 }
 

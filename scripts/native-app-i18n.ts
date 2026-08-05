@@ -5,22 +5,30 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import {
+  loadControlUiSharedCatalog,
+  type ControlUiSharedCatalog,
+} from "./lib/control-ui-i18n-shared-catalog.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
-type NativeI18nSurface = "android" | "apple";
+type NativeI18nSurface = "android" | "apple" | "linux";
+type ScannedNativeI18nSurface = Exclude<NativeI18nSurface, "linux">;
 
 export { NATIVE_I18N_LOCALES };
 
 export type NativeI18nEntry = {
+  description?: string;
   id: string;
   kind: string;
-  line: number;
   path: string;
+  semanticKey?: string;
   source: string;
   surface: NativeI18nSurface;
 };
 
-type Candidate = Omit<NativeI18nEntry, "id">;
+type Candidate = Omit<NativeI18nEntry, "id"> & {
+  line: number;
+};
 type NativeTranslationArtifact = {
   entries: Array<{ id: string; source: string; translated: string }>;
   glossaryHash: string;
@@ -43,6 +51,7 @@ export type NativeI18nQualityFinding = {
 type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
   glossary?: Array<{ source: string; target: string }>;
+  sharedCatalog?: ControlUiSharedCatalog;
   translate?: NativeTranslator;
   translationsDir?: string;
 };
@@ -56,7 +65,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
-const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
+const LINUX_MESSAGES_PATH = "apps/linux/ui/messages.json";
+const SOURCE_ROOTS: Record<ScannedNativeI18nSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
     path.join(ROOT, "apps", "android", "app", "src", "play"),
@@ -74,6 +84,35 @@ const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
+const SHARED_CATALOG_BY_LOCALE = new Map<string, Promise<ControlUiSharedCatalog>>();
+// Sharing is an authored semantic decision: identical English alone does not establish meaning.
+const REVIEWED_SHARED_NATIVE_MESSAGES = new Map<string, string>([
+  ["Active", "common.active"],
+  ["Back", "common.back"],
+  ["Cancel", "common.cancel"],
+  ["Close", "common.close"],
+  ["Confirm", "common.confirm"],
+  ["Connect", "common.connect"],
+  ["Connected", "common.connected"],
+  ["Continue", "common.continue"],
+  ["Create", "common.create"],
+  ["Delete", "common.delete"],
+  ["Disabled", "common.disabled"],
+  ["Dismiss", "common.dismiss"],
+  ["Enabled", "common.enabled"],
+  ["just now", "common.justNow"],
+  ["Loading", "usage.loading.badge"],
+  ["Loading…", "common.loading"],
+  ["Next", "common.next"],
+  ["Offline", "common.offline"],
+  ["Online", "common.online"],
+  ["Previous", "common.previous"],
+  ["Refresh", "common.refresh"],
+  ["Remove", "common.remove"],
+  ["Retry", "common.retry"],
+  ["Save", "common.save"],
+  ["Saving…", "common.saving"],
+]);
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
@@ -698,10 +737,13 @@ function enclosingCallName(source: string, offset: number): string | null {
 function structuralTokenSignature(source: string): string {
   const swift = extractSwiftInterpolations(source)?.toSorted();
   const kotlin = extractKotlinInterpolations(source)?.toSorted();
+  const icu = [...source.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/gu)]
+    .map((match) => match[1])
+    .toSorted();
   const nativeFormat = [...source.matchAll(NATIVE_FORMAT_RE)].map((match) => match[0]).toSorted();
   const buildSettings = (source.match(BUILD_SETTING_RE) ?? []).toSorted();
   const lineBreaks = (source.match(/\n/gu) ?? []).length;
-  return JSON.stringify({ swift, kotlin, nativeFormat, buildSettings, lineBreaks });
+  return JSON.stringify({ swift, kotlin, icu, nativeFormat, buildSettings, lineBreaks });
 }
 
 function addCandidate(
@@ -1159,31 +1201,87 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
   return nested.flat();
 }
 
-function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "path" | "source" | "surface">): string {
+function nativeEntryIdentity(
+  entry: Pick<NativeI18nEntry, "path" | "source" | "surface"> &
+    Partial<Pick<NativeI18nEntry, "semanticKey">>,
+): string {
+  if (entry.surface === "linux" && entry.semanticKey) {
+    return [entry.surface, entry.semanticKey].join("\u0000");
+  }
   return [entry.surface, entry.path, entry.source].join("\u0000");
+}
+
+function nativeSourceIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">): string {
+  return [entry.surface, entry.source].join("\u0000");
+}
+
+function sharedNativeSemanticKey(
+  entry: Pick<NativeI18nEntry, "source">,
+  sharedCatalog?: ControlUiSharedCatalog,
+): string | undefined {
+  if (!sharedCatalog) {
+    return undefined;
+  }
+
+  const semanticKey = REVIEWED_SHARED_NATIVE_MESSAGES.get(entry.source);
+  if (!semanticKey) {
+    return undefined;
+  }
+  if (sharedCatalog.source.get(semanticKey) !== entry.source) {
+    throw new Error(
+      `reviewed native localization mapping ${semanticKey} must equal ${JSON.stringify(entry.source)}`,
+    );
+  }
+  return semanticKey;
 }
 
 export function assignNativeI18nIds(
   entries: readonly Candidate[],
   previousEntries: readonly NativeI18nEntry[] = [],
+  sharedCatalog?: ControlUiSharedCatalog,
 ): NativeI18nEntry[] {
   const seen = new Set<string>();
-  const previousIds = new Map(
-    previousEntries.map((entry) => [nativeEntryIdentity(entry), entry.id]),
-  );
   const unique = [...new Map(entries.map((entry) => [nativeEntryIdentity(entry), entry])).values()];
+  const currentIdentities = new Set(unique.map(nativeEntryIdentity));
+  const previousByIdentity = new Map(
+    previousEntries.map((entry) => [nativeEntryIdentity(entry), entry]),
+  );
+  const previousPositions = new Map(
+    previousEntries.map((entry, index) => [nativeEntryIdentity(entry), index]),
+  );
+  const previousBySource = new Map<string, NativeI18nEntry[]>();
+  for (const entry of previousEntries) {
+    const identity = nativeSourceIdentity(entry);
+    const previous = previousBySource.get(identity) ?? [];
+    previous.push(entry);
+    previousBySource.set(identity, previous);
+  }
+
+  const previousFor = (entry: Candidate): NativeI18nEntry | undefined => {
+    const exact = previousByIdentity.get(nativeEntryIdentity(entry));
+    if (exact) {
+      return exact;
+    }
+    const moved = (previousBySource.get(nativeSourceIdentity(entry)) ?? []).filter(
+      (candidate) => !currentIdentities.has(nativeEntryIdentity(candidate)),
+    );
+    return moved.length === 1 ? moved[0] : undefined;
+  };
+
   return unique
     .toSorted(
       (left, right) =>
         compareCodePoints(left.surface, right.surface) ||
         compareCodePoints(left.path, right.path) ||
-        left.line - right.line ||
-        compareCodePoints(left.kind, right.kind) ||
-        compareCodePoints(left.source, right.source),
+        (previousPositions.get(nativeEntryIdentity(left)) ?? Number.MAX_SAFE_INTEGER) -
+          (previousPositions.get(nativeEntryIdentity(right)) ?? Number.MAX_SAFE_INTEGER) ||
+        compareCodePoints(left.source, right.source) ||
+        compareCodePoints(left.kind, right.kind),
     )
     .map((entry) => {
       const identity = nativeEntryIdentity(entry);
-      const previousId = previousIds.get(identity);
+      const previous = previousFor(entry);
+      const previousId = previous?.id;
       const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
       const baseId = `native.${entry.surface}.${digest}`;
       let id = previousId && !seen.has(previousId) ? previousId : baseId;
@@ -1191,7 +1289,28 @@ export function assignNativeI18nIds(
         id = `${baseId}.${suffix}`;
       }
       seen.add(id);
-      return Object.assign(entry, { id });
+
+      const persisted: NativeI18nEntry = {
+        kind: entry.kind,
+        path: entry.path,
+        source: entry.source,
+        surface: entry.surface,
+        id,
+      };
+      const semanticKey =
+        entry.semanticKey ??
+        (sharedCatalog ? sharedNativeSemanticKey(entry, sharedCatalog) : previous?.semanticKey);
+      if (semanticKey) {
+        persisted.semanticKey = semanticKey;
+        const description =
+          entry.description ??
+          (previous?.semanticKey === semanticKey ? previous.description : undefined) ??
+          sharedCatalog?.descriptions.get(semanticKey);
+        if (description) {
+          persisted.description = description;
+        }
+      }
+      return persisted;
     });
 }
 
@@ -1222,6 +1341,27 @@ async function readNativeI18nInventory(): Promise<{
     throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
   }
   return { entries: inventory.entries as NativeI18nEntry[], raw };
+}
+
+function sharedNativeCatalog(locale?: string): Promise<ControlUiSharedCatalog> {
+  const cacheKey = locale ?? "source";
+  let pending = SHARED_CATALOG_BY_LOCALE.get(cacheKey);
+  if (!pending) {
+    pending = loadControlUiSharedCatalog({ rootDir: ROOT, locales: locale ? [locale] : [] }).then(
+      (catalog) => {
+        for (const [source, semanticKey] of REVIEWED_SHARED_NATIVE_MESSAGES) {
+          if (catalog.source.get(semanticKey) !== source) {
+            throw new Error(
+              `reviewed native localization mapping ${semanticKey} must equal ${JSON.stringify(source)}`,
+            );
+          }
+        }
+        return catalog;
+      },
+    );
+    SHARED_CATALOG_BY_LOCALE.set(cacheKey, pending);
+  }
+  return pending;
 }
 
 export async function collectNativeI18nEntries(
@@ -1277,7 +1417,19 @@ export async function collectNativeI18nEntries(
   const entries = typedSources.flatMap(({ repoPath, source, surface }) =>
     extractNativeI18nCandidates(surface, repoPath, source, uiCallNames),
   );
-  return assignNativeI18nIds(entries, stableEntries);
+  const sharedCatalog = await sharedNativeCatalog();
+  const linuxEntries: Candidate[] = [...sharedCatalog.source.entries()]
+    .filter(([semanticKey]) => semanticKey.startsWith("desktop."))
+    .map(([semanticKey, source]) => ({
+      description: sharedCatalog.descriptions.get(semanticKey),
+      kind: "semantic-message",
+      line: 0,
+      path: LINUX_MESSAGES_PATH,
+      semanticKey,
+      source,
+      surface: "linux",
+    }));
+  return assignNativeI18nIds([...entries, ...linuxEntries], stableEntries, sharedCatalog);
 }
 
 function render(entries: NativeI18nEntry[]): string {
@@ -1567,8 +1719,11 @@ export async function syncNativeLocale(
   } catch {
     // The first refresh creates the locale artifact.
   }
+  const sharedCatalog =
+    options.sharedCatalog ??
+    (entries.some((entry) => entry.semanticKey) ? await sharedNativeCatalog(locale) : undefined);
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
-  const reusableById = new Map(
+  const exactById = new Map(
     entries.map((entry) => {
       const exact = previousById.get(entry.id);
       const translated =
@@ -1576,17 +1731,88 @@ export async function syncNativeLocale(
       return [entry.id, translated] as const;
     }),
   );
-  const glossaryChanged = previous.glossaryHash !== currentGlossaryHash;
+  const previousBySemanticKey = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const translated = exactById.get(entry.id);
+    if (!entry.semanticKey || !translated || translated === entry.source) {
+      continue;
+    }
+    const semanticIdentity = `${entry.semanticKey}\u0000${entry.source}`;
+    const translations = previousBySemanticKey.get(semanticIdentity) ?? new Set<string>();
+    translations.add(translated);
+    previousBySemanticKey.set(semanticIdentity, translations);
+  }
+  const reusableById = new Map(
+    entries.map((entry) => {
+      const exact = exactById.get(entry.id);
+      if (!entry.semanticKey) {
+        return [entry.id, exact] as const;
+      }
+
+      const reviewedKey = REVIEWED_SHARED_NATIVE_MESSAGES.get(entry.source);
+      const shared =
+        sharedCatalog?.source.get(entry.semanticKey) === entry.source
+          ? sharedCatalog.translations.get(locale)?.get(entry.semanticKey)
+          : undefined;
+      const validShared =
+        shared?.trim() &&
+        structuralTokenSignature(shared) === structuralTokenSignature(entry.source)
+          ? shared
+          : undefined;
+
+      if (entry.semanticKey === reviewedKey && validShared) {
+        return [entry.id, validShared] as const;
+      }
+      if (exact) {
+        return [entry.id, exact] as const;
+      }
+      if (validShared) {
+        return [entry.id, validShared] as const;
+      }
+
+      const existing = previousBySemanticKey.get(`${entry.semanticKey}\u0000${entry.source}`);
+      const semanticTranslation = existing?.size === 1 ? [...existing][0] : undefined;
+      return [entry.id, semanticTranslation] as const;
+    }),
+  );
+  const glossaryChanged =
+    previous.glossaryHash.length > 0 && previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
     .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
       sourcePath: entry.path,
+      semanticKey: entry.semanticKey,
+      description:
+        entry.description ??
+        `${entry.surface === "apple" ? "Apple" : entry.surface === "android" ? "Android" : "Linux desktop"} ${entry.kind.replaceAll("-", " ")} in ${path.basename(entry.path)}`,
     }));
-  const translated = pending.length
-    ? await (options.translate ?? translateNativeEntries)(pending, locale, glossary)
+  const pendingBySemanticKey = new Map<string, typeof pending>();
+  for (const entry of pending) {
+    const semanticIdentity = entry.semanticKey
+      ? `${entry.semanticKey}\u0000${entry.source}`
+      : entry.id;
+    const equivalents = pendingBySemanticKey.get(semanticIdentity) ?? [];
+    equivalents.push(entry);
+    pendingBySemanticKey.set(semanticIdentity, equivalents);
+  }
+  const representativeEntries = [...pendingBySemanticKey.values()].map((group) =>
+    expectDefined(group[0], "native semantic translation representative"),
+  );
+  const representativeTranslations = representativeEntries.length
+    ? await (options.translate ?? translateNativeEntries)(representativeEntries, locale, glossary)
     : new Map<string, string>();
+  const translated = new Map<string, string>();
+  for (const equivalents of pendingBySemanticKey.values()) {
+    const representative = expectDefined(equivalents[0], "native semantic translation group");
+    const value = representativeTranslations.get(representative.id);
+    if (value !== undefined) {
+      for (const entry of equivalents) {
+        translated.set(entry.id, value);
+      }
+    }
+  }
   const artifact: NativeTranslationArtifact = {
     version: 1,
     locale,

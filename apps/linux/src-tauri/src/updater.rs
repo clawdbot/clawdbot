@@ -1,3 +1,4 @@
+use crate::i18n;
 use serde::Serialize;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -217,7 +218,7 @@ async fn run_check(app: AppHandle, manual: bool) {
                 TerminalResultKind::NotAvailable,
                 NOT_AVAILABLE_EVENT,
                 (),
-                "OpenClaw is up to date — no update is available",
+                &i18n::text("desktop.notifications.updateCurrent"),
             );
             return;
         }
@@ -433,12 +434,12 @@ fn deliver_error(
 }
 
 fn error_notification_body(result: TerminalResultKind, message: &str) -> String {
-    let prefix = match result {
-        TerminalResultKind::CheckFailed => "Update check failed",
-        TerminalResultKind::UpdateFailed => "Update failed",
+    let key = match result {
+        TerminalResultKind::CheckFailed => "desktop.notifications.updateCheckFailed",
+        TerminalResultKind::UpdateFailed => "desktop.notifications.updateFailed",
         _ => unreachable!("only error results have error notification copy"),
     };
-    format!("{prefix}: {message}")
+    i18n::format(key, &[("error", message)])
 }
 
 fn emit_error(app: &AppHandle, error: impl std::fmt::Display) {
@@ -452,11 +453,14 @@ fn emit_error(app: &AppHandle, error: impl std::fmt::Display) {
 }
 
 fn ready_notification_body(version: &str) -> String {
-    format!("Update ready — restart OpenClaw to install v{version}")
+    i18n::format("desktop.notifications.updateReady", &[("version", version)])
 }
 
 fn manual_notification_body(version: &str) -> String {
-    format!("Update available: v{version} — download from the release page")
+    i18n::format(
+        "desktop.notifications.updateAvailable",
+        &[("version", version)],
+    )
 }
 
 #[cfg(test)]

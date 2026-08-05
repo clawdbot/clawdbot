@@ -1,6 +1,8 @@
 const tauri = window["__TAURI__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
+const desktopI18n = window.openclawDesktopI18n;
+const t = (key, fallback, values) => desktopI18n?.translate(key, fallback, values) ?? fallback;
 
 const elements = {
   activity: document.querySelector("#activity"),
@@ -40,7 +42,7 @@ function render({
   activity = null,
   description,
   dot = "working",
-  eyebrow = "DESKTOP COMPANION",
+  eyebrow = t("desktop.main.desktopCompanion", "DESKTOP COMPANION"),
   showInstall = false,
   title,
 }) {
@@ -96,7 +98,7 @@ function friendlyError(error) {
   if (typeof error === "string") {
     return error;
   }
-  return error?.message || "OpenClaw could not complete the operation.";
+  return error?.message || t("desktop.main.operationFailed", "OpenClaw could not complete the operation.");
 }
 
 function gatewayHost(gateway) {
@@ -113,11 +115,13 @@ function canConnectDirect(gateway) {
 
 function renderGateways(gateways) {
   elements.gatewayList.replaceChildren();
-  elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
+  elements.discoveryStatus.textContent = gateways.length
+    ? t("desktop.main.discoveryFound", "{count} FOUND", { count: gateways.length })
+    : t("desktop.main.discoverySearching", "SEARCHING");
   if (!gateways.length) {
     const empty = document.createElement("p");
     empty.className = "discovery-empty";
-    empty.textContent = "Looking for nearby OpenClaw gateways…";
+    empty.textContent = t("desktop.main.discoveryEmpty", "Looking for nearby OpenClaw gateways…");
     elements.gatewayList.append(empty);
     return;
   }
@@ -128,7 +132,10 @@ function renderGateways(gateways) {
     button.type = "button";
     button.disabled = !canConnectDirect(gateway);
     if (button.disabled) {
-      button.title = "This gateway does not advertise a direct connection.";
+      button.title = t(
+        "desktop.main.directConnectionUnavailable",
+        "This gateway does not advertise a direct connection.",
+      );
     }
 
     const copy = document.createElement("span");
@@ -154,11 +161,11 @@ function renderGateways(gateways) {
       })
         .then(() => {
           button.disabled = false;
-          elements.discoveryStatus.textContent = "WINDOW OPENED";
+          elements.discoveryStatus.textContent = t("desktop.main.windowOpened", "WINDOW OPENED");
         })
         .catch(() => {
           button.disabled = false;
-          elements.discoveryStatus.textContent = "CONNECT FAILED";
+          elements.discoveryStatus.textContent = t("desktop.main.connectFailed", "CONNECT FAILED");
         });
     });
     elements.gatewayList.append(button);
@@ -179,7 +186,7 @@ async function refreshGateways() {
     }
   } catch {
     discoverySignature = null;
-    elements.discoveryStatus.textContent = "UNAVAILABLE";
+    elements.discoveryStatus.textContent = t("desktop.main.discoveryUnavailable", "UNAVAILABLE");
   } finally {
     discoveryPending = false;
   }
@@ -187,9 +194,12 @@ async function refreshGateways() {
 
 async function connect() {
   render({
-    activity: "Checking local services…",
-    description: "Finding your gateway and preparing the Control UI.",
-    title: "Connecting to OpenClaw",
+    activity: t("desktop.main.activityChecking", "Checking local services…"),
+    description: t(
+      "desktop.main.connectingDescription",
+      "Finding your gateway and preparing the Control UI.",
+    ),
+    title: t("desktop.main.connectingTitle", "Connecting to OpenClaw"),
   });
   try {
     const snapshot = await invoke("bootstrap");
@@ -198,19 +208,24 @@ async function connect() {
       if (buildInfo?.releaseBuild === false) {
         elements.channel.value = "dev";
         render({
-          description:
+          description: t(
+            "desktop.main.chooseChannelDescription",
             "This companion is a development build, so its Gateway install should usually use the matching release channel.",
-          eyebrow: "FIRST-RUN SETUP",
+          ),
+          eyebrow: t("desktop.main.firstRunSetup", "FIRST-RUN SETUP"),
           showInstall: true,
-          title: "Choose a release channel",
+          title: t("desktop.main.chooseChannelTitle", "Choose a release channel"),
         });
         return;
       }
       render({
-        activity: "Starting the bundled installer…",
-        description: "OpenClaw is installing its managed CLI and Node runtime.",
-        eyebrow: "FIRST-RUN SETUP",
-        title: "Preparing OpenClaw",
+        activity: t("desktop.main.activityStartingInstaller", "Starting the bundled installer…"),
+        description: t(
+          "desktop.main.installingDescription",
+          "OpenClaw is installing its managed CLI and Node runtime.",
+        ),
+        eyebrow: t("desktop.main.firstRunSetup", "FIRST-RUN SETUP"),
+        title: t("desktop.main.preparing", "Preparing OpenClaw"),
       });
       await install();
     }
@@ -223,27 +238,32 @@ async function install() {
   elements.installButton.disabled = true;
   elements.channel.disabled = true;
   elements.installLog.textContent = "";
-  elements.logStatus.textContent = "RUNNING";
+  elements.logStatus.textContent = t("desktop.main.logRunning", "RUNNING");
   show(elements.logWrap, true);
   render({
-    activity: "Installing OpenClaw…",
-    description: "A managed CLI and Node runtime are being installed in your home directory.",
-    eyebrow: "INSTALLING",
-    title: "Preparing your companion",
+    activity: t("desktop.main.activityInstalling", "Installing OpenClaw…"),
+    description: t(
+      "desktop.main.installDescription",
+      "A managed CLI and Node runtime are being installed in your home directory.",
+    ),
+    eyebrow: t("desktop.main.installing", "INSTALLING"),
+    title: t("desktop.main.preparingCompanion", "Preparing your companion"),
   });
   try {
     await invoke("install_cli", { channel: elements.channel.value });
-    elements.logStatus.textContent = "COMPLETE";
+    elements.logStatus.textContent = t("desktop.main.logComplete", "COMPLETE");
   } catch (error) {
-    elements.logStatus.textContent = "FAILED";
+    elements.logStatus.textContent = t("desktop.main.logFailed", "FAILED");
     appendLog(friendlyError(error));
     render({
-      description:
+      description: t(
+        "desktop.main.installIncomplete",
         "Installation did not finish. Review the final log lines, choose a release channel, then retry.",
+      ),
       dot: "error",
-      eyebrow: "INSTALLATION ISSUE",
+      eyebrow: t("desktop.main.installIssue", "INSTALLATION ISSUE"),
       showInstall: true,
-      title: "OpenClaw needs attention",
+      title: t("desktop.main.needsAttention", "OpenClaw needs attention"),
     });
   } finally {
     elements.installButton.disabled = false;
@@ -253,10 +273,16 @@ async function install() {
 
 async function runGatewayAction(action) {
   render({
-    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
-    description: "OpenClaw is waiting for the local gateway to become healthy.",
-    eyebrow: "GATEWAY",
-    title: "One moment",
+    activity:
+      action === "restart"
+        ? t("desktop.main.activityRestarting", "Restarting gateway…")
+        : t("desktop.main.activityStarting", "Starting gateway…"),
+    description: t(
+      "desktop.main.gatewayWaiting",
+      "OpenClaw is waiting for the local gateway to become healthy.",
+    ),
+    eyebrow: t("desktop.main.gateway", "GATEWAY"),
+    title: t("desktop.main.oneMoment", "One moment"),
   });
   try {
     await invoke("gateway_action", { action });
@@ -269,11 +295,11 @@ function renderRetry(message) {
   show(elements.logWrap, false);
   renderAction(
     {
-      actionLabel: "Try again",
+      actionLabel: t("desktop.main.tryAgain", "Try again"),
       description: message,
       dot: "error",
-      eyebrow: "CONNECTION ISSUE",
-      title: "OpenClaw needs attention",
+      eyebrow: t("desktop.main.connectionIssue", "CONNECTION ISSUE"),
+      title: t("desktop.main.needsAttention", "OpenClaw needs attention"),
     },
     connect,
   );
@@ -292,37 +318,48 @@ elements.updateDismiss.addEventListener("click", () => {
   show(elements.updateBanner, false);
 });
 
+await desktopI18n?.ready;
+
 await listen("install-progress", ({ payload }) => appendLog(payload.line));
 await listen("updater://not-available", () => {
   renderUpdate({
-    message: "No update is available.",
-    title: "OpenClaw is up to date",
+    message: t("desktop.update.noUpdate", "No update is available."),
+    title: t("desktop.update.current", "OpenClaw is up to date"),
   });
 });
 await listen("updater://available", ({ payload }) => {
   elements.updateProgress.removeAttribute("value");
   renderUpdate({
-    message: payload.notes || "Downloading in the background…",
+    message: payload.notes || t("desktop.update.downloading", "Downloading in the background…"),
     progress: true,
-    title: `Update available v${payload.version} — downloading…`,
+    title: t("desktop.update.availableDownloading", "Update available v{version} — downloading…", {
+      version: payload.version,
+    }),
   });
 });
 await listen("updater://progress", ({ payload }) => {
   if (payload.total) {
     elements.updateProgress.max = payload.total;
     elements.updateProgress.value = payload.downloaded;
-    elements.updateMessage.textContent = `${formatBytes(payload.downloaded)} of ${formatBytes(payload.total)}`;
+    elements.updateMessage.textContent = t("desktop.update.downloadProgress", "{downloaded} of {total}", {
+      downloaded: formatBytes(payload.downloaded),
+      total: formatBytes(payload.total),
+    });
   } else {
     elements.updateProgress.removeAttribute("value");
-    elements.updateMessage.textContent = `${formatBytes(payload.downloaded)} downloaded`;
+    elements.updateMessage.textContent = t("desktop.update.downloaded", "{downloaded} downloaded", {
+      downloaded: formatBytes(payload.downloaded),
+    });
   }
 });
 await listen("updater://ready", ({ payload }) => {
   renderUpdate({
     action: () => invoke("relaunch"),
-    actionLabel: "Restart to update",
-    message: `Version v${payload.version} is installed and ready.`,
-    title: "Update ready",
+    actionLabel: t("desktop.update.restart", "Restart to update"),
+    message: t("desktop.update.readyMessage", "Version v{version} is installed and ready.", {
+      version: payload.version,
+    }),
+    title: t("desktop.update.ready", "Update ready"),
   });
 });
 await listen("updater://available-manual", ({ payload }) => {
@@ -331,18 +368,20 @@ await listen("updater://available-manual", ({ payload }) => {
       invoke("open_release_page").catch((error) => {
         renderUpdate({
           message: friendlyError(error),
-          title: "Could not open release page",
+          title: t("desktop.update.openFailed", "Could not open release page"),
         });
       }),
-    actionLabel: "Open download page",
-    message: payload.notes || "Install the latest system package from the release page.",
-    title: `Update available v${payload.version}`,
+    actionLabel: t("desktop.update.openDownload", "Open download page"),
+    message:
+      payload.notes ||
+      t("desktop.update.installManual", "Install the latest system package from the release page."),
+    title: t("desktop.update.available", "Update available v{version}", { version: payload.version }),
   });
 });
 await listen("updater://error", ({ payload }) => {
   renderUpdate({
     message: payload.message,
-    title: "Update check failed",
+    title: t("desktop.update.checkFailed", "Update check failed"),
   });
 });
 void invoke("updater_ready");
@@ -352,24 +391,35 @@ window.setInterval(() => void refreshGateways(), 2000);
 const mode = new URLSearchParams(window.location.search).get("mode");
 if (mode === "reconnecting") {
   render({
-    activity: "Retrying every few seconds…",
-    description: "The gateway connection dropped. OpenClaw will restore the dashboard automatically.",
-    eyebrow: "GATEWAY OFFLINE",
-    title: "Reconnecting",
+    activity: t("desktop.main.activityRetrying", "Retrying every few seconds…"),
+    description: t(
+      "desktop.main.reconnectingDescription",
+      "The gateway connection dropped. OpenClaw will restore the dashboard automatically.",
+    ),
+    eyebrow: t("desktop.main.gatewayOffline", "GATEWAY OFFLINE"),
+    title: t("desktop.gateway.reconnecting", "Reconnecting"),
   });
 } else if (mode === "stopped") {
   renderAction(
     {
-      actionLabel: "Start Gateway",
-      description: "The gateway is stopped. The desktop companion will remain available in the tray.",
+      actionLabel: t("desktop.main.startGateway", "Start Gateway"),
+      description: t(
+        "desktop.main.gatewayStoppedDescription",
+        "The gateway is stopped. The desktop companion will remain available in the tray.",
+      ),
       dot: "idle",
-      eyebrow: "GATEWAY STOPPED",
-      title: "OpenClaw is standing by",
+      eyebrow: t("desktop.main.gatewayStopped", "GATEWAY STOPPED"),
+      title: t("desktop.main.standingBy", "OpenClaw is standing by"),
     },
     () => runGatewayAction("start"),
   );
 } else if (mode === "error") {
-  renderRetry("The last gateway action failed. Check the service, then retry.");
+  renderRetry(
+    t(
+      "desktop.main.gatewayActionFailed",
+      "The last gateway action failed. Check the service, then retry.",
+    ),
+  );
 } else {
   await connect();
 }

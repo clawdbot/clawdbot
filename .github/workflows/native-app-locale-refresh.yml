@@ -5,20 +5,22 @@ on:
     branches:
       - main
     paths:
-      - apps/android/app/src/main/**
-      - apps/android/app/src/play/**
-      - apps/android/app/src/thirdParty/**
-      - apps/android/wear/src/main/**
-      - apps/ios/**
-      - apps/macos/Sources/**
-      - apps/macos/Package.swift
-      - apps/shared/OpenClawKit/Sources/**
-      - apps/.i18n/native/**
       - apps/.i18n/native-source.json
+      - apps/linux/ui/messages.json
+      - apps/linux/ui/generate-locales.ts
       - scripts/control-ui-i18n.ts
       - scripts/android-app-i18n.ts
       - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
+      - scripts/native-i18n-locales.ts
+      - scripts/lib/control-ui-i18n-catalog.ts
+      - scripts/lib/control-ui-i18n-config.ts
+      - scripts/lib/control-ui-i18n-shared-catalog.ts
+      - scripts/lib/control-ui-i18n-sync-plan.ts
+      - scripts/lib/native-i18n-refresh-plan.mjs
+      - ui/src/i18n/locales/en.ts
+      - ui/src/i18n/locales/en-agents.ts
+      - ui/src/i18n/.i18n/*.tm.jsonl
       - ui/src/i18n/.i18n/glossary.*.json
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
@@ -61,10 +63,35 @@ jobs:
           fi
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
-  publisher-preflight:
-    name: Verify generated PR App permissions
+  plan:
+    name: Detect semantic native locale changes
     needs: resolve-base
     if: needs.resolve-base.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      refresh: ${{ steps.plan.outputs.refresh }}
+      reason: ${{ steps.plan.outputs.reason }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: false
+
+      - name: Plan semantic native locale refresh
+        id: plan
+        env:
+          BEFORE_SHA: ${{ github.event.before || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ needs.resolve-base.outputs.sha }}
+        run: node scripts/lib/native-i18n-refresh-plan.mjs
+
+  publisher-preflight:
+    name: Verify generated PR App permissions
+    needs: [resolve-base, plan]
+    if: needs.resolve-base.result == 'success' && needs.plan.outputs.refresh == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -104,9 +131,10 @@ jobs:
           fi
 
   refresh:
-    needs: [resolve-base, publisher-preflight]
+    needs: [resolve-base, plan, publisher-preflight]
     if: >-
       needs.resolve-base.result == 'success' &&
+      needs.plan.outputs.refresh == 'true' &&
       needs.publisher-preflight.result == 'success'
     strategy:
       fail-fast: false
@@ -249,9 +277,10 @@ jobs:
 
   finalize:
     name: Commit native locale refresh
-    needs: [resolve-base, publisher-preflight, refresh]
+    needs: [resolve-base, plan, publisher-preflight, refresh]
     if: >-
       needs.resolve-base.result == 'success' &&
+      needs.plan.outputs.refresh == 'true' &&
       needs.publisher-preflight.result == 'success' &&
       needs.refresh.result == 'success'
     runs-on: ubuntu-latest
@@ -290,8 +319,14 @@ jobs:
       - name: Refresh native generated artifacts
         run: node --import tsx scripts/native-app-i18n.ts sync --write
 
+      - name: Refresh Linux desktop locale bundle
+        run: node --import tsx apps/linux/ui/generate-locales.ts
+
       - name: Validate native locale refresh
         run: node --import tsx scripts/native-app-i18n.ts check
+
+      - name: Validate Linux desktop locale bundle
+        run: node --import tsx apps/linux/ui/generate-locales.ts --check
 
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
@@ -314,6 +349,7 @@ jobs:
             apps/android/wear/src/main/res/values*/strings.xml
             apps/ios/Resources/Localizable.xcstrings
             apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings
+            apps/linux/ui/locales.json
             apps/ios/Sources/*.lproj/InfoPlist.strings
             apps/ios/WatchApp/*.lproj/InfoPlist.strings
             apps/ios/ShareExtension/*.lproj/InfoPlist.strings
@@ -332,6 +368,17 @@ jobs:
             scripts/android-app-i18n.ts
             scripts/apple-app-i18n.ts
             scripts/native-app-i18n.ts
+            scripts/native-i18n-locales.ts
+            scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-shared-catalog.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
+            scripts/lib/native-i18n-refresh-plan.mjs
+            apps/linux/ui/messages.json
+            apps/linux/ui/generate-locales.ts
+            ui/src/i18n/locales/en.ts
+            ui/src/i18n/locales/en-agents.ts
+            ui/src/i18n/.i18n/*.tm.jsonl
             ui/src/i18n/.i18n/glossary.*.json
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml

@@ -422,6 +422,7 @@ type StringUnit = {
 };
 
 type CatalogEntry = {
+  comment?: string;
   localizations?: Record<string, { stringUnit?: StringUnit }>;
 };
 
@@ -432,10 +433,11 @@ type Catalog = {
 };
 
 type NativeSourceEntry = {
+  description?: string;
   id: string;
   kind: string;
-  line: number;
   path: string;
+  semanticKey?: string;
   source: string;
   surface: string;
 };
@@ -646,6 +648,69 @@ function chooseTranslation(source: string, translations: readonly string[]): str
   );
 }
 
+const GENERATED_APPLE_COMMENT_PREFIX = "OpenClaw translator context:";
+const MAX_APPLE_COMMENT_CONTEXTS = 4;
+
+function describeAppleSourceOwnership(entry: NativeSourceEntry): string {
+  const platform = entry.path.startsWith("apps/ios/WatchApp/")
+    ? "watchOS"
+    : entry.path.startsWith("apps/ios/ActivityWidget/")
+      ? "iOS widget"
+      : entry.path.startsWith("apps/ios/ShareExtension/")
+        ? "iOS share extension"
+        : entry.path.startsWith("apps/ios/")
+          ? "iOS"
+          : entry.path.startsWith("apps/macos/")
+            ? "macOS"
+            : "shared Apple";
+  const role = entry.kind.startsWith("ui-modifier")
+    ? "accessibility or interface label"
+    : entry.kind === "conditional-branch"
+      ? "conditional interface text"
+      : "interface text";
+  return `${platform} ${role} in ${path.basename(entry.path)}`;
+}
+
+function appleCatalogComment(
+  existing: CatalogEntry | undefined,
+  entries: readonly NativeSourceEntry[],
+): string | undefined {
+  const descriptions = [
+    ...new Set(
+      entries
+        .map((entry) => entry.description?.trim() || describeAppleSourceOwnership(entry))
+        .filter((description): description is string => Boolean(description)),
+    ),
+  ].toSorted(compareCodeUnits);
+  const semanticKeys = [
+    ...new Set(
+      entries
+        .map((entry) => entry.semanticKey?.trim())
+        .filter((semanticKey): semanticKey is string => Boolean(semanticKey)),
+    ),
+  ].toSorted(compareCodeUnits);
+  if (descriptions.length === 0 && semanticKeys.length === 0) {
+    return existing?.comment;
+  }
+
+  const previous = existing?.comment?.trim();
+  const authored = previous?.startsWith(GENERATED_APPLE_COMMENT_PREFIX)
+    ? undefined
+    : previous?.split(`\n\n${GENERATED_APPLE_COMMENT_PREFIX}`)[0]?.trim();
+  const visibleDescriptions = descriptions.slice(0, MAX_APPLE_COMMENT_CONTEXTS);
+  const remaining = descriptions.length - visibleDescriptions.length;
+  const context = [
+    GENERATED_APPLE_COMMENT_PREFIX,
+    ...visibleDescriptions.map((description) => `- ${description}`),
+    ...(remaining > 0 ? [`- ${remaining} additional usage contexts`] : []),
+    ...(semanticKeys.length > 0 ? [`Message keys: ${semanticKeys.join(", ")}`] : []),
+  ].join("\n");
+
+  // Xcode-owned English literal keys are a shipped runtime contract; semantic
+  // identity belongs in translator context until Swift call sites adopt keys.
+  return authored ? `${authored}\n\n${context}` : context;
+}
+
 function buildAppleCatalog(
   existingCatalog: Catalog,
   nativeSource: NativeSourceArtifact,
@@ -660,27 +725,50 @@ function buildAppleCatalog(
   );
   const sourceSet = new Set(sources);
   const appleIdsBySource = new Map<string, Set<string>>();
+  const appleEntriesBySource = new Map<string, NativeSourceEntry[]>();
+  const nativeEntriesById = new Map(nativeSource.entries.map((entry) => [entry.id, entry]));
   for (const [entry, source] of catalogEntries) {
     const ids = appleIdsBySource.get(source) ?? new Set<string>();
     ids.add(entry.id);
     appleIdsBySource.set(source, ids);
+    const entries = appleEntriesBySource.get(source) ?? [];
+    entries.push(entry);
+    appleEntriesBySource.set(source, entries);
   }
   const existingStrings = existingCatalog.strings ?? {};
   const translationsByLocale = new Map(
     translations.map((artifact) => {
       const bySource = new Map<string, string[]>();
+      const sharedBySource = new Map<string, string[]>();
       for (const entry of artifact.entries) {
         const source = appleCatalogValue(entry.source);
         if (!sourceSet.has(source)) {
           continue;
         }
         const appleIds = appleIdsBySource.get(source);
-        if (appleIds && !appleIds.has(entry.id)) {
-          continue;
+        let destination = bySource;
+        if (!appleIds?.has(entry.id)) {
+          const candidate = nativeEntriesById.get(entry.id);
+          const hasSharedMeaning =
+            candidate?.source === entry.source &&
+            Boolean(candidate.semanticKey) &&
+            appleEntriesBySource
+              .get(source)
+              ?.some((appleEntry) => appleEntry.semanticKey === candidate.semanticKey);
+          if (!hasSharedMeaning) {
+            continue;
+          }
+          destination = sharedBySource;
         }
-        const values = bySource.get(source) ?? [];
+        const values = destination.get(source) ?? [];
         values.push(appleCatalogValue(entry.translated));
-        bySource.set(source, values);
+        destination.set(source, values);
+      }
+      for (const [source, shared] of sharedBySource) {
+        const owned = bySource.get(source) ?? [];
+        if (!owned.some((value) => value !== source)) {
+          bySource.set(source, [...owned, ...shared]);
+        }
       }
       return [artifact.locale, bySource] as const;
     }),
@@ -719,7 +807,8 @@ function buildAppleCatalog(
         },
       };
     }
-    strings[source] = { localizations };
+    const comment = appleCatalogComment(existing, appleEntriesBySource.get(source) ?? []);
+    strings[source] = comment ? { comment, localizations } : { localizations };
   }
 
   return {

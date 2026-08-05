@@ -1375,6 +1375,22 @@ jobs:
             pnpm apple:i18n:check
           fi
 
+      - name: Verify Linux desktop locale bundle
+        env:
+          STRICT_NATIVE_I18N: ${{ needs.preflight.outputs.strict_native_i18n }}
+        run: |
+          set -euo pipefail
+          if [ -f apps/linux/ui/generate-locales.ts ]; then
+            node --import tsx apps/linux/ui/generate-locales.ts --check-source
+            if [ "${STRICT_NATIVE_I18N}" = "true" ]; then
+              node --import tsx apps/linux/ui/generate-locales.ts --check
+            else
+              echo "Translated Linux bundle parity belongs to the native locale refresh."
+            fi
+          else
+            echo "Historical target predates the Linux desktop locale catalog."
+          fi
+
       - name: Check native app generated locale parity
         if: ${{ needs.preflight.outputs.strict_native_i18n == 'true' }}
         run: |
