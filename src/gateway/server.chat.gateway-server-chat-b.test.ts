@@ -893,22 +893,7 @@ describe("gateway server chat", () => {
         key: "agent:main:main",
         sessionId: "sess-main",
       });
-      expect(startup.payload?.metadata?.models).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "gpt-main",
-            provider: "openai",
-          }),
-        ]),
-      );
-      expect(startup.payload?.metadata?.commands).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "model",
-            textAliases: expect.arrayContaining(["/model"]),
-          }),
-        ]),
-      );
+      expect(startup.payload?.metadata).toBeUndefined();
       expect(startup.payload?.messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1469,7 +1454,7 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.startup serves prepared metadata when configured visibility needs full discovery", async () => {
+  test("chat.startup omits metadata instead of starting configured full discovery", async () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await writeGatewayConfig({
         agents: {
@@ -1497,14 +1482,7 @@ describe("gateway server chat", () => {
       }>(ws, "chat.startup", { sessionKey: "main" });
 
       expect(startup.ok).toBe(true);
-      expect(startup.payload?.metadata?.models).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "gpt-main",
-            provider: "openai",
-          }),
-        ]),
-      );
+      expect(startup.payload?.metadata?.models).toBeUndefined();
     });
   });
 

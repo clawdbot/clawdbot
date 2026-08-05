@@ -114,11 +114,41 @@ describe("usage.status provider usage cache", () => {
     vi.restoreAllMocks();
   });
 
-  it("reuses byte-identical results within 60s and refreshes stale data in the background", async () => {
-    const first = await runUsageStatus();
-    const repeated = await runUsageStatus();
+  it("returns a cold usage snapshot without waiting for provider HTTP", async () => {
+    let resolveProviderUsage:
+      | ((value: { updatedAt: number; providers: never[] }) => void)
+      | undefined;
+    mocks.loadProviderUsageSummary.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveProviderUsage = resolve;
+        }),
+    );
 
-    expect(JSON.stringify(repeated)).toBe(JSON.stringify(first));
+    const resultPromise = runUsageStatus();
+    const providerWait = Symbol("provider-wait");
+    const result = await Promise.race([
+      resultPromise,
+      new Promise<typeof providerWait>((resolve) => {
+        setTimeout(() => resolve(providerWait), 25);
+      }),
+    ]);
+
+    resolveProviderUsage?.({ updatedAt: now, providers: [] });
+    expect(result).toEqual({ updatedAt: now, providers: [] });
+  });
+
+  it("reuses byte-identical results within 60s and refreshes stale data in the background", async () => {
+    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [] });
+    const first = await vi.waitFor(async () => {
+      const result = (await runUsageStatus()) as {
+        providers: Array<{ windows: Array<{ usedPercent: number }> }>;
+      };
+      expect(result.providers[0]?.windows[0]?.usedPercent).toBe(10);
+      return result;
+    });
+
+    expect(JSON.stringify(await runUsageStatus())).toBe(JSON.stringify(first));
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
 
     now = 61_000;
@@ -136,29 +166,35 @@ describe("usage.status provider usage cache", () => {
   });
 
   it("shares the raw snapshot with models.authStatus and invalidates on credential rotation", async () => {
-    await runUsageStatus();
+    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [] });
     const agentId = resolveDefaultAgentId(config);
     const agentDir = resolveAgentDir(config, agentId);
-    const usage = readProviderUsageStaleWhileRevalidate({
-      agentId,
-      agentDir,
-      configRef: config,
-      credentialKey: fingerprintProviderUsageCredentials({
-        cfg: config,
-        directApiKeys: new Map(),
-        store: store as AuthProfileStore,
-      }),
-      providerIds: ["openai"],
-      now,
+    const readUsage = () =>
+      readProviderUsageStaleWhileRevalidate({
+        agentId,
+        agentDir,
+        configRef: config,
+        credentialKey: fingerprintProviderUsageCredentials({
+          cfg: config,
+          directApiKeys: new Map(),
+          store: store as AuthProfileStore,
+        }),
+        providerIds: ["openai"],
+        now,
+      });
+    await vi.waitFor(() => {
+      expect(readUsage().get("openai")?.windows[0]?.usedPercent).toBe(10);
     });
-    expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
 
     store.profiles["openai:default"].access = "access-two";
-    const rotated = (await runUsageStatus()) as {
-      providers: Array<{ windows: Array<{ usedPercent: number }> }>;
-    };
-    expect(rotated.providers[0]?.windows[0]?.usedPercent).toBe(20);
+    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [] });
+    await vi.waitFor(async () => {
+      const rotated = (await runUsageStatus()) as {
+        providers: Array<{ windows: Array<{ usedPercent: number }> }>;
+      };
+      expect(rotated.providers[0]?.windows[0]?.usedPercent).toBe(20);
+    });
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
   });
 });

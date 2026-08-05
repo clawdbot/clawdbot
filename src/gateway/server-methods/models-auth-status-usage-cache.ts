@@ -269,7 +269,7 @@ export function readProviderUsageStaleWhileRevalidate(
   return matching?.usageByProvider ?? new Map();
 }
 
-/** Returns cached provider usage, awaiting only a cold miss and refreshing stale data in place. */
+/** Returns cached provider usage while every network refresh runs in the background. */
 async function loadProviderUsageSummaryStaleWhileRevalidate(
   params: ProviderUsageCacheParams,
 ): Promise<UsageSummary> {
@@ -294,7 +294,8 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
     void refresh.catch(() => {});
     return matching.summary;
   }
-  return await refresh;
+  void refresh.catch(() => {});
+  return { updatedAt: params.now, providers: [] };
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */

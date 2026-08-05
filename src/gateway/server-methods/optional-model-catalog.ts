@@ -68,7 +68,17 @@ export function startOptionalServerMethodModelCatalogSnapshotLoad(
   loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
 ): OptionalServerMethodModelCatalogLoad<GatewayModelCatalogSnapshot> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    load: () => context.loadGatewayModelCatalogSnapshot(loadParams),
+    load: async () => {
+      // Optional request metadata may consume a published catalog, but it must
+      // never trigger provider discovery while the gateway request loop waits.
+      if (
+        context.readPreparedGatewayModelCatalog &&
+        (await context.readPreparedGatewayModelCatalog(loadParams)) === undefined
+      ) {
+        return undefined;
+      }
+      return await context.loadGatewayModelCatalogSnapshot(loadParams);
+    },
     normalize: normalizeOptionalModelCatalogSnapshot,
   });
 }
