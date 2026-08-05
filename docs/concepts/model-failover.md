@@ -260,6 +260,12 @@ If the entire candidate chain is exhausted only by overload failures, the reply 
 
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
+### Route circuit breaker
+
+OpenClaw tracks repeated transient failures for each agent, provider, and model route. Five `rate_limit`, `overloaded`, `server_error`, `timeout`, or `empty_response` failures within 10 minutes open the route circuit. While it is open, new turns skip that route only when another fallback candidate can serve.
+
+The first open period lasts 2 minutes. After it expires, one turn reserves a recovery probe while concurrent turns continue to fallback. A successful probe closes the circuit; another eligible failure doubles the open period up to 15 minutes. The state is process-local, bounded, and cleared by a Gateway restart.
+
 ### Candidate chain rules
 
 OpenClaw builds the candidate list from the currently requested `provider/model` plus configured fallbacks.

@@ -34,6 +34,7 @@ import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { modelCircuitInternals } from "./model-fallback-circuit.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
@@ -248,6 +249,7 @@ function resetModelFallbackTestState(): void {
   // Fallback state has process-level caches for skip markers, harnesses, auth,
   // and plugin normalization. Reset every surface between tests.
   resetFallbackSkipCacheForTest();
+  modelCircuitInternals.modelCircuitStates.clear();
   clearAgentHarnesses();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
@@ -765,6 +767,80 @@ describe("runWithModelFallback", () => {
         reason: "tls_certificate",
       },
     ]);
+  });
+
+  it("skips an intermittently degraded route after repeated transient failures", async () => {
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]);
+    const primaryOutcomes = Array.from({ length: 10 }, (_, index) =>
+      index % 2 === 0 ? "success" : "failure",
+    );
+    let primaryCalls = 0;
+    const run = vi.fn(async (provider: string, model: string) => {
+      if (provider !== "openai") {
+        return "fallback-ok";
+      }
+      const outcome = primaryOutcomes[primaryCalls++];
+      if (outcome === "failure") {
+        throw new FailoverError("provider overloaded", {
+          provider,
+          model,
+          reason: "overloaded",
+        });
+      }
+      return "primary-ok";
+    });
+
+    for (let index = 0; index < primaryOutcomes.length; index += 1) {
+      await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+      });
+    }
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(primaryCalls).toBe(primaryOutcomes.length);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      reason: "circuit_open",
+      status: 503,
+    });
+    expect(run).toHaveBeenLastCalledWith("anthropic", "claude-opus-4-7", {
+      isFinalFallbackAttempt: true,
+    });
+  });
+
+  it("keeps trying the only candidate when no fallback can serve", async () => {
+    const cfg = makeDiagnosticFallbackConfig([]);
+    const failure = new FailoverError("provider overloaded", {
+      provider: "openai",
+      model: "gpt-5.5",
+      reason: "overloaded",
+    });
+    const run = vi.fn().mockRejectedValue(failure);
+
+    for (let index = 0; index <= modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.5",
+          run,
+        }),
+      ).rejects.toBe(failure);
+    }
+
+    expect(run).toHaveBeenCalledTimes(modelCircuitInternals.FAILURE_THRESHOLD + 1);
+    expect(modelCircuitInternals.modelCircuitStates.size).toBe(0);
   });
 
   it("does not replay CLI max-turn failures on configured fallback models", async () => {

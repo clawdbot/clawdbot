@@ -202,6 +202,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 404;
     case "session_expired":
       return 410; // Gone - session no longer exists
+    case "circuit_open":
+      return 503;
     default:
       return undefined;
   }
