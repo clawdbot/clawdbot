@@ -21,8 +21,11 @@ import { GatewayChatClient } from "./gateway-chat.js";
 import { synchronizedFrameRows } from "./tui-pty-harness-assertion-test-support.js";
 import {
   cleanupStartedFixture,
+  createChatTerminalObserver,
+  createIdempotentCleanup,
   createFreshSession,
   lastOutputIndexAfter,
+  registerIdempotentCleanup,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
@@ -157,11 +160,6 @@ async function requestWithUnavailableRetry<T>(request: () => Promise<T>): Promis
       await sleep(Math.max(25, Math.min(error.retryAfterMs ?? 25, 1_000)));
     }
   }
-}
-
-function createIdempotentCleanup(cleanup: () => Promise<void>) {
-  let cleanupPromise: Promise<void> | undefined;
-  return () => (cleanupPromise ??= cleanup());
 }
 
 type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
@@ -845,8 +843,37 @@ async function startGatewayModeTui(
   const rejectedRequestOffset = shared.mockModel.rejectedRequests().length;
   const sessionKey = `agent:${scenario.agentId}:tui-pty-${++gatewaySessionSequence}`;
   const sessionKeys = new Set([sessionKey]);
-  await shared.controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
-  await shared.controlClient.patchSession({
+  const controlClient = new GatewayChatClient({
+    url: shared.gateway.url,
+    token: shared.gateway.gatewayToken,
+    allowInsecureLocalOperatorUi: false,
+  });
+  let controlClientConnected = false;
+  controlClient.onConnected = () => {
+    controlClientConnected = true;
+  };
+  // A timed-out RPC drops its pending response while leaving the socket open.
+  // Case-local ownership prevents that late work from crossing into the next test.
+  const cleanup = registerIdempotentCleanup(registerCleanup, async () => {
+    shared.mockModel.releaseFirstResponse(scenario.modelId);
+    try {
+      if (controlClientConnected) {
+        for (const key of sessionKeys) {
+          await controlClient.abortChat({ sessionKey: key });
+        }
+      }
+    } finally {
+      await controlClient.stop();
+    }
+  });
+  controlClient.start();
+  await waitFor({
+    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+    read: () => (controlClientConnected ? true : null),
+    onTimeout: () => new Error("Gateway case control client did not connect"),
+  });
+  await controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
+  await controlClient.patchSession({
     key: sessionKey,
     agentId: scenario.agentId,
     model: `tui-pty-mock/${scenario.modelId}`,
@@ -865,13 +892,6 @@ async function startGatewayModeTui(
     onTimeout: () => new Error("adopted Gateway session did not reach an idle final screen"),
   });
   const outputOffset = run.visibleOutput().length;
-  const cleanup = createIdempotentCleanup(async () => {
-    shared.mockModel.releaseFirstResponse(scenario.modelId);
-    for (const key of sessionKeys) {
-      await shared.controlClient.abortChat({ sessionKey: key });
-    }
-  });
-  registerCleanup(cleanup);
   return {
     kind: "gateway" as const,
     run,
@@ -1593,27 +1613,62 @@ export default {
       const shared = await requireSharedGatewayFixture();
       const agentId = SHARED_GATEWAY_AGENT_ID;
       const sessionKey = `agent:${agentId}:tui-pty-history`;
+      const runId = randomUUID();
       const userMarker = "T02_HISTORY_USER";
       const assistantMarker = GATEWAY_SCENARIOS.history.replyText;
       const model = `tui-pty-mock/${GATEWAY_SCENARIOS.history.modelId}`;
-      await shared.controlClient.createSession({ key: sessionKey, agentId });
-      await shared.controlClient.patchSession({ key: sessionKey, agentId, model });
-      await shared.controlClient.sendChat({ sessionKey, message: userMarker });
-      await waitForHistoryMessages(shared.controlClient, sessionKey, ({ messages }) =>
-        hasOrderedTurn(messages, userMarker, assistantMarker),
-      );
-      const attached = await startIsolatedGatewayPty({
-        gateway: shared.gateway,
-        registerCleanup: onTestFinished,
-        sessionKey,
+      const terminalObserver = createChatTerminalObserver();
+      const historyClient = new GatewayChatClient({
+        url: shared.gateway.url,
+        token: shared.gateway.gatewayToken,
+        allowInsecureLocalOperatorUi: false,
       });
+      let historyClientConnected = false;
+      historyClient.onConnected = () => {
+        historyClientConnected = true;
+      };
+      historyClient.onEvent = terminalObserver.onEvent;
+      const cleanup = registerIdempotentCleanup(onTestFinished, async () => {
+        try {
+          if (historyClientConnected) {
+            await historyClient.abortChat({ sessionKey, runId });
+          }
+        } finally {
+          await historyClient.stop();
+        }
+      });
+      let attached: Awaited<ReturnType<typeof startIsolatedGatewayPty>> | undefined;
       try {
-        await attached.run.waitForOutput(assistantMarker, LOCAL_STARTUP_TIMEOUT_MS);
+        historyClient.start();
+        await waitFor({
+          timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+          read: () => (historyClientConnected ? true : null),
+          onTimeout: () => new Error("history Gateway client did not connect"),
+        });
+        await historyClient.subscribeSessionEvents();
+        await historyClient.createSession({ key: sessionKey, agentId });
+        await historyClient.patchSession({ key: sessionKey, agentId, model });
+        await historyClient.sendChat({ sessionKey, message: userMarker, runId });
+        await terminalObserver.waitForFinal({
+          runId,
+          sessionKey,
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+        });
+        await waitForHistoryMessages(historyClient, sessionKey, ({ messages }) =>
+          hasOrderedTurn(messages, userMarker, assistantMarker),
+        );
+        attached = await startIsolatedGatewayPty({
+          gateway: shared.gateway,
+          registerCleanup: onTestFinished,
+          sessionKey,
+        });
+        const attachedRun = attached.run;
+        await attachedRun.waitForOutput(assistantMarker, LOCAL_STARTUP_TIMEOUT_MS);
         const output = await waitFor({
           timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
           read: () => {
             const screen =
-              synchronizedFrameRows(attached.run.output(), attached.run)[0]?.join("\n") ?? "";
+              synchronizedFrameRows(attachedRun.output(), attachedRun)[0]?.join("\n") ?? "";
             return screen.includes(userMarker) && screen.includes(assistantMarker) ? screen : null;
           },
           onTimeout: () => new Error("history did not reach a final synchronized TUI screen"),
@@ -1622,7 +1677,11 @@ export default {
         expect(output.split(assistantMarker)).toHaveLength(2);
         expect(output.indexOf(userMarker)).toBeLessThan(output.indexOf(assistantMarker));
       } finally {
-        await attached.cleanup();
+        try {
+          await attached?.cleanup();
+        } finally {
+          await cleanup();
+        }
       }
     },
     LOCAL_TEST_TIMEOUT_MS,

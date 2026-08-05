@@ -1032,6 +1032,9 @@ describe("Discord model picker interactions", () => {
       entry: {
         updatedAt: Date.now(),
         sessionId: "bound-session",
+        authProfileOverride: "lmstudio:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
       },
     });
 
@@ -1056,6 +1059,9 @@ describe("Discord model picker interactions", () => {
     expect(entry?.providerOverride).toBe("lmstudio");
     expect(entry?.modelOverride).toBe("unsloth/gemma-4-26b-a4b-it@iq4_xs");
     expect(entry?.liveModelSwitchPending).toBe(true);
+    expect(entry?.authProfileOverride).toBe("lmstudio:work");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+    expect(entry?.authProfileOverrideCompactionCount).toBe(2);
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
@@ -1063,6 +1069,61 @@ describe("Discord model picker interactions", () => {
     expect(
       JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
     ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
+  });
+
+  it("preserves auth profiles through provider aliases in the direct persistence fallback", async () => {
+    const context = createModelPickerContext();
+    context.cfg.plugins = { allow: ["byteplus"] };
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-auth-alias",
+      targetSessionKey: "agent:worker:subagent:auth-alias",
+      agentId: "worker",
+    });
+    const pickerData = createModelsProviderData({
+      anthropic: ["claude-sonnet-4-5"],
+      "byteplus-plan": ["ark-code-latest"],
+    });
+    const modelCommand = createModelCommandDefinition();
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:worker:subagent:auth-alias",
+      entry: {
+        updatedAt: Date.now(),
+        sessionId: "auth-alias-session",
+        authProfileOverride: "byteplus:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      },
+    });
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    const button = createModelPickerFallbackButton(context, dispatchSpy);
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-auth-alias",
+    };
+
+    await button.run(submitInteraction as unknown as PickerButtonInteraction, {
+      ...createModelsViewSubmitData(),
+      p: "byteplus-plan",
+      mi: "1",
+    });
+
+    const entry = getSessionEntry({
+      storePath,
+      sessionKey: "agent:worker:subagent:auth-alias",
+    });
+    expect(entry?.providerOverride).toBe("byteplus-plan");
+    expect(entry?.modelOverride).toBe("ark-code-latest");
+    expect(entry?.authProfileOverride).toBe("byteplus:work");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+    expect(entry?.authProfileOverrideCompactionCount).toBe(2);
   });
 
   it("does not write a fallback override when hidden /model dispatch is rejected", async () => {

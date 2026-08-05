@@ -6,6 +6,7 @@ read_when:
   - You need to call core helpers from a plugin (TTS, STT, image gen, web search, Gateway, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
+  - You are implementing model-picker persistence in a channel plugin
 ---
 
 Reference for the `api.runtime` object injected into every plugin during registration. Use these helpers instead of importing host internals directly.
@@ -60,7 +61,19 @@ Model-picker integrations use two focused runtime subpaths. Import the typed
 `applySessionModelSelection(...)` and its result types from
 `openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
 seam, including its authoritative conflict check and post-commit effects. The
-lower-level session-entry model helpers are not a picker persistence API.
+lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
+persistence API.
+
+Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
+persistence fallback when a channel callback cannot enter the full live-session
+transaction and already owns an atomic canonical session-entry patch. Pass the
+active config, resolved agent directory, entry, effective provider before the
+change, and validated selection. The helper mutates that entry only: it keeps a
+pinned auth profile when its recorded credential provider or configured alias is
+compatible, clears an incompatible pin, and enforces the model-selection lock.
+The caller still owns model allowlist validation, atomic persistence,
+`markLiveSwitchPending`, and any post-commit effects. Prefer
+`applySessionModelSelection(...)` whenever the full transaction is available.
 
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in
