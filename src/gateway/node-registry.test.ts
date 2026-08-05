@@ -355,6 +355,53 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
+  it("does not dispatch when pairing revalidation outlives the invoke budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      let releasePairingLookup: (() => void) | undefined;
+      const resolveCurrentPairingState = vi.fn(
+        () =>
+          new Promise<{ identity: string; generation: string }>((resolve) => {
+            releasePairingLookup = () =>
+              resolve({ identity: "identity-a", generation: "generation-a" });
+          }),
+      );
+      const registry = createNodeRegistry({ resolveCurrentPairingState });
+      const client = makeClient("conn-budget", "node-budget", frames);
+      registerNodeSession(registry, client, {
+        pairingIdentity: "identity-a",
+        pairingGeneration: "generation-a",
+      });
+      const onDispatchReady = vi.fn();
+
+      const invocation = registry.invoke({
+        nodeId: "node-budget",
+        expectedConnId: "conn-budget",
+        expectedPairingGeneration: "generation-a",
+        command: "system.run",
+        timeoutMs: 20,
+        onDispatchReady,
+      });
+      // The caller's budget runs out while the pairing lease is still in flight.
+      await vi.advanceTimersByTimeAsync(40);
+      expect(resolveCurrentPairingState).toHaveBeenCalledOnce();
+      releasePairingLookup?.();
+      await vi.advanceTimersByTimeAsync(1);
+
+      // A send here would reach the node after the caller's deadline already
+      // answered that no command had been dispatched.
+      expect(frames).toEqual([]);
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      await expect(invocation).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("revalidates persistent generation ownership for inbound node RPCs", async () => {
     const resolveCurrentPairingState = vi.fn().mockResolvedValue({
       identity: "identity-a",

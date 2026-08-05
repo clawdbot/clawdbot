@@ -1079,6 +1079,14 @@ export class NodeRegistry {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
     }
+    // Anchor the budget before the first await so pre-dispatch work spends it too.
+    // A budget that only starts at dispatch can outlive the caller's own deadline,
+    // and a send that lands after the caller already answered would contradict the
+    // dispatch provenance that answer carried.
+    const invokeStartedAtMs = Date.now();
+    // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
+    const budgetMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
+    const dispatchDeadlineAtMs = budgetMs > 0 ? invokeStartedAtMs + budgetMs : undefined;
     let node = this.nodesById.get(params.nodeId);
     if (!node) {
       return {
@@ -1138,13 +1146,21 @@ export class NodeRegistry {
         };
       }
     }
+    // Pairing revalidation above can await, so re-derive what is left of the
+    // budget. Dispatching on an exhausted one would hand the command to the node
+    // after the caller's deadline already answered that none had been dispatched.
+    const timeoutMs =
+      dispatchDeadlineAtMs === undefined
+        ? budgetMs
+        : Math.max(0, dispatchDeadlineAtMs - Date.now());
+    if (dispatchDeadlineAtMs !== undefined && timeoutMs === 0) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
     const requestId = randomUUID();
     const invokeParams = normalizeSystemRunInvokeParams({
       command: params.command,
       params: params.params,
     });
-    // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
-    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     const payload = {
       id: requestId,
       nodeId: params.nodeId,
