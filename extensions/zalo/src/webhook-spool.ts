@@ -179,6 +179,7 @@ function createZaloWebhookIngress(options: {
     waitForDeliveryIdleBeforeRepump: false,
     runPumpTask: runDetachedWebhookWork,
     deferredClaims: "wait-on-stop",
+    admissionMode: "durable-after-stop",
     drain: {
       adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
       startLimit: ZALO_WEBHOOK_MAX_CONCURRENT_DELIVERIES,

@@ -115,9 +115,15 @@ type ZaloProcessingContext = {
   turnAdoptionLifecycle?: ZaloWebhookIngressLifecycle;
 };
 
-type ZaloPollingLoopParams = ZaloProcessingContext & {
+type ZaloPollingLoopParams = {
+  token: string;
+  account: ResolvedZaloAccount;
+  runtime: ZaloRuntimeEnv;
   abortSignal: AbortSignal;
   isStopped: () => boolean;
+  statusSink?: ZaloStatusSink;
+  fetcher?: ZaloFetch;
+  acceptUpdate: (rawEvent: string) => Promise<void>;
 };
 type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
@@ -262,35 +268,9 @@ async function handleZaloWebhookRequest(
 }
 
 function startPollingLoop(params: ZaloPollingLoopParams) {
-  const {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    abortSignal,
-    isStopped,
-    statusSink,
-    fetcher,
-  } = params;
+  const { token, account, runtime, abortSignal, isStopped, statusSink, fetcher, acceptUpdate } =
+    params;
   const pollTimeout = 30;
-  const processingContext = {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    statusSink,
-    fetcher,
-  };
 
   runtime.log?.(`[${account.accountId}] Zalo polling loop started timeout=${String(pollTimeout)}s`);
 
@@ -301,7 +281,27 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 
     try {
       const response = await getUpdates(token, { timeout: pollTimeout }, fetcher);
+      // The Bot API consumes each polled update on response. When shutdown
+      // arrives while getUpdates is in-flight (the poll carries no abort
+      // signal and runs to its own 35 s timeout), still journal the update.
+      // This is best-effort — getUpdates outlives the 5 s channel-stop
+      // deadline, so the process may exit before the response lands. When
+      // it does land, durable-after-stop admission accepts the append after
+      // ingress.stop() has completed; the row is recovered on next restart.
+      const shouldJournal =
+        response.ok &&
+        response.result &&
+        response.result.message &&
+        response.result.event_name !== "message.sticker.received" &&
+        response.result.event_name !== "message.unsupported.received";
       if (isStopped() || abortSignal.aborted) {
+        if (shouldJournal) {
+          await acceptUpdate(JSON.stringify(response.result)).catch((err: unknown) =>
+            runtime.error?.(
+              `[${account.accountId}] failed to journal consumed update before shutdown: ${formatZaloError(err)}`,
+            ),
+          );
+        }
         return undefined;
       }
       if (response.ok) {
@@ -309,10 +309,11 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
-        await processUpdate({
-          update: response.result,
-          ...processingContext,
-        });
+        // No-op message events (stickers, unsupported) carry a message field
+        // but produce no dispatch — skip them at the journal gate.
+        if (shouldJournal) {
+          await acceptUpdate(JSON.stringify(response.result));
+        }
       }
     } catch (err) {
       if (err instanceof ZaloApiError && err.isPollingTimeout) {
@@ -323,6 +324,12 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         statusSink?.({ connected: false, lifecycle: "recovering", lastError: error });
         // Abort-aware backoff; bottom poll reschedule already checks stopped/aborted.
         await sleepWithAbort(5000, abortSignal).catch(() => undefined);
+      } else {
+        // getUpdates network error during shutdown: log instead of silently
+        // dropping it — the poll transport is in an indeterminate state.
+        runtime.error?.(
+          `[${account.accountId}] Zalo ingress error during shutdown: ${formatZaloError(err)}`,
+        );
       }
     }
 
@@ -1103,20 +1110,43 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       );
     }
 
+    const { createZaloWebhookIngress } = await loadZaloWebhookIngressRuntime();
+    // Polling and webhook share one durable ingress per account: the Bot API
+    // consumes polled updates on response, so a crash between poll and dispatch
+    // is unrecoverable without the same append-before-dispatch journal.
+    const ingress = createZaloWebhookIngress({
+      accountId: account.accountId,
+      runtime,
+      deliver: async (update, turnAdoptionLifecycle) => {
+        await processUpdate({
+          update,
+          token,
+          account,
+          config,
+          runtime,
+          core,
+          mediaMaxMb: effectiveMediaMaxMb,
+          canHostMedia,
+          webhookUrl: effectiveWebhookUrl,
+          webhookPath: effectiveWebhookPath,
+          statusSink,
+          fetcher,
+          turnAdoptionLifecycle,
+        });
+      },
+    });
+    ingress.start();
+    asyncStopHandlers.push(ingress.stop);
+
     startPollingLoop({
       token,
       account,
-      config,
       runtime,
-      core,
-      canHostMedia,
-      webhookUrl: effectiveWebhookUrl,
-      webhookPath: effectiveWebhookPath,
       abortSignal,
       isStopped: () => stopped,
-      mediaMaxMb: effectiveMediaMaxMb,
       statusSink,
       fetcher,
+      acceptUpdate: ingress.accept,
     });
 
     await waitForAbortSignal(abortSignal);

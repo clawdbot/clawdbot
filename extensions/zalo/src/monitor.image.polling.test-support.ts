@@ -13,6 +13,7 @@ import {
 import {
   getUpdatesMock,
   getZaloRuntimeMock,
+  installLifecycleIngressState,
   loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
@@ -32,6 +33,7 @@ describe("Zalo polling image handling", () => {
   beforeEach(async () => {
     await resetLifecycleTestState();
     getZaloRuntimeMock.mockReturnValue(core);
+    await installLifecycleIngressState();
   });
 
   afterAll(async () => {
