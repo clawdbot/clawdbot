@@ -85,11 +85,12 @@ The bundled `alibaba` plugin registers a video-generation provider for Wan model
 Each model advertises only its matching runtime mode. Geometry also follows the
 vendor protocol for that model family instead of sending one generic parameter shape.
 
-| Mode               | Max output videos | Reference limits                      | Max duration | Supported controls                                        |
-| ------------------ | ----------------- | ------------------------------------- | ------------ | --------------------------------------------------------- |
-| Text-to-video      | 1                 | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
-| Image-to-video     | 1                 | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                        |
-| Reference-to-video | 1                 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
+| Mode                         | Max output videos | Reference limits                      | Max duration | Supported controls                                                   |
+| ---------------------------- | ----------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Text-to-video                | 1                 | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Image-to-video               | 1                 | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                                   |
+| Reference-to-video (Wan 2.6) | 1                 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Reference-to-video (Wan 2.7) | 1                 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `watermark`; audio is always on |
 
 Wan 2.6 text/reference models translate `resolution` plus `aspectRatio` to the
 documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and

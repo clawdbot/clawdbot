@@ -286,11 +286,12 @@ To make Qwen the default video provider:
 
 Each Wan model advertises only its matching runtime mode:
 
-| Mode               | Models                                | Reference limits                      | Max duration | Supported controls                                        |
-| ------------------ | ------------------------------------- | ------------------------------------- | ------------ | --------------------------------------------------------- |
-| Text-to-video      | `wan2.6-t2v`                          | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
-| Image-to-video     | `wan2.6-i2v`                          | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                        |
-| Reference-to-video | `wan2.6-r2v`, `wan2.6-r2v-flash`, 2.7 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
+| Mode                         | Models                           | Reference limits                      | Max duration | Supported controls                                                   |
+| ---------------------------- | -------------------------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Text-to-video                | `wan2.6-t2v`                     | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Image-to-video               | `wan2.6-i2v`                     | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                                   |
+| Reference-to-video (Wan 2.6) | `wan2.6-r2v`, `wan2.6-r2v-flash` | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Reference-to-video (Wan 2.7) | `wan2.7-r2v`                     | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `watermark`; audio is always on |
 
 Wan 2.6 text/reference models translate `resolution` plus `aspectRatio` to the
 documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
