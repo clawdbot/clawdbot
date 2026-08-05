@@ -286,7 +286,6 @@ describe("startGatewayMaintenanceTimers", () => {
       pruneEmptyDirs: true,
     });
 
-    cleanOldMediaMock.mockClear();
     await vi.waitFor(() => {
       expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalled();
     });
