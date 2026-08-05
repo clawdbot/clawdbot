@@ -16,6 +16,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 
 const STARTUP_REFUSAL =
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
+const STARTUP_RECOVERY =
+  'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runIsolatedModuleScript(env: NodeJS.ProcessEnv, script: string) {
@@ -130,6 +132,7 @@ describe("gateway startup-migration refusal", () => {
       expect(result.status, output).toBe(1);
       expect(result.signal, output).toBeNull();
       expect(result.stderr).toContain(STARTUP_REFUSAL);
+      expect(result.stderr).toContain(STARTUP_RECOVERY);
       expect(result.stderr.split(STARTUP_REFUSAL)).toHaveLength(2);
       expect(result.stderr).not.toContain("[openclaw] Could not start the CLI.");
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
