@@ -10,6 +10,7 @@ import {
 } from "./openclaw-state-db.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
+  adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   formatUserProfileAvatarEtag,
@@ -38,6 +39,15 @@ function imageFetch(bytes: Uint8Array, mime: string) {
   return vi.fn(
     async () => new Response(Uint8Array.from(bytes).buffer, { headers: { "content-type": mime } }),
   );
+}
+
+async function ensureTailscaleProfileWithAvatar(
+  identity: Parameters<typeof ensureProfileForTailscaleIdentity>[0],
+  options: Parameters<typeof ensureProfileForTailscaleIdentity>[1],
+  fetchOptions: Parameters<typeof adoptTailscaleProfileAvatar>[3],
+) {
+  const profile = ensureProfileForTailscaleIdentity(identity, options);
+  return await adoptTailscaleProfileAvatar(profile.id, identity.profilePic, options, fetchOptions);
 }
 
 afterEach(() => {
@@ -71,14 +81,14 @@ describe("user profiles", () => {
     ]);
   });
 
-  it("resolves provider identities without storing them as emails", async () => {
+  it("resolves provider identities without storing them as emails", () => {
     const options = stateOptions();
 
-    const first = await ensureProfileForTailscaleIdentity(
+    const first = ensureProfileForTailscaleIdentity(
       { login: "Ada@GitHub", name: "Ada Lovelace" },
       options,
     );
-    const second = await ensureProfileForTailscaleIdentity(
+    const second = ensureProfileForTailscaleIdentity(
       { login: "ada@github", name: "Different Provider Name" },
       options,
     );
@@ -97,10 +107,10 @@ describe("user profiles", () => {
     ).toEqual([{ provider: "github", subject: "ada", profile_id: first.id }]);
   });
 
-  it("keeps dotted Tailscale logins on the email alias path", async () => {
+  it("keeps dotted Tailscale logins on the email alias path", () => {
     const options = stateOptions();
 
-    const profile = await ensureProfileForTailscaleIdentity(
+    const profile = ensureProfileForTailscaleIdentity(
       { login: "Person@Gmail.COM", name: "Person Example" },
       options,
     );
@@ -112,27 +122,21 @@ describe("user profiles", () => {
     ]);
   });
 
-  it("adopts a Tailscale name only while the display-name slot is empty", async () => {
+  it("adopts a Tailscale name only while the display-name slot is empty", () => {
     const options = stateOptions();
-    const profile = await ensureProfileForTailscaleIdentity(
+    const profile = ensureProfileForTailscaleIdentity(
       { login: "ada@github", name: "Ada Provider" },
       options,
     );
 
     setDisplayName(profile.id, null, options);
     expect(
-      await ensureProfileForTailscaleIdentity(
-        { login: "ada@github", name: "Ada Adopted" },
-        options,
-      ),
+      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
     ).toMatchObject({ displayName: "Ada Adopted" });
 
     setDisplayName(profile.id, "User Chosen", options);
     expect(
-      await ensureProfileForTailscaleIdentity(
-        { login: "ada@github", name: "Provider Changed" },
-        options,
-      ),
+      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options),
     ).toMatchObject({ displayName: "User Chosen" });
   });
 
@@ -245,7 +249,7 @@ describe("user profiles", () => {
     const options = stateOptions();
     const bytes = fixtureImage(path);
 
-    const profile = await ensureProfileForTailscaleIdentity(
+    const profile = await ensureTailscaleProfileWithAvatar(
       {
         login: `avatar-${mime.slice("image/".length)}@github`,
         name: "Avatar User",
@@ -292,7 +296,7 @@ describe("user profiles", () => {
   ])("keeps the avatar empty after a $name fetch", async ({ fetchImpl }) => {
     const options = stateOptions();
 
-    const profile = await ensureProfileForTailscaleIdentity(
+    const profile = await ensureTailscaleProfileWithAvatar(
       {
         login: "avatar-failure@github",
         name: "Still Authenticated",
@@ -324,7 +328,7 @@ describe("user profiles", () => {
         }),
     );
 
-    const profile = await ensureProfileForTailscaleIdentity(
+    const profile = await ensureTailscaleProfileWithAvatar(
       {
         login: "avatar-timeout@github",
         name: "Timeout User",
@@ -347,7 +351,7 @@ describe("user profiles", () => {
           resolveFetch = resolve;
         }),
     );
-    const pending = ensureProfileForTailscaleIdentity(
+    const pending = ensureTailscaleProfileWithAvatar(
       {
         login: "avatar-race@github",
         name: "Race User",

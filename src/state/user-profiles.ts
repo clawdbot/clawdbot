@@ -439,12 +439,11 @@ async function adoptAvatarIfEmpty(params: {
   );
 }
 
-/** Resolves a verified Tailscale login and adopts provider metadata into empty fields only. */
-export async function ensureProfileForTailscaleIdentity(
+/** Resolves a verified Tailscale login and adopts its display name into an empty field. */
+export function ensureProfileForTailscaleIdentity(
   identity: TailscaleProfileIdentity,
   options: OpenClawStateDatabaseOptions = {},
-  fetchOptions: TailscaleAvatarFetchOptions = {},
-): Promise<UserProfile> {
+): UserProfile {
   const classified = classifyTailscaleLogin(identity.login);
   if (classified.kind === "invalid") {
     throw new TypeError("Tailscale login must contain a nonempty subject and suffix");
@@ -459,10 +458,19 @@ export async function ensureProfileForTailscaleIdentity(
           initialDisplayName: displayName,
           options,
         });
-  const named = adoptDisplayNameIfEmpty(resolved.id, displayName, options);
+  return adoptDisplayNameIfEmpty(resolved.id, displayName, options);
+}
+
+/** Best-effort avatar adoption runs after authentication so remote I/O cannot delay login. */
+export async function adoptTailscaleProfileAvatar(
+  profileId: string,
+  profilePic: string | undefined,
+  options: OpenClawStateDatabaseOptions = {},
+  fetchOptions: TailscaleAvatarFetchOptions = {},
+): Promise<UserProfile> {
   return await adoptAvatarIfEmpty({
-    profileId: named.id,
-    profilePic: identity.profilePic,
+    profileId,
+    profilePic,
     options,
     fetchOptions,
   });
