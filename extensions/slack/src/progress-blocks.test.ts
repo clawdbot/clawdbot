@@ -208,7 +208,7 @@ describe("buildSlackProgressDraftBlocks", () => {
             id: "commentary:preamble-1",
             kind: "item",
             label: "Commentary",
-            text: "💬 I’m using the `monorepo` skill on **Linux x86_64**.",
+            text: "💬 Rendering the `sample-widget` fixture on **example.test**.",
             prefix: false,
           },
           {
@@ -221,7 +221,7 @@ describe("buildSlackProgressDraftBlocks", () => {
         ],
       }),
     ).toEqual([
-      legacyLineBlock("• *Commentary*", "I’m using the `monorepo` skill on *Linux x86_64*."),
+      legacyLineBlock("• *Commentary*", "Rendering the `sample-widget` fixture on *example.test*."),
       legacyLineBlock("• *Reasoning*", "_Reading the Slack handler_"),
     ]);
   });
