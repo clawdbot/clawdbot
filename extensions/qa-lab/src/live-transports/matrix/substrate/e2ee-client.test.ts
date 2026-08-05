@@ -33,20 +33,19 @@ describe("matrix qa e2ee client storage", () => {
       }),
       shutdownTimeoutMs: options?.shutdownTimeoutMs ?? 500,
       stopAndPersist: vi.fn(async () => {
-        calls.push("persist");
+        calls.push("stop-and-persist");
       }),
-      stopSyncWithoutPersist: vi.fn(() => calls.push("stop-sync")),
-      stopWithoutPersist: vi.fn(() => calls.push("discard")),
+      stopWithoutPersist: vi.fn(() => calls.push("stop-and-discard")),
     });
     return { calls, lifecycle };
   }
 
-  it("stops sync, drains decryptions, and only then persists", async () => {
+  it("drains decryptions before stopping the SDK and persisting", async () => {
     const { calls, lifecycle } = createLifecycleFixture();
 
     await lifecycle.stop();
 
-    expect(calls).toEqual(["detach", "stop-sync", "drain", "persist"]);
+    expect(calls).toEqual(["detach", "drain", "stop-and-persist"]);
   });
 
   it("shares one stop promise across concurrent and repeated shutdown requests", async () => {
@@ -68,10 +67,10 @@ describe("matrix qa e2ee client storage", () => {
       }),
     ).rejects.toThrow("shutdown has started");
     expect(run).not.toHaveBeenCalled();
-    expect(calls).toEqual(["detach", "stop-sync", "drain", "persist"]);
+    expect(calls).toEqual(["detach", "drain", "stop-and-persist"]);
   });
 
-  it("gives an active operation a bounded grace period before stopping sync", async () => {
+  it("gives an active operation a bounded grace period before draining and stopping", async () => {
     vi.useFakeTimers();
     try {
       const { calls, lifecycle } = createLifecycleFixture();
@@ -92,7 +91,7 @@ describe("matrix qa e2ee client storage", () => {
       await operation;
       await stop;
 
-      expect(calls).toEqual(["operation", "detach", "stop-sync", "drain", "persist"]);
+      expect(calls).toEqual(["operation", "detach", "drain", "stop-and-persist"]);
     } finally {
       vi.useRealTimers();
     }
@@ -120,7 +119,7 @@ describe("matrix qa e2ee client storage", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await rejection;
-      expect(calls).toEqual(["operation", "detach", "discard"]);
+      expect(calls).toEqual(["operation", "detach", "stop-and-discard"]);
     } finally {
       vi.useRealTimers();
     }
@@ -144,7 +143,7 @@ describe("matrix qa e2ee client storage", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await rejection;
-      expect(calls).toEqual(["detach", "stop-sync", "drain", "discard"]);
+      expect(calls).toEqual(["detach", "drain", "stop-and-discard"]);
     } finally {
       vi.useRealTimers();
     }
@@ -173,7 +172,7 @@ describe("matrix qa e2ee client storage", () => {
       await rejection;
       expect(calls).toEqual(["operation", "detach"]);
       await vi.advanceTimersByTimeAsync(100);
-      expect(calls).toEqual(["operation", "detach", "discard"]);
+      expect(calls).toEqual(["operation", "detach", "stop-and-discard"]);
     } finally {
       vi.useRealTimers();
     }

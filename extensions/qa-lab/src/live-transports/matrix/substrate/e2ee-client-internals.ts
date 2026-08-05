@@ -39,7 +39,6 @@ export function createMatrixQaE2eeClientLifecycle(params: {
   drainPendingDecryptions: () => Promise<void>;
   shutdownTimeoutMs: number;
   stopAndPersist: () => Promise<void>;
-  stopSyncWithoutPersist: () => void;
   stopWithoutPersist: () => void;
 }) {
   const activeOperations = new Set<Promise<unknown>>();
@@ -71,16 +70,15 @@ export function createMatrixQaE2eeClientLifecycle(params: {
           Promise.allSettled(activeOperations),
           graceMs,
           "active Matrix SDK operations did not settle before shutdown",
-        ).catch((error) => {
+        ).catch((error: unknown) => {
           failShutdown("waiting for active Matrix SDK operations", error);
         });
       }
-      params.stopSyncWithoutPersist();
       await withMatrixQaE2eeTimeout(
         params.drainPendingDecryptions(),
         Math.max(0, deadline - Date.now()),
         "pending Matrix decryptions did not drain before shutdown",
-      ).catch((error) => {
+      ).catch((error: unknown) => {
         failShutdown("draining pending Matrix decryptions", error);
       });
       await params.stopAndPersist();

@@ -344,7 +344,6 @@ export async function createMatrixQaE2eeScenarioClient(
     drainPendingDecryptions: () => client.drainPendingDecryptions(),
     shutdownTimeoutMs,
     stopAndPersist: () => client.stopAndPersist(),
-    stopSyncWithoutPersist: () => client.stopSyncWithoutPersist(),
     stopWithoutPersist: () => client.stopWithoutPersist(),
   });
 
