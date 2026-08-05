@@ -811,7 +811,7 @@ const SUPERVISION_SENSITIVE_KEY_RE = /authorization|password|secret|token|api[-_
 const LEGACY_FULL_REDACT_RE =
   /\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b|\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b|\bBearer\s+([-._~+/a-zA-Z0-9]+=*)/g;
 
-const LEGACY_FULL_REDACT_REPLACE = (match: string, bearerToken?: string) =>
+const LEGACY_FULL_REDACT_REPLACE = (_match: string, bearerToken?: string) =>
   bearerToken ? "Bearer [redacted]" : "[redacted]";
 
 /**
