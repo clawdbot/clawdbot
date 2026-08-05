@@ -5,7 +5,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
 
 const CLAWROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
@@ -81,9 +81,7 @@ async function readClawRouterUsagePayload(
   });
   try {
     const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
-    return payload !== null && typeof payload === "object" && !Array.isArray(payload)
-      ? (payload as ClawRouterUsagePayload)
-      : undefined;
+    return asOptionalRecord(payload) as ClawRouterUsagePayload | undefined;
   } catch {
     return undefined;
   }
