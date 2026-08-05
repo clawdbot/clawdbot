@@ -2263,7 +2263,7 @@ describe("qa suite runtime launcher", () => {
     ]);
     const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
       entries?: Array<{
-        execution?: { channel?: { id?: string } };
+        execution?: { channel?: { driver?: string; id?: string; live?: boolean } };
         result?: { status?: string };
         test?: { id?: string };
       }>;
