@@ -2823,8 +2823,8 @@ describe("runCli exit behavior", () => {
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
-  it("keeps tools available to plugin command discovery", async () => {
-    const argv = ["node", "openclaw", "tools", "effective"];
+  it("keeps tools commands out of plugin command discovery", async () => {
+    const argv = ["node", "openclaw", "tools", "commands", "list"];
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     const program = {
       commands: [],
@@ -2836,12 +2836,7 @@ describe("runCli exit behavior", () => {
 
     expect(startProxyMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "tools", argv]]);
-    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
-      program,
-      undefined,
-      undefined,
-      { mode: "lazy", primary: "tools", skipPluginValidation: false },
-    );
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
