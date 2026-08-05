@@ -66,6 +66,7 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
   agentId?: string;
   defaultAgentId?: string;
   scopeUnknownByAgent?: boolean;
+  requireFallbackAgentOwnership?: boolean;
   now?: number;
 }): TrackedActiveSessionRunSnapshot {
   const runs: TrackedActiveSessionRunSnapshot["runs"] = [];
@@ -77,6 +78,9 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
     ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
     ...(params.scopeUnknownByAgent !== undefined
       ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
+      : {}),
+    ...(params.requireFallbackAgentOwnership !== undefined
+      ? { requireFallbackAgentOwnership: params.requireFallbackAgentOwnership }
       : {}),
   });
   if (!(params.context.chatAbortControllers instanceof Map)) {
@@ -107,6 +111,9 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
       ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
       ...(params.scopeUnknownByAgent !== undefined
         ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
+        : {}),
+      ...(params.requireFallbackAgentOwnership !== undefined
+        ? { requireFallbackAgentOwnership: params.requireFallbackAgentOwnership }
         : {}),
     });
     if (!matches) {
@@ -154,7 +161,10 @@ function isTrackedActiveSessionRunForKey(
   key: string,
   agentId?: string,
   defaultAgentId?: string,
-  options?: { scopeUnknownByAgent?: boolean },
+  options?: {
+    scopeUnknownByAgent?: boolean;
+    requireFallbackAgentOwnership?: boolean;
+  },
 ): boolean {
   if (!active.sessionKey || active.sessionKey !== key) {
     return false;
@@ -167,6 +177,9 @@ function isTrackedActiveSessionRunForKey(
   const requestedAgentId = agentId ?? defaultAgentId;
   if (!requestedAgentId) {
     return true;
+  }
+  if (!active.agentId && options?.requireFallbackAgentOwnership === true) {
+    return false;
   }
   const activeAgentId = active.agentId ?? defaultAgentId;
   return activeAgentId
@@ -183,6 +196,7 @@ function isTrackedActiveSessionRunForTarget(
     agentId?: string;
     defaultAgentId?: string;
     scopeUnknownByAgent?: boolean;
+    requireFallbackAgentOwnership?: boolean;
   },
 ): boolean {
   const matchesCanonicalKey = isTrackedActiveSessionRunForKey(
@@ -190,7 +204,10 @@ function isTrackedActiveSessionRunForTarget(
     params.canonicalKey,
     params.agentId,
     params.defaultAgentId,
-    { scopeUnknownByAgent: params.scopeUnknownByAgent },
+    {
+      scopeUnknownByAgent: params.scopeUnknownByAgent,
+      requireFallbackAgentOwnership: params.requireFallbackAgentOwnership,
+    },
   );
   const matchesRequestedKey =
     params.requestedKey === params.canonicalKey
@@ -200,12 +217,25 @@ function isTrackedActiveSessionRunForTarget(
           params.requestedKey,
           params.agentId,
           params.defaultAgentId,
-          { scopeUnknownByAgent: params.scopeUnknownByAgent },
+          {
+            scopeUnknownByAgent: params.scopeUnknownByAgent,
+            requireFallbackAgentOwnership: params.requireFallbackAgentOwnership,
+          },
         );
   const targetSessionId = params.sessionId?.trim() || undefined;
   const targetAgentId = resolveActiveRunTargetAgentId(params);
+  const fallbackTarget =
+    params.canonicalKey === "global" ||
+    params.requestedKey === "global" ||
+    (params.scopeUnknownByAgent === true &&
+      (params.canonicalKey === "unknown" || params.requestedKey === "unknown"));
+  const requiresFallbackAgentOwnership =
+    fallbackTarget && params.requireFallbackAgentOwnership === true;
+  const activeAgentId = active.agentId ? normalizeAgentId(active.agentId) : undefined;
   const activeAgentMatchesTarget =
-    !active.agentId || !targetAgentId || normalizeAgentId(active.agentId) === targetAgentId;
+    targetAgentId === undefined ||
+    activeAgentId === targetAgentId ||
+    (activeAgentId === undefined && !requiresFallbackAgentOwnership);
   // Session-id-only controllers predate keyed run state; keyed controllers must
   // still match the diagnosed key so a reused id cannot borrow another session's run.
   const matchesSessionId =
@@ -245,6 +275,7 @@ export function hasTrackedActiveSessionRun(params: {
   defaultAgentId?: string;
   excludeRunIds?: ReadonlySet<string>;
   scopeUnknownByAgent?: boolean;
+  requireFallbackAgentOwnership?: boolean;
 }): boolean {
   const activeRuns = collectTrackedActiveSessionRuns(params.context);
   return activeRuns.some(
@@ -255,14 +286,20 @@ export function hasTrackedActiveSessionRun(params: {
         params.canonicalKey,
         params.agentId,
         params.defaultAgentId,
-        { scopeUnknownByAgent: params.scopeUnknownByAgent },
+        {
+          scopeUnknownByAgent: params.scopeUnknownByAgent,
+          requireFallbackAgentOwnership: params.requireFallbackAgentOwnership,
+        },
       ) ||
         isTrackedActiveSessionRunForKey(
           active,
           params.requestedKey,
           params.agentId,
           params.defaultAgentId,
-          { scopeUnknownByAgent: params.scopeUnknownByAgent },
+          {
+            scopeUnknownByAgent: params.scopeUnknownByAgent,
+            requireFallbackAgentOwnership: params.requireFallbackAgentOwnership,
+          },
         )),
   );
 }
@@ -277,6 +314,7 @@ export function resolveVisibleActiveSessionRunState(params: {
   trackedActiveRuns?: readonly TrackedActiveSessionRun[];
   projectedAgentRunIndex?: ProjectedAgentRunIndex;
   scopeUnknownByAgent?: boolean;
+  requireFallbackAgentOwnership?: boolean;
 }): { active: boolean; runIds: string[] } {
   const sessionId = params.sessionId?.trim();
   const runIds = (params.trackedActiveRuns ?? collectTrackedActiveSessionRuns(params.context))
@@ -290,6 +328,9 @@ export function resolveVisibleActiveSessionRunState(params: {
         ...(params.scopeUnknownByAgent !== undefined
           ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
           : {}),
+        ...(params.requireFallbackAgentOwnership !== undefined
+          ? { requireFallbackAgentOwnership: params.requireFallbackAgentOwnership }
+          : {}),
       }),
     )
     .map((active) => active.runId)
@@ -302,6 +343,9 @@ export function resolveVisibleActiveSessionRunState(params: {
     ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
     ...(params.scopeUnknownByAgent !== undefined
       ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
+      : {}),
+    ...(params.requireFallbackAgentOwnership !== undefined
+      ? { requireFallbackAgentOwnership: params.requireFallbackAgentOwnership }
       : {}),
   });
   const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
@@ -321,6 +365,7 @@ export function hasVisibleActiveSessionRun(params: {
   agentId?: string;
   defaultAgentId?: string;
   scopeUnknownByAgent?: boolean;
+  requireFallbackAgentOwnership?: boolean;
 }): boolean {
   return resolveVisibleActiveSessionRunState(params).active;
 }

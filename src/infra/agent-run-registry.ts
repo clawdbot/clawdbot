@@ -132,6 +132,7 @@ export function registerAgentRunContext(
   }
   if (context.agentId && existing.agentId !== context.agentId) {
     existing.agentId = context.agentId;
+    runIndexChanged = true;
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
@@ -411,10 +412,19 @@ export function hasProjectedAgentRunForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
   scopeUnknownByAgent?: boolean;
+  requireFallbackAgentOwnership?: boolean;
   index?: ProjectedAgentRunIndex;
 }): boolean {
   const index = params.index ?? buildProjectedAgentRunIndex();
   const targetAgentId = resolveProjectedRunTargetAgentId(params);
+  const requiresFallbackAgentOwnership =
+    params.requireFallbackAgentOwnership === true &&
+    targetAgentId !== undefined &&
+    params.sessionKeys.some(
+      (sessionKey) =>
+        sessionKey === "global" ||
+        (sessionKey === "unknown" && params.scopeUnknownByAgent === true),
+    );
   return index.runs.some((run) => {
     const matchesSessionKey =
       run.sessionKey !== undefined && params.sessionKeys.includes(run.sessionKey);
@@ -422,8 +432,11 @@ export function hasProjectedAgentRunForSession(params: {
       params.sessionId !== undefined &&
       run.sessionId === params.sessionId &&
       (run.sessionKey === undefined || matchesSessionKey);
+    const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : undefined;
     const matchesAgent =
-      !run.agentId || !targetAgentId || normalizeAgentId(run.agentId) === targetAgentId;
+      targetAgentId === undefined ||
+      runAgentId === targetAgentId ||
+      (runAgentId === undefined && !requiresFallbackAgentOwnership);
     return (matchesSessionKey || matchesSessionId) && matchesAgent;
   });
 }

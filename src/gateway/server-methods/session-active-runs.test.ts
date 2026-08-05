@@ -302,6 +302,48 @@ describe("session active runs", () => {
       clearAgentRunContext("unknown-run");
     }
   });
+
+  it("requires explicit ownership for strict multi-agent fallback projections", () => {
+    const context = contextWithRuns([
+      [
+        "ownerless-controller",
+        {
+          sessionId: "shared-global-session",
+        },
+      ],
+    ]);
+    registerAgentRunContext("ownerless-lifecycle", {
+      isControlUiVisible: false,
+      projectSessionActive: true,
+      sessionId: "shared-global-session",
+      sessionKey: "global",
+    });
+    try {
+      expect(
+        collectTrackedActiveSessionRunSnapshot({
+          context,
+          requestedKey: "global",
+          canonicalKey: "global",
+          sessionId: "shared-global-session",
+          agentId: "work",
+          defaultAgentId: "main",
+        }).hasActiveRun,
+      ).toBe(true);
+      expect(
+        collectTrackedActiveSessionRunSnapshot({
+          context,
+          requestedKey: "global",
+          canonicalKey: "global",
+          sessionId: "shared-global-session",
+          agentId: "work",
+          defaultAgentId: "main",
+          requireFallbackAgentOwnership: true,
+        }),
+      ).toEqual({ hasActiveRun: false, runs: [] });
+    } finally {
+      clearAgentRunContext("ownerless-lifecycle");
+    }
+  });
 });
 
 describe("collectTrackedActiveSessionRunSnapshot", () => {

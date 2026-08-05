@@ -88,6 +88,10 @@ describe("agent-events sequencing", () => {
     expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
     version = readAgentRunIndexVersion();
 
+    registerAgentRunContext("projected-run", { agentId: "main" });
+    expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
+    version = readAgentRunIndexVersion();
+
     registerAgentRunContext("projected-run", { verboseLevel: "full" });
     expect(readAgentRunIndexVersion()).toBe(version);
 

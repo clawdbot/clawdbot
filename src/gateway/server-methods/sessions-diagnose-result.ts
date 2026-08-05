@@ -297,6 +297,7 @@ export async function buildDiagnoseResult(params: {
   const { cfg, context, p, target } = params;
   const now = Date.now();
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const configuredAgentCount = listAgentIds(cfg).length;
   const gatewayRun = collectTrackedActiveSessionRunSnapshot({
     context,
     requestedKey: p.key ?? target.key,
@@ -305,6 +306,7 @@ export async function buildDiagnoseResult(params: {
     ...(target.agentId ? { agentId: target.agentId } : {}),
     defaultAgentId,
     scopeUnknownByAgent: true,
+    requireFallbackAgentOwnership: configuredAgentCount > 1,
     now,
   });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
@@ -315,7 +317,7 @@ export async function buildDiagnoseResult(params: {
   });
   const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
     target.key,
-    listAgentIds(cfg).length,
+    configuredAgentCount,
   );
   const stateSnapshot = useSharedRuntimeEvidence
     ? getDiagnosticSessionStateSnapshot(

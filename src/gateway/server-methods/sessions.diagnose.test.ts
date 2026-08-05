@@ -885,25 +885,54 @@ test("sessions.diagnose omits ambiguous process-wide evidence for multi-agent fa
     sessionKey: "global",
     reason: "model_call:stream",
   });
-
-  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
-    key: "global",
-    agentId: "work",
-  });
-
-  expect(result.ok).toBe(true);
-  const payload = result.payload;
-  if (!payload) {
-    throw new Error("expected diagnose payload");
-  }
-  expect(payload.session).toMatchObject({
-    key: "global",
+  registerAgentRunContext("ownerless-global-lifecycle", {
+    isControlUiVisible: false,
+    projectSessionActive: true,
     sessionId: "sess-work-global",
-    agentId: "work",
-    hasActiveRun: false,
+    sessionKey: "global",
   });
-  expect(payload.live).not.toHaveProperty("diagnostic");
-  expect(payload.live).not.toHaveProperty("lane");
+  try {
+    const result = await directSessionReq<SessionsDiagnoseResult>(
+      "sessions.diagnose",
+      {
+        key: "global",
+        agentId: "work",
+      },
+      {
+        context: {
+          chatAbortControllers: new Map([
+            [
+              "ownerless-global-controller",
+              {
+                controller: new AbortController(),
+                sessionId: "sess-work-global",
+                startedAtMs: Date.now() - 1_000,
+                expiresAtMs: Date.now() + 60_000,
+                kind: "agent",
+              },
+            ],
+          ]),
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    const payload = result.payload;
+    if (!payload) {
+      throw new Error("expected diagnose payload");
+    }
+    expect(payload.session).toMatchObject({
+      key: "global",
+      sessionId: "sess-work-global",
+      agentId: "work",
+      hasActiveRun: false,
+    });
+    expect(payload.live.gatewayRun).toEqual({ hasActiveRun: false, runs: [] });
+    expect(payload.live).not.toHaveProperty("diagnostic");
+    expect(payload.live).not.toHaveProperty("lane");
+  } finally {
+    clearAgentRunContext("ownerless-global-lifecycle");
+  }
 });
 
 test("sessions.diagnose scopes unknown fallback active runs to the requested agent", async () => {

@@ -120,6 +120,7 @@ function scoreDiagnoseCandidatePreselect(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     defaultAgentId: params.defaultAgentId,
     scopeUnknownByAgent: true,
+    requireFallbackAgentOwnership: params.configuredAgentCount > 1,
   });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.entry.sessionId,
@@ -317,6 +318,7 @@ function scoreDiagnoseCandidate(params: {
   agentId?: string;
 }): number {
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const configuredAgentCount = listAgentIds(params.cfg).length;
   const gatewayRun = collectTrackedActiveSessionRunSnapshot({
     context: params.context,
     requestedKey: params.row.key,
@@ -325,6 +327,7 @@ function scoreDiagnoseCandidate(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     defaultAgentId,
     scopeUnknownByAgent: true,
+    requireFallbackAgentOwnership: configuredAgentCount > 1,
   });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.row.sessionId,
@@ -334,7 +337,7 @@ function scoreDiagnoseCandidate(params: {
   });
   const useSharedRuntimeEvidence = isDiagnoseSharedRuntimeEvidenceUnambiguous(
     params.row.key,
-    listAgentIds(params.cfg).length,
+    configuredAgentCount,
   );
   const diagnostic = useSharedRuntimeEvidence
     ? getDiagnosticSessionStateSnapshot({
