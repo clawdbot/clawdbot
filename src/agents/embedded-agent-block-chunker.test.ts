@@ -52,7 +52,7 @@ describe("EmbeddedBlockChunker", () => {
 
     expect(chunks.length).toBe(1);
     expect(chunks[0]).toContain("console.log");
-    expect(chunks[0]).toMatch(/```\n?$/);
+    expect(chunks[0]).toMatch(/```\n\n$/);
     expect(chunks[0]).not.toContain("After");
     expect(chunker.bufferedText).toMatch(/^After/);
   });
@@ -64,7 +64,7 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph."]);
+    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph.\n\n"]);
     expect(chunker.bufferedText).toBe("Third paragraph.");
   });
 
@@ -139,7 +139,7 @@ describe("EmbeddedBlockChunker", () => {
     const chunks = drainChunks(chunker);
 
     expectChunksWithinLength(chunks, 10);
-    expect(chunks).toEqual(["abcdefghij", "k"]);
+    expect(chunks).toEqual(["abcdefghij", "k\n\n"]);
     expect(chunker.bufferedText).toBe("Rest");
   });
 
@@ -167,7 +167,7 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```"]);
+    expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\n"]);
     expect(chunker.bufferedText).toBe("After fence");
   });
 

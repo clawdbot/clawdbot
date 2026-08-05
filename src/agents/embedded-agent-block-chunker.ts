@@ -65,17 +65,14 @@ function findSafeParagraphBreakIndex(params: {
   const { text, fenceSpans, minChars, reverse, offset = 0 } = params;
   let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
   while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
-    const candidates = [paragraphIdx, paragraphIdx + 1];
-    for (const candidate of candidates) {
-      if (candidate < minChars) {
-        continue;
-      }
-      if (candidate < 0 || candidate >= text.length) {
-        continue;
-      }
-      if (isSafeFenceBreak(fenceSpans, offset + candidate)) {
-        return candidate;
-      }
+    const separator = text.slice(paragraphIdx).match(/^\n[\t ]*\n+/)?.[0];
+    const boundary = paragraphIdx + (separator?.length ?? 0);
+    if (
+      boundary >= minChars &&
+      boundary <= text.length &&
+      isSafeFenceBreak(fenceSpans, offset + boundary)
+    ) {
+      return boundary;
     }
     paragraphIdx = reverse
       ? text.lastIndexOf("\n\n", paragraphIdx - 1)
@@ -181,11 +178,14 @@ export class EmbeddedBlockChunker {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
         if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
-          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
+          const chunk = `${reopenPrefix}${source.slice(
+            start,
+            paragraphBreak.index + paragraphBreak.length,
+          )}`;
           if (chunk.trim().length > 0) {
             emit(chunk);
           }
-          start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
+          start = paragraphBreak.index + paragraphBreak.length;
           reopenFence = undefined;
           continue;
         }
