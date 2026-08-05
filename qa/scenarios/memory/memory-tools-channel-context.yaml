@@ -144,7 +144,7 @@ flow:
                     const previewSent = events.find((event) => event.kind === "outbound-message" && event.message.id === previewRetired.message.id && event.cursor < previewRetired.cursor);
                     return previewSent ? { message: candidate, previewId: previewRetired.message.id, finalId: candidate.id, previewSentCursor: previewSent.cursor, previewDeletedCursor: previewRetired.cursor, finalSentCursor: finalSent.cursor } : undefined;
                   })()
-            - 10000
+            - expr: liveTurnTimeoutMs(env, 30000)
         - set: durableChannelOutbound
           value:
             expr: durableChannelLifecycle.message

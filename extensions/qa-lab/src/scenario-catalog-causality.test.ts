@@ -227,4 +227,21 @@ describe("qa scenario catalog causality", () => {
       }
     },
   );
+
+  it.each([
+    ["memory-tools-channel-context", "durableChannelLifecycle", 30000],
+    ["agent-progress-evidence", "durableCompletionLifecycle", 60000],
+  ] as const)("keeps the policy-aware durable delivery budget for %s", (scenarioId, saveAs, ms) => {
+    const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+    const durableWait = actions.find(
+      (action) =>
+        (action as { call?: string }).call === "waitForCondition" &&
+        (action as { saveAs?: string }).saveAs === saveAs,
+    );
+
+    expect(durableWait, scenarioId).toMatchObject({
+      args: [expect.any(Object), { expr: `liveTurnTimeoutMs(env, ${ms})` }],
+    });
+  });
 });
