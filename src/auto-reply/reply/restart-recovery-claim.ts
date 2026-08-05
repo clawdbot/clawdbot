@@ -333,6 +333,9 @@ export function createReplyRestartRecoveryClaimController(params: {
             sourceTurnId && params.sameChannelThreadRequired === true ? true : undefined,
           restartRecoverySourceIngress: sourceTurnId ? "channel" : undefined,
           restartRecoverySourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          // Admission rewrites the row to running for the recovery run; the
+          // predecessor's lifecycle owner must not survive into the new turn.
+          lifecycleRunId: undefined,
           runtimeMs: undefined,
           startedAt: updatedAt,
           status: "running",

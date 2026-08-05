@@ -356,6 +356,9 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
       status: "running",
+      // Admission rewrites the row to running for the retried turn; the
+      // predecessor's lifecycle owner must not survive into the new turn.
+      lifecycleRunId: undefined,
       startedAt: params.startedAt,
       endedAt: undefined,
       restartRecoveryDeliveryContext: undefined,

@@ -46,6 +46,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryRuns?: SessionEntry["restartRecoveryRuns"];
   /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */
   restartRecoveryTerminalRunIds?: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
+  lifecycleRunId?: SessionEntry["lifecycleRunId"];
   runtimeMs?: number;
   startedAt?: number;
   status?: SessionRunStatus;
