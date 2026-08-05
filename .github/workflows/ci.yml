@@ -1276,15 +1276,6 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
-          if [ "$RUN_TUI_PTY" = "true" ]; then
-            start_check "tui-pty" env \
-              NODE_OPTIONS=--max-old-space-size=8192 \
-              OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 \
-              OPENCLAW_TUI_PTY_USE_BUILT_CLI=1 \
-              OPENCLAW_VITEST_MAX_WORKERS=2 \
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
-          fi
-
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
               node scripts/check-gateway-watch-regression.mjs --skip-build
@@ -1297,6 +1288,18 @@ jobs:
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then
             start_check "gateway-watch" \
               node scripts/check-gateway-watch-regression.mjs --skip-build
+            wait_checks
+          fi
+
+          # The built local TUI lane owns a real Gateway fixture. Keep it
+          # exclusive so sibling artifact shards cannot starve its requests.
+          if [ "$RUN_TUI_PTY" = "true" ]; then
+            start_check "tui-pty" env \
+              NODE_OPTIONS=--max-old-space-size=8192 \
+              OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 \
+              OPENCLAW_TUI_PTY_USE_BUILT_CLI=1 \
+              OPENCLAW_VITEST_MAX_WORKERS=2 \
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
             wait_checks
           fi
 

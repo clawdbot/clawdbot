@@ -1,5 +1,6 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,9 +10,12 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
+import { runExec } from "../process/exec.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { synchronizedFrameRows } from "./tui-pty-harness-assertion-test-support.js";
@@ -27,6 +31,7 @@ type MockModelServer = {
   baseUrl: string;
   requests: (modelId?: string) => MockModelRequest[];
   rejectedRequests: () => MockModelRequest[];
+  allowValidResponses: (modelId: string) => void;
   releaseFirstResponse: (modelId: string) => void;
   stop: () => Promise<void>;
 };
@@ -369,6 +374,12 @@ async function startRoutedMockModelServer(
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests: (modelId) => (modelId ? (requestsByModel.get(modelId) ?? []) : requests),
     rejectedRequests: () => rejectedRequests,
+    allowValidResponses: (modelId) => {
+      const behavior = behaviors[modelId];
+      if (behavior) {
+        behavior.invalidEditLoop = false;
+      }
+    },
     releaseFirstResponse: (modelId) => {
       firstResponseGates.get(modelId)?.resolve();
     },
@@ -514,6 +525,11 @@ async function startLocalModeTui(
     holdFirstResponse?: boolean;
     followupReplyText?: string;
     replyText?: string;
+    prepareConfig?: (params: {
+      config: OpenClawConfig;
+      tempDir: string;
+      stateDir: string;
+    }) => Promise<OpenClawConfig> | OpenClawConfig;
   } = {},
 ) {
   const replyText = opts.replyText ?? "LOCAL_PTY_RESPONSE";
@@ -525,18 +541,39 @@ async function startLocalModeTui(
   const xdgDataHome = path.join(tempDir, "xdg-data");
   const xdgCacheHome = path.join(tempDir, "xdg-cache");
   const configPath = path.join(tempDir, "openclaw.json");
+  const env: NodeJS.ProcessEnv = {
+    HOME: homeDir,
+    OPENCLAW_HOME: homeDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
+    OPENCLAW_AGENT_DIR: undefined,
+    OPENCLAW_SKIP_PROVIDERS: undefined,
+    XDG_CONFIG_HOME: xdgConfigHome,
+    XDG_DATA_HOME: xdgDataHome,
+    XDG_CACHE_HOME: xdgCacheHome,
+    OPENCLAW_THEME: "dark",
+    OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
+    NO_COLOR: undefined,
+  };
   const mockModel = await startMockModelServer(replyText, {
     invalidEditLoop: opts.invalidEditLoop,
     holdFirstResponse: opts.holdFirstResponse,
     followupReplyText: opts.followupReplyText,
   });
-  const config = buildLocalModeConfig({
+  let config: OpenClawConfig = buildLocalModeConfig({
     workspaceDir,
     providerBaseUrl: mockModel.baseUrl,
     toolsProfile: opts.invalidEditLoop ? "coding" : "minimal",
   });
   let run: PtyRun;
   try {
+    config =
+      (await opts.prepareConfig?.({
+        config,
+        tempDir,
+        stateDir,
+      })) ?? config;
     await Promise.all([
       mkdir(workspaceDir, { recursive: true }),
       mkdir(homeDir, { recursive: true }),
@@ -549,21 +586,7 @@ async function startLocalModeTui(
 
     run = startPty(process.execPath, buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]), {
       cwd: process.cwd(),
-      env: {
-        HOME: homeDir,
-        OPENCLAW_HOME: homeDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
-        OPENCLAW_AGENT_DIR: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        XDG_CONFIG_HOME: xdgConfigHome,
-        XDG_DATA_HOME: xdgDataHome,
-        XDG_CACHE_HOME: xdgCacheHome,
-        OPENCLAW_THEME: "dark",
-        OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-        NO_COLOR: undefined,
-      },
+      env,
       exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
       outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     });
@@ -596,6 +619,9 @@ async function startLocalModeTui(
     kind: "local" as const,
     run,
     mockModel,
+    configPath,
+    env,
+    stateDir,
     cleanup,
   };
 }
@@ -1197,6 +1223,214 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "repairs isolated config through the approved built CLI and resumes local chat",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished, {
+        prepareConfig: ({ config }) => ({
+          ...config,
+          tools: { ...config.tools, profile: "coding" },
+        }),
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        const cliPath = path.join(process.cwd(), "openclaw.mjs");
+        const cli = `${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)}`;
+        await fixture.run.write(`!${cli} config set tools.profile minimal\r`);
+        await fixture.run.waitForOutput("Allow local shell commands for this session?");
+        await fixture.run.write("\u001b[B\r", { delay: false });
+        await fixture.run.waitForOutput("local shell: enabled for this session");
+        await fixture.run.waitForOutput("[local] exit 0");
+
+        const repaired = JSON.parse(await readFile(fixture.configPath, "utf8")) as OpenClawConfig;
+        expect(repaired.tools?.profile).toBe("minimal");
+
+        const { stdout } = await runExec(
+          process.execPath,
+          [cliPath, "config", "validate", "--json"],
+          {
+            cwd: process.cwd(),
+            env: { ...fixture.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
+            logOutput: false,
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          },
+        );
+        expect(JSON.parse(stdout)).toMatchObject({ valid: true });
+
+        await fixture.run.write("prompt after config repair\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () => new Error("post-repair prompt did not reach the mock provider"),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(
+          "prompt after config repair",
+        );
+        await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "authenticates a manifest-discovered provider and resumes the unchanged local model",
+    async ({ onTestFinished }) => {
+      const pluginId = "t05-local-auth-fixture";
+      const providerId = "t05-local-auth-provider";
+      const profileId = `${providerId}:default`;
+      const sentinel = `t05-${randomUUID()}`;
+      const expectedDigest = createHash("sha256").update(sentinel).digest("hex");
+      const fixture = await startLocalModeTui(onTestFinished, {
+        replyText: "LOCAL_AUTH_RESPONSE",
+        prepareConfig: async ({ config, tempDir }) => {
+          const pluginDir = path.join(tempDir, "auth-plugin");
+          await mkdir(pluginDir, { recursive: true });
+          await Promise.all([
+            writeFile(
+              path.join(pluginDir, "package.json"),
+              `${JSON.stringify(
+                {
+                  name: "@openclaw/t05-local-auth-fixture",
+                  version: "0.0.0",
+                  type: "module",
+                  openclaw: { extensions: ["./index.js"] },
+                },
+                null,
+                2,
+              )}\n`,
+              "utf8",
+            ),
+            writeFile(
+              path.join(pluginDir, "openclaw.plugin.json"),
+              `${JSON.stringify(
+                {
+                  id: pluginId,
+                  name: "T05 Local Auth Fixture",
+                  providers: [providerId],
+                  setup: {
+                    providers: [{ id: providerId, envVars: ["T05_LOCAL_AUTH_API_KEY"] }],
+                  },
+                  providerAuthChoices: [
+                    {
+                      provider: providerId,
+                      method: "api-key",
+                      choiceId: `${providerId}-api-key`,
+                      choiceLabel: "T05 local auth API key",
+                      groupId: providerId,
+                      groupLabel: "T05 local auth",
+                      optionKey: "t05LocalAuthApiKey",
+                      cliFlag: "--t05-local-auth-api-key",
+                      cliOption: "--t05-local-auth-api-key <key>",
+                      onboardingScopes: ["text-inference"],
+                    },
+                  ],
+                  configSchema: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {},
+                  },
+                },
+                null,
+                2,
+              )}\n`,
+              "utf8",
+            ),
+            writeFile(
+              path.join(pluginDir, "index.js"),
+              `const providerId = ${JSON.stringify(providerId)};
+export default {
+  id: ${JSON.stringify(pluginId)},
+  name: "T05 Local Auth Fixture",
+  register(api) {
+    api.registerProvider({
+      id: providerId,
+      label: "T05 local auth",
+      envVars: ["T05_LOCAL_AUTH_API_KEY"],
+      auth: [{
+        id: "api-key",
+        kind: "api_key",
+        label: "T05 local auth API key",
+        run: async (ctx) => {
+          const key = await ctx.prompter.text({
+            message: "Enter T05 local auth API key",
+            sensitive: true,
+          });
+          return {
+            profiles: [{
+              profileId: providerId + ":default",
+              credential: { type: "api_key", provider: providerId, key },
+            }],
+          };
+        },
+      }],
+    });
+  },
+};
+`,
+              "utf8",
+            ),
+          ]);
+          return {
+            ...config,
+            plugins: {
+              enabled: true,
+              slots: { memory: "none" },
+              load: { paths: [pluginDir] },
+              allow: [pluginId],
+              entries: { [pluginId]: { enabled: true } },
+            },
+          };
+        },
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write(`/auth ${providerId}\r`, { delay: false });
+        await fixture.run.waitForOutput(`opening auth flow for ${providerId}`);
+        await fixture.run.waitForOutput("Enter T05 local auth API key");
+        await fixture.run.write(`${sentinel}\r`, { delay: false });
+        await fixture.run.waitForOutput(`auth flow finished for ${providerId}`);
+        expect(fixture.run.output().includes(sentinel)).toBe(false);
+
+        const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
+        const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
+        expect(await stat(sqlitePath).then((entry) => entry.isFile())).toBe(true);
+        const store = loadPersistedAuthProfileStore(agentDir);
+        const profile = store?.profiles[profileId];
+        expect(profile?.type === "api_key").toBe(true);
+        expect(profile?.provider === providerId).toBe(true);
+        const persistedDigest =
+          profile?.type === "api_key" && profile.key
+            ? createHash("sha256").update(profile.key).digest("hex")
+            : "";
+        expect(persistedDigest).toBe(expectedDigest);
+
+        const config = JSON.parse(await readFile(fixture.configPath, "utf8")) as OpenClawConfig;
+        expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+          "tui-pty-mock/gpt-5.5",
+        );
+        await fixture.run.write("prompt after local auth\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () => new Error("post-auth prompt did not reach the mock provider"),
+        });
+        expect(fixture.mockModel.requests()[0]?.body.model).toBe("gpt-5.5");
+        await fixture.run.waitForOutput("LOCAL_AUTH_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
   function registerValidationLoopTest(mode: "gateway" | "local") {
     it(
       `renders safe validation-loop abort diagnostics through the real ${mode} backend`,
@@ -1286,6 +1520,18 @@ describe("TUI PTY real backends", () => {
           expect(caseOutput).not.toContain("Received arguments");
 
           if (fixture.kind === "local") {
+            fixture.mockModel.allowValidResponses("gpt-5.5");
+            const abortedRequestCount = fixture.mockModel.requests().length;
+            await fixture.run.write("prompt after local validation abort\r");
+            await waitFor({
+              timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+              read: () => (fixture.mockModel.requests().length > abortedRequestCount ? true : null),
+              onTimeout: () => new Error("post-abort prompt did not reach the mock provider"),
+            });
+            expect(JSON.stringify(fixture.mockModel.requests().at(-1)?.body)).toContain(
+              "prompt after local validation abort",
+            );
+            await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
             await fixture.run.write("/exit\r", { delay: false });
             expect((await fixture.run.waitForExit()).exitCode).toBe(0);
           }
@@ -1297,6 +1543,8 @@ describe("TUI PTY real backends", () => {
       LOCAL_TEST_TIMEOUT_MS,
     );
   }
+
+  registerValidationLoopTest("local");
 
   // Register every Gateway case inside the nested suite so targeted runs retain
   // the fixture's separate startup timeout.

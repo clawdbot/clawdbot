@@ -201,7 +201,9 @@ async function downloadBytePlusVideo(params: {
     assertProviderBinaryResponseContent(response, "BytePlus generated video download", "video");
   } catch (error) {
     // A rejected binary response still owns a live socket until its unread body is canceled.
-    await response.body?.cancel().catch(() => undefined);
+    // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+    // before the rejected response and its dispatcher can be released.
+    void response.body?.cancel().catch(() => undefined);
     throw error;
   }
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";

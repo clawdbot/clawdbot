@@ -1375,26 +1375,131 @@ describe("buildQaRuntimeEnv", () => {
         testing.stopQaGatewayChildProcessTree(child as never, {
           gracefulTimeoutMs: 1,
           forceTimeoutMs: 1,
+          inspectLinuxProcessGroup: () => null,
         }),
-      ).rejects.toThrow("qa gateway process tree remained alive after forced shutdown");
+      ).rejects.toThrow(
+        process.platform === "linux"
+          ? "qa gateway process tree remained alive after forced shutdown: pgid=12345 members=unknown (/proc unavailable) childExitRecorded=false"
+          : "qa gateway process tree remained alive after forced shutdown: pid=12345 childExitRecorded=false",
+      );
     },
   );
 
-  it("treats Linux process groups with only dead members as stopped", () => {
-    const stats = [
+  it("reports Linux process-tree diagnostics when forced shutdown times out", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const child = Object.assign(new EventEmitter(), {
+      pid: 12345,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(() => true),
+    });
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      await expect(
+        testing.stopQaGatewayChildProcessTree(child as never, {
+          gracefulTimeoutMs: 1,
+          forceTimeoutMs: 1,
+          inspectLinuxProcessGroup: () => ({
+            alive: true,
+            diagnostics:
+              'pgid=12345 members=[pid=12345 state=Z command="gateway", pid=12346 state=S command="worker"]',
+          }),
+        }),
+      ).rejects.toThrow(
+        'qa gateway process tree remained alive after forced shutdown: pgid=12345 members=[pid=12345 state=Z command="gateway", pid=12346 state=S command="worker"] childExitRecorded=false',
+      );
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+  });
+
+  it("classifies Linux zombie-only process groups as stopped", () => {
+    const inspection = testing.inspectLinuxProcessGroupStats(123, [
       "123 (gateway child) Z 1 123 123 0 -1 0",
       "124 (helper (worker)) X 1 123 123 0 -1 0",
       "125 (unrelated) S 1 999 999 0 -1 0",
-    ];
+    ]);
 
-    expect(testing.classifyLinuxProcessGroupStats(123, stats)).toBe(false);
+    expect(inspection).toEqual({
+      alive: false,
+      diagnostics:
+        'pgid=123 members=[pid=123 state=Z command="gateway child", pid=124 state=X command="helper (worker)"]',
+    });
+  });
+
+  it("classifies Linux process groups with a runnable descendant as alive", () => {
+    const inspection = testing.inspectLinuxProcessGroupStats(123, [
+      "123 (gateway child) Z 1 123 123 0 -1 0",
+      "126 (live helper) D 1 123 123 0 -1 0",
+    ]);
+
+    expect(inspection).toEqual({
+      alive: true,
+      diagnostics:
+        'pgid=123 members=[pid=123 state=Z command="gateway child", pid=126 state=D command="live helper"]',
+    });
+  });
+
+  it("classifies an empty Linux process-group snapshot as unknown", () => {
     expect(
-      testing.classifyLinuxProcessGroupStats(123, [
-        ...stats,
-        "126 (live helper) D 1 123 123 0 -1 0",
-      ]),
-    ).toBe(true);
-    expect(testing.classifyLinuxProcessGroupStats(456, stats)).toBeNull();
+      testing.inspectLinuxProcessGroupStats(123, ["125 (unrelated) S 1 999 999 0 -1 0"]),
+    ).toEqual({
+      alive: null,
+      diagnostics: "pgid=123 members=[]",
+    });
+  });
+
+  it("bounds Linux process-group diagnostics", () => {
+    const stats = Array.from(
+      { length: 300 },
+      (_, index) => `${index + 1} (${`worker-${index}`.padEnd(32, "x")}) S 1 123 123 0 -1 0`,
+    );
+
+    const inspection = testing.inspectLinuxProcessGroupStats(123, stats);
+
+    expect(inspection.alive).toBe(true);
+    expect(inspection.diagnostics.length).toBeLessThanOrEqual(2_048);
+    expect(inspection.diagnostics).toMatch(/\.\.\.$/u);
+  });
+
+  it("trusts Linux runnable-member inspection before child exit metadata settles", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const processKill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = {
+      pid: 12345,
+      exitCode: null,
+      signalCode: null,
+    };
+    try {
+      expect(
+        testing.isQaGatewayChildProcessTreeAlive(child as never, () => ({
+          alive: false,
+          diagnostics: 'pgid=12345 members=[pid=12345 state=Z command="gateway"]',
+        })),
+      ).toBe(false);
+      expect(
+        testing.isQaGatewayChildProcessTreeAlive(child as never, () => ({
+          alive: true,
+          diagnostics: 'pgid=12345 members=[pid=12346 state=S command="worker"]',
+        })),
+      ).toBe(true);
+      expect(
+        testing.isQaGatewayChildProcessTreeAlive(child as never, () => ({
+          alive: null,
+          diagnostics: "pgid=12345 members=[]",
+        })),
+      ).toBe(true);
+      expect(testing.isQaGatewayChildProcessTreeAlive(child as never, () => null)).toBe(true);
+      expect(processKill).toHaveBeenCalledWith(-12345, 0);
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
   });
 
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
@@ -1479,6 +1584,10 @@ describe("buildQaRuntimeEnv", () => {
       {
         gracefulTimeoutMs: 1,
         forceTimeoutMs: 50,
+        inspectLinuxProcessGroup: () => ({
+          alive: !sawForceKill || postKillLivenessChecks < 2,
+          diagnostics: 'pgid=12346 members=[pid=12347 state=S command="worker"]',
+        }),
       },
     );
 

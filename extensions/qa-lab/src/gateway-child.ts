@@ -88,6 +88,7 @@ const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
 // Loaded Docker runners can take several seconds to reap a force-killed process group.
 const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS = 5_000;
+const QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS = 2_048;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
@@ -692,7 +693,8 @@ export const testing = {
   signalQaGatewayChildProcessTree,
   resolveQaGatewayChildStopTimeouts,
   stopQaGatewayChildProcessTree,
-  classifyLinuxProcessGroupStats,
+  inspectLinuxProcessGroupStats,
+  isQaGatewayChildProcessTreeAlive,
   closeWriteStream,
 };
 
@@ -705,36 +707,73 @@ function isProcessAlreadyExitedError(error: unknown): boolean {
 }
 
 function parseLinuxProcessStat(raw: string) {
+  const commandStart = raw.indexOf("(");
   const commandEnd = raw.lastIndexOf(")");
-  if (commandEnd < 0) {
+  if (commandStart <= 0 || commandEnd <= commandStart) {
     return null;
   }
+  const pid = Number.parseInt(raw.slice(0, commandStart).trim(), 10);
   const fields = raw
     .slice(commandEnd + 1)
     .trim()
     .split(/\s+/u);
   const state = fields[0];
   const processGroupId = Number.parseInt(fields[2] ?? "", 10);
-  if (!state || !Number.isSafeInteger(processGroupId) || processGroupId <= 0) {
+  if (
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    !state ||
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 0
+  ) {
     return null;
   }
-  return { processGroupId, state };
+  return {
+    command: raw.slice(commandStart + 1, commandEnd),
+    pid,
+    processGroupId,
+    state,
+  };
 }
 
-function classifyLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
+function boundQaGatewayProcessTreeDiagnostics(details: string) {
+  if (details.length <= QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS) {
+    return details;
+  }
+  return `${sliceUtf16Safe(details, 0, QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS - 3)}...`;
+}
+
+function inspectLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
   const members = stats
     .map((raw) => parseLinuxProcessStat(raw))
     .filter(
       (entry): entry is NonNullable<ReturnType<typeof parseLinuxProcessStat>> =>
         entry?.processGroupId === processGroupId,
-    );
-  if (members.length === 0) {
-    return null;
-  }
-  return members.some((entry) => entry.state !== "Z" && entry.state !== "X");
+    )
+    .toSorted((left, right) => left.pid - right.pid);
+  const diagnostics = members
+    .map(
+      (member) =>
+        `pid=${member.pid} state=${member.state} command=${JSON.stringify(member.command)}`,
+    )
+    .join(", ");
+  return {
+    alive:
+      members.length === 0
+        ? null
+        : members.some((entry) => entry.state !== "Z" && entry.state !== "X"),
+    diagnostics: boundQaGatewayProcessTreeDiagnostics(
+      `pgid=${processGroupId} members=[${diagnostics}]`,
+    ),
+  };
 }
 
-function inspectLinuxProcessGroupLiveness(processGroupId: number) {
+type QaLinuxProcessGroupInspection = ReturnType<typeof inspectLinuxProcessGroupStats>;
+type QaLinuxProcessGroupInspector = (
+  processGroupId: number,
+) => QaLinuxProcessGroupInspection | null;
+
+function inspectLinuxProcessGroup(processGroupId: number): QaLinuxProcessGroupInspection | null {
   if (process.platform !== "linux") {
     return null;
   }
@@ -751,14 +790,20 @@ function inspectLinuxProcessGroupLiveness(processGroupId: number) {
     }
     try {
       stats.push(readFileSync(path.join("/proc", entry.name, "stat"), "utf8"));
-    } catch {
+    } catch (error) {
       // Processes can exit while /proc is being scanned.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return null;
+      }
     }
   }
-  return classifyLinuxProcessGroupStats(processGroupId, stats);
+  return inspectLinuxProcessGroupStats(processGroupId, stats);
 }
 
-function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
+function isQaGatewayChildProcessTreeAlive(
+  child: ChildProcess,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector = inspectLinuxProcessGroup,
+) {
   if (!child.pid) {
     return false;
   }
@@ -767,12 +812,12 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
   }
   try {
     process.kill(-child.pid, 0);
-    if (!hasChildExited(child)) {
-      return true;
+    if (process.platform === "linux") {
+      // Linux can retain zombie-only process groups after SIGKILL while Node's
+      // child metadata is still unsettled. Runnable /proc members are the owner.
+      return inspectLinuxProcessGroupFn(child.pid)?.alive ?? true;
     }
-    // Container PID 1 can leave killed descendants as zombies. They cannot
-    // retain ports or execute work, so do not make release QA wait forever.
-    return inspectLinuxProcessGroupLiveness(child.pid) ?? true;
+    return true;
   } catch (error) {
     if (!isProcessAlreadyExitedError(error) && !hasChildExited(child)) {
       return true;
@@ -838,43 +883,78 @@ function signalQaGatewayChildProcessTree(
   }
 }
 
-async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number) {
+async function waitForQaGatewayChildExit(
+  child: ChildProcess,
+  timeoutMs: number,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
-    if (!isQaGatewayChildProcessTreeAlive(child)) {
+    if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
       return true;
     }
     await sleep(Math.min(25, Math.max(0, deadline - Date.now())));
   }
-  return !isQaGatewayChildProcessTreeAlive(child);
+  return !isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn);
 }
 
-function resolveQaGatewayChildStopTimeouts(opts?: {
+type QaGatewayChildStopOptions = {
   gracefulTimeoutMs?: number;
   forceTimeoutMs?: number;
-}) {
+  inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
+};
+
+function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
   return {
     gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
     forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
   };
 }
 
+function formatQaGatewayProcessTreeDiagnostics(
+  child: ChildProcess,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
+) {
+  const childExitRecorded = hasChildExited(child);
+  if (process.platform !== "linux" || !child.pid) {
+    return `pid=${child.pid ?? "unknown"} childExitRecorded=${childExitRecorded}`;
+  }
+  const inspection = inspectLinuxProcessGroupFn(child.pid);
+  const processGroupDetails =
+    inspection?.diagnostics ?? `pgid=${child.pid} members=unknown (/proc unavailable)`;
+  return boundQaGatewayProcessTreeDiagnostics(
+    `${processGroupDetails} childExitRecorded=${childExitRecorded}`,
+  );
+}
+
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+  opts?: QaGatewayChildStopOptions,
 ) {
-  if (!isQaGatewayChildProcessTreeAlive(child)) {
+  const inspectLinuxProcessGroupFn = opts?.inspectLinuxProcessGroup ?? inspectLinuxProcessGroup;
+  if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
     return;
   }
   const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
-  if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
+  if (
+    await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)
+  ) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
+  const stopped = await waitForQaGatewayChildExit(
+    child,
+    timeouts.forceTimeoutMs,
+    inspectLinuxProcessGroupFn,
+  );
   if (!stopped) {
-    throw new Error("qa gateway process tree remained alive after forced shutdown");
+    throw new Error(
+      `qa gateway process tree remained alive after forced shutdown: ${formatQaGatewayProcessTreeDiagnostics(
+        child,
+        inspectLinuxProcessGroupFn,
+      )}`,
+    );
   }
 }
 
