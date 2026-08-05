@@ -5,10 +5,14 @@ import { z } from "zod";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
+import {
+  pinDirectory,
+  requireDirectorySync,
+  type PinnedDirectory,
+} from "../infra/directory-durability.js";
 import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 import {
@@ -191,69 +195,78 @@ export async function captureFinalRecoveryPoint(
     );
   }
   await prepareOperationDirectory(recoveryPointPath, "repository");
-  await writeJournalRecord(journalPath, "intent", request);
-
-  let snapshots: RecoveryPointSqliteSnapshot[];
+  const recoveryPointDirectory = await pinRecoveryPointDirectory(recoveryPointPath);
   try {
-    snapshots = await captureSqliteInventory(request, recoveryPointPath);
-  } catch (error) {
-    if (error instanceof FinalRecoveryPointError) {
-      throw error;
+    await writeJournalRecord(journalPath, "intent", request);
+
+    let snapshots: RecoveryPointSqliteSnapshot[];
+    try {
+      snapshots = await captureSqliteInventory(request, recoveryPointPath, recoveryPointDirectory);
+    } catch (error) {
+      if (error instanceof FinalRecoveryPointError) {
+        throw error;
+      }
+      throw new FinalRecoveryPointError(
+        "final-capture.snapshot-failed",
+        "quarantine",
+        "Final recovery-point SQLite capture failed after durable intent.",
+        { cause: error },
+      );
     }
-    throw new FinalRecoveryPointError(
-      "final-capture.snapshot-failed",
-      "quarantine",
-      "Final recovery-point SQLite capture failed after durable intent.",
-      { cause: error },
-    );
-  }
 
-  let manifest: RecoveryPointManifest;
-  let acceptance: RecoveryPointAcceptance;
-  try {
-    manifest = await createRecoveryPointManifest({
-      snapshots,
-      ownerInventory: request.ownerInventory,
-      now: () => new Date(request.capturedAt),
-    });
-    ({ acceptance } = await verifyRecoveryPoint({
+    let manifest: RecoveryPointManifest;
+    let acceptance: RecoveryPointAcceptance;
+    try {
+      manifest = await createRecoveryPointManifest({
+        snapshots,
+        ownerInventory: request.ownerInventory,
+        now: () => new Date(request.capturedAt),
+      });
+      ({ acceptance } = await verifyRecoveryPoint({
+        manifest,
+        snapshots,
+        ownerInventory: request.ownerInventory,
+      }));
+    } catch (error) {
+      throw new FinalRecoveryPointError(
+        "final-capture.verification-failed",
+        "quarantine",
+        "Final recovery-point aggregate verification failed after durable intent.",
+        { cause: error },
+      );
+    }
+
+    const aggregateManifestPath = path.join(recoveryPointPath, "manifest.json");
+    await recoveryPointDirectory.assertCurrent();
+    await writeCaptureBytes(
+      aggregateManifestPath,
+      Buffer.from(stableStringify(manifest), "utf8"),
+      "aggregate manifest",
+      recoveryPointDirectory,
+    );
+    const result = buildResult({
+      request,
+      recoveryPointPath,
+      aggregateManifestPath,
       manifest,
+      acceptance,
       snapshots,
-      ownerInventory: request.ownerInventory,
-    }));
-  } catch (error) {
-    throw new FinalRecoveryPointError(
-      "final-capture.verification-failed",
-      "quarantine",
-      "Final recovery-point aggregate verification failed after durable intent.",
-      { cause: error },
-    );
+    });
+    await writeJournalRecord(journalPath, "result", result);
+    return result;
+  } finally {
+    await recoveryPointDirectory.close().catch(() => undefined);
   }
-
-  const aggregateManifestPath = path.join(recoveryPointPath, "manifest.json");
-  await writeCaptureBytes(
-    aggregateManifestPath,
-    Buffer.from(stableStringify(manifest), "utf8"),
-    "aggregate manifest",
-  );
-  const result = buildResult({
-    request,
-    recoveryPointPath,
-    aggregateManifestPath,
-    manifest,
-    acceptance,
-    snapshots,
-  });
-  await writeJournalRecord(journalPath, "result", result);
-  return result;
 }
 
 async function captureSqliteInventory(
   request: FinalRecoveryPointRequest,
   recoveryPointPath: string,
+  recoveryPointDirectory: PinnedDirectory,
 ): Promise<RecoveryPointSqliteSnapshot[]> {
   const capturedAt = () => new Date(request.capturedAt);
   const componentsRoot = path.join(recoveryPointPath, "components");
+  const agentDatabases = resolveOwnerAgentDatabases(request);
   const captures = [
     {
       repositoryPath: path.join(componentsRoot, "global"),
@@ -261,15 +274,16 @@ async function captureSqliteInventory(
       identity: { role: "global" as const },
     },
     ...(await Promise.all(
-      request.ownerInventory.agentIds.map(async (agentId) => ({
+      agentDatabases.map(async ({ agentId, path: databasePath }) => ({
         repositoryPath: path.join(componentsRoot, "agents", agentId),
-        databasePath: await fs.realpath(resolveOpenClawAgentSqlitePath({ agentId })),
+        databasePath: await fs.realpath(databasePath),
         identity: { role: "agent" as const, agentId },
       })),
     )),
   ];
   const snapshots: RecoveryPointSqliteSnapshot[] = [];
   for (const capture of captures) {
+    await recoveryPointDirectory.assertCurrent();
     const provider = createLocalSqliteSnapshotProvider({
       repositoryPath: capture.repositoryPath,
       allowedDatabaseRoles: [capture.identity.role],
@@ -282,9 +296,44 @@ async function captureSqliteInventory(
       path: capture.databasePath,
       identity: capture.identity,
     });
+    await recoveryPointDirectory.assertCurrent();
     snapshots.push({ provider, ref: created.ref });
   }
+  requireDirectorySync(await recoveryPointDirectory.sync(), "Final recovery-point repository");
   return snapshots;
+}
+
+function resolveOwnerAgentDatabases(request: FinalRecoveryPointRequest): Array<{
+  agentId: string;
+  path: string;
+}> {
+  const expectedAgentIds = request.ownerInventory.agentIds;
+  const expected = new Set(expectedAgentIds);
+  const registered = listOpenClawRegisteredAgentDatabases();
+  const byAgentId = new Map<string, string>();
+  for (const entry of registered) {
+    if (!expected.has(entry.agentId)) {
+      throw operationConflict(
+        `Final recovery-point inventory omitted registered agent database: ${entry.agentId}.`,
+      );
+    }
+    const existing = byAgentId.get(entry.agentId);
+    if (existing !== undefined && existing !== entry.path) {
+      throw operationConflict(
+        `Final recovery-point inventory cannot represent multiple registered databases for agent: ${entry.agentId}.`,
+      );
+    }
+    byAgentId.set(entry.agentId, entry.path);
+  }
+  return expectedAgentIds.map((agentId) => {
+    const databasePath = byAgentId.get(agentId);
+    if (!databasePath) {
+      throw operationConflict(
+        `Final recovery-point inventory includes unregistered agent database: ${agentId}.`,
+      );
+    }
+    return { agentId, path: databasePath };
+  });
 }
 
 async function verifyCommittedResult(
@@ -300,7 +349,14 @@ async function verifyCommittedResult(
   let snapshots: RecoveryPointSqliteSnapshot[];
   let verified: Awaited<ReturnType<typeof verifyRecoveryPoint>>;
   try {
-    manifest = (await readJson(recoveryPointPath, "manifest.json")) as RecoveryPointManifest;
+    const manifestRead = await readAggregateManifest(recoveryPointPath, "manifest.json");
+    if (
+      manifestRead.sha256 !== parsedResult.data.aggregateManifestSha256 ||
+      manifestRead.sizeBytes !== parsedResult.data.aggregateManifestSizeBytes
+    ) {
+      throw operationConflict("Committed final recovery-point manifest bytes changed.");
+    }
+    manifest = manifestRead.parsed as RecoveryPointManifest;
     snapshots = await resolveCommittedSnapshots(recoveryPointPath, request.ownerInventory.agentIds);
     verified = await verifyRecoveryPoint({
       manifest,
@@ -308,6 +364,9 @@ async function verifyCommittedResult(
       ownerInventory: request.ownerInventory,
     });
   } catch (error) {
+    if (error instanceof FinalRecoveryPointError) {
+      throw error;
+    }
     throw new FinalRecoveryPointError(
       "final-capture.verification-failed",
       "quarantine",
@@ -421,15 +480,41 @@ async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
   applyPrivateModeSync(result.path, PRIVATE_DIRECTORY_MODE);
 }
 
-async function writeCaptureBytes(filePath: string, value: Buffer, label: string): Promise<void> {
+async function pinRecoveryPointDirectory(directoryPath: string): Promise<PinnedDirectory> {
   try {
-    await writeNewBytes(filePath, value);
+    const pinned = await pinDirectory(directoryPath, { label: "Final recovery-point repository" });
+    await pinned.assertCurrent();
+    requireDirectorySync(await pinned.sync(), "Final recovery-point repository");
+    return pinned;
+  } catch (error) {
+    throw new FinalRecoveryPointError(
+      "final-capture.snapshot-failed",
+      "hold",
+      "Final recovery-point repository could not be pinned.",
+      { cause: error },
+    );
+  }
+}
+
+async function writeCaptureBytes(
+  filePath: string,
+  value: Buffer,
+  label: string,
+  parentDirectory: PinnedDirectory,
+): Promise<void> {
+  try {
+    await writeNewBytes(filePath, value, parentDirectory);
   } catch (error) {
     throw operationConflict(`Final recovery-point ${label} could not be committed.`, error);
   }
 }
 
-async function writeNewBytes(filePath: string, value: Buffer): Promise<void> {
+async function writeNewBytes(
+  filePath: string,
+  value: Buffer,
+  parentDirectory: PinnedDirectory,
+): Promise<void> {
+  await parentDirectory.assertCurrent();
   const handle = await fs.open(filePath, "wx", PRIVATE_FILE_MODE);
   try {
     await handle.writeFile(value);
@@ -437,7 +522,8 @@ async function writeNewBytes(filePath: string, value: Buffer): Promise<void> {
   } finally {
     await handle.close();
   }
-  requireDirectorySync(await syncDirectory(path.dirname(filePath)), "Final recovery-point journal");
+  await parentDirectory.assertCurrent();
+  requireDirectorySync(await parentDirectory.sync(), "Final recovery-point repository");
 }
 
 async function readJournalRecord(databasePath: string, recordType: string): Promise<unknown> {
@@ -460,7 +546,10 @@ async function writeJournalRecord(
   }
 }
 
-async function readJson(rootPath: string, relativePath: string): Promise<unknown> {
+async function readAggregateManifest(
+  rootPath: string,
+  relativePath: string,
+): Promise<{ parsed: unknown; sha256: string; sizeBytes: number }> {
   const read = await (
     await root(rootPath)
   ).read(relativePath, {
@@ -469,7 +558,11 @@ async function readJson(rootPath: string, relativePath: string): Promise<unknown
     symlinks: "reject",
   });
   try {
-    return JSON.parse(read.buffer.toString("utf8")) as unknown;
+    return {
+      parsed: JSON.parse(read.buffer.toString("utf8")) as unknown,
+      sha256: sha256Hex(read.buffer),
+      sizeBytes: read.buffer.byteLength,
+    };
   } catch (error) {
     throw operationConflict(`Final recovery-point ${relativePath} is not valid JSON.`, error);
   }

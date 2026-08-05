@@ -436,8 +436,8 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
-    // Private RFC 0013 recovery helpers are direct unit-test contracts until
-    // their hidden host-facing caller lands in the next stacked slice.
+    // The recovery-point composer is now reached by the hidden final-capture
+    // command; these remaining named exports are retained contract entrypoints.
     "src/snapshot/recovery-point.ts": ["exports"],
     // The hidden final-capture request contract is imported directly by its
     // focused tests before a production host adapter exists.
