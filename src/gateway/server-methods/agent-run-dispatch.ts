@@ -17,6 +17,7 @@ import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import {
@@ -24,6 +25,49 @@ import {
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+
+type PersistGatewaySessionLifecycleEvent = typeof persistGatewaySessionLifecycleEvent;
+
+export async function persistNonDeliveredAgentRunTerminalSession(params: {
+  agentId?: string;
+  deliver?: boolean;
+  persist?: PersistGatewaySessionLifecycleEvent;
+  runId: string;
+  sessionId?: string;
+  sessionKey?: string;
+  terminalOutcome: AgentRunTerminalOutcome;
+}): Promise<void> {
+  if (params.deliver === true || !params.sessionKey || !params.sessionId) {
+    return;
+  }
+  const endedAt = params.terminalOutcome.endedAt ?? Date.now();
+  const phase = params.terminalOutcome.status === "ok" ? "end" : "error";
+  await (params.persist ?? persistGatewaySessionLifecycleEvent)({
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    event: {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      ts: endedAt,
+      data: {
+        phase,
+        endedAt,
+        ...(phase === "error" && params.terminalOutcome.error
+          ? { error: params.terminalOutcome.error }
+          : {}),
+        ...(params.terminalOutcome.stopReason
+          ? { stopReason: params.terminalOutcome.stopReason }
+          : {}),
+        ...(params.terminalOutcome.livenessState
+          ? { livenessState: params.terminalOutcome.livenessState }
+          : {}),
+        ...(params.terminalOutcome.timeoutPhase
+          ? { timeoutPhase: params.terminalOutcome.timeoutPhase }
+          : {}),
+      },
+    },
+  });
+}
 
 function resolveResolvedAgentTimeoutStopReason(
   meta: unknown,
@@ -189,6 +233,25 @@ export function dispatchAgentRunFromGateway(params: {
         timeoutPhase,
         providerStarted: result?.meta?.providerStarted,
       });
+      const resultAgentMeta = result?.meta?.agentMeta as { sessionId?: unknown } | null | undefined;
+      const terminalSessionId =
+        typeof resultAgentMeta?.sessionId === "string"
+          ? resultAgentMeta.sessionId
+          : params.ingressOpts.sessionId;
+      try {
+        await persistNonDeliveredAgentRunTerminalSession({
+          agentId: params.ingressOpts.agentId,
+          deliver: params.ingressOpts.deliver,
+          runId: params.runId,
+          sessionId: terminalSessionId,
+          sessionKey: params.ingressOpts.sessionKey,
+          terminalOutcome,
+        });
+      } catch (error) {
+        params.context.logGateway.warn(
+          `failed to persist non-delivered agent session terminal state ${params.runId}: ${formatForLog(error)}`,
+        );
+      }
       const responseStatus =
         RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION[
           classifyAgentRunTerminalOutcome(terminalOutcome)
