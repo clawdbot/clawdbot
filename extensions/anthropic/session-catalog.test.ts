@@ -2,15 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginNodeHostCommand,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import {
-  createClaudeSessionNodeHostCommands,
   createClaudeSessionNodeInvokePolicies,
-} from "./session-catalog-node-commands.js";
+  registerClaudeSessionDiscovery,
+} from "./session-catalog-registration.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
@@ -19,8 +23,28 @@ import {
   CLAUDE_TERMINAL_RESUME_COMMAND,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
-  registerClaudeSessionCatalog,
 } from "./session-catalog.js";
+
+function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
+  registerClaudeSessionDiscovery({
+    ...api,
+    registerNodeHostCommand: api.registerNodeHostCommand ?? (() => {}),
+  });
+}
+
+function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+  const commands: OpenClawPluginNodeHostCommand[] = [];
+  registerClaudeSessionDiscovery({
+    id: "anthropic",
+    config: {},
+    runtime: createPluginRuntimeMock(),
+    registerSessionCatalog: () => {},
+    registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => {
+      commands.push(command);
+    },
+  } as unknown as OpenClawPluginApi);
+  return commands;
+}
 
 function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider {
   let provider: SessionCatalogProvider | undefined;
@@ -509,29 +533,28 @@ describe("Claude session catalog", () => {
       sessionId: "openclaw-adopted",
       entry: { sessionId: "openclaw-adopted", updatedAt: Date.now() },
     }));
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
     let provider: SessionCatalogProvider | undefined;
     const api = {
       id: "anthropic",
       config: {},
-      runtime: {
-        config: {
-          current: () => ({
-            agents: {
-              defaults: {
-                models: {
-                  "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
-                },
-              },
-            },
-          }),
-        },
+      runtime: createPluginRuntimeMock({
+        config: { current: () => config },
         agent: {
           session: {
             listSessionEntries: () => [],
             createSessionEntry,
           },
         },
-      },
+      }),
       registerSessionCatalog: (candidate: SessionCatalogProvider) => {
         provider = candidate;
       },
@@ -581,9 +604,7 @@ describe("Claude session catalog", () => {
     const api = {
       id: "anthropic",
       config: {},
-      runtime: {
-        config: { current: () => config },
-      },
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerSessionCatalog: (candidate: SessionCatalogProvider) => {
         provider = candidate;
       },
@@ -623,7 +644,7 @@ describe("Claude session catalog", () => {
       const api = {
         id: "anthropic",
         config,
-        runtime: { config: { current: () => config } },
+        runtime: createPluginRuntimeMock({ config: { current: () => config } }),
         registerSessionCatalog: (candidate: SessionCatalogProvider) => {
           provider = candidate;
         },
@@ -661,7 +682,7 @@ describe("Claude session catalog", () => {
     const api = {
       id: "anthropic",
       config,
-      runtime: { config: { current: () => config } },
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerSessionCatalog: (candidate: SessionCatalogProvider) => {
         provider = candidate;
       },
@@ -698,7 +719,7 @@ describe("Claude session catalog", () => {
     const api = {
       id: "anthropic",
       config,
-      runtime: { config: { current: () => config } },
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerSessionCatalog: (candidate: SessionCatalogProvider) => {
         provider = candidate;
       },
@@ -736,7 +757,7 @@ describe("Claude session catalog", () => {
     const api = {
       id: "anthropic",
       config,
-      runtime: { config: { current: () => config } },
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerSessionCatalog: (candidate: SessionCatalogProvider) => {
         provider = candidate;
       },

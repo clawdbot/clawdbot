@@ -21,6 +21,8 @@ const unpairNote = document.getElementById("unpairNote");
 const relayValue = document.getElementById("relayValue");
 let sendingPage = false;
 let settingsOpen = false;
+// Preserve rejected actions across status polls until a successful retry.
+let actionError = null;
 
 const STATE_LABEL = {
   on: "Connected",
@@ -46,6 +48,10 @@ function relayHost(relayUrl) {
 
 async function refresh() {
   const status = await chrome.runtime.sendMessage({ type: "getStatus" });
+  if (status?.ok === false) {
+    statusLine.textContent = actionError ?? status.error ?? "Could not refresh browser status.";
+    return;
+  }
   statusDot.className = `status-dot ${status.state}`;
   pairSection.classList.toggle("hidden", status.paired || settingsOpen);
   connectedSection.classList.toggle("hidden", !status.paired || settingsOpen);
@@ -55,11 +61,13 @@ async function refresh() {
   unpairButton.classList.toggle("hidden", !status.paired);
   unpairNote.classList.toggle("hidden", !status.paired);
   if (!status.paired) {
-    statusLine.textContent = "Not paired with a gateway";
+    statusLine.textContent = actionError ?? "Not paired with a gateway";
     return;
   }
   const label = STATE_LABEL[status.state] ?? STATE_LABEL.off;
-  statusLine.textContent = `${label} · ${status.sharedTabCount} tab${status.sharedTabCount === 1 ? "" : "s"} shared`;
+  statusLine.textContent =
+    actionError ??
+    `${label} · ${status.sharedTabCount} tab${status.sharedTabCount === 1 ? "" : "s"} shared`;
   statusHint.classList.toggle("hidden", status.state !== "error");
   const tab = await activeTab();
   if (tab?.id === undefined) {
@@ -117,15 +125,26 @@ async function onPair() {
     pairingString: pairingInput.value,
   });
   if (!result.ok) {
-    errorLine.textContent = result.error ?? "Pairing failed.";
+    actionError = result.error ?? "Pairing failed.";
+    errorLine.textContent = actionError;
     errorLine.classList.remove("hidden");
+    statusLine.textContent = actionError;
+    await refresh();
     return;
   }
+  actionError = null;
   await refresh();
 }
 
 async function onUnpair() {
-  await chrome.runtime.sendMessage({ type: "unpair" });
+  const result = await chrome.runtime.sendMessage({ type: "unpair" });
+  if (result?.ok === false) {
+    actionError = result.error ?? "Could not unpair this browser.";
+    statusLine.textContent = actionError;
+    await refresh();
+    return;
+  }
+  actionError = null;
   settingsOpen = false;
   await refresh();
 }
@@ -133,7 +152,14 @@ async function onUnpair() {
 async function onToggleShare() {
   const tabId = Number.parseInt(shareButton.dataset.tabId ?? "", 10);
   if (Number.isFinite(tabId)) {
-    await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
+    const result = await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
+    if (result?.ok === false) {
+      actionError = result.error ?? "Could not update browser tab sharing.";
+      statusLine.textContent = actionError;
+      await refresh();
+      return;
+    }
+    actionError = null;
   }
   await refresh();
 }

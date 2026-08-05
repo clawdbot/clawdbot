@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   createOpenClawTestState,
@@ -11,26 +11,35 @@ import { inspectSkillProposal, listSkillProposals } from "../workshop/service.js
 import { runSkillResearchAutoCapture } from "./autocapture.js";
 
 const tempDirs = createTrackedTempDirs();
-const SESSION_KEY = "agent:main:main";
 let testState: OpenClawTestState;
+let sessionKeyIndex = 0;
+let SESSION_KEY = "";
 
-beforeEach(async () => {
+beforeAll(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-autocapture-auto-state-",
   });
-  await upsertSessionEntry(
-    { agentId: "main", sessionKey: SESSION_KEY },
-    { sessionId: "session-autocapture-auto", updatedAt: 1 },
-  );
+});
+
+beforeEach(() => {
+  testState.applyEnv();
+  SESSION_KEY = `agent:main:autocapture-auto-test-${String(++sessionKeyIndex)}`;
 });
 
 afterEach(async () => {
-  await testState.cleanup();
   await tempDirs.cleanup();
 });
 
+afterAll(async () => {
+  await testState.cleanup();
+});
+
 async function makeWorkspace(): Promise<string> {
+  await upsertSessionEntry(
+    { agentId: "main", sessionKey: SESSION_KEY },
+    { sessionId: `session-${SESSION_KEY}`, updatedAt: 1 },
+  );
   return await tempDirs.make("openclaw-skill-autocapture-auto-");
 }
 

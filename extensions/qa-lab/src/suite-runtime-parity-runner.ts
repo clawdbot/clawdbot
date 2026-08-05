@@ -55,6 +55,7 @@ export async function runQaRuntimeParitySuite(params: {
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
+  controlUiEnabled?: boolean;
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
@@ -175,7 +176,7 @@ export async function runQaRuntimeParitySuite(params: {
               concurrency: 1,
               enabledPluginIds: params.enabledPluginIds,
               startLab,
-              controlUiEnabled: scenarioRequiresControlUi(scenario),
+              controlUiEnabled: params.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
               forcedRuntime: runtime,
               captureRuntimeParityCell: true,
               writeEvidenceFile: params.writeEvidenceFile,

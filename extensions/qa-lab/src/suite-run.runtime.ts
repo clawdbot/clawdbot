@@ -137,6 +137,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       primaryModel,
       alternateModel,
       fastMode,
+      controlUiEnabled: params.controlUiEnabled,
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       enabledPluginIds: params.enabledPluginIds,

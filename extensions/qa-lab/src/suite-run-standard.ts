@@ -15,7 +15,11 @@ import {
   type QaSuiteGatewayRssSample,
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
-import { applyQaMergePatch, collectQaSuiteTransportPolicy } from "./suite-planning.js";
+import {
+  applyQaMergePatch,
+  collectQaSuiteTransportPolicy,
+  scenarioRequiresControlUi,
+} from "./suite-planning.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import {
@@ -68,6 +72,8 @@ export async function runQaFlowSuiteStandard(
   } = context;
   const ownsLab = !params?.lab;
   const startLab = params?.startLab;
+  const controlUiEnabled =
+    params?.controlUiEnabled ?? selectedScenarios.some(scenarioRequiresControlUi);
   writeQaSuiteProgress(progressEnabled, "lab start");
   const lab =
     params?.lab ??
@@ -126,7 +132,7 @@ export async function runQaFlowSuiteStandard(
       thinkingDefault: params?.thinkingDefault,
       forcedRuntime: params?.forcedRuntime,
       claudeCliAuthMode: params?.claudeCliAuthMode,
-      controlUiEnabled: params?.controlUiEnabled ?? true,
+      controlUiEnabled,
       enabledPluginIds,
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
@@ -144,10 +150,12 @@ export async function runQaFlowSuiteStandard(
       progressEnabled,
       `gateway ready: ${sanitizeQaSuiteProgressValue(activeGateway.baseUrl)}`,
     );
-    lab.setControlUi({
-      controlUiProxyTarget: activeGateway.baseUrl,
-      controlUiProxyToken: activeGateway.token,
-    });
+    if (controlUiEnabled) {
+      lab.setControlUi({
+        controlUiProxyTarget: activeGateway.baseUrl,
+        controlUiProxyToken: activeGateway.token,
+      });
+    }
     const activeEnv: QaSuiteEnvironment = {
       lab,
       mock: activeMock,
@@ -441,10 +449,12 @@ export async function runQaFlowSuiteStandard(
       finishLab: ownsLab
         ? () => lab.stop()
         : async () => {
-            lab.setControlUi({
-              controlUiUrl: null,
-              controlUiProxyTarget: null,
-            });
+            if (controlUiEnabled) {
+              lab.setControlUi({
+                controlUiUrl: null,
+                controlUiProxyTarget: null,
+              });
+            }
           },
     });
     throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });

@@ -2932,6 +2932,41 @@ output="$(docker_e2e_maybe_print_log_heartbeat plugins-run 1 1 "$TMPDIR/run.log"
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
+  it("preserves heredoc stdin through Docker E2E heartbeat logging", () => {
+    const workDir = tempDirs.make("openclaw-docker-e2e-log-stdin-");
+    const script = repoShell(workDir)`
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+run_logged_print_heartbeat plugins-run 30 bash -s <<'SH'
+printf "first payload line\\nsecond payload line\\n"
+SH
+`;
+
+    expect(execFileSync("bash", ["-lc", script], { encoding: "utf8" })).toBe(
+      "first payload line\nsecond payload line\n",
+    );
+  });
+
+  it("preserves failing heredoc output and status through Docker E2E heartbeat logging", () => {
+    const workDir = tempDirs.make("openclaw-docker-e2e-log-failing-stdin-");
+    const script = repoShell(workDir)`
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+run_logged_print_heartbeat plugins-run 30 bash -s <<'SH'
+printf "captured failure output\\n"
+exit 37
+SH
+`;
+
+    const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+    expect(result.status).toBe(37);
+    expect(result.stdout).toBe("captured failure output\n");
+    expect(result.stderr).toBe("");
+  });
+
   it("cleans the heartbeat command when the wrapper is terminated", () => {
     const workDir = tempDirs.make("openclaw-docker-e2e-log-term-cleanup-");
     const script = repoShell(workDir)`

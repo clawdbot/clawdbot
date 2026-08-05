@@ -63,7 +63,6 @@ import {
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
-  waitForQaChannelReady,
   waitForTransportReady,
 } from "./suite-runtime-gateway.js";
 import {
@@ -225,7 +224,6 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     fetchJson,
     waitForGatewayHealthy,
     waitForTransportReady,
-    waitForQaChannelReady,
     browserRequest: callQaBrowserRequest,
     waitForBrowserReady: waitForQaBrowserReady,
     browserOpenTab: qaBrowserOpenTab,
