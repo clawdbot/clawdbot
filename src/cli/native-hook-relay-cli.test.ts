@@ -875,7 +875,7 @@ describe("parent death watch", () => {
 
   it("does not exit when the parent /proc entry is unreadable at poll time", () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    const readProcStat = vi.fn((pid: number) => {
+    const readProcStat = vi.fn((pid: number): MockProcStatResult => {
       if (pid === PARENT_PID) {
         return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
       }
