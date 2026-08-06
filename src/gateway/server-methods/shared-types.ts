@@ -54,6 +54,10 @@ import type {
   WorkerPlacementDispatchContract,
 } from "../worker-environments/service-contract.js";
 import type { ChatMetadataReadParams, ChatMetadataResult } from "./chat-metadata-contract.js";
+import type {
+  ChatStartupProjectionReadParams,
+  ChatStartupProjectionResult,
+} from "./chat-startup-projection-contract.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /**
@@ -221,6 +225,9 @@ export type GatewayRequestContext = {
     workspaceDir?: string;
   }) => Promise<ModelCatalogEntry[] | undefined>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readChatStartupProjection?: (
+    params: ChatStartupProjectionReadParams,
+  ) => Promise<ChatStartupProjectionResult>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;

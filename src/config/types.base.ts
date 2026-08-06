@@ -263,7 +263,7 @@ export type SessionMaintenanceConfig = {
   /**
    * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
    * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
-   * (mode=enforce). Set `false` to disable the budget entirely.
+   * (mode=enforce). Set `false`, `0`, or `"0"` to disable the budget entirely.
    */
   maxDiskBytes?: number | string | false;
   /**

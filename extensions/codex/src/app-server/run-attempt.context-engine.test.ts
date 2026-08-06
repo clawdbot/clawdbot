@@ -1,4 +1,3 @@
-// Codex tests cover run attempt.context engine plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +19,8 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+// Codex tests cover run attempt.context engine plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
@@ -233,7 +234,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.146.0",
+      cliVersion: "0.146.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -382,12 +383,7 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
 
 type MockCallReader = { mock: { calls: unknown[][] } };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function optionalString(value: unknown): string {
   return typeof value === "string" ? value : "";

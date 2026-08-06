@@ -266,6 +266,8 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
+  /** Voice notes can carry the final reply text as a visible caption. */
+  captionedFinalText?: boolean;
   /**
    * Optional preferred audio container the channel wants for voice-memo
    * delivery. When set and the host can transcode (e.g. `afconvert` on

@@ -832,6 +832,7 @@ export const en: TranslationMap = {
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
     forkSession: "Fork",
+    forkedSession: "Forked thread",
     openChat: "Open chat",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",

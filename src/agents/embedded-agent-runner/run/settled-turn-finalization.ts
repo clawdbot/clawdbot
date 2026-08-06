@@ -16,7 +16,10 @@ import {
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
+import {
+  copyAttemptDeliveryState,
+  resolveSettledTurnFinalizationRequest,
+} from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
@@ -88,6 +91,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       finalizationSucceeded: false,
     };
   }
+  const settledFailureSignal = prepared.failureSignal;
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
@@ -114,7 +118,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       }),
       signalOwnedInterruption: false,
     };
-    prepared = prepareEmbeddedRunTerminal({
+    const finalizedPrepared = prepareEmbeddedRunTerminal({
       ...input.terminalBase,
       attempt,
       currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
@@ -123,6 +127,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       lastRunPromptUsage,
       terminalState,
     });
+    // A failure-honest final answer cannot turn a settled cron denial into success.
+    prepared = { ...finalizedPrepared, failureSignal: settledFailureSignal };
     return {
       attempt,
       attemptAssistant: attempt.currentAttemptAssistant,
@@ -188,8 +194,8 @@ function buildSettledTurnFinalizationAttemptResult(input: {
 }): EmbeddedRunAttemptResult {
   const { result, settledAttempt } = input;
   const text = resolveSettledTurnFinalizationText(result);
-  // Finalization bypasses ordinary attempt normalization. Rebuild only the
-  // terminal projection so settled side effects and retry state cannot leak in.
+  // Finalization replaces terminal ownership, not facts from already-settled tools.
+  // Keep those facts while replay, abort, and lifecycle state remain finalizer-local.
   return {
     terminal: { kind: "ok" },
     sessionIdUsed: settledAttempt.sessionIdUsed,
@@ -199,6 +205,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     runtimeArtifact: settledAttempt.runtimeArtifact,
     systemPromptReport: settledAttempt.systemPromptReport,
     finalPromptText: input.prompt,
+    ...copyAttemptDeliveryState(settledAttempt),
     messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
     assistantTexts: [text],
     assistantTranscriptOwned: result.assistantTranscriptOwned,
@@ -207,19 +214,12 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     lastAssistant: result.assistant,
     currentAttemptAssistant: result.assistant,
     currentAttemptCompletedAssistant: result.assistant,
-    toolMetas: [],
-    acceptedSessionSpawns: [],
-    didSendViaMessagingTool: false,
-    didDeliverSourceReplyViaMessageTool: false,
-    didSendDeterministicApprovalPrompt: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    messagingToolSourceReplyPayloads: [],
+    toolMetas: settledAttempt.toolMetas,
     hasToolMediaBlockReply: false,
-    successfulCronAdds: 0,
     cloudCodeAssistFormatError: false,
     attemptUsage: result.usage,
+    codeModeEngaged: settledAttempt.codeModeEngaged,
+    assistantTurns: 1,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },

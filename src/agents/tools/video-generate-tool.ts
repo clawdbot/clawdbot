@@ -17,10 +17,6 @@ import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
-import {
-  resolveVideoGenerationMode,
-  resolveVideoGenerationModeCapabilities,
-} from "../../video-generation/capabilities.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
   generateVideo,
@@ -457,85 +453,6 @@ function resolveSelectedVideoGenerationProvider(params: {
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
   });
-}
-
-function validateVideoGenerationCapabilities(params: {
-  provider: VideoGenerationProvider | undefined;
-  model?: string;
-  inputImageCount: number;
-  inputVideoCount: number;
-  inputAudioCount: number;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: VideoGenerationResolution;
-  durationSeconds?: number;
-  audio?: boolean;
-  watermark?: boolean;
-}) {
-  const provider = params.provider;
-  if (!provider) {
-    return;
-  }
-  const mode = resolveVideoGenerationMode({
-    inputImageCount: params.inputImageCount,
-    inputVideoCount: params.inputVideoCount,
-  });
-  const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
-    provider,
-    model: params.model,
-    inputImageCount: params.inputImageCount,
-    inputVideoCount: params.inputVideoCount,
-  });
-  if (!caps && mode === "imageToVideo" && params.inputVideoCount === 0) {
-    throw new ToolInputError(`${provider.id} does not support image-to-video reference inputs.`);
-  }
-  if (!caps && mode === "videoToVideo" && params.inputImageCount === 0) {
-    throw new ToolInputError(`${provider.id} does not support video-to-video reference inputs.`);
-  }
-  if (!caps) {
-    return;
-  }
-  if (
-    mode === "imageToVideo" &&
-    "enabled" in caps &&
-    !caps.enabled &&
-    params.inputVideoCount === 0
-  ) {
-    throw new ToolInputError(`${provider.id} does not support image-to-video reference inputs.`);
-  }
-  if (
-    mode === "videoToVideo" &&
-    "enabled" in caps &&
-    !caps.enabled &&
-    params.inputImageCount === 0
-  ) {
-    throw new ToolInputError(`${provider.id} does not support video-to-video reference inputs.`);
-  }
-  if (params.inputImageCount > 0) {
-    const maxInputImages = caps.maxInputImages ?? MAX_INPUT_IMAGES;
-    if (params.inputImageCount > maxInputImages) {
-      throw new ToolInputError(
-        `${provider.id} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
-      );
-    }
-  }
-  if (params.inputVideoCount > 0) {
-    const maxInputVideos = caps.maxInputVideos ?? MAX_INPUT_VIDEOS;
-    if (params.inputVideoCount > maxInputVideos) {
-      throw new ToolInputError(
-        `${provider.id} supports at most ${maxInputVideos} reference video${maxInputVideos === 1 ? "" : "s"}.`,
-      );
-    }
-  }
-  // Audio-count validation is intentionally deferred to runtime.ts (generateVideo).
-  // The runtime guard skips per-candidate providers that lack audio support, allowing
-  // fallback candidates that do support audio to run. A ToolInputError here would fire
-  // against only the primary provider and prevent valid fallback-based audio requests.
-  // maxDurationSeconds validation is intentionally deferred to runtime.ts (generateVideo).
-  // The runtime guard skips per-candidate providers whose hard cap is below the requested
-  // duration, allowing a fallback with a higher cap to run — same rationale as the audio
-  // check above. When providers declare an explicit supportedDurationSeconds list, runtime
-  // normalization snaps to the nearest valid value instead of skipping.
 }
 
 function formatIgnoredVideoGenerationOverride(override: VideoGenerationIgnoredOverride): string {
@@ -1223,20 +1140,6 @@ export function createVideoGenerateTool(options?: {
           asset.sourceAsset.role = role;
         }
       }
-      validateVideoGenerationCapabilities({
-        provider: selectedProvider,
-        model:
-          parseVideoGenerationModelRef(model)?.model ?? model ?? selectedProvider?.defaultModel,
-        inputImageCount: loadedReferenceImages.length,
-        inputVideoCount: loadedReferenceVideos.length,
-        inputAudioCount: loadedReferenceAudios.length,
-        size,
-        aspectRatio,
-        resolution,
-        durationSeconds,
-        audio,
-        watermark,
-      });
       // Accepted tasks own their paid work independently; cancellation applies only before admission.
       signal?.throwIfAborted();
       const taskHandle = createVideoGenerationTaskRun({

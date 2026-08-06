@@ -176,7 +176,7 @@ async function captureExpectedRuntimeArtifact(
     before,
     startOptions: appServer.start,
     spawnIdentity,
-    runtimeIdentity: { serverVersion: "0.146.0", userAgent: "openclaw/0.146.0 (macOS; test)" },
+    runtimeIdentity: { serverVersion: "0.146.1", userAgent: "openclaw/0.146.1 (macOS; test)" },
   });
 }
 
@@ -186,7 +186,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.146.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.146.1 (macOS; test)" } });
 }
 
 async function waitForRequest(
@@ -225,7 +225,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: "/repo",
-      cliVersion: "0.146.0",
+      cliVersion: "0.146.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

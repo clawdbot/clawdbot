@@ -324,10 +324,10 @@ async function compactCliTranscript(params: {
       params.contextEngine,
       {
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey || params.sessionId,
+        sessionKey: params.sessionKey,
         sessionTarget: {
           sessionId: params.sessionId,
-          sessionKey: params.sessionKey || params.sessionId,
+          sessionKey: params.sessionKey,
           ...(params.storePath ? { storePath: params.storePath } : {}),
         },
         tokenBudget: params.contextTokenBudget,

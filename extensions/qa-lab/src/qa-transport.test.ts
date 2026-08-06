@@ -136,6 +136,105 @@ describe("waitForQaTransportOutboundSequence", () => {
     });
   });
 
+  it.each([
+    { description: "before the final marker", failureBeforeFinal: true },
+    { description: "after the final marker", failureBeforeFinal: false },
+  ])("rejects an owned-account failure reply $description", async ({ failureBeforeFinal }) => {
+    const state = createQaBusState();
+    const preview = state.addOutboundMessage({
+      accountId: "default",
+      to: "dm:alice",
+      text: "owned preview",
+    });
+    const addFailure = () =>
+      state.addOutboundMessage({
+        accountId: "default",
+        to: "dm:alice",
+        text: "⚠️ agent failed before reply: provider rejected this request",
+      });
+
+    if (failureBeforeFinal) {
+      addFailure();
+    }
+    state.editMessage({
+      accountId: "default",
+      messageId: preview.id,
+      text: "final marker",
+    });
+    if (!failureBeforeFinal) {
+      addFailure();
+    }
+
+    await expect(
+      waitForQaTransportOutboundSequence({
+        accountId: "default",
+        input: {
+          conversationId: "alice",
+          finalSettleMs: 0,
+          finalTextIncludes: "final marker",
+          minimumPreviewEvents: 1,
+          timeoutMs: 25,
+        },
+        readEvents: () => state.getSnapshot().events,
+      }),
+    ).rejects.toThrow("provider rejected this request");
+  });
+
+  it("ignores stale, foreign-account, and inbound failure replies", async () => {
+    const state = createQaBusState();
+    state.addOutboundMessage({
+      accountId: "default",
+      to: "dm:alice",
+      text: "⚠️ agent failed before reply: stale failure",
+    });
+    const sinceCursor = state.getSnapshot().cursor;
+
+    state.addOutboundMessage({
+      accountId: "other",
+      to: "dm:alice",
+      text: "⚠️ agent failed before reply: foreign account failure",
+    });
+    const inbound = state.addInboundMessage({
+      accountId: "default",
+      conversation: { id: "alice", kind: "direct" },
+      senderId: "alice",
+      text: "⚠️ agent failed before reply: inbound failure",
+    });
+    state.editMessage({
+      accountId: "default",
+      messageId: inbound.id,
+      text: "⚠️ agent failed before reply: edited inbound failure",
+    });
+    const preview = state.addOutboundMessage({
+      accountId: "default",
+      to: "dm:alice",
+      text: "owned preview",
+    });
+    state.editMessage({
+      accountId: "default",
+      messageId: preview.id,
+      text: "final marker",
+    });
+
+    await expect(
+      waitForQaTransportOutboundSequence({
+        accountId: "default",
+        input: {
+          conversationId: "alice",
+          finalSettleMs: 0,
+          finalTextIncludes: "final marker",
+          minimumPreviewEvents: 1,
+          sinceCursor,
+          timeoutMs: 25,
+        },
+        readEvents: () => state.getSnapshot().events,
+      }),
+    ).resolves.toMatchObject({
+      events: [{ kind: "sent" }, { kind: "edited" }],
+      final: { accountId: "default", direction: "outbound", id: preview.id },
+    });
+  });
+
   it("does not accept a matching preview that is deleted during final settling", async () => {
     const state = createQaBusState();
     const preview = state.addOutboundMessage({

@@ -25,10 +25,9 @@ const { projects: _projects, ...baseTest } = baseTestWithProjects as {
   projects?: string[];
   setupFiles?: string[];
 };
-const tuiPtyExcludes = [
-  "src/tui/tui-pty-harness.e2e.test.ts",
-  ...(process.arch === "arm64" ? ["src/tui/tui-pty-local.e2e.test.ts"] : []),
-];
+// The dedicated TUI PTY config owns both terminal suites and emits per-test progress.
+// The local real-backend file can exceed the generic E2E silent-process watchdog.
+const tuiPtyExcludes = ["src/tui/tui-pty-harness.e2e.test.ts", "src/tui/tui-pty-local.e2e.test.ts"];
 const exclude = [
   ...(baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts"),
   ...tuiPtyExcludes,

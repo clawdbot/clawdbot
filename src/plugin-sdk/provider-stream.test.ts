@@ -1,5 +1,6 @@
-// Provider stream tests cover shared stream-wrapper families and payload compatibility.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+// Provider stream tests cover shared stream-wrapper families and payload compatibility.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { VERSION } from "../version.js";
@@ -42,12 +43,7 @@ function requireStreamFn(streamFn: StreamFn | null | undefined) {
   return streamFn;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requirePayload(payload: Record<string, unknown> | undefined): Record<string, unknown> {
   if (!payload) {

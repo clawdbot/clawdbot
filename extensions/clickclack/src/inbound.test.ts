@@ -669,7 +669,7 @@ describe("handleClickClackInbound", () => {
     expect(dispatch.mock.calls[0]?.[0].ctxPayload.GroupSystemPrompt).toContain("sessions_send");
   });
 
-  it("drops an old bound channel after the main session is replaced", async () => {
+  it("rotates an old attachment before dispatch after the main session is replaced", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const mainSessionKey = "agent:research:main";
@@ -710,10 +710,15 @@ describe("handleClickClackInbound", () => {
     });
 
     expect(runtime.llm.complete).not.toHaveBeenCalled();
-    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+    expect(getClickClackDiscussionBindingStore(runtime).get(mainSessionKey)).toMatchObject({
+      sessionId: "session-id",
+      channelId: "chn_1",
+      externalRef: "openclaw:test:research",
+    });
   });
 
-  it("drops inbound delivery for an archived managed discussion", async () => {
+  it("ignores legacy session-derived archive metadata on a durable room", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     getClickClackDiscussionBindingStore(runtime).set("agent:research:main", {
@@ -753,7 +758,7 @@ describe("handleClickClackInbound", () => {
     });
 
     expect(runtime.llm.complete).not.toHaveBeenCalled();
-    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("drops inbound delivery as soon as the main session is archived", async () => {
@@ -906,6 +911,8 @@ describe("handleClickClackInbound", () => {
     const generation = reserveDiscussionBindingGeneration({
       runtime,
       sessionKey,
+      accountId: "default",
+      credentialFingerprint: "test-fingerprint",
       destinationIdentity: "http://127.0.0.1:8080\0wsp_1",
       createGeneration: () => "pending-generation",
     });

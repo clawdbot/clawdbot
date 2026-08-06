@@ -113,6 +113,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const sessionTarget = await resolveAgentRunSessionTarget({
       agentId: sessionAgentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionFile: params.sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -369,7 +370,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
             hookRunner,
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: sessionTarget.sessionKey,
             sessionAgentId,
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,

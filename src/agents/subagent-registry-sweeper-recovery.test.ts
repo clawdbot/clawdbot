@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
@@ -62,6 +63,9 @@ function run(): SubagentRunRecord {
     startedAt: Date.now() - 55_000,
   });
 }
+
+const childRuns = (runs: Map<string, SubagentRunRecord>) => (childSessionKey: string) =>
+  [...runs.values()].filter((entry) => entry.childSessionKey === childSessionKey);
 
 function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
   const entry = run();
@@ -127,7 +131,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     runContextEngineSubagentEnded: vi.fn(),
     notifyContextEngineSubagentEnded,
     retireSupersededRun: vi.fn(),
-    getRunsForChildSession: () => [],
+    getRunsForChildSession: childRuns(runs),
     getRunsForCollectorGroup: () => [],
     warn,
   });
@@ -193,6 +197,27 @@ describe("subagent registry recovery scheduling", () => {
     recoverRow.mockResolvedValue({ status: "handled" });
     await sweeper.runTick();
     expect(recoverRow).toHaveBeenCalledTimes(5);
+    sweeper.reset();
+  });
+
+  it("drops a stale terminal retry when a newer generation wins during finalization", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    recoverRow.mockResolvedValue({ status: "terminal", error: "interrupted" });
+    const { entry, runs, finalizeInterruptedSubagentRun, sweeper } = createHarness(runtime);
+    const finalization = createDeferred<number>();
+    finalizeInterruptedSubagentRun.mockReturnValueOnce(finalization.promise);
+
+    const pending = sweeper.sweepOnce();
+    await vi.waitFor(() => expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce());
+    const newer = run();
+    newer.runId = "newer-recovery-run";
+    newer.generation = (entry.generation ?? 0) + 1;
+    runs.set(newer.runId, newer);
+    finalization.resolve(0);
+    await pending;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
     sweeper.reset();
   });
 
@@ -301,7 +326,22 @@ describe("subagent registry recovery scheduling", () => {
     sweeper.reset();
   });
 
-  it("does not apply a durable kill after runtime loading yields to a replacement row", async () => {
+  it.each([
+    [
+      "same run id",
+      (runs: Map<string, SubagentRunRecord>, entry: SubagentRunRecord) =>
+        runs.set(entry.runId, run()),
+    ],
+    [
+      "newer generation",
+      (runs: Map<string, SubagentRunRecord>, entry: SubagentRunRecord) => {
+        const newer = run();
+        newer.runId = "newer-kill-run";
+        newer.generation = (entry.generation ?? 0) + 1;
+        runs.set(newer.runId, newer);
+      },
+    ],
+  ])("does not apply a durable kill after %s wins during runtime loading", async (_name, win) => {
     const entry = run();
     entry.killIntent = {
       requestedAt: Date.now(),
@@ -311,35 +351,30 @@ describe("subagent registry recovery scheduling", () => {
       sessionLifecycleRevision: "session-revision",
     };
     const runs = new Map([[entry.runId, entry]]);
-    const replacement = run();
-    let releaseRuntime!: () => void;
-    const loadKillRuntime = vi.fn(
-      () =>
-        new Promise<typeof import("./subagent-control.runtime.js")>((resolve) => {
-          releaseRuntime = () =>
-            resolve(killRuntime as unknown as typeof import("./subagent-control.runtime.js"));
-        }),
-    );
+    const runtime = createDeferred<typeof import("./subagent-control.runtime.js")>();
+    const loadKillRuntime = vi.fn(() => runtime.promise);
     const completeSubagentRunWithRecovery = vi.fn();
-
+    const retireSupersededRun = vi.fn();
     const pending = reconcileDurableSubagentKillIntent({
       runId: entry.runId,
       entry,
       runs,
+      getRunsForChildSession: childRuns(runs),
       loadKillRuntime,
       completeSubagentRunWithRecovery,
-      retireSupersededRun: vi.fn(),
+      retireSupersededRun,
       warn: vi.fn(),
     });
+
     await vi.waitFor(() => expect(loadKillRuntime).toHaveBeenCalledOnce());
-    runs.set(entry.runId, replacement);
-    releaseRuntime();
+    win(runs, entry);
+    runtime.resolve(killRuntime as never);
 
     await expect(pending).resolves.toBe(false);
-    expect(killRuntime.isEmbeddedAgentRunActive).not.toHaveBeenCalled();
     expect(killRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(killRuntime.clearSessionQueues).not.toHaveBeenCalled();
     expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+    expect(retireSupersededRun).not.toHaveBeenCalled();
   });
 
   it("does not apply a durable kill after the same session id resets to a new revision", async () => {
@@ -366,6 +401,7 @@ describe("subagent registry recovery scheduling", () => {
       runId: entry.runId,
       entry,
       runs,
+      getRunsForChildSession: childRuns(runs),
       loadKillRuntime,
       completeSubagentRunWithRecovery,
       retireSupersededRun: vi.fn(),
@@ -444,6 +480,7 @@ describe("subagent registry recovery scheduling", () => {
         runId: entry.runId,
         entry,
         runs,
+        getRunsForChildSession: childRuns(runs),
         loadKillRuntime: async () =>
           killRuntime as unknown as typeof import("./subagent-control.runtime.js"),
         completeSubagentRunWithRecovery,
@@ -497,6 +534,7 @@ describe("subagent registry recovery scheduling", () => {
         runId: entry.runId,
         entry,
         runs,
+        getRunsForChildSession: childRuns(runs),
         loadKillRuntime: async () =>
           killRuntime as unknown as typeof import("./subagent-control.runtime.js"),
         completeSubagentRunWithRecovery: vi.fn(),

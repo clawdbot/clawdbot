@@ -32,6 +32,14 @@ import {
 } from "@openclaw/gateway-client/browser";
 // Control UI module implements gateway behavior.
 import { formatErrorMessage } from "@openclaw/normalization-core";
+import {
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
+  type ControlUiBootstrapProfileHint,
+} from "../../../src/gateway/control-ui-contract.js";
+import {
+  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
+} from "../../../src/shared/device-bootstrap-profile.js";
 import { redactToolDetail } from "../lib/browser-redact.ts";
 import {
   clearDeviceAuthToken,
@@ -146,14 +154,6 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
-  "operator.approvals",
-  "operator.questions",
-  "operator.read",
-  "operator.talk.secrets",
-  "operator.write",
-] as const;
-
 type GatewayConnectDevice = NonNullable<ConnectParams["device"]>;
 type GatewayConnectClientInfo = ConnectParams["client"];
 
@@ -170,6 +170,7 @@ export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
   bootstrapToken?: string;
+  bootstrapProfile?: ControlUiBootstrapProfileHint;
   password?: string;
   clientName?: GatewayClientName;
   clientVersion?: string;
@@ -458,7 +459,9 @@ export class GatewayBrowserClient {
     }
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
-        ? [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]
+        ? this.opts.bootstrapProfile === CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
+          ? [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]
+          : [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]
         : undefined,
       usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
@@ -511,6 +514,7 @@ export class GatewayBrowserClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
+    this.opts.bootstrapProfile = undefined;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,

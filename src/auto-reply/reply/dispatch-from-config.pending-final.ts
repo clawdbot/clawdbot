@@ -3,7 +3,7 @@ import {
   loadSessionEntryReadOnly,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import {
@@ -47,6 +47,7 @@ function buildPendingFinalDeliveryCleanupPatch(entry: SessionEntry): Partial<Ses
       ? {
           abortedLastRun: false,
           endedAt,
+          lifecycleRunId: undefined,
           runtimeMs:
             typeof entry.startedAt === "number"
               ? Math.max(0, endedAt - entry.startedAt)

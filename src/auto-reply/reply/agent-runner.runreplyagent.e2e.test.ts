@@ -1,7 +1,8 @@
-// E2E tests for run-reply-agent execution and generated session artifacts.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// E2E tests for run-reply-agent execution and generated session artifacts.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
@@ -89,12 +90,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
   const call = mock.mock.calls[callIndex] as unknown[] | undefined;
@@ -701,7 +697,17 @@ describe("runReplyAgent active steering", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("queues a follow-up when transcript-backed steering is unsupported", async () => {
+  it.each([
+    "no_active_run",
+    "not_streaming",
+    "stale_run",
+    "compacting",
+    "image_input_unsupported",
+    "source_reply_delivery_mode_mismatch",
+    "task_suggestion_delivery_mode_mismatch",
+    "transcript_commit_wait_unsupported",
+    "runtime_rejected",
+  ] as const)("queues a follow-up when active steering fails with %s", async (reason) => {
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -710,8 +716,7 @@ describe("runReplyAgent active steering", () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
       queued: false,
       sessionId: "session",
-      reason: "transcript_commit_wait_unsupported",
-      target: "none",
+      reason,
       gatewayHealth: "live",
     });
     const onAdopted = vi.fn();
@@ -721,6 +726,7 @@ describe("runReplyAgent active steering", () => {
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
+      shouldFollowup: true,
       resolvedQueueMode: "steer",
     });
 
@@ -739,6 +745,46 @@ describe("runReplyAgent active steering", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "model reply" }));
     expect(onAdopted).not.toHaveBeenCalled();
+  });
+
+  it("adopts but never replays steering accepted without transcript confirmation", async () => {
+    const cancel = vi.fn();
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    active.setPhase("running");
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
+      queued: true,
+      sessionId: "session",
+      target: "embedded_run",
+      gatewayHealth: "live",
+      transcriptCommit: "unconfirmed",
+      errorMessage: "receipt unavailable",
+    });
+    const onAdopted = vi.fn();
+    const { run, typing } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 
   it("admits an ordinary rejected steering turn with durable recovery state", async () => {

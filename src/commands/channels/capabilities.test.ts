@@ -1,4 +1,5 @@
 // Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -71,12 +72,7 @@ function resetOutput() {
   errors.length = 0;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockArg(
   mock: { mock: { calls: unknown[][] } },
