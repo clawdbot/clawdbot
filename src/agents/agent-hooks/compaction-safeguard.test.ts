@@ -674,6 +674,26 @@ describe("compaction-safeguard summary budgets", () => {
     expect(out).not.toContain("zz");
   });
 
+  it("starts raw split-turn context on a whole message", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+    const body = section.slice(section.indexOf(SUFFIX_TRUNCATED_MARKER.trim()));
+
+    // The tail slice lands mid-message; the surviving content must resume at a
+    // real line start rather than presenting a fragment as a whole turn.
+    for (const line of body.split("\n").slice(1).filter(Boolean)) {
+      // Rendered lines are truncated at MAX_RECENT_TURN_TEXT_CHARS with a trailing ellipsis.
+      expect(line, `partial line: ${line.slice(0, 40)}`).toMatch(
+        /^- Assistant: turn-\d+ y+\.{0,3}$/,
+      );
+    }
+  });
+
   it("never exceeds the cap, down to a one-character budget", () => {
     const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
     const suffix =

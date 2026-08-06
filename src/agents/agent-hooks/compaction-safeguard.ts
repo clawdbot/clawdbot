@@ -578,17 +578,15 @@ function capWithMarker(text: string, maxChars: number, marker: string): string {
   return `${truncateUtf16Safe(text, budget)}${marker}`;
 }
 
-// Mirror of capWithMarker for text whose newest content is at the end: the
-// marker leads so the artifact still reports that the head was cut.
-function capTailWithMarker(text: string, maxChars: number, marker: string): string {
-  if (maxChars <= 0 || text.length <= maxChars) {
-    return text;
-  }
-  const budget = Math.max(0, maxChars - marker.length);
-  if (budget <= 0) {
-    return sliceUtf16Safe(text, -maxChars);
-  }
-  return `${marker}${sliceUtf16Safe(text, -budget)}`;
+/**
+ * Drops a leading partial line after a tail slice. Rendered turns are one per
+ * line, so a character-boundary cut can restart mid-message and leave a
+ * fragment that reads as a complete turn. No boundary at all means the whole
+ * slice is one such fragment, so nothing survives.
+ */
+function dropLeadingPartialLine(text: string): string {
+  const lineBreak = text.indexOf("\n");
+  return lineBreak >= 0 ? text.slice(lineBreak + 1) : "";
 }
 
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
@@ -624,21 +622,19 @@ function capCompactionSummaryPreservingSuffix(
   log.warn(
     `Compaction suffix (${suffix.length} chars) exceeds its ${suffixBudget}-char share of the ${maxChars}-char summary budget; truncating suffix and keeping ${cappedBody.length} chars of summary body`,
   );
+  if (suffixBudget <= 0) {
+    // sliceUtf16Safe(s, -0) returns the whole string, since -0 < 0 is false.
+    // Unreachable today (the body's reserve is at most half the budget, so some
+    // budget always remains) but the trap is one edit away from being live.
+    return cappedBody;
+  }
   if (suffixBudget <= SUFFIX_TRUNCATED_MARKER.length) {
     // Marker cannot fit; keep suffix tail instead of a partial marker fragment.
     return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
   }
   // Suffix keeps its tail (workspace rules, diagnostics) over its head.
   const rawKept = sliceUtf16Safe(suffix, -(suffixBudget - SUFFIX_TRUNCATED_MARKER.length));
-  // Resume on a line boundary. Preserved turns render one per line and carry a
-  // verbatim contract, so a character-boundary cut can restart mid-message and
-  // leave a fragment that reads as a whole turn. Dropping the partial line
-  // costs a little more budget and keeps every surviving turn intact.
-  // No later boundary means the whole kept portion is the tail of one line;
-  // emitting it would be the mid-turn fragment this guard exists to prevent.
-  const lineBreak = rawKept.indexOf("\n");
-  const keptSuffix = lineBreak >= 0 ? rawKept.slice(lineBreak + 1) : "";
-  return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${keptSuffix}`;
+  return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${dropLeadingPartialLine(rawKept)}`;
 }
 
 function resolveSummaryReserveTokens(
@@ -827,7 +823,12 @@ function boundSummarizedSplitTurn(section: string): string {
  * summary body.
  */
 function boundRawSplitTurn(lines: string): string {
-  return capTailWithMarker(lines, MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER);
+  if (lines.length <= MAX_CONTEXT_SECTION_CHARS) {
+    return lines;
+  }
+  const budget = MAX_CONTEXT_SECTION_CHARS - SUFFIX_TRUNCATED_MARKER.length;
+  const kept = budget > 0 ? dropLeadingPartialLine(sliceUtf16Safe(lines, -budget)) : "";
+  return `${SUFFIX_TRUNCATED_MARKER}${kept}`;
 }
 
 function formatPreservedTurnsSection(messages: AgentMessage[]): string {
