@@ -11,6 +11,7 @@ import {
   insertOperatorApproval,
   listOperatorApprovalReceiptsForRun,
   resolveOperatorApproval,
+  summarizeOperatorApprovalReceiptsForRun,
 } from "./operator-approval-store.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -151,6 +152,18 @@ describe("operator approval decision receipts", () => {
         databaseOptions: database,
       }),
     ).toBe(7);
+    expect(
+      summarizeOperatorApprovalReceiptsForRun({
+        runId: context.runId,
+        linkState: "unambiguous",
+        nowMs: 3_000,
+        databaseOptions: database,
+      }),
+    ).toEqual({
+      count: 7,
+      coverageState: "unknown",
+      missingEvidence: ["operator_approval.valid"],
+    });
     expect(
       receipts.map((receipt) => [
         receipt.decision.outcome,

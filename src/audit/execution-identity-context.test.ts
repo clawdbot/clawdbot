@@ -1009,6 +1009,35 @@ describe("execution identity context storage", () => {
     });
   });
 
+  it("keeps a corrupt approval unknown before its decision page is returned", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("run-corrupt-approval"), {
+      ...database,
+      now: 100,
+      contextId: "context-corrupt-approval",
+      executionId: "execution-corrupt-approval",
+      runtimeInstanceId: "runtime-1",
+    });
+    recordDeniedApprovalForRun("run-corrupt-approval", database, "corrupt-approval");
+    openOpenClawStateDatabase(database)
+      .db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?")
+      .run("{", "corrupt-approval");
+
+    expect(
+      inspectExecutionIdentityRun(
+        { executionId: "execution-corrupt-approval", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["operator_approval.valid"]),
+      },
+      decisions: [{ decision: { outcome: "not-applicable" } }],
+      nextDecisionCursor: "1",
+    });
+  });
+
   it("reports a retained approval with no identity context as an unknown missing link", () => {
     const database = databaseOptions();
     recordDeniedApprovalForRun("run-missing-context", database);

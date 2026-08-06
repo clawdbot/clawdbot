@@ -778,6 +778,44 @@ export function countOperatorApprovalReceiptsForRun(params: {
   );
 }
 
+/** Summarize all retained owner rows so receipt paging cannot change top-level coverage. */
+export function summarizeOperatorApprovalReceiptsForRun(params: {
+  runId: string;
+  linkState: OperatorApprovalReceiptLinkState;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): {
+  count: number;
+  coverageState?: "enforced" | "unknown";
+  missingEvidence: string[];
+} {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "operator_approvals")) {
+        return { count: 0, missingEvidence: [] };
+      }
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+      const rows = executeSqliteQuerySync(
+        db,
+        terminalApprovalsForRunQuery(stateDb, params.runId, params.nowMs ?? Date.now()),
+      ).rows;
+      if (rows.length === 0) {
+        return { count: 0, missingEvidence: [] };
+      }
+      const hasCorruptRecord = rows.some((row) => decodeOperatorApprovalRow(row) === null);
+      const hasAmbiguousLink = params.linkState === "ambiguous";
+      return {
+        count: rows.length,
+        coverageState: hasCorruptRecord || hasAmbiguousLink ? "unknown" : "enforced",
+        missingEvidence: [
+          ...(hasAmbiguousLink ? ["decision.execution_link"] : []),
+          ...(hasCorruptRecord ? ["operator_approval.valid"] : []),
+        ],
+      };
+    }, params.databaseOptions) ?? { count: 0, missingEvidence: [] }
+  );
+}
+
 /** Project authoritative approval rows directly; no generic decision fact is written. */
 export function listOperatorApprovalReceiptsForRun(params: {
   context: OperatorApprovalReceiptContext;

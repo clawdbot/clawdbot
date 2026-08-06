@@ -5,8 +5,8 @@ import type {
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
-  countOperatorApprovalReceiptsForRun,
   listOperatorApprovalReceiptsForRun,
+  summarizeOperatorApprovalReceiptsForRun,
 } from "../gateway/operator-approval-store.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
@@ -64,11 +64,13 @@ export function presentExecutionDecisionReceipts(params: {
   const offset = params.decisionOffset ?? 0;
   const limit = params.decisionLimit ?? 50;
   const now = params.options.now ?? Date.now();
-  const approvalCount = countOperatorApprovalReceiptsForRun({
+  const approvalSummary = summarizeOperatorApprovalReceiptsForRun({
     runId: params.context.runId,
+    linkState: params.approvalLinkState,
     nowMs: now,
     databaseOptions: params.options,
   });
+  const approvalCount = approvalSummary.count;
   const genericCount = countExecutionDecisionFactsForContext({
     contextId: params.context.contextId,
     now,
@@ -117,20 +119,17 @@ export function presentExecutionDecisionReceipts(params: {
   }
   const nextOffset = offset + decisions.length;
   const pageCoverage = new Set(decisions.map((receipt) => receipt.enforcement.coverageState));
-  // Approval linkage is an owner fact, not a property of the requested page.
-  // Preserve ambiguity even when pagination has not returned the approval yet.
-  const hasAmbiguousApproval = approvalCount > 0 && params.approvalLinkState === "ambiguous";
   const coverageState = pageCoverage.has("unsupported")
     ? "unsupported"
-    : hasAmbiguousApproval || pageCoverage.has("unknown")
+    : approvalSummary.coverageState === "unknown" || pageCoverage.has("unknown")
       ? "unknown"
-      : approvalCount > 0 || pageCoverage.has("enforced")
+      : approvalSummary.coverageState === "enforced" || pageCoverage.has("enforced")
         ? "enforced"
         : params.context.coverageState;
   const missingEvidence = [
     ...new Set([
       ...params.context.missingEvidence,
-      ...(hasAmbiguousApproval ? ["decision.execution_link"] : []),
+      ...approvalSummary.missingEvidence,
       ...decisions.flatMap((receipt) => receipt.missingEvidence),
     ]),
   ].toSorted();
