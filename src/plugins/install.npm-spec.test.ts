@@ -3403,13 +3403,31 @@ describe("installPluginFromNpmSpec", () => {
   it.each([
     {
       name: "untrusted source",
+      mode: "update" as const,
       trustedSourceLinkedOfficialInstall: false,
       expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
     },
     {
       name: "different catalog replacement",
+      mode: "update" as const,
       trustedSourceLinkedOfficialInstall: true,
       expectedReplacementPluginId: "different-plugin",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "fresh install",
+      mode: "install" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "manifest without the legacy id",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: undefined,
     },
   ])("rejects a manifest id replacement for a $name", async (testCase) => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
@@ -3418,14 +3436,14 @@ describe("installPluginFromNpmSpec", () => {
       packageName: "@openclaw/fish-audio-speech",
       version: "2026.8.1-beta.0",
       pluginId: "fish-audio-speech",
-      legacyPluginIds: ["fish-audio"],
+      legacyPluginIds: testCase.legacyPluginIds,
       npmRoot,
     });
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
       npmDir: npmRoot,
-      mode: "update",
+      mode: testCase.mode,
       expectedPluginId: "fish-audio",
       expectedReplacementPluginId: testCase.expectedReplacementPluginId,
       trustedSourceLinkedOfficialInstall: testCase.trustedSourceLinkedOfficialInstall,

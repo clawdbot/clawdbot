@@ -64,7 +64,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Fish Audio plugin upgrades:** migrate official npm installs from the legacy `fish-audio` plugin id to `fish-audio-speech` while preserving the `fish-audio` provider/config id, and reject untrusted or ambiguous package identity replacements.
 - **Control UI owner handoff:** give browsers opened by host-issued dashboard and graphical onboarding links durable administrator access, including same-browser recovery from a limited credential, while keeping generic, Telegram, mobile, and ordinary scope-upgrade paths bounded. Thanks @shakkernerd.
 - **Control UI agent and skill permissions:** gate Agents, Skills, Skill Workshop, and delayed mutation dispatches by the current Gateway method catalog and operator scopes while preserving read-only browsing and legacy Gateway compatibility. Fixes #119176. Thanks @shakkernerd.
 - **Guided onboarding skip-UI routing:** keep `openclaw onboard --skip-ui` and `openclaw setup --skip-ui` on guided onboarding while skipping both browser and terminal handoffs, instead of silently switching to the classic wizard. Thanks @shakkernerd.

@@ -2,7 +2,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  matchesExpectedPluginId,
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
@@ -14,50 +13,6 @@ import {
   resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
 } from "./installed-plugin-index-store-path.js";
-
-describe("expected plugin identity", () => {
-  const renamedPlugin = {
-    expectedPluginId: "fish-audio",
-    expectedReplacementPluginId: "fish-audio-speech",
-    pluginId: "fish-audio-speech",
-    manifestPluginId: "fish-audio-speech",
-    legacyPluginIds: ["fish-audio"],
-    npmPluginId: "@openclaw/fish-audio-speech",
-    trustedSourceLinkedOfficialInstall: true,
-  };
-
-  it("accepts a manifest-declared legacy id only for updates", () => {
-    expect(matchesExpectedPluginId({ ...renamedPlugin, mode: "update" })).toBe(true);
-    expect(matchesExpectedPluginId({ ...renamedPlugin, mode: "install" })).toBe(false);
-  });
-
-  it("rejects undeclared id mismatches during updates", () => {
-    expect(
-      matchesExpectedPluginId({
-        ...renamedPlugin,
-        expectedPluginId: "unrelated-plugin",
-        mode: "update",
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects legacy id replacement without matching trusted catalog intent", () => {
-    expect(
-      matchesExpectedPluginId({
-        ...renamedPlugin,
-        trustedSourceLinkedOfficialInstall: false,
-        mode: "update",
-      }),
-    ).toBe(false);
-    expect(
-      matchesExpectedPluginId({
-        ...renamedPlugin,
-        expectedReplacementPluginId: "different-plugin",
-        mode: "update",
-      }),
-    ).toBe(false);
-  });
-});
 
 describe("plugin install root context", () => {
   it("keeps discovery roots on the operator install while runtime state is redirected", async () => {

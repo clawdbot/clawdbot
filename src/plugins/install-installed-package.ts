@@ -46,7 +46,6 @@ export async function validatePackagePluginInstallSource(params: {
   packageDir: string;
   manifest?: PackageManifest;
   expectedPluginId?: string;
-  expectedReplacementPluginId?: string;
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
@@ -55,7 +54,6 @@ export async function validatePackagePluginInstallSource(params: {
   installPolicyRequest?: PluginInstallPolicyRequest;
   logger: PluginInstallLogger;
   mode: "install" | "update";
-  requestedMode?: "install" | "update";
   resolveEffectiveMode?: (pluginId: string) => Promise<"install" | "update">;
 }): Promise<
   | {
@@ -98,13 +96,9 @@ export async function validatePackagePluginInstallSource(params: {
   if (
     !matchesExpectedPluginId({
       expectedPluginId: params.expectedPluginId,
-      expectedReplacementPluginId: params.expectedReplacementPluginId,
       pluginId,
       manifestPluginId,
-      legacyPluginIds: ocManifestResult.ok ? ocManifestResult.manifest.legacyPluginIds : undefined,
-      mode: params.requestedMode ?? params.mode,
       npmPluginId,
-      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     })
   ) {
     return {
@@ -275,7 +269,6 @@ export async function installPluginFromInstalledPackageDir(
     emitSuccessSecurityEvent?: boolean;
     packageDir: string;
     dependencyScanRootDir?: string;
-    requestedMode?: "install" | "update";
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   return await installPluginFromInstalledPackageDirInternal(params);
@@ -287,7 +280,6 @@ async function installPluginFromInstalledPackageDirInternal(
     emitSuccessSecurityEvent?: boolean;
     packageDir: string;
     dependencyScanRootDir?: string;
-    requestedMode?: "install" | "update";
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -296,7 +288,6 @@ async function installPluginFromInstalledPackageDirInternal(
     runtime,
     packageDir: params.packageDir,
     expectedPluginId: params.expectedPluginId,
-    expectedReplacementPluginId: params.expectedReplacementPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -305,7 +296,6 @@ async function installPluginFromInstalledPackageDirInternal(
     installPolicyRequest: params.installPolicyRequest,
     logger,
     mode: params.mode ?? "install",
-    requestedMode: params.requestedMode,
   });
   if (!validated.ok) {
     return validated;

@@ -556,6 +556,24 @@ export async function installPluginFromManagedNpmRoot(
       beforeInstallPackageNames: preInstallRootPackageNames,
       npmRoot,
     });
+    let installedExpectedPluginId = expectedPluginId;
+    if (
+      mode === "update" &&
+      params.trustedSourceLinkedOfficialInstall === true &&
+      expectedPluginId &&
+      params.expectedReplacementPluginId
+    ) {
+      const manifestResult = runtime.loadPluginManifest(installRoot);
+      if (
+        manifestResult.ok &&
+        manifestResult.manifest.id === params.expectedReplacementPluginId &&
+        manifestResult.manifest.legacyPluginIds?.includes(expectedPluginId)
+      ) {
+        // Only managed npm updates may replace an expected id, after the downloaded
+        // official manifest corroborates the catalog-declared migration.
+        installedExpectedPluginId = params.expectedReplacementPluginId;
+      }
+    }
     const result = await installPluginFromInstalledPackageDir({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       config: params.config,
@@ -563,13 +581,9 @@ export async function installPluginFromManagedNpmRoot(
       packageDir: installRoot,
       dependencyScanRootDir: npmRoot,
       logger,
-      expectedPluginId,
-      expectedReplacementPluginId: params.expectedReplacementPluginId,
+      expectedPluginId: installedExpectedPluginId,
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       mode: policyMode,
-      // A new managed generation is scanned as an install, but an ID replacement
-      // remains valid only when the operator entered through the update flow.
-      requestedMode: mode,
       installPolicyRequest: params.installPolicyRequest,
       emitSuccessSecurityEvent: false,
     });

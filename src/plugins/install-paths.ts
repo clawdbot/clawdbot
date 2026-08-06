@@ -60,27 +60,14 @@ export function validatePluginId(pluginId: string): string | null {
 /** Checks whether an installed plugin id matches the expected id, including old npm keying. */
 export function matchesExpectedPluginId(params: {
   expectedPluginId?: string;
-  expectedReplacementPluginId?: string;
   pluginId: string;
   manifestPluginId?: string;
-  legacyPluginIds?: readonly string[];
-  mode: "install" | "update";
   npmPluginId: string;
-  trustedSourceLinkedOfficialInstall?: boolean;
 }): boolean {
   if (!params.expectedPluginId) {
     return true;
   }
   if (params.expectedPluginId === params.pluginId) {
-    return true;
-  }
-  if (
-    params.mode === "update" &&
-    params.trustedSourceLinkedOfficialInstall === true &&
-    params.expectedReplacementPluginId === params.manifestPluginId &&
-    params.manifestPluginId &&
-    params.legacyPluginIds?.includes(params.expectedPluginId)
-  ) {
     return true;
   }
   // Backward compatibility: older install records keyed scoped npm packages by

@@ -562,11 +562,7 @@ async function installFromArchiveWithWarnings(params: {
   return { result, warnings };
 }
 
-function setupManifestInstallFixture(params: {
-  manifestId: string;
-  packageName?: string;
-  legacyPluginIds?: string[];
-}) {
+function setupManifestInstallFixture(params: { manifestId: string; packageName?: string }) {
   const caseDir = suiteTempRootTracker.makeTempDir();
   const stateDir = path.join(caseDir, "state");
   const pluginDir = path.join(caseDir, "plugin-src");
@@ -584,7 +580,6 @@ function setupManifestInstallFixture(params: {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: params.manifestId,
-      ...(params.legacyPluginIds ? { legacyPluginIds: params.legacyPluginIds } : {}),
       configSchema: { type: "object", properties: {} },
     }),
     "utf-8",
@@ -3697,45 +3692,6 @@ describe("installPluginFromDir", () => {
 
     expectInstalledWithPluginId(res, extensionsDir, "matrix");
     expectWarningExcludes(infoMessages, "differs from npm package name");
-  });
-
-  it.each([
-    {
-      name: "copied package source",
-      install: (pluginDir: string, extensionsDir: string) =>
-        installPluginFromDir({
-          dirPath: pluginDir,
-          extensionsDir,
-          expectedPluginId: "fish-audio",
-          expectedReplacementPluginId: "fish-audio-speech",
-          trustedSourceLinkedOfficialInstall: true,
-          mode: "update",
-        }),
-    },
-    {
-      name: "installed package directory",
-      install: (pluginDir: string) =>
-        installPluginFromInstalledPackageDir({
-          packageDir: pluginDir,
-          expectedPluginId: "fish-audio",
-          expectedReplacementPluginId: "fish-audio-speech",
-          trustedSourceLinkedOfficialInstall: true,
-          mode: "update",
-        }),
-    },
-  ])("accepts a declared legacy manifest id while updating a $name", async ({ install }) => {
-    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
-      manifestId: "fish-audio-speech",
-      packageName: "@openclaw/fish-audio-speech",
-      legacyPluginIds: ["fish-audio"],
-    });
-
-    const result = await install(pluginDir, extensionsDir);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.pluginId).toBe("fish-audio-speech");
-    }
   });
 
   it.each([

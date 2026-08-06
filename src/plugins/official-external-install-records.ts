@@ -24,8 +24,8 @@ function resolveExactNpmPackageName(value: string): string | undefined {
   return packageName && value.trim() === packageName ? packageName : undefined;
 }
 
-function resolveRecordedNpmPackageName(record: PluginInstallRecord): string | undefined {
-  if (record.source !== "npm" || record.spec === undefined) {
+function resolveUnanimousRecordedNpmPackageName(record: PluginInstallRecord): string | undefined {
+  if (record.source !== "npm") {
     return undefined;
   }
   const packageNames: string[] = [];
@@ -142,7 +142,6 @@ function hasTrustedClawHubSourceAuthority(
 
 type TrustedSourceLinkedOfficialNpmInstall = {
   npmSpec: string;
-  packageName: string;
   pluginId: string;
   replacementPluginId?: string;
 };
@@ -152,11 +151,32 @@ export function resolveTrustedSourceLinkedOfficialNpmInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;
 }): TrustedSourceLinkedOfficialNpmInstall | undefined {
-  const packageName = resolveRecordedNpmPackageName(params.record);
-  if (!packageName) {
+  if (params.record.source !== "npm") {
     return undefined;
   }
-  const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
+  const canonicalEntry = getOfficialExternalPluginCatalogEntry(params.pluginId);
+  if (canonicalEntry) {
+    const officialSpec = resolveOfficialExternalPluginInstall(canonicalEntry)?.npmSpec;
+    const packageName = resolveNpmSpecPackageName(officialSpec);
+    const recordedPackageNames = [
+      params.record.resolvedName,
+      resolveNpmSpecPackageName(params.record.spec),
+      resolveNpmSpecPackageName(params.record.resolvedSpec),
+    ].filter((value): value is string => Boolean(value));
+    if (officialSpec && packageName && recordedPackageNames.includes(packageName)) {
+      return {
+        npmSpec: officialSpec,
+        pluginId: params.pluginId,
+      };
+    }
+  }
+
+  // Replacing a legacy id is more sensitive than refreshing a canonical record:
+  // every populated package identity must be valid and agree on the catalog package.
+  const packageName = resolveUnanimousRecordedNpmPackageName(params.record);
+  const entry = packageName
+    ? getOfficialExternalPluginCatalogEntryForPackage(packageName)
+    : undefined;
   if (!entry) {
     return undefined;
   }
@@ -164,19 +184,19 @@ export function resolveTrustedSourceLinkedOfficialNpmInstall(params: {
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const canonicalPluginId = resolveOfficialExternalPluginId(entry);
   if (
+    !packageName ||
     !officialSpec ||
     officialPackageName !== packageName ||
     !canonicalPluginId ||
-    (params.pluginId !== canonicalPluginId &&
-      !resolveOfficialExternalPluginLegacyIds(entry).includes(params.pluginId))
+    params.pluginId === canonicalPluginId ||
+    !resolveOfficialExternalPluginLegacyIds(entry).includes(params.pluginId)
   ) {
     return undefined;
   }
   return {
     npmSpec: officialSpec,
-    packageName,
     pluginId: canonicalPluginId,
-    ...(params.pluginId !== canonicalPluginId ? { replacementPluginId: canonicalPluginId } : {}),
+    replacementPluginId: canonicalPluginId,
   };
 }
 

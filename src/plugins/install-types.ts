@@ -73,7 +73,6 @@ export type PackageInstallCommonParams = InstallSafetyOverrides & {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
-  expectedReplacementPluginId?: string;
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
