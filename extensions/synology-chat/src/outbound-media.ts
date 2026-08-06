@@ -1,6 +1,7 @@
 // Synology Chat plugin module stages immutable outbound bytes for NAS attachment pickup.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { mimeTypeFromFilePath, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildHostedOutboundMediaResponseHeaders,
@@ -30,6 +31,15 @@ const SYNOLOGY_OUTBOUND_MEDIA_PREPARE_TIMEOUT_MS = 60_000;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS = 2;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES = 4;
 const ACTIVE_CONTENT_TYPES = new Set(["image/svg+xml", "text/html", "application/xhtml+xml"]);
+const HTML_ACTIVE_PREFIX_TAGS = [
+  "html",
+  "head",
+  "script",
+  "iframe",
+  "body",
+  "style",
+  "title",
+] as const;
 const OUTBOUND_MEDIA_NAMESPACE = "hosted-outbound-media";
 const OUTBOUND_MEDIA_CHUNKS_NAMESPACE = "hosted-outbound-media-chunks";
 
@@ -128,8 +138,68 @@ function normalizeMediaAccess(params: {
   };
 }
 
-function isActiveContentType(contentType: string | undefined): boolean {
-  return ACTIVE_CONTENT_TYPES.has(contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "");
+function startsWithHtmlTag(value: string, tag: string): boolean {
+  if (!value.startsWith(`<${tag}`)) {
+    return false;
+  }
+  const boundary = value.at(tag.length + 1);
+  return boundary === ">" || boundary === "/" || /\s/u.test(boundary ?? "");
+}
+
+function sniffActiveTextContent(buffer: Buffer): string | undefined {
+  let prefix = buffer
+    .subarray(0, 4_096)
+    .toString("utf8")
+    .replace(/^\uFEFF/u, "")
+    .trimStart();
+  // XML declarations and comments commonly precede SVG roots, so skip only
+  // bounded leading wrappers before inspecting the actual document element.
+  for (let index = 0; index < 4; index += 1) {
+    if (prefix.startsWith("<?xml")) {
+      const end = prefix.indexOf("?>");
+      if (end === -1) {
+        break;
+      }
+      prefix = prefix.slice(end + 2).trimStart();
+      continue;
+    }
+    if (prefix.startsWith("<!--")) {
+      const end = prefix.indexOf("-->");
+      if (end === -1) {
+        break;
+      }
+      prefix = prefix.slice(end + 3).trimStart();
+      continue;
+    }
+    break;
+  }
+  const normalized = prefix.toLowerCase();
+  if (startsWithHtmlTag(normalized, "svg")) {
+    return "image/svg+xml";
+  }
+  if (
+    normalized.startsWith("<!doctype html") ||
+    HTML_ACTIVE_PREFIX_TAGS.some((tag) => startsWithHtmlTag(normalized, tag))
+  ) {
+    return "text/html";
+  }
+  return undefined;
+}
+
+function detectActiveContentType(params: {
+  buffer: Buffer;
+  contentType?: string;
+  fileName?: string;
+}): string | undefined {
+  const declaredType = normalizeMimeType(params.contentType);
+  if (declaredType && ACTIVE_CONTENT_TYPES.has(declaredType)) {
+    return declaredType;
+  }
+  const fileNameType = normalizeMimeType(mimeTypeFromFilePath(params.fileName));
+  if (fileNameType && ACTIVE_CONTENT_TYPES.has(fileNameType)) {
+    return fileNameType;
+  }
+  return sniffActiveTextContent(params.buffer);
 }
 
 export async function prepareSynologyHostedMedia(params: {
@@ -164,15 +234,22 @@ export async function prepareSynologyHostedMedia(params: {
       throw new Error("Synology Chat attachment capability could not be prepared.");
     }
     const cleanup = createCleanup(store, id);
-    const metadata = await store.readMetadata(id);
-    if (!metadata) {
+    // Inspect the exact frozen object that the NAS will receive. Remote MIME
+    // metadata is attacker-controlled and cannot establish a passive payload.
+    const staged = await store.read(id);
+    if (!staged) {
       await cleanup();
       throw new Error("Synology Chat attachment expired before it could be sent.");
     }
-    if (isActiveContentType(metadata.contentType)) {
+    const activeContentType = detectActiveContentType({
+      buffer: staged.buffer,
+      contentType: staged.metadata.contentType,
+      fileName: staged.metadata.fileName,
+    });
+    if (activeContentType) {
       await cleanup();
       throw new Error(
-        `Synology Chat attachments do not support active content type ${metadata.contentType}.`,
+        `Synology Chat attachments do not support active content type ${activeContentType}.`,
       );
     }
 

@@ -203,6 +203,40 @@ describe("Synology Chat hosted outbound media", () => {
     ).rejects.toThrow("do not support active content type");
   });
 
+  it.each([
+    {
+      name: "HTML bytes with a passive MIME and filename",
+      buffer: Buffer.from("<script>alert('active')</script>"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    },
+    {
+      name: "XML-prefixed SVG bytes with generic metadata",
+      buffer: Buffer.from('<?xml version="1.0"?><!--fixture--><svg onload="alert(1)"/>'),
+      contentType: "application/octet-stream",
+      fileName: "diagram.bin",
+    },
+    {
+      name: "an active filename with generic content",
+      buffer: Buffer.from("not markup"),
+      contentType: "application/octet-stream",
+      fileName: "report.html",
+    },
+  ])("rejects $name", async ({ buffer, contentType, fileName }) => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer,
+      kind: undefined,
+      contentType,
+      fileName,
+    });
+    await expect(
+      prepareSynologyHostedMedia({
+        account: createAccount(),
+        mediaUrl: "https://files.example.com/disguised-content",
+      }),
+    ).rejects.toThrow("do not support active content type");
+  });
+
   it("sanitizes response filenames before constructing headers", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("pdf"),
