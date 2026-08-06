@@ -6,6 +6,10 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  registerGeneratedMediaTaskActivity,
+  supersedeGeneratedMediaTaskActivity,
+} from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -117,6 +121,59 @@ describe("shouldDetachMediaGenerationTask", () => {
       },
     });
     expect(shouldDetachMediaGenerationTask(sessionKey)).toBe(true);
+  });
+});
+
+describe("superseded media completion", () => {
+  it("records the old task without delivering its stale output", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
+    };
+    const handle = {
+      taskId: "task-old-source",
+      runId: "tool:image_generate:old-source",
+      requesterSessionKey: "agent:cadence:imessage:direct:contact",
+      taskLabel: "make it crisper",
+    };
+    registerGeneratedMediaTaskActivity(handle.runId, handle.requesterSessionKey);
+    registerGeneratedMediaTaskActivity(
+      "tool:image_generate:new-source",
+      handle.requesterSessionKey,
+    );
+    supersedeGeneratedMediaTaskActivity(handle.runId, "tool:image_generate:new-source");
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle,
+      scheduleBackgroundWork: (work) => scheduled.push(work),
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure: vi.fn(),
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/stale-output.png"],
+        wakeResult: "generated stale output",
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    expect(lifecycle.wakeTaskCompletion).not.toHaveBeenCalled();
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalResult: expect.objectContaining({
+          terminalOutcome: "blocked",
+          terminalSummary: expect.stringContaining("superseded"),
+        }),
+      }),
+    );
   });
 });
 

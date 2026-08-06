@@ -21,6 +21,7 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import {
   clearGeneratedMediaTaskActivity,
+  getGeneratedMediaTaskSupersedingRunId,
   registerGeneratedMediaTaskActivity,
 } from "../../tasks/generated-media-task-activity.js";
 import {
@@ -494,6 +495,13 @@ export function scheduleMediaGenerationTaskCompletion<
         run: params.run,
       });
     } catch (error) {
+      const supersedingRunId = params.handle
+        ? getGeneratedMediaTaskSupersedingRunId(params.handle.runId)
+        : undefined;
+      if (supersedingRunId) {
+        params.lifecycle.failTaskRun({ handle: params.handle, error });
+        return;
+      }
       try {
         const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
           wake: async () =>
@@ -519,6 +527,24 @@ export function scheduleMediaGenerationTaskCompletion<
         });
       }
       params.lifecycle.failTaskRun({ handle: params.handle, error });
+      return;
+    }
+
+    const supersedingRunId = params.handle
+      ? getGeneratedMediaTaskSupersedingRunId(params.handle.runId)
+      : undefined;
+    if (supersedingRunId) {
+      params.lifecycle.completeTaskRun({
+        handle: params.handle,
+        provider: executed.provider,
+        model: executed.model,
+        count: executed.count,
+        paths: executed.paths,
+        terminalResult: {
+          terminalOutcome: "blocked",
+          terminalSummary: `Completion intentionally withheld because newer media run ${supersedingRunId} superseded this request.`,
+        },
+      });
       return;
     }
 

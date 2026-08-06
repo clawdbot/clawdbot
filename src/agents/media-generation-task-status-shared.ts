@@ -235,6 +235,7 @@ function findRecentStartedMediaGenerationTaskForSession(params: {
   const retainedEntries: RecentMediaGenerationTaskStart[] = [];
   for (const entry of entries.toReversed()) {
     const task = entry.task;
+    const requestKeyMatches = !params.requestKey || entry.requestKey === params.requestKey;
     const persistedTask = findPersistedTaskForRecentMediaGenerationStart({
       sessionKey,
       cachedTask: task,
@@ -244,7 +245,11 @@ function findRecentStartedMediaGenerationTaskForSession(params: {
     if (persistedTask) {
       const persistedTaskLabelMatches =
         !taskLabel || mediaGenerationTaskLabelMatches(persistedTask, taskLabel);
-      if (isTaskStillBlockingDuplicateGuard(persistedTask) && persistedTaskLabelMatches) {
+      if (
+        requestKeyMatches &&
+        isTaskStillBlockingDuplicateGuard(persistedTask) &&
+        persistedTaskLabelMatches
+      ) {
         return persistedTask;
       }
       if (
@@ -265,7 +270,7 @@ function findRecentStartedMediaGenerationTaskForSession(params: {
     }
     if (isRecentMediaGenerationTaskRecord({ task, maxAgeMs, nowMs })) {
       const cachedTaskLabelMatches = !taskLabel || mediaGenerationTaskLabelMatches(task, taskLabel);
-      if (isTaskStillBlockingDuplicateGuard(task) && cachedTaskLabelMatches) {
+      if (requestKeyMatches && isTaskStillBlockingDuplicateGuard(task) && cachedTaskLabelMatches) {
         return { ...task };
       }
       retainedEntries.push(entry);
@@ -366,16 +371,16 @@ function findDuplicateGuardMediaGenerationTaskForSession(params: {
   requestKey?: string;
   maxAgeMs: number;
 }): TaskRecord | undefined {
-  return (
-    findRecentStartedMediaGenerationTaskForSession(params) ??
-    findActiveMediaGenerationTaskForSession({
-      sessionKey: params.sessionKey,
-      taskKind: params.taskKind,
-      sourcePrefix: params.sourcePrefix,
-      taskLabel: params.taskLabel,
-    }) ??
-    undefined
-  );
+  const recentMatch = findRecentStartedMediaGenerationTaskForSession(params);
+  if (recentMatch || params.requestKey) {
+    return recentMatch;
+  }
+  return findActiveMediaGenerationTaskForSession({
+    sessionKey: params.sessionKey,
+    taskKind: params.taskKind,
+    sourcePrefix: params.sourcePrefix,
+    taskLabel: params.taskLabel,
+  });
 }
 
 /** Builds structured status details for one media generation task. */

@@ -38,6 +38,7 @@ import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { supersedeGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -46,6 +47,7 @@ import {
   sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
+import { findActiveImageGenerationTaskForSession } from "../image-generation-task-status.js";
 import {
   buildMediaGenerationRequestKey,
   recordRecentMediaGenerationTaskStartForSession,
@@ -910,7 +912,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Create/edit images. Batch via count; aspectRatio and resolution up to 4K. Session chat runs background: call once/request, await completion, then visible reply with structured media attachment. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task.',
+      'Create/edit images. For an inbound-image edit, use the current turn attachment path; a new reference image supersedes an active edit with the same prompt. Batch via count; aspectRatio and resolution up to 4K. Session chat runs background: call once/request, await completion, then visible reply with structured media attachment. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
@@ -946,14 +948,6 @@ export function createImageGenerateTool(options?: {
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readStringParam(params, "prompt", { required: true });
-
-      const activeDuplicateGuardResult = createImageGenerateDuplicateGuardResult(
-        options?.agentSessionKey,
-        { prompt },
-      );
-      if (activeDuplicateGuardResult) {
-        return activeDuplicateGuardResult;
-      }
 
       const imageInputs = normalizeReferenceImages(params);
       const filename = readStringParam(params, "filename");
@@ -1023,6 +1017,10 @@ export function createImageGenerateTool(options?: {
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
+      const supersededTask =
+        imageInputs.length > 0
+          ? findActiveImageGenerationTaskForSession(options?.agentSessionKey, { prompt })
+          : undefined;
       validateImageGenerationCapabilities({
         provider: selectedProvider,
         count,
@@ -1077,6 +1075,9 @@ export function createImageGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id,
       });
+      if (taskHandle && supersededTask?.runId) {
+        supersedeGeneratedMediaTaskActivity(supersededTask.runId, taskHandle.runId);
+      }
       const shouldDetach = Boolean(
         taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
       );
