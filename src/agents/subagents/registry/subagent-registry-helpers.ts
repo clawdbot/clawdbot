@@ -3,8 +3,6 @@
  *
  * Handles frozen result caps, orphan detection, timing persistence, and announce retry logging.
  */
-import fsSync from "node:fs";
-import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -182,15 +180,6 @@ export async function persistSubagentSessionTiming(
   );
 }
 
-// Attachment cleanup must stay within the recorded root even if paths were
-// symlinks. Compare real paths before removing anything recursively.
-function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
-  const rootWithSep = params.rootPath.endsWith(path.sep)
-    ? params.rootPath
-    : `${params.rootPath}${path.sep}`;
-  return params.childPath.startsWith(rootWithSep);
-}
-
 /** Best-effort async removal for a subagent attachment directory. */
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
@@ -200,39 +189,6 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
     rootDir: entry.attachmentsRootDir,
     absDir: entry.attachmentsDir,
   });
-}
-
-function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
-  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
-    return;
-  }
-
-  const resolveReal = (targetPath: string): string | null => {
-    try {
-      return fsSync.realpathSync.native(targetPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  try {
-    const rootReal = resolveReal(entry.attachmentsRootDir);
-    const dirReal = resolveReal(entry.attachmentsDir);
-    if (!dirReal) {
-      return;
-    }
-
-    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
-    if (!isResolvedChildPath({ childPath: dirReal, rootPath: rootBase })) {
-      return;
-    }
-    fsSync.rmSync(dirReal, { recursive: true, force: true });
-  } catch {
-    // best effort
-  }
 }
 
 /** Marks an orphaned registry run finished, cleans attachments, and removes it. */
@@ -247,7 +203,9 @@ export function reconcileOrphanedRun(params: {
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
-    safeRemoveAttachmentsDirSync(params.entry);
+    // Restore pruning is synchronous, but recursive deletion must keep using the
+    // rooted async remover; a raw sync rm would reintroduce a parent-swap race.
+    void safeRemoveAttachmentsDir(params.entry);
   }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);

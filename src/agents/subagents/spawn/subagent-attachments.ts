@@ -4,12 +4,17 @@
  * Validates base64/utf8 payloads, writes private receipt files, and resolves inherited workspace paths.
  */
 import crypto from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import { ensureDirectoryWithinRoot } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { ensureAbsoluteDirectory, isPathInside, root } from "../../../infra/fs-safe.js";
+import { removePathWithinRoot } from "../../../infra/fs-safe-remove.js";
+import {
+  ensureAbsoluteDirectory,
+  isPathInside,
+  resolveOpenedFileRealPathForHandle,
+  root,
+} from "../../../infra/fs-safe.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 
 function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
@@ -293,17 +298,48 @@ export async function removeSubagentAttachmentsDir(params: {
   absDir: string;
 }): Promise<boolean> {
   try {
-    const [rootReal, dirReal] = await Promise.all([
-      fs.realpath(params.rootDir),
-      fs.realpath(params.absDir),
-    ]);
-    if (!isPathInside(rootReal, dirReal)) {
+    const rootDir = path.resolve(params.rootDir);
+    const absDir = path.resolve(params.absDir);
+    if (!isPathInside(rootDir, absDir)) {
       return false;
     }
-    await fs.rm(dirReal, { recursive: true, force: true });
+    await removePathWithinRoot({
+      rootDir,
+      relativePath: path.relative(rootDir, absDir),
+      recursive: true,
+      force: true,
+    });
     return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+  } catch {
+    return false;
+  }
+}
+
+async function setPrivateAttachmentDirectoryMode(params: {
+  rootDir: string;
+  absDir: string;
+}): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  const handle = await fs.open(
+    params.absDir,
+    fsConstants.O_RDONLY |
+      fsConstants.O_DIRECTORY |
+      fsConstants.O_NOFOLLOW |
+      fsConstants.O_NONBLOCK,
+  );
+  try {
+    const [identity, realPath] = await Promise.all([
+      handle.stat(),
+      resolveOpenedFileRealPathForHandle(handle, params.absDir),
+    ]);
+    if (!identity.isDirectory() || !isPathInside(params.rootDir, realPath)) {
+      throw new Error("attachment directory changed before permission hardening");
+    }
+    await handle.chmod(0o700);
+  } finally {
+    await handle.close();
   }
 }
 
@@ -342,16 +378,9 @@ export async function materializeSubagentAttachments(params: {
     // would trust a pre-existing attachments symlink before fs-safe can reject the hop.
     const workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o600 });
     workspaceRootDir = workspaceRoot.rootReal;
-    const ensuredAttachmentDir = await ensureDirectoryWithinRoot({
-      rootDir: workspaceRootDir,
-      requestedPath: relDir,
-      scopeLabel: "child workspace",
-      mode: 0o700,
-    });
-    if (!ensuredAttachmentDir.ok) {
-      throw new Error(ensuredAttachmentDir.error);
-    }
-    absDir = ensuredAttachmentDir.path;
+    absDir = path.join(workspaceRootDir, ...relDir.split(path.posix.sep));
+    await workspaceRoot.mkdir(relDir);
+    await setPrivateAttachmentDirectoryMode({ rootDir: workspaceRootDir, absDir });
 
     const files: SubagentAttachmentReceiptFile[] = [];
     const writeJobs: Array<{ outPath: string; buf: Buffer }> = [];
