@@ -83,7 +83,7 @@ function identity(packageName: string) {
 
 describe("npm placeholder publication", () => {
   it("preserves selected multi-package order and binds unique release-enabled manifests", async () => {
-    const names = ["@openclaw/zoom-meetings", "@openclaw/comfy-provider"];
+    const names = ["@openclaw/zoom-meetings", "@openclaw/comfy-provider"] as const;
     const root = createRepo([
       { dir: "comfy", manifest: packageJson(names[1]) },
       { dir: "zoom-meetings", manifest: packageJson(names[0]) },
@@ -244,7 +244,7 @@ describe("npm placeholder publication", () => {
   });
 
   it("publishes serially and preserves every non-placeholder dist-tag", async () => {
-    const names = ["@openclaw/byteplus-provider", "@openclaw/meta-provider"];
+    const names = ["@openclaw/byteplus-provider", "@openclaw/meta-provider"] as const;
     const root = createRepo([
       { dir: "byteplus", manifest: packageJson(names[0]) },
       { dir: "meta", manifest: packageJson(names[1]) },
@@ -265,8 +265,13 @@ describe("npm placeholder publication", () => {
           ? registryResponse()
           : existingMeta.clone(),
     });
-    const firstIdentity = manifest.packages[0].tarball;
-    const secondIdentity = manifest.packages[1].tarball;
+    expect(manifest.packages).toHaveLength(2);
+    const [firstPackage, secondPackage] = manifest.packages;
+    if (!firstPackage || !secondPackage) {
+      throw new Error("Expected two placeholder manifest packages.");
+    }
+    const firstIdentity = firstPackage.tarball;
+    const secondIdentity = secondPackage.tarball;
     const publishResponses = [
       registryResponse(),
       registryResponse({
@@ -304,9 +309,15 @@ describe("npm placeholder publication", () => {
     });
 
     expect(calls.map((args) => args[0])).toEqual(["publish", "publish"]);
-    expect(calls.map((args) => basenameForTarball(args[1]))).toEqual(
-      manifest.packages.map((entry) => entry.tarball.name),
-    );
+    expect(
+      calls.map((args) => {
+        const tarballPath = args[1];
+        if (!tarballPath) {
+          throw new Error("Expected npm publish tarball argument.");
+        }
+        return basenameForTarball(tarballPath);
+      }),
+    ).toEqual(manifest.packages.map((entry) => entry.tarball.name));
     expect(result.results.map((entry) => entry.packageName)).toEqual(names);
     expect(readdirSync(tempRoot)).toEqual([]);
   });

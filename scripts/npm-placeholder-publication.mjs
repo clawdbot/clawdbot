@@ -156,7 +156,8 @@ function readJsonRegularFile(path, label) {
   try {
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    throw new Error(`${label} is invalid JSON: ${error instanceof Error ? error.message : error}`);
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label} is invalid JSON: ${detail}`, { cause: error });
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must contain an object.`);
@@ -593,8 +594,8 @@ async function readFinalRegistry(entry, params) {
   const sleep =
     params.sleep ??
     ((delayMs) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, delayMs);
+      new Promise((done) => {
+        setTimeout(done, delayMs);
       }));
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -790,8 +791,10 @@ export async function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    },
+  );
 }
