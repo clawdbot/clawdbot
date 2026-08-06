@@ -698,6 +698,62 @@ describe("cron edit command", () => {
     );
   });
 
+  it.each(["", "   "])(
+    "rejects blank --model %j instead of silently ignoring it",
+    async (model) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(["edit", "job-1", "--model", model], { from: "user" });
+
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--model must not be blank"));
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["", "   "])("rejects blank --model %j combined with --clear-model", async (model) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--model", model, "--clear-model"], {
+        from: "user",
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--model must not be blank"));
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("rejects --model combined with --clear-model", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--model", "opus", "--clear-model"], {
+        from: "user",
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Use --model or --clear-model, not both"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("stores an explicit wildcard with --clear-tools", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
@@ -930,6 +986,55 @@ describe("cron edit command", () => {
     errorSpy.mockRestore();
     exitSpy.mockRestore();
   });
+
+  it.each(["", "   "])(
+    "rejects blank --thinking %j instead of silently ignoring it",
+    async (thinking) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(["edit", "job-1", "--thinking", thinking], {
+          from: "user",
+        });
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--thinking must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["", "   "])(
+    "rejects blank --thinking %j combined with --clear-thinking",
+    async (thinking) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(
+          ["edit", "job-1", "--thinking", thinking, "--clear-thinking"],
+          { from: "user" },
+        );
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--thinking must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
 
   it("documents the --clear-model flag alongside the sibling --clear-tools", () => {
     const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
