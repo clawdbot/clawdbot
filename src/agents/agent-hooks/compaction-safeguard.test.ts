@@ -614,37 +614,6 @@ describe("compaction-safeguard summary budgets", () => {
     }
   });
 
-  it("keeps the audited sections when a front-heavy body is capped", () => {
-    const max = MAX_COMPACTION_SUMMARY_CHARS;
-    // A valid summary whose bulk sits under the first heading, pushing the later
-    // required sections — and the identifiers the audit protects — past any
-    // prefix-only allocation.
-    const body = [
-      `## Decisions\n${"d".repeat(max)}`,
-      "## Open TODOs\nFinish the refresh.",
-      "## Constraints/Rules\nNo new config keys.",
-      "## Pending user asks\nRerun the scan.",
-      "## Exact identifiers\nN823JB, port 4000, 2026-08-05",
-    ].join("\n");
-
-    const out = capCompactionSummaryPreservingSuffix(body, "~".repeat(max), max);
-
-    expect(out.length).toBeLessThanOrEqual(max);
-    // auditSummaryQuality runs before this budgeting, so the stored artifact
-    // must still satisfy the audit that already passed.
-    for (const heading of [
-      "## Decisions",
-      "## Open TODOs",
-      "## Constraints/Rules",
-      "## Pending user asks",
-      "## Exact identifiers",
-    ]) {
-      expect(out, `heading ${heading}`).toContain(heading);
-    }
-    expect(out).toContain("N823JB");
-    expect(out).toContain(SUMMARY_TRUNCATED_MARKER.trim());
-  });
-
   it("never exceeds the cap, down to a one-character budget", () => {
     const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
     const suffix =

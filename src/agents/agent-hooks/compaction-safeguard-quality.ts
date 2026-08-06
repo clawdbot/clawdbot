@@ -11,12 +11,7 @@ const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const MAX_ASK_OVERLAP_TOKENS = 12;
 const MIN_ASK_OVERLAP_TOKENS_FOR_DOUBLE_MATCH = 3;
-/**
- * Headings auditSummaryQuality requires. Exported because budgeting runs after
- * the audit: a cap blind to these can store an artifact the audit already
- * passed but that no longer satisfies it.
- */
-export const REQUIRED_SUMMARY_SECTIONS = [
+const REQUIRED_SUMMARY_SECTIONS = [
   "## Decisions",
   "## Open TODOs",
   "## Constraints/Rules",
