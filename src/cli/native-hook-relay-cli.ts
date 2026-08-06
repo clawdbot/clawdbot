@@ -113,11 +113,17 @@ function readProcStat(pid: number): { startTime: number; ppid: number } | null {
 }
 
 /**
- * On Linux, polls the parent process identity and exits when the parent
- * disappears or is replaced. Hook relay helpers are spawned per tool call
- * by Codex. When the gateway or Codex process tree is SIGKILLed (cgroup
- * OOM, container memory cap), the relay process is reparented to PID 1
- * without cleanup.
+ * On Linux, polls the relay's direct parent process identity and exits when
+ * that parent disappears or is replaced. Hook relay helpers are spawned per
+ * tool call by the Codex app-server. When the app-server is SIGKILLed
+ * (cgroup OOM, container memory cap), the relay process is reparented to
+ * PID 1 without cleanup.
+ *
+ * This watch covers the app-server-death path. The gateway-death path is
+ * handled separately by the relay's own call timeout: when the gateway is
+ * unreachable the bridge or gateway RPC times out and the relay exits
+ * through the normal deadline path. The parent watch and the deadline are
+ * complementary — each covers a different failure mode.
  *
  * A signal-0 existence probe (process.kill(pid, 0)) cannot distinguish the
  * original parent from an unrelated process that reused the same numeric
@@ -190,7 +196,8 @@ export async function runNativeHookRelayCli(
   deps: NativeHookRelayCliDeps = {},
 ): Promise<number> {
   // Start parent-death watch on Linux so this relay process exits when the
-  // spawning Codex process is SIGKILLed (container OOM, cgroup cap).
+  // spawning Codex app-server is SIGKILLed (container OOM, cgroup cap).
+  // The relay's own deadline handles the gateway-unreachable case separately.
   const parentDeathWatch =
     process.platform === "linux" ? installParentDeathWatchLinux(process.ppid) : undefined;
 
