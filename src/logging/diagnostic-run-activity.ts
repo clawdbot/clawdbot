@@ -342,7 +342,8 @@ export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityE
   if (!activity) {
     return;
   }
-  if (params.progressKind === "liveness") {
+  // run.progress predates progressKind; only an explicit semantic fact may clear evidence.
+  if (params.progressKind !== "semantic") {
     touchSessionActivity(activity, params.reason);
     return;
   }

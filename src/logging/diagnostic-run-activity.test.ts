@@ -372,6 +372,42 @@ describe("argument-churn liveness", () => {
 });
 
 describe("repeated request liveness", () => {
+  it("defaults omitted progress to liveness and reserves clearing for explicit semantic progress", () => {
+    const ref = {
+      sessionId: "progress-default-session",
+      sessionKey: "agent:main:progress-default",
+    };
+    const runId = "progress-default-run";
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId,
+        provider: "mock",
+        model: "request-model",
+        observationUnit: "request",
+      });
+    }
+
+    markDiagnosticRunProgress({ ...ref, runId, reason: "legacy:progress" });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "legacy:progress",
+      repeatedRequestNoProgressAgeMs: expect.any(Number),
+    });
+
+    markDiagnosticRunProgress({
+      ...ref,
+      runId,
+      reason: "assistant:progress",
+      progressKind: "semantic",
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "assistant:progress",
+      repeatedRequestNoProgressAgeMs: undefined,
+    });
+  });
+
   it("ages repeated requests across mechanical progress until semantic progress arrives", () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-08-04T00:00:00Z");

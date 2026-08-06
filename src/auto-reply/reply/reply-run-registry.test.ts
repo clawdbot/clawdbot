@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -173,6 +175,52 @@ describe("reply run registry", () => {
     ).toMatchObject({
       activeWorkKind: undefined,
       lastProgressReason: "reply_operation:ended",
+    });
+  });
+
+  it("keeps repeated request evidence across reply-operation progress", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-08-06T08:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = {
+      sessionKey: "agent:main:telegram:direct:retry-bridge",
+      sessionId: "session-retry-bridge",
+    };
+    const runId = "run-retry-bridge";
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId,
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+    vi.setSystemTime(startedAt + 30_000);
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId,
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+
+    const operation = createTestReplyOperation(ref);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "reply_operation:queued",
+      repeatedRequestNoProgressAgeMs: 30_000,
+    });
+
+    operation.markWaitingForDeferredMaintenance();
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "deferred_maintenance:waiting",
+      repeatedRequestNoProgressAgeMs: 30_000,
+    });
+
+    operation.complete();
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "reply_operation:ended",
+      repeatedRequestNoProgressAgeMs: 30_000,
     });
   });
 
