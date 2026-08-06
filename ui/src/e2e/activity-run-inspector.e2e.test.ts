@@ -187,6 +187,10 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
 
       const runTab = page.getByRole("tab", { name: "Run inspector" });
       await expect.poll(() => runTab.getAttribute("aria-selected")).toBe("true");
+      const modePanel = page.getByRole("tabpanel");
+      await expect
+        .poll(() => modePanel.getAttribute("aria-labelledby"))
+        .toBe("activity-mode-tab-run");
       await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
       for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
         await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
@@ -229,6 +233,9 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         .toBe("Live activity");
       await page.keyboard.press("Enter");
       await page.getByText("No activity yet.", { exact: true }).waitFor();
+      await expect
+        .poll(() => modePanel.getAttribute("aria-labelledby"))
+        .toBe("activity-mode-tab-live");
       expect(new URL(page.url()).search).toBe("");
       await page.goBack();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();

@@ -372,7 +372,7 @@ class ActivityPage extends OpenClawLightDomElement {
         variant: "sub",
         onSelect: (selected) => this.selectMode(selected),
       })}
-      <div id="activity-mode-panel">
+      <div id="activity-mode-panel" role="tabpanel" aria-labelledby=${`activity-mode-tab-${mode}`}>
         ${mode === "run"
           ? renderRunInspector({
               basePath: this.context.basePath,
