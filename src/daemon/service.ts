@@ -302,8 +302,11 @@ export async function startGatewayService(
  * Validates that a gateway service actually started after a raw platform start.
  * Rejects if the service manager reports a failed state or a new non-zero exit
  * code, which indicates the binary started but immediately crashed.
+ *
+ * Kept module-private: production callers share this helper, and exporting it
+ * trips the unused-exports deadcode gate even though recovery uses it.
  */
-export function assertGatewayServiceStarted(
+function assertGatewayServiceStarted(
   preState: GatewayServiceState,
   postState: GatewayServiceState,
   context: string,
@@ -486,7 +489,14 @@ export function resolveGatewayService(): GatewayService {
 export async function startGatewayServiceAfterFailedUpdate(
   args: GatewayServiceControlArgs,
 ): Promise<void> {
-  assertGatewayServiceMutationOwnedByOpenClaw("start the gateway service", args.env);
+  // Ownership only — do not go through withGatewayServiceMutationGuards, which
+  // also applies the future-config version block this recovery must survive.
+  // Call Allowed directly so a merge with main (which inlined/removed the local
+  // OwnedByOpenClaw helper) cannot leave a dangling name at this call site.
+  assertGatewayServiceMutationAllowed("start the gateway service", process.env);
+  if (args.env && args.env !== process.env) {
+    assertGatewayServiceMutationAllowed("start the gateway service", args.env);
+  }
   const service = isSupportedGatewayServicePlatform(process.platform)
     ? GATEWAY_SERVICE_REGISTRY[process.platform]
     : createUnsupportedGatewayService();
