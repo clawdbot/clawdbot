@@ -382,6 +382,7 @@ describe("runMessageAction plugin dispatch", () => {
         describeMessageTool: () => ({
           actions: [
             "pin",
+            "unpin",
             "list-pins",
             "member-info",
             "channel-info",
@@ -391,10 +392,22 @@ describe("runMessageAction plugin dispatch", () => {
           ],
         }),
         messageActionTargetAliases: {
-          edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
+          edit: {
+            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+          },
+          pin: {
+            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+          },
+          unpin: {
+            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+          },
         },
         supportsAction: ({ action }) =>
           action === "pin" ||
+          action === "unpin" ||
           action === "list-pins" ||
           action === "member-info" ||
           action === "channel-info" ||
@@ -476,6 +489,53 @@ describe("runMessageAction plugin dispatch", () => {
         "list pins call params",
       );
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { action: "unpin" as const, alias: "chatId", messageId: "om_unpin" },
+      { action: "edit" as const, alias: "chat_id", messageId: "om_edit" },
+      { action: "pin" as const, alias: "channel_id", messageId: "om_pin" },
+    ])("guards $alias delivery aliases for $action before plugin dispatch", async (testCase) => {
+      const cfg = {
+        channels: { actionhub: { enabled: true } },
+        tools: { message: { crossContext: { allowWithinProvider: false } } },
+      } as OpenClawConfig;
+      const toolContext = {
+        currentChannelProvider: "actionhub" as const,
+        currentChannelId: "oc_current",
+      };
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: testCase.action,
+          params: {
+            channel: "actionhub",
+            messageId: testCase.messageId,
+            [testCase.alias]: "oc_foreign",
+          },
+          toolContext,
+          conversationReadOrigin: "direct-operator",
+          dryRun: false,
+        }),
+      ).rejects.toThrow("Cross-context messaging denied");
+      expect(handleAction).not.toHaveBeenCalled();
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: testCase.action,
+          params: {
+            channel: "actionhub",
+            messageId: testCase.messageId,
+            [testCase.alias]: "oc_current",
+          },
+          toolContext,
+          conversationReadOrigin: "direct-operator",
+          dryRun: false,
+        }),
+      ).resolves.toMatchObject({ kind: "action", action: testCase.action });
+      expect(handleAction).toHaveBeenCalledOnce();
     });
 
     it("preserves canonical thread and edit fields through plugin dispatch", async () => {
