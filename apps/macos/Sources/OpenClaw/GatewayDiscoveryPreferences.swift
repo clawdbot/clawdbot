@@ -1,6 +1,20 @@
 import Foundation
+import OSLog
 
 enum GatewayDiscoveryPreferences {
+    struct StartupConfig {
+        let root: [String: Any]
+        let migrationChanged: Bool
+        let migrationPersisted: Bool
+        let remoteToken: GatewayRemoteConfig.TokenValue
+        let remoteTransport: AppState.RemoteTransport
+        let remoteURL: String?
+        let connectionMode: AppState.ConnectionMode
+        let remoteIdentityConfigured: Bool
+        let remoteIdentity: String
+    }
+
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway-discovery-preferences")
     private static let preferredStableIDKey = "gateway.preferredStableID"
     private static let legacyPreferredStableIDKey = "bridge.preferredStableID"
     private static let preferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
@@ -31,6 +45,57 @@ enum GatewayDiscoveryPreferences {
         let raw = UserDefaults.standard.string(forKey: self.preferredRouteBindingKey)
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    static func prepareStartupConfig(
+        isPreview: Bool,
+        saver: ([String: Any]) -> Bool) -> StartupConfig
+    {
+        let loadedRoot = OpenClawConfigFile.loadDict()
+        let migration = isPreview
+            ? (root: loadedRoot, changed: false)
+            : self.migrateLegacyUnboundDiscoveryRoute(loadedRoot)
+        let persisted = !migration.changed || saver(migration.root)
+        if !persisted {
+            self.logger.error("legacy discovery route migration could not be persisted")
+        }
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: migration.root)
+        let remote = (migration.root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let remoteIdentity = (remote?["sshIdentity"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return StartupConfig(
+            root: migration.root,
+            migrationChanged: migration.changed,
+            migrationPersisted: persisted,
+            remoteToken: GatewayRemoteConfig.resolveTokenValue(root: migration.root),
+            remoteTransport: resolution.transport,
+            remoteURL: resolution.directURL?.absoluteString ??
+                GatewayRemoteConfig.resolveUrlString(root: migration.root),
+            connectionMode: ConnectionModeResolver.resolve(root: migration.root).mode,
+            remoteIdentityConfigured: remote?.keys.contains("sshIdentity") == true,
+            remoteIdentity: remoteIdentity)
+    }
+
+    static func migrateLegacyUnboundDiscoveryRoute(_ currentRoot: [String: Any])
+        -> (root: [String: Any], changed: Bool)
+    {
+        guard self.preferredStableID() != nil,
+              self.preferredRouteBinding() == nil,
+              ConnectionModeResolver.resolve(root: currentRoot).mode == .remote,
+              GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
+        else {
+            return (currentRoot, false)
+        }
+
+        var root = currentRoot
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var remote = gateway["remote"] as? [String: Any] ?? [:]
+        remote["transport"] = AppState.RemoteTransport.ssh.rawValue
+        remote["url"] = GatewayDiscoverySelectionSupport.sshTunnelGatewayUrl(
+            current: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "")
+        gateway["remote"] = remote
+        root["gateway"] = gateway
+        return (root, true)
     }
 
     @MainActor

@@ -512,54 +512,37 @@ final class AppState {
             UserDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
-        let loadedConfigRoot = OpenClawConfigFile.loadDict()
-        let legacyRouteMigration = isPreview
-            ? (root: loadedConfigRoot, changed: false)
-            : Self.migrateLegacyUnboundDiscoveryRoute(loadedConfigRoot)
-        let legacyRouteMigrationPersisted = !legacyRouteMigration.changed ||
-            gatewayConfigSaver(legacyRouteMigration.root)
-        let configRoot = legacyRouteMigration.root
-        if !legacyRouteMigrationPersisted {
-            Self.logger.error("legacy discovery route migration could not be persisted")
-        }
-        self.lastConfigFingerprint = Self.configFingerprint(configRoot)
-        self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
-        let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
-        let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
-        let configRemoteTransport = configRemoteResolution.transport
-        let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
-            ?? GatewayRemoteConfig.resolveUrlString(root: configRoot)
-        let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
-        self.remoteTransport = configRemoteTransport
-        self.connectionMode = resolvedConnectionMode
+        let startupConfig = GatewayDiscoveryPreferences.prepareStartupConfig(
+            isPreview: isPreview, saver: gatewayConfigSaver)
+        self.lastConfigFingerprint = Self.configFingerprint(startupConfig.root)
+        self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(startupConfig.root)
+        self.remoteTransport = startupConfig.remoteTransport
+        self.connectionMode = startupConfig.connectionMode
 
-        let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let configRemote = (startupConfig.root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
         let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
-        if resolvedConnectionMode == .remote,
+        if startupConfig.connectionMode == .remote,
            hasConfigRemoteTarget
         {
             self.remoteTarget = configRemoteTarget
-        } else if resolvedConnectionMode == .remote,
-                  configRemoteTransport != .direct,
+        } else if startupConfig.connectionMode == .remote,
+                  startupConfig.remoteTransport != .direct,
                   storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  let host = AppState.remoteHost(from: configRemoteUrl),
+                  let host = AppState.remoteHost(from: startupConfig.remoteURL),
                   !LoopbackHost.isLoopbackHost(host)
         {
             self.remoteTarget = "\(NSUserName())@\(host)"
         } else {
             self.remoteTarget = storedRemoteTarget
         }
-        self.remoteUrl = configRemoteUrl ?? ""
-        self.remoteToken = configRemoteToken.textFieldValue
-        self.remoteTokenUnsupported = configRemoteToken.isUnsupportedNonString
-        let hasConfigRemoteIdentity = configRemote?.keys.contains("sshIdentity") == true
-        let configRemoteIdentity = (configRemote?["sshIdentity"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        self.remoteIdentity = hasConfigRemoteIdentity
-            ? configRemoteIdentity
+        self.remoteUrl = startupConfig.remoteURL ?? ""
+        self.remoteToken = startupConfig.remoteToken.textFieldValue
+        self.remoteTokenUnsupported = startupConfig.remoteToken.isUnsupportedNonString
+        self.remoteIdentity = startupConfig.remoteIdentityConfigured
+            ? startupConfig.remoteIdentity
             : UserDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
@@ -590,11 +573,11 @@ final class AppState {
         }
 
         if !self.isPreview {
-            if !legacyRouteMigrationPersisted {
+            if !startupConfig.migrationPersisted {
                 // Failed persistence must keep routing closed instead of letting the watcher
                 // republish the old Direct endpoint from disk.
                 self.gatewayConfigSyncState = .failed
-            } else if legacyRouteMigration.changed {
+            } else if startupConfig.migrationChanged {
                 GatewayDiscoveryPreferences.setPreferredStableID(nil)
             } else {
                 self.reconcilePreferredGatewayRouteBinding()
@@ -604,7 +587,7 @@ final class AppState {
         if !self.isPreview {
             scheduleExecApprovalModeReadRetry()
         }
-        if !self.isPreview, legacyRouteMigrationPersisted {
+        if !self.isPreview, startupConfig.migrationPersisted {
             self.startConfigWatcher()
         }
     }
@@ -1280,28 +1263,6 @@ extension AppState {
 }
 
 extension AppState {
-    static func migrateLegacyUnboundDiscoveryRoute(_ currentRoot: [String: Any])
-        -> (root: [String: Any], changed: Bool)
-    {
-        guard GatewayDiscoveryPreferences.preferredStableID() != nil,
-              GatewayDiscoveryPreferences.preferredRouteBinding() == nil,
-              ConnectionModeResolver.resolve(root: currentRoot).mode == .remote,
-              GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
-        else {
-            return (currentRoot, false)
-        }
-
-        var root = currentRoot
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        var remote = gateway["remote"] as? [String: Any] ?? [:]
-        remote["transport"] = RemoteTransport.ssh.rawValue
-        remote["url"] = GatewayDiscoverySelectionSupport.sshTunnelGatewayUrl(
-            current: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "")
-        gateway["remote"] = remote
-        root["gateway"] = gateway
-        return (root, true)
-    }
-
     private static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft,

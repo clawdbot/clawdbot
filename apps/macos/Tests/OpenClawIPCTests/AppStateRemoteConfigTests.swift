@@ -173,7 +173,7 @@ struct AppStateRemoteConfigTests {
             ]
             GatewayDiscoveryPreferences.setPreferredStableID("legacy-gateway")
 
-            let migration = AppState.migrateLegacyUnboundDiscoveryRoute(vulnerableRoot)
+            let migration = GatewayDiscoveryPreferences.migrateLegacyUnboundDiscoveryRoute(vulnerableRoot)
             #expect(migration.changed)
             #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
             #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) ==
