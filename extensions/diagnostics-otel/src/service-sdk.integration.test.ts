@@ -9,8 +9,10 @@ import {
 import { logs } from "@opentelemetry/api-logs";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { ExportResultCode, W3CTraceContextPropagator } from "@opentelemetry/core";
+import { LoggerProvider } from "@opentelemetry/sdk-logs";
 import { MeterProvider } from "@opentelemetry/sdk-metrics";
 import {
+  AlwaysOffSampler,
   BasicTracerProvider,
   BatchSpanProcessor,
   InMemorySpanExporter,
@@ -35,6 +37,8 @@ const ENV_KEYS = [
   "OTEL_PROPAGATORS",
   "OTEL_NODE_RESOURCE_DETECTORS",
   "OTEL_RESOURCE_ATTRIBUTES",
+  "OTEL_TRACES_SAMPLER",
+  "OTEL_TRACES_SAMPLER_ARG",
   "OTEL_EXPORTER_OTLP_PROTOCOL",
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
@@ -98,11 +102,65 @@ async function emitDiagnosticLog(): Promise<void> {
     {
       type: "log.record",
       level: "INFO",
-      message: "disabled lifecycle log",
+      message: "lifecycle log",
     },
     {},
   );
   await waitForDiagnosticEventsDrained();
+}
+
+function createResourceCapturingExporter(): {
+  attributes: Promise<Readonly<Record<string, unknown>>>;
+  exporter: SpanExporter;
+} {
+  let resolveAttributes!: (attributes: Readonly<Record<string, unknown>>) => void;
+  let rejectAttributes!: (error: Error) => void;
+  const attributes = new Promise<Readonly<Record<string, unknown>>>((resolve, reject) => {
+    resolveAttributes = resolve;
+    rejectAttributes = reject;
+  });
+  return {
+    attributes,
+    exporter: {
+      export(spans, resultCallback) {
+        const resource = spans[0]?.resource;
+        if (!resource) {
+          const error = new Error("expected exported span resource");
+          resultCallback({ code: ExportResultCode.FAILED, error });
+          rejectAttributes(error);
+          return;
+        }
+        void Promise.resolve(resource.waitForAsyncAttributes?.()).then(
+          () => {
+            resultCallback({ code: ExportResultCode.SUCCESS });
+            resolveAttributes(resource.attributes);
+          },
+          (cause: unknown) => {
+            const error = cause instanceof Error ? cause : new Error(String(cause));
+            resultCallback({ code: ExportResultCode.FAILED, error });
+            rejectAttributes(error);
+          },
+        );
+      },
+      async shutdown() {},
+    },
+  };
+}
+
+async function captureResourceAttributes(label: string) {
+  const capture = createResourceCapturingExporter();
+  const sdk = new OpenClawOtelSdk({
+    spanProcessors: [new SimpleSpanProcessor(capture.exporter)],
+  });
+  sdk.start();
+  try {
+    trace.getTracer(`resource-test-${label}`).startSpan(label).end();
+    return await capture.attributes;
+  } finally {
+    sdk.unregisterSignalGlobals();
+    await sdk.shutdown();
+    sdk.unregisterContextGlobals();
+  }
 }
 
 async function expectAsyncContext(): Promise<void> {
@@ -143,6 +201,7 @@ async function expectW3cPropagation(): Promise<void> {
 
 function installExternalGlobals() {
   const contextManager = new AsyncLocalStorageContextManager().enable();
+  const loggerProvider = new LoggerProvider();
   const spanExporter = new InMemorySpanExporter();
   const tracerProvider = new BasicTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(spanExporter)],
@@ -150,13 +209,18 @@ function installExternalGlobals() {
   const meterProvider = new MeterProvider();
   const ownerTracer = tracerProvider.getTracer("external-owner");
   expect(context.setGlobalContextManager(contextManager)).toBe(true);
+  expect(logs.setGlobalLoggerProvider(loggerProvider)).toBe(loggerProvider);
   expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
   expect(trace.setGlobalTracerProvider(tracerProvider)).toBe(true);
   expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
   providerShutdowns.push(async () => {
-    await Promise.all([tracerProvider.shutdown(), meterProvider.shutdown()]);
+    await Promise.all([
+      loggerProvider.shutdown(),
+      tracerProvider.shutdown(),
+      meterProvider.shutdown(),
+    ]);
   });
-  return { meterProvider, ownerTracer, spanExporter };
+  return { loggerProvider, meterProvider, ownerTracer, spanExporter };
 }
 
 beforeEach(() => {
@@ -278,7 +342,53 @@ test("keeps async context installed while span processors flush", async () => {
 });
 
 test.each([
+  {
+    name: "OTEL_TRACES_SAMPLER=always_off",
+    sampler: undefined,
+    samplerArg: undefined,
+    samplerEnv: "always_off",
+  },
+  {
+    name: "OTEL_TRACES_SAMPLER=traceidratio with argument zero",
+    sampler: undefined,
+    samplerArg: "0",
+    samplerEnv: "traceidratio",
+  },
+  {
+    name: "an explicit AlwaysOffSampler",
+    sampler: new AlwaysOffSampler(),
+    samplerArg: undefined,
+    samplerEnv: "always_on",
+  },
+])("does not export spans with $name", async ({ sampler, samplerArg, samplerEnv }) => {
+  process.env.OTEL_TRACES_SAMPLER = samplerEnv;
+  if (samplerArg !== undefined) {
+    process.env.OTEL_TRACES_SAMPLER_ARG = samplerArg;
+  }
+  const exportedSpans: unknown[] = [];
+  const exporter: SpanExporter = {
+    export(spans, resultCallback) {
+      exportedSpans.push(...spans);
+      resultCallback({ code: ExportResultCode.SUCCESS });
+    },
+    async shutdown() {},
+  };
+  const sdk = new OpenClawOtelSdk({
+    spanProcessors: [new SimpleSpanProcessor(exporter)],
+    ...(sampler ? { sampler } : {}),
+  });
+  sdk.start();
+  trace.getTracer(`sampler-test-${samplerEnv}`).startSpan("not-exported").end();
+  sdk.unregisterSignalGlobals();
+  await sdk.shutdown();
+  sdk.unregisterContextGlobals();
+
+  expect(exportedSpans).toEqual([]);
+});
+
+test.each([
   { detectors: undefined, expected: true },
+  { detectors: "all", expected: true },
   { detectors: "none", expected: false },
   { detectors: "env", expected: true },
 ])("honors OTEL_NODE_RESOURCE_DETECTORS=$detectors", async ({ detectors, expected }) => {
@@ -286,55 +396,24 @@ test.each([
     process.env.OTEL_NODE_RESOURCE_DETECTORS = detectors;
   }
   process.env.OTEL_RESOURCE_ATTRIBUTES = "openclaw.lifecycle.detector=enabled";
-  let resourceAttributes: Readonly<Record<string, unknown>> = {};
-  let resolveExport!: () => void;
-  let rejectExport!: (error: unknown) => void;
-  const exported = new Promise<void>((resolve, reject) => {
-    resolveExport = resolve;
-    rejectExport = reject;
-  });
-  const exporter: SpanExporter = {
-    export(spans, resultCallback) {
-      const resource = spans[0]?.resource;
-      if (!resource) {
-        const error = new Error("expected exported span resource");
-        resultCallback({ code: ExportResultCode.FAILED, error });
-        rejectExport(error);
-        return;
-      }
-      void Promise.resolve(resource.waitForAsyncAttributes?.()).then(
-        () => {
-          resourceAttributes = resource.attributes;
-          resultCallback({ code: ExportResultCode.SUCCESS });
-          resolveExport();
-        },
-        (cause: unknown) => {
-          const error = cause instanceof Error ? cause : new Error(String(cause));
-          resultCallback({ code: ExportResultCode.FAILED, error });
-          rejectExport(error);
-        },
-      );
-    },
-    async shutdown() {},
-  };
-  const sdk = new OpenClawOtelSdk({
-    spanProcessors: [new SimpleSpanProcessor(exporter)],
-  });
-  sdk.start();
-  trace
-    .getTracer(`resource-detector-test-${detectors ?? "default"}`)
-    .startSpan("resource-detector")
-    .end();
-  await exported;
-  sdk.unregisterSignalGlobals();
-  await sdk.shutdown();
-  sdk.unregisterContextGlobals();
+  const resourceAttributes = await captureResourceAttributes(detectors ?? "default");
 
   if (expected) {
     expect(resourceAttributes).toHaveProperty("openclaw.lifecycle.detector", "enabled");
   } else {
     expect(resourceAttributes).not.toHaveProperty("openclaw.lifecycle.detector");
   }
+});
+
+test("does not generate a service instance id across default-detector restarts", async () => {
+  const first = await captureResourceAttributes("default-generation-one");
+  const second = await captureResourceAttributes("default-generation-two");
+
+  expect(first["service.instance.id"]).toBeUndefined();
+  expect(second["service.instance.id"]).toBeUndefined();
+  expect(first["process.pid"]).toBe(process.pid);
+  expect(second["process.pid"]).toBe(process.pid);
+  expect(first["host.name"]).toBe(second["host.name"]);
 });
 
 test("switches enabled to disabled with no signal, health, listener, or stdout route", async () => {
@@ -452,6 +531,41 @@ test("rolls back partial ownership when trace registration fails", async () => {
   await expectNoAsyncContext();
 });
 
+test("preserves an external meter provider when metrics registration collides", async () => {
+  const { endpoint } = await openReceiver();
+  const externalMeterProvider = new MeterProvider();
+  expect(metrics.setGlobalMeterProvider(externalMeterProvider)).toBe(true);
+  providerShutdowns.push(() => externalMeterProvider.shutdown());
+  const service = createDiagnosticsOtelService();
+  const ctx = createOtelContext(endpoint, { traces: true, metrics: true });
+  services.push({ service, ctx });
+
+  await expect(service.start(ctx)).rejects.toThrow(
+    "diagnostics-otel could not register its global meter provider",
+  );
+  await service.stop?.(ctx);
+
+  expect(metrics.getMeterProvider()).toBe(externalMeterProvider);
+  expect(propagation.fields()).toEqual([]);
+  await expectNoAsyncContext();
+});
+
+test("keeps the global logger provider while exporting plugin logs privately", async () => {
+  const { endpoint, receiver } = await openReceiver();
+  const externalLoggerProvider = new LoggerProvider();
+  expect(logs.setGlobalLoggerProvider(externalLoggerProvider)).toBe(externalLoggerProvider);
+  providerShutdowns.push(() => externalLoggerProvider.shutdown());
+  const service = createDiagnosticsOtelService();
+  const ctx = createOtelContext(endpoint, { traces: false, metrics: false, logs: true });
+
+  await startService(service, ctx);
+  await emitDiagnosticLog();
+  await service.stop?.(ctx);
+
+  expect(logs.getLoggerProvider()).toBe(externalLoggerProvider);
+  expect(receiver.capturedLogRecords).toHaveLength(1);
+});
+
 test("keeps preloaded globals while all OpenClaw telemetry stays disabled", async () => {
   const external = installExternalGlobals();
   process.env[PRELOAD_ENV] = "1";
@@ -478,6 +592,7 @@ test("keeps preloaded globals while all OpenClaw telemetry stays disabled", asyn
 
   expect(trace.getTracer("external-owner")).toBe(external.ownerTracer);
   expect(metrics.getMeterProvider()).toBe(external.meterProvider);
+  expect(logs.getLoggerProvider()).toBe(external.loggerProvider);
   expect(external.spanExporter.getFinishedSpans().map((span) => span.name)).toContain(
     "external-after-stop",
   );
@@ -502,6 +617,7 @@ test("does not remove context, propagation, trace, or metrics replaced by the ho
 
   expect(trace.getTracer("external-owner")).toBe(external.ownerTracer);
   expect(metrics.getMeterProvider()).toBe(external.meterProvider);
+  expect(logs.getLoggerProvider()).toBe(external.loggerProvider);
   expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
   await expectAsyncContext();
 });

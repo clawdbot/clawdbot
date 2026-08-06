@@ -44,6 +44,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 
 const DEFAULT_PROPAGATORS = ["tracecontext", "baggage"];
+const DEFAULT_RESOURCE_DETECTORS = [envDetector, processDetector, hostDetector];
 const CONTEXT_OWNER_KEY = createContextKey("openclaw.diagnostics-otel.context-owner");
 const PROPAGATOR_OWNER_KEY = createContextKey("openclaw.diagnostics-otel.propagator-owner");
 const TRACE_OWNER_SCOPE = "openclaw.diagnostics-otel.lifecycle";
@@ -150,7 +151,10 @@ function createConfiguredPropagator(): TextMapPropagator | null {
 
 function configuredResourceDetectors(): ResourceDetector[] {
   const names = getStringListFromEnv("OTEL_NODE_RESOURCE_DETECTORS");
-  if (!names || names.includes("all")) {
+  if (!names) {
+    return [...DEFAULT_RESOURCE_DETECTORS];
+  }
+  if (names.includes("all")) {
     return [...RESOURCE_DETECTORS.values()];
   }
   if (names.includes("none")) {
@@ -224,8 +228,8 @@ export class OpenClawOtelSdk {
       const tracerProvider = new OwnedTracerProvider(
         new BasicTracerProvider({
           resource,
-          sampler: this.options.sampler,
           spanProcessors,
+          ...(this.options.sampler !== undefined ? { sampler: this.options.sampler } : {}),
           ...(sdkMetricsEnabled && this.meterProvider ? { meterProvider: this.meterProvider } : {}),
         }),
       );
