@@ -5,79 +5,59 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
-import type { StreamEvent } from "./mock-openai-contracts.js";
+import { MOCK_OPENAI_FIXTURES } from "./mock-fixtures.js";
+import {
+  MOCK_FIXTURE_CONFORMANCE_CONTRACTS,
+  QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT,
+  QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER,
+  QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER,
+  QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT,
+  QA_COMPACTION_RETRY_HISTORICAL_PHRASE,
+  QA_COMPACTION_RETRY_OVERFLOW_PADDING,
+  QA_COMPACTION_RETRY_PROMPT,
+  QA_COMPACTION_SUMMARY_HEADINGS,
+  QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+  QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT,
+  QA_EMPTY_RESPONSE_RECOVERY_PROMPT,
+  QA_EMPTY_RESPONSE_RETRY_INSTRUCTION,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT,
+  QA_IMAGE_PNG_BASE64,
+  QA_REASONING_ONLY_RECOVERY_PROMPT,
+  QA_REASONING_ONLY_RETRY_INSTRUCTION,
+  QA_REASONING_ONLY_SIDE_EFFECT_PROMPT,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+  QA_THINKING_VISIBILITY_MAX_PROMPT,
+  QA_THINKING_VISIBILITY_OFF_PROMPT,
+  SLACK_CHART_DONE_TOKEN,
+  SLACK_CHART_MESSAGE_TOOL_ARGS,
+  SLACK_CHART_PROMPT,
+  WHATSAPP_ACTIVATION_ALWAYS_MARKER,
+  WHATSAPP_ACTIVATION_ALWAYS_PROMPT,
+  WHATSAPP_AGENT_REACT_PROMPT,
+  WHATSAPP_AGENT_UPLOAD_PROMPT,
+  WHATSAPP_AGENT_UPLOAD_TOKEN,
+  WHATSAPP_BROADCAST_PROMPT,
+  WHATSAPP_BROADCAST_TOKEN,
+  WHATSAPP_GROUP_AGENT_REACT_PROMPT,
+  WHATSAPP_GROUP_AGENT_UPLOAD_PROMPT,
+  WHATSAPP_GROUP_AGENT_UPLOAD_TOKEN,
+  WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL,
+  WHATSAPP_PENDING_HISTORY_OK_MARKER,
+  WHATSAPP_PENDING_HISTORY_QUIET_MARKER,
+  WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER,
+  WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
+  WHATSAPP_REPLY_TO_BOT_SEED_MARKER,
+  WHATSAPP_REPLY_TO_BOT_SEED_PROMPT,
+  WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER,
+  WHATSAPP_REPLY_TO_BOT_TRIGGER_PROMPT,
+  type StreamEvent,
+} from "./mock-openai-contracts.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 type MockServer = { baseUrl: string };
 
 const cleanups: Array<() => Promise<void>> = [];
-const QA_IMAGE_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
-const QA_REASONING_ONLY_RECOVERY_PROMPT =
-  "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK.";
-const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT =
-  "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK.";
-const QA_THINKING_VISIBILITY_OFF_PROMPT =
-  "QA thinking visibility check off: answer exactly THINKING-OFF-OK.";
-const QA_THINKING_VISIBILITY_MAX_PROMPT =
-  "QA thinking visibility check max: verify 17+24=41 internally, then answer exactly THINKING-MAX-OK.";
-const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
-  "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK.";
-const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
-  "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
-const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
-  "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then answer with exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK.";
-const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
-  "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
-const QA_REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
-const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
-  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
-const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
-const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
-  status: "completed",
-  value: {
-    changed: true,
-    created: true,
-    diff: "+1 Replay safety: unsafe after write.",
-    patch: [
-      "--- compaction-retry-summary.txt",
-      "+++ compaction-retry-summary.txt",
-      "@@ -0,0 +1,1 @@",
-      "+Replay safety: unsafe after write.",
-      "",
-    ].join("\n"),
-    firstChangedLine: 1,
-  },
-  output: [],
-  replaySafe: false,
-  telemetry: {
-    catalogSize: 32,
-    sources: { openclaw: 32, mcp: 0, client: 0 },
-    counterScope: "qaFixtureScope01",
-    searchCount: 0,
-    describeCount: 0,
-    callCount: 1,
-  },
-} as const;
-const QA_COMPACTION_RETRY_PROMPT =
-  "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
-const QA_COMPACTION_RETRY_OVERFLOW_PADDING = "x".repeat(300_000);
-const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
-const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
-const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
-const QA_COMPACTION_SUMMARY_HEADINGS = [
-  "## Decisions",
-  "## Open TODOs",
-  "## Constraints/Rules",
-  "## Pending user asks",
-  "## Exact identifiers",
-] as const;
-const QA_COMPACTION_SUMMARY_INSTRUCTIONS = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
-
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
 function expectCurrentCompactionSummaryHeadings(summary: string) {
   expect(summary.match(/^## .+$/gmu)).toEqual(QA_COMPACTION_SUMMARY_HEADINGS);
@@ -391,59 +371,6 @@ const CODEX_CUSTOM_PATCH_NAMESPACE = {
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
 const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
-const SLACK_CHART_SUMMARY_TOKEN = "SLACK_QA_CHART_SUMMARY_TEST";
-const SLACK_CHART_DONE_TOKEN = "SLACK_QA_CHART_DONE_TEST";
-const SLACK_CHART_MESSAGE_TOOL_ARGS = {
-  action: "send",
-  message: SLACK_CHART_SUMMARY_TOKEN,
-  presentation: {
-    blocks: [
-      {
-        type: "chart",
-        chartType: "line",
-        title: "QA latency trend",
-        categories: ["P50", "P95"],
-        series: [{ name: "Latency", values: [120, 240] }],
-        xLabel: "Percentile",
-        yLabel: "Milliseconds",
-      },
-    ],
-  },
-};
-const SLACK_CHART_PROMPT = [
-  `Slack native chart QA check ${SLACK_CHART_SUMMARY_TOKEN}.`,
-  `Call the message tool exactly once with these exact arguments: ${JSON.stringify(SLACK_CHART_MESSAGE_TOOL_ARGS)}.`,
-  `After the chart send succeeds, reply with only this exact marker: ${SLACK_CHART_DONE_TOKEN}`,
-].join(" ");
-const WHATSAPP_AGENT_REACT_PROMPT =
-  "React to this WhatsApp message with thumbs up for QA action check WHATSAPP_QA_AGENT_REACT_TEST.";
-const WHATSAPP_GROUP_AGENT_REACT_PROMPT =
-  "openclawqa react to this WhatsApp group message with thumbs up for QA action check WHATSAPP_QA_GROUP_AGENT_REACT_TEST.";
-const WHATSAPP_AGENT_UPLOAD_TOKEN = "WHATSAPP_QA_AGENT_UPLOAD_TEST";
-const WHATSAPP_GROUP_AGENT_UPLOAD_TOKEN = "WHATSAPP_QA_GROUP_AGENT_UPLOAD_TEST";
-const WHATSAPP_AGENT_UPLOAD_PROMPT =
-  `Use the WhatsApp message tool upload-file action to send a PNG with caption ${WHATSAPP_AGENT_UPLOAD_TOKEN}. ` +
-  "Do not send any visible text reply after the upload.";
-const WHATSAPP_GROUP_AGENT_UPLOAD_PROMPT =
-  `openclawqa use the WhatsApp message tool upload-file action to send a PNG with caption ${WHATSAPP_GROUP_AGENT_UPLOAD_TOKEN}. ` +
-  "Do not send any visible text reply after the upload.";
-const WHATSAPP_PENDING_HISTORY_QUIET_MARKER = "WHATSAPP_QA_PENDING_HISTORY_QUIET_TEST";
-const WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL = "WHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_TEST";
-const WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER = "WHATSAPP_QA_PENDING_HISTORY_TRIGGER_TEST";
-const WHATSAPP_PENDING_HISTORY_OK_MARKER = "WHATSAPP_QA_PENDING_HISTORY_OK_TEST";
-const WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT = [
-  "openclawqa pending history context check",
-  WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER,
-  `Return ${WHATSAPP_PENDING_HISTORY_OK_MARKER} only if prior group context contains ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}.`,
-].join(" ");
-const WHATSAPP_BROADCAST_TOKEN = "WHATSAPP_QA_BROADCAST_TOKEN_TEST";
-const WHATSAPP_BROADCAST_PROMPT = `openclawqa broadcast fanout check ${WHATSAPP_BROADCAST_TOKEN}`;
-const WHATSAPP_ACTIVATION_ALWAYS_MARKER = "WHATSAPP_QA_ACTIVATION_ALWAYS_TEST";
-const WHATSAPP_ACTIVATION_ALWAYS_PROMPT = `Group activation visible behavior marker ${WHATSAPP_ACTIVATION_ALWAYS_MARKER}`;
-const WHATSAPP_REPLY_TO_BOT_SEED_MARKER = "WHATSAPP_QA_REPLY_TO_BOT_SEED_TEST";
-const WHATSAPP_REPLY_TO_BOT_SEED_PROMPT = `Mentioned group seed marker ${WHATSAPP_REPLY_TO_BOT_SEED_MARKER}`;
-const WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER = "WHATSAPP_QA_REPLY_TO_BOT_TRIGGER_TEST";
-const WHATSAPP_REPLY_TO_BOT_TRIGGER_PROMPT = `Quoted implicit reply trigger marker ${WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER}`;
 const THREAD_SUBAGENT_CHILD_ERROR_TOKEN = "QA_SUBAGENT_CHILD_ERROR";
 const THREAD_SUBAGENT_TOOL_ERROR =
   "thread=true requested but thread delivery is unavailable in this test harness.";
@@ -460,7 +387,205 @@ function explicitSessionsSpawnPrompt(token: string) {
   ].join(" ");
 }
 
+type MockFixtureConformanceCase = {
+  fixtureId: string;
+  name: string;
+  request: Record<string, unknown>;
+  expected:
+    | { kind: "reply"; text: string }
+    | {
+        kind: "tool";
+        name: string;
+        args: Record<string, unknown>;
+        namespace?: string;
+      };
+};
+
+function promptFixtureCase(
+  fixtureId: string,
+  name: string,
+  prompt: string,
+  expected: MockFixtureConformanceCase["expected"],
+  request: Record<string, unknown> = {},
+): MockFixtureConformanceCase {
+  return { fixtureId, name, request: { ...request, input: [makeUserInput(prompt)] }, expected };
+}
+
+function expectedFixtureTool(
+  name: string,
+  args: Record<string, unknown>,
+  namespace?: string,
+): MockFixtureConformanceCase["expected"] {
+  return { kind: "tool", name, args, ...(namespace ? { namespace } : {}) };
+}
+
+const MOCK_FIXTURE_CONFORMANCE_CASES: readonly MockFixtureConformanceCase[] = [
+  promptFixtureCase(
+    "heartbeat",
+    "heartbeat reply",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.heartbeat.prompt,
+    { kind: "reply", text: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.heartbeat.reply },
+  ),
+  promptFixtureCase(
+    "tool-progress",
+    "read plan",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolProgress.read.prompt,
+    expectedFixtureTool("read", {
+      path: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolProgress.read.path,
+    }),
+  ),
+  promptFixtureCase(
+    "tool-progress",
+    "exec plan",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolProgress.exec.prompt,
+    expectedFixtureTool("exec", {
+      command: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolProgress.exec.command,
+    }),
+  ),
+  promptFixtureCase(
+    "tool-search",
+    "instruction-declared dynamic tool",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolSearch.webSearch.prompt,
+    expectedFixtureTool("web_search", MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolSearch.webSearch.args),
+    { instructions: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolSearch.webSearch.instructions },
+  ),
+  promptFixtureCase(
+    "tool-search",
+    "explicit fixture target",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolSearch.sessionStatus.prompt,
+    expectedFixtureTool(
+      "session_status",
+      MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolSearch.sessionStatus.args,
+    ),
+  ),
+  promptFixtureCase(
+    "tool-search",
+    "canonical direct web fetch",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolSearch.webFetch.prompt,
+    expectedFixtureTool("web_fetch", MOCK_FIXTURE_CONFORMANCE_CONTRACTS.toolSearch.webFetch.args),
+  ),
+  promptFixtureCase(
+    "explicit-sessions-spawn",
+    "explicit session spawn",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.explicitSpawn.prompt,
+    expectedFixtureTool("sessions_spawn", MOCK_FIXTURE_CONFORMANCE_CONTRACTS.explicitSpawn.args),
+    { tools: [SESSIONS_SPAWN_TOOL] },
+  ),
+  promptFixtureCase(
+    "subagent-handoff",
+    "non-threaded QA handoff",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.subagentHandoff.prompt,
+    expectedFixtureTool("sessions_spawn", MOCK_FIXTURE_CONFORMANCE_CONTRACTS.subagentHandoff.args),
+    { tools: [SESSIONS_SPAWN_TOOL] },
+  ),
+  promptFixtureCase(
+    "generic-read",
+    "repo-scoped read",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.genericRead.prompt,
+    expectedFixtureTool("read", { path: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.genericRead.path }),
+  ),
+  promptFixtureCase(
+    "visible-skill-marker",
+    "visible skill marker",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.visibleSkill.prompts[0],
+    { kind: "reply", text: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.visibleSkill.reply },
+  ),
+  promptFixtureCase(
+    "visible-skill-marker",
+    "natural visible skill wording",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.visibleSkill.prompts[1],
+    { kind: "reply", text: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.visibleSkill.reply },
+  ),
+  promptFixtureCase(
+    "hot-install-marker",
+    "hot-installed skill marker",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.hotInstall.prompt,
+    { kind: "reply", text: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.hotInstall.reply },
+  ),
+  promptFixtureCase(
+    "unmentioned-group-chatter",
+    "unmentioned group reply",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.unmentionedGroup.prompt,
+    { kind: "reply", text: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.unmentionedGroup.reply },
+  ),
+  promptFixtureCase(
+    "direct-fallback-completed",
+    "completed direct fallback stays private",
+    MOCK_FIXTURE_CONFORMANCE_CONTRACTS.directFallbackCompletion.prompt,
+    {
+      kind: "reply",
+      text: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.directFallbackCompletion.reply,
+    },
+  ),
+  {
+    fixtureId: "subagent-handoff",
+    name: "Codex Responses Lite namespace",
+    request: {
+      input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
+        },
+        makeUserInput(MOCK_FIXTURE_CONFORMANCE_CONTRACTS.subagentHandoff.responsesLitePrompt),
+      ],
+    },
+    expected: {
+      kind: "tool",
+      name: "sessions_spawn",
+      namespace: "openclaw",
+      args: MOCK_FIXTURE_CONFORMANCE_CONTRACTS.subagentHandoff.args,
+    },
+  },
+];
+
+function orderedMockFixtureConformanceCases() {
+  const casesByFixture = new Map<string, MockFixtureConformanceCase[]>();
+  for (const fixtureCase of MOCK_FIXTURE_CONFORMANCE_CASES) {
+    const cases = casesByFixture.get(fixtureCase.fixtureId) ?? [];
+    cases.push(fixtureCase);
+    casesByFixture.set(fixtureCase.fixtureId, cases);
+  }
+  const fixtureIds = new Set(MOCK_OPENAI_FIXTURES.map((fixture) => fixture.id));
+  const missingFixture = MOCK_FIXTURE_CONFORMANCE_CASES.find(
+    (fixtureCase) => !fixtureIds.has(fixtureCase.fixtureId),
+  );
+  if (missingFixture) {
+    throw new Error(`Unknown mock fixture in conformance table: ${missingFixture.fixtureId}`);
+  }
+  const orderedCases: Array<MockFixtureConformanceCase & { fixtureOrder: number }> = [];
+  for (const [fixtureOrder, fixture] of MOCK_OPENAI_FIXTURES.entries()) {
+    for (const fixtureCase of casesByFixture.get(fixture.id) ?? []) {
+      orderedCases.push({ ...fixtureCase, fixtureOrder });
+    }
+  }
+  return orderedCases;
+}
+
 describe("qa mock openai server", () => {
+  it.each(orderedMockFixtureConformanceCases())(
+    "renders fixture $fixtureOrder:$fixtureId ($name)",
+    async ({ request, expected }) => {
+      const server = await startMockServer();
+      const payload = await expectOpenAiNonStreamingResponsesJson(server, request);
+
+      if (expected.kind === "reply") {
+        expect(outputItems(payload)).toHaveLength(1);
+        expect(outputText(payload)).toBe(expected.text);
+        return;
+      }
+
+      expect(outputItems(payload)).toHaveLength(1);
+      const toolCall = outputToolCall(payload, expected.name);
+      expect(toolCall).toMatchObject({
+        type: "function_call",
+        name: expected.name,
+        ...(expected.namespace ? { namespace: expected.namespace } : {}),
+      });
+      expect(outputToolArgsFromItem(toolCall)).toEqual(expected.args);
+    },
+  );
+
   it("returns HTTP 503 only after the provider failure fixture receives tool output", async () => {
     const server = await startMockServer();
     const prompt = "Provider HTTP 503 after tool QA check: read QA_KICKOFF_TASK.md, then reply.";
@@ -911,22 +1036,6 @@ describe("qa mock openai server", () => {
     expect(blockContinuationBody).not.toContain('"item_id":"msg_mock_block_1"');
   });
 
-  it("plans deterministic tool-progress reads from prompt paths", async () => {
-    const server = await startMockServer();
-
-    const response = await expectStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Tool progress QA check: read `qa-progress-target.txt` before answering. After the read completes, reply exactly `TOOL_PROGRESS_OK`.",
-        ),
-      ],
-    });
-
-    const body = await response.text();
-    expect(body).toContain('"name":"read"');
-    expect(body).toContain("qa-progress-target.txt");
-  });
-
   it("plans deterministic tool-progress reads for exact-marker prompts", async () => {
     const server = await startMockServer();
     const prompt =
@@ -982,21 +1091,6 @@ describe("qa mock openai server", () => {
     });
 
     expect(final.output[0]?.content?.[0]?.text).toBe(marker);
-  });
-
-  it("plans deterministic tool-progress exec commands from exact command prompts", async () => {
-    const server = await startMockServer();
-    const command =
-      "rg -n 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt' . ; sleep 2";
-    const prompt = `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that exec command completes or fails, reply exactly \`TOOL_PROGRESS_EXEC_OK\`.`;
-
-    const response = await expectStreamingResponses(server, {
-      input: [makeUserInput(prompt)],
-    });
-
-    const body = await response.text();
-    expect(body).toContain('"name":"exec"');
-    expect(body).toContain(command);
   });
 
   it("dispatches structured Slack commentary, exec, and final phases", async () => {
@@ -1479,32 +1573,6 @@ describe("qa mock openai server", () => {
     });
 
     expect(outputText(completion)).toBe("QA-LARGE-CACHE-WARMUP-OK");
-  });
-
-  it("preserves unquoted repo-scoped read targets", async () => {
-    const server = await startMockServer();
-    const toolPlan = await expectResponsesText(server, {
-      stream: true,
-      input: [makeUserInput("Read repo/qa/scenarios/index.yaml before continuing.")],
-    });
-
-    expect(toolPlan).toContain('"name":"read"');
-    expect(toolPlan).toContain('"arguments":"{\\"path\\":\\"repo/qa/scenarios/index.yaml\\"}"');
-  });
-
-  it("does not treat natural reply-exactly-with phrasing as a marker token", async () => {
-    const server = await startMockServer();
-    const response = await expectNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      input: [
-        makeUserInput(
-          "Use qa-visible-skill now. Reply exactly with the visible skill marker and nothing else.",
-        ),
-      ],
-    });
-
-    expect(outputText(response)).toBe("VISIBLE-SKILL-OK");
   });
 
   it("drives the Lobster Invaders write flow and memory recall responses", async () => {
@@ -2992,37 +3060,6 @@ Update and merge these partial structured summaries.`,
     expect(embeddingPayload.data?.map((item) => item.embedding?.length)).toStrictEqual([16, 16]);
   });
 
-  it("requests non-threaded subagent handoff for QA channel runs", async () => {
-    const server = await startMockServer();
-
-    const body = await expectStreamingResponsesText(server, {
-      tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        makeUserInput(
-          "Delegate a bounded QA task to a subagent, then summarize the delegated result clearly.",
-        ),
-      ],
-    });
-    expect(body).toContain('"name":"sessions_spawn"');
-    expect(body).toContain('\\"label\\":\\"qa-sidecar\\"');
-    expect(body).toContain('\\"thread\\":false');
-  });
-
-  it("emits explicitly requested sessions_spawn tool calls", async () => {
-    const server = await startMockServer();
-
-    const body = await expectResponsesText(server, {
-      stream: true,
-      tools: [SESSIONS_SPAWN_TOOL],
-      input: [makeUserInput(explicitSessionsSpawnPrompt("QA_SUBAGENT_CHILD_FIXED"))],
-    });
-    expect(body).toContain('"name":"sessions_spawn"');
-    expect(body).toContain('\\"label\\":\\"qa-thread-subagent\\"');
-    expect(body).toContain('\\"thread\\":true');
-    expect(body).toContain('\\"mode\\":\\"session\\"');
-    expect(body).toContain("QA_SUBAGENT_CHILD_FIXED");
-  });
-
   it("records planned sessions_spawn arguments for forked-context QA assertions", async () => {
     const server = await startMockServer();
 
@@ -3107,26 +3144,6 @@ Update and merge these partial structured summaries.`,
       "yield debug request",
     );
     expect(yieldDebug.plannedToolName).toBe("sessions_yield");
-  });
-
-  it("returns no visible announce output for the direct fallback QA marker", async () => {
-    const server = await startMockServer();
-
-    const body = await expectOpenAiNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      input: [
-        makeUserInput(
-          [
-            "[Internal task completion event]",
-            "Task: qa-direct-fallback-worker",
-            "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
-          ].join("\n"),
-        ),
-      ],
-    });
-
-    expect(body.output?.[0]?.content?.[0]?.text).toBe("");
   });
 
   it.each([
@@ -4719,34 +4736,6 @@ Update and merge these partial structured summaries.`,
     }
   });
 
-  it("answers heartbeat prompts without spawning extra subagents", async () => {
-    const server = await startMockServer();
-
-    const response = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "System: Gateway restart config-apply ok\nSystem: QA-SUBAGENT-RECOVERY-1234\n\nRead HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
-        ),
-      ],
-    });
-
-    expect(outputText(await response.json())).toBe("HEARTBEAT_OK");
-  });
-
-  it("returns exact markers for visible and hot-installed skills", async () => {
-    const server = await startMockServer();
-
-    const visible = await expectNonStreamingResponses(server, {
-      input: [makeUserInput("Visible skill marker: give me the visible skill marker exactly.")],
-    });
-    expect(outputText(await visible.json())).toBe("VISIBLE-SKILL-OK");
-
-    const hot = await expectNonStreamingResponses(server, {
-      input: [makeUserInput("Hot install marker: give me the hot install marker exactly.")],
-    });
-    expect(outputText(await hot.json())).toBe("HOT-INSTALL-OK");
-  });
-
   it("uses the latest exact marker directive from conversation history", async () => {
     const server = await startMockServer();
 
@@ -5273,41 +5262,6 @@ Update and merge these partial structured summaries.`,
     expect(outputText(completion)).toBe("fresh-image-completion-marker");
   });
 
-  it("plans QA tool-search calls for instruction-declared Codex dynamic tools", async () => {
-    const server = await startMockServer();
-
-    const response = await expectNonStreamingResponses(server, {
-      instructions: "Codex dynamic OpenClaw tools available in this turn: web_search.",
-      input: [
-        makeUserInput(
-          "tool search qa check target=web_search. Call exactly that tool once and then summarize.",
-        ),
-      ],
-    });
-
-    const toolPlanOutput = outputItem(await response.json());
-    expect(toolPlanOutput.type).toBe("function_call");
-    expect(toolPlanOutput.name).toBe("web_search");
-    expect(String(toolPlanOutput.arguments)).toContain("OpenClaw runtime parity fixed query");
-  });
-
-  it("plans QA tool-search calls from explicit fixture targets even without Responses tools", async () => {
-    const server = await startMockServer();
-
-    const response = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "tool search qa check target=session_status. Call exactly that tool once and then summarize.",
-        ),
-      ],
-    });
-
-    const toolPlanOutput = outputItem(await response.json());
-    expect(toolPlanOutput.type).toBe("function_call");
-    expect(toolPlanOutput.name).toBe("session_status");
-    expect(String(toolPlanOutput.arguments)).toContain("current");
-  });
-
   it("plans one structured batch search for the Tool Search gateway fixture", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
@@ -5451,24 +5405,6 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(outputItem(await response.json()).name).not.toBe("tool_call");
-  });
-
-  it("plans the explicit web_fetch fixture prompt as the canonical direct call", async () => {
-    const server = await startMockServer();
-    const prompt =
-      "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch.";
-
-    const response = await expectNonStreamingResponses(server, {
-      input: [makeUserInput(prompt)],
-    });
-
-    const toolPlanOutput = outputItem(await response.json());
-    expect(toolPlanOutput.type).toBe("function_call");
-    expect(toolPlanOutput.name).toBe("web_fetch");
-    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
-      url: "https://example.com/",
-      maxChars: 500,
-    });
   });
 
   it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {
@@ -5973,28 +5909,6 @@ Update and merge these partial structured summaries.`,
     },
   );
 
-  it("plans Codex Responses Lite handoff from declared developer additional tools", async () => {
-    const server = await startMockServer();
-
-    const response = await expectNonStreamingResponses(server, {
-      input: [
-        {
-          type: "additional_tools",
-          role: "developer",
-          tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
-        },
-        makeUserInput(
-          "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.",
-        ),
-      ],
-    });
-
-    const toolPlanOutput = outputItem(await response.json());
-    expect(toolPlanOutput.type).toBe("function_call");
-    expect(toolPlanOutput.name).toBe("sessions_spawn");
-    expect(toolPlanOutput.namespace).toBe("openclaw");
-  });
-
   it("records image inputs and describes attached images", async () => {
     const server = await startMockServer();
 
@@ -6344,19 +6258,6 @@ Update and merge these partial structured summaries.`,
     expect(body).toContain('"encrypted_content":"QA_MOCK_REMOTE_COMPACTION_SUMMARY"');
     expect(body).toContain('"type":"response.completed"');
     expect(await getJson(server, "/debug/requests")).toEqual([]);
-  });
-
-  it("returns NO_REPLY for unmentioned group chatter", async () => {
-    const server = await startMockServer();
-
-    const response = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          'Conversation info: ⟦openclaw:ctx⟧\n{"is_group_chat": true}\n\nhello team, no bot ping here',
-        ),
-      ],
-    });
-    expect(outputText(await response.json())).toBe("NO_REPLY");
   });
 
   it("advertises Anthropic claude-opus-4-8 baseline model on /v1/models", async () => {
