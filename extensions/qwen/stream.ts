@@ -10,6 +10,7 @@ import {
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  isQwenTokenPlanEffortThinkingModelId,
   isQwenTokenPlanDeepSeekV4ModelId,
   isQwenTokenPlanGlmModelId,
   isQwenTokenPlanKimiModelId,
@@ -22,6 +23,7 @@ import {
 type QwenThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 type QwenThinkingFormat = string | undefined;
 type QwenTokenPlanThinkingContract =
+  | { family: "qwen3.8" }
   | { family: "deepseek-v4" }
   | { family: "kimi" }
   | { family: "glm"; supportsMax: boolean };
@@ -84,6 +86,9 @@ function resolveQwenTokenPlanThinkingContract(
 ): QwenTokenPlanThinkingContract | undefined {
   if (!isQwenTokenPlanProviderId(providerId)) {
     return undefined;
+  }
+  if (isQwenTokenPlanEffortThinkingModelId(modelId)) {
+    return { family: "qwen3.8" };
   }
   if (isQwenTokenPlanDeepSeekV4ModelId(modelId)) {
     return { family: "deepseek-v4" };
@@ -176,7 +181,9 @@ function enforceQwenTokenPlanPayloadAfterCaller(
   }
   payload.enable_thinking = enableThinking;
   enableThinking = normalizeTokenPlanThinkingToolChoice(payload, enableThinking, forceThinking);
-  if (tokenPlanContract?.family === "deepseek-v4") {
+  if (tokenPlanContract?.family === "qwen3.8") {
+    patchTokenPlanQwen38Payload(payload, rawThinkingLevel, enableThinking);
+  } else if (tokenPlanContract?.family === "deepseek-v4") {
     const thinkingLevel =
       rawThinkingLevel === "xhigh" || rawThinkingLevel === "max" ? "max" : "high";
     patchTokenPlanDeepSeekV4Payload(payload, thinkingLevel, enableThinking);
@@ -274,6 +281,42 @@ function createQwenTokenPlanConstraintWrapper(
   };
 }
 
+// qwen3.8 is hybrid: thinking can be switched off, and when it is on the model honours the
+// documented low/high/xhigh effort enum, which is the caller's only lever on spend. Map
+// OpenClaw's wider level set onto that enum rather than dropping reasoning_effort, which is
+// what the generic branch would do and which would strand every call at the xhigh default.
+function patchTokenPlanQwen38Payload(
+  payload: Record<string, unknown>,
+  thinkingLevel: string | undefined,
+  enableThinking: boolean,
+): void {
+  delete payload.thinking;
+  payload.enable_thinking = enableThinking;
+  if (!enableThinking) {
+    delete payload.reasoning_effort;
+    return;
+  }
+  switch (typeof thinkingLevel === "string" ? thinkingLevel.trim().toLowerCase() : thinkingLevel) {
+    case "none":
+    case "off":
+    case "minimal":
+    case "low":
+      payload.reasoning_effort = "low";
+      return;
+    case "medium":
+      // Documented as low/high/xhigh, but the gateway accepts medium, so send it
+      // rather than rounding up to a tier the caller did not ask to pay for.
+      payload.reasoning_effort = "medium";
+      return;
+    case "high":
+      payload.reasoning_effort = "high";
+      return;
+    default:
+      // xhigh, max, or unset: the service already defaults to xhigh.
+      payload.reasoning_effort = "xhigh";
+  }
+}
+
 function patchTokenPlanGlmPayload(
   payload: Record<string, unknown>,
   thinkingLevel: QwenThinkingLevel,
@@ -333,7 +376,9 @@ export function createQwenThinkingWrapper(
       } else {
         payloadObj.enable_thinking = enableThinking;
       }
-      if (tokenPlanContract?.family === "deepseek-v4") {
+      if (tokenPlanContract?.family === "qwen3.8") {
+        patchTokenPlanQwen38Payload(payloadObj, effectiveThinkingLevel, enableThinking);
+      } else if (tokenPlanContract?.family === "deepseek-v4") {
         // DashScope's OpenAI endpoint uses enable_thinking, while DeepSeek V4
         // also requires replay reasoning_content and high/max effort mapping.
         patchTokenPlanDeepSeekV4Payload(payloadObj, effectiveThinkingLevel, enableThinking);
@@ -381,6 +426,8 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   // need provider constraints unless an explicit transport format owns them.
   const useTokenPlanConstraints =
     tokenPlanProvider && !explicitLegacyThinkingFormat && thinkingFormat === undefined;
+  // Only the thinking-only bucket rejects `enable_thinking: false`. The effort bucket is
+  // hybrid: it can turn thinking off, and keeps `reasoning_effort` when it is on.
   const forceThinking = useTokenPlanConstraints && isQwenTokenPlanThinkingOnlyModelId(ctx.modelId);
   let streamFn = createQwenThinkingWrapper(
     ctx.streamFn,

@@ -201,6 +201,80 @@ describe("wrapQwenProviderStream", () => {
     expect(captured).toStrictEqual({ enable_thinking: true });
   });
 
+  it.each([
+    ["qwen3.8-max", "minimal", "low"],
+    ["qwen3.8-max", "low", "low"],
+    ["qwen3.8-max", "medium", "medium"],
+    ["qwen3.8-max", "high", "high"],
+    ["qwen3.8-max", "xhigh", "xhigh"],
+    ["qwen3.8-max", "max", "xhigh"],
+  ])(
+    "keeps %s thinking on and maps level %s to effort %s",
+    (modelId, thinkingLevel, expectedEffort) => {
+      let captured: Record<string, unknown> = {};
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {};
+        options?.onPayload?.(payload, _model);
+        captured = payload;
+        return {} as ReturnType<StreamFn>;
+      };
+      const model = {
+        api: "openai-completions",
+        provider: "qwen-token-plan",
+        id: modelId,
+        reasoning: true,
+      } as Model<"openai-completions">;
+      const wrapped = wrapQwenProviderStream({
+        provider: "qwen-token-plan",
+        modelId: model.id,
+        model,
+        streamFn: baseStreamFn,
+        thinkingLevel,
+      } as never);
+
+      void wrapped?.(model, { messages: [] } as Context, {} as never);
+
+      // The generic branch would drop reasoning_effort and strand the call at the
+      // service default of xhigh, so the effort must survive on this family.
+      expect(captured).toStrictEqual({
+        enable_thinking: true,
+        reasoning_effort: expectedEffort,
+      });
+    },
+  );
+
+  it.each(["qwen3.8-max"])(
+    "turns thinking off for %s on /think off and sends no effort",
+    (modelId) => {
+      let captured: Record<string, unknown> = {};
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {};
+        options?.onPayload?.(payload, _model);
+        captured = payload;
+        return {} as ReturnType<StreamFn>;
+      };
+      const model = {
+        api: "openai-completions",
+        provider: "qwen-token-plan",
+        id: modelId,
+        reasoning: true,
+      } as Model<"openai-completions">;
+      const wrapped = wrapQwenProviderStream({
+        provider: "qwen-token-plan",
+        modelId: model.id,
+        model,
+        streamFn: baseStreamFn,
+        thinkingLevel: "off",
+      } as never);
+
+      void wrapped?.(model, { messages: [] } as Context, {} as never);
+
+      // qwen3.8 is hybrid: the gateway accepts enable_thinking:false and suppresses
+      // reasoning, so /think off must reach it instead of being raised to low effort.
+      expect(captured).toStrictEqual({ enable_thinking: false });
+    },
+  );
+
   it.each(["kimi-k2.7-code", "MiniMax-M2.5"])(
     "forces thinking for %s when configured catalog metadata disables reasoning",
     (modelId) => {
