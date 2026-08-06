@@ -28,7 +28,11 @@ export type GatewayRestartSnapshot = {
   elapsedMs?: number;
 };
 
+export type GatewayPortHealthWaitOutcome = "healthy" | "timeout" | "still-starting";
+
 export type GatewayPortHealthSnapshot = {
   portUsage: PortUsage;
   healthy: boolean;
+  waitOutcome?: GatewayPortHealthWaitOutcome;
+  elapsedMs?: number;
 };

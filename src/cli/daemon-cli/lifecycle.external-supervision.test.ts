@@ -228,6 +228,7 @@ describe("external gateway supervision lifecycle", () => {
       delayMs: 500,
       previousLockIdentity: lockIdentity,
       waitIndefinitelyForPreviousOwner: false,
+      previousOwnerPid: 4200,
     });
   });
 
@@ -245,7 +246,31 @@ describe("external gateway supervision lifecycle", () => {
       delayMs: 500,
       previousLockIdentity: gatewayLockIdentity,
       waitIndefinitelyForPreviousOwner: false,
+      previousOwnerPid: 4200,
     });
+  });
+
+  it("reports a slow in-process restart as still starting instead of failing", async () => {
+    waitForGatewayHealthyListener.mockResolvedValue({
+      healthy: false,
+      portUsage: { port: 18_789, status: "free", listeners: [], hints: [] },
+      waitOutcome: "still-starting",
+      elapsedMs: 65_000,
+    });
+    const { defaultRuntime } = await import("../../runtime.js");
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    await expect(runDaemonRestart({ json: true, force: true })).resolves.toBe(true);
+
+    expect(writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "restart",
+        ok: true,
+        message: expect.stringContaining("still in progress after 65s"),
+      }),
+    );
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Timed out after"));
   });
 
   it("uses targeted in-gateway restart transport on Windows", async () => {
@@ -277,6 +302,7 @@ describe("external gateway supervision lifecycle", () => {
       delayMs: 500,
       previousLockIdentity: gatewayLockIdentity,
       waitIndefinitelyForPreviousOwner: false,
+      previousOwnerPid: 4200,
     });
   });
 

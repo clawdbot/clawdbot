@@ -109,6 +109,27 @@ function formatRestartFailure(params: {
   };
 }
 
+/**
+ * Renders the "still starting" note for in-process (SIGUSR1) gateway restarts:
+ * the PID is unchanged and the process is alive while the port is still free,
+ * so the restart is progressing rather than failed. Explicitly non-failure
+ * language — failure here would push operators toward destructive recovery of
+ * a healthy, booting process.
+ */
+function formatGatewayStillStartingMessage(params: {
+  elapsedMs?: number;
+  pid: number;
+  fallbackTimeoutSeconds: number;
+}): string {
+  const elapsedSeconds = Math.max(
+    1,
+    Math.round(
+      params.elapsedMs === undefined ? params.fallbackTimeoutSeconds : params.elapsedMs / 1000,
+    ),
+  );
+  return `Gateway restart is still in progress after ${elapsedSeconds}s: process PID ${params.pid} is alive and booting (in-process restart keeps the PID). Poll readiness with "openclaw gateway status --deep".`;
+}
+
 async function resolveGatewayLifecycleContext(service = resolveGatewayService()): Promise<{
   port: number;
   env: NodeJS.ProcessEnv;
@@ -442,11 +463,29 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     delayMs: POST_RESTART_HEALTH_DELAY_MS,
     previousLockIdentity: signaled.previousLockIdentity,
     waitIndefinitelyForPreviousOwner: healthWait.waitIndefinitelyForPreviousOwner,
+    previousOwnerPid: signaled.pid,
   });
-  if (!health.healthy) {
+  if (!health.healthy && health.waitOutcome !== "still-starting") {
     const message = `Gateway restart timed out after ${healthWait.timeoutSeconds}s waiting for health checks.`;
     fail(message, renderGatewayPortHealthDiagnostics(health));
     return false;
+  }
+
+  if (health.waitOutcome === "still-starting") {
+    const stillStartingMessage = formatGatewayStillStartingMessage({
+      elapsedMs: health.elapsedMs,
+      pid: signaled.pid,
+      fallbackTimeoutSeconds: healthWait.timeoutSeconds,
+    });
+    emit({
+      ok: true,
+      result: signaled.result,
+      message: stillStartingMessage,
+    });
+    if (!json) {
+      defaultRuntime.log(theme.info(stillStartingMessage));
+    }
+    return true;
   }
 
   emit({
@@ -582,6 +621,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let unmanagedRestartHealthAttempts = restartHealthAttempts;
   let unmanagedRestartWaitIndefinitely = false;
   let unmanagedRestartWaitSeconds = restartWaitSeconds;
+  let unmanagedRestartPid: number | undefined;
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
@@ -626,12 +666,15 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const handled = await restartUnmanaged(unmanagedPort, restartIntent, !mutationError);
       if (handled) {
         restartedWithoutServiceManager = true;
-        if (isGatewaySignalRestartResult(handled) && handled.previousLockIdentity) {
-          unmanagedPreviousLockIdentity = handled.previousLockIdentity;
-          const healthWait = await resolveRestartListenerHealthWait(restartIntent);
-          unmanagedRestartHealthAttempts = healthWait.attempts;
-          unmanagedRestartWaitIndefinitely = healthWait.waitIndefinitelyForPreviousOwner;
-          unmanagedRestartWaitSeconds = healthWait.timeoutSeconds;
+        if (isGatewaySignalRestartResult(handled)) {
+          unmanagedRestartPid = handled.pid;
+          if (handled.previousLockIdentity) {
+            unmanagedPreviousLockIdentity = handled.previousLockIdentity;
+            const healthWait = await resolveRestartListenerHealthWait(restartIntent);
+            unmanagedRestartHealthAttempts = healthWait.attempts;
+            unmanagedRestartWaitIndefinitely = healthWait.waitIndefinitelyForPreviousOwner;
+            unmanagedRestartWaitSeconds = healthWait.timeoutSeconds;
+          }
         }
         return handled;
       }
@@ -654,8 +697,22 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
                 waitIndefinitelyForPreviousOwner: unmanagedRestartWaitIndefinitely,
               }
             : {}),
+          ...(unmanagedRestartPid !== undefined ? { previousOwnerPid: unmanagedRestartPid } : {}),
         });
         if (health.healthy) {
+          return undefined;
+        }
+        if (health.waitOutcome === "still-starting" && unmanagedRestartPid !== undefined) {
+          const stillStartingLine = formatGatewayStillStartingMessage({
+            elapsedMs: health.elapsedMs,
+            pid: unmanagedRestartPid,
+            fallbackTimeoutSeconds: unmanagedRestartWaitSeconds,
+          });
+          if (!jsonOutput) {
+            defaultRuntime.log(theme.info(stillStartingLine));
+          } else {
+            warnings.push(stillStartingLine);
+          }
           return undefined;
         }
 

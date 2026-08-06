@@ -875,6 +875,7 @@ describe("runDaemonRestart health checks", () => {
         port: 18_789,
       },
       waitIndefinitelyForPreviousOwner: false,
+      previousOwnerPid: 4200,
     });
   });
 
@@ -917,6 +918,7 @@ describe("runDaemonRestart health checks", () => {
         port: 18_789,
       },
       waitIndefinitelyForPreviousOwner: false,
+      previousOwnerPid: 4200,
     });
   });
 

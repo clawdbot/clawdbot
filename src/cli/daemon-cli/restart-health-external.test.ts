@@ -1,5 +1,5 @@
 // Externally supervised gateway restart polling tests.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   inspectPortUsage,
   mockGatewayLockReplacement,
@@ -97,5 +97,78 @@ describe("restart health", () => {
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
     expect(inspectPortUsage).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports still-starting when the restarted process is alive and the port is free", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => undefined);
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 1,
+      delayMs: 500,
+      previousOwnerPid: 4200,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("still-starting");
+    expect(snapshot.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(killSpy).toHaveBeenCalledWith(4200, 0);
+  });
+
+  it("reports timeout when the restarted process is no longer alive", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      const error = new Error("ESRCH") as NodeJS.ErrnoException;
+      error.code = "ESRCH";
+      throw error;
+    });
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 1,
+      delayMs: 500,
+      previousOwnerPid: 4200,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("timeout");
+  });
+
+  it("keeps the healthy outcome for a reachable listener", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4200, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.7.16", connId: "gateway" },
+    });
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 1,
+      delayMs: 500,
+      previousOwnerPid: 4200,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.waitOutcome).toBe("healthy");
   });
 });
