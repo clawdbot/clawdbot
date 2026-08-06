@@ -16,7 +16,7 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.openNodeSqliteDatabase>
     ): ReturnType<typeof actual.openNodeSqliteDatabase> => {
       const [databasePath] = args;
-      sqliteOpenState.beforeOpen?.(databasePath);
+      void sqliteOpenState.beforeOpen?.(databasePath);
       return actual.openNodeSqliteDatabase(...args);
     },
   };
