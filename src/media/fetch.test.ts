@@ -1722,5 +1722,81 @@ describe("readRemoteMediaBuffer", () => {
     ).rejects.toMatchObject({ code: "http_error", status: 400 });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  // readRemoteMediaBuffer is the OTHER Wikimedia-fetching path — the one Telegram
+  // reply delivery actually uses (via loadWebMedia), distinct from saveRemoteMedia's
+  // managed-media-store path above. The original fix only wrapped saveRemoteMedia, so
+  // a rejected Wikimedia thumbnail could still abort a Telegram reply before its text
+  // sent, on exactly the route the original bug report described. These three tests
+  // mirror the saveRemoteMedia Wikimedia tests above, against readRemoteMediaBuffer.
+  it("retries against the original file even when the 400 response body was drained (readRemoteMediaBuffer / Telegram reply path)", async () => {
+    const thumbUrl =
+      "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
+    const originalUrl =
+      "https://upload.wikimedia.org/wikipedia/commons/e/e7/007_American_Pit_Bull_Terrier.jpg";
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 400 }))
+      .mockResolvedValueOnce(
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+      );
+
+    const result = await readRemoteMediaBuffer({
+      url: thumbUrl,
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(thumbUrl);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(originalUrl);
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.buffer).toStrictEqual(Buffer.from([1, 2, 3]));
+  });
+
+  it("does not rewrite non-upload.wikimedia.org hosts in readRemoteMediaBuffer (guards the endsWith overmatch)", async () => {
+    const plainFetchImpl = vi.fn().mockResolvedValueOnce(new Response(null, { status: 400 }));
+    await expect(
+      readRemoteMediaBuffer({
+        url: "https://example.com/image.jpg",
+        fetchImpl: plainFetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ code: "http_error", status: 400 });
+    expect(plainFetchImpl).toHaveBeenCalledTimes(1);
+
+    const evilFetchImpl = vi.fn().mockResolvedValueOnce(new Response(null, { status: 400 }));
+    await expect(
+      readRemoteMediaBuffer({
+        url: "https://evilwikimedia.org/wikipedia/commons/thumb/e/e7/x.jpg/800px-x.jpg",
+        fetchImpl: evilFetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ code: "http_error", status: 400 });
+    expect(evilFetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the original thumbnail error when the original file also fails (readRemoteMediaBuffer)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 400 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+
+    await expect(
+      readRemoteMediaBuffer({
+        url: "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/x.jpg/800px-x.jpg",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ code: "http_error", status: 400 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

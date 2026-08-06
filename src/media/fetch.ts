@@ -640,16 +640,23 @@ export async function saveResponseMedia(
   });
 }
 
+/**
+ * True for a `MediaFetchError` produced by an HTTP 400 response — the status
+ * Wikimedia returns for a thumbnail width outside its pre-rendered whitelist.
+ * Shared by `saveRemoteMedia` and `readRemoteMediaBuffer` so the Wikimedia
+ * original-file fallback (./wikimedia.js) covers both fetch paths: the
+ * managed-media store write AND the buffer read Telegram reply delivery uses
+ * (via `loadWebMedia`). Body-agnostic on purpose — the managed-media store
+ * path drains non-OK response bodies before this ever sees them.
+ */
+function isWikimediaThumbnailRejection(err: unknown): boolean {
+  return err instanceof MediaFetchError && err.code === "http_error" && err.status === 400;
+}
+
 /** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  // Wikimedia rejects thumbnail widths outside its pre-rendered whitelist with an
-  // HTTP 400; retry the always-available original file. Body-agnostic on purpose, so
-  // it also fires on the managed-media store path that drains non-OK bodies. See
-  // ./wikimedia.js.
-  return await withWikimediaOriginalFallback(
-    options.url,
-    (err) => err instanceof MediaFetchError && err.code === "http_error" && err.status === 400,
-    (url) => withMediaFetchRetry(options, () => saveRemoteMediaOnce({ ...options, url })),
+  return await withWikimediaOriginalFallback(options.url, isWikimediaThumbnailRejection, (url) =>
+    withMediaFetchRetry(options, () => saveRemoteMediaOnce({ ...options, url })),
   );
 }
 
@@ -683,7 +690,13 @@ async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<Sav
 
 /** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
 export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  return await withMediaFetchRetry(options, () => readRemoteMediaBufferOnce(options));
+  // Same Wikimedia original-file fallback as saveRemoteMedia above — this is the path
+  // Telegram reply delivery actually uses (loadWebMedia -> readRemoteMediaBuffer), so
+  // without this a rejected Wikimedia thumbnail still aborts the reply before its text
+  // sends, on exactly the route the original bug report described.
+  return await withWikimediaOriginalFallback(options.url, isWikimediaThumbnailRejection, (url) =>
+    withMediaFetchRetry(options, () => readRemoteMediaBufferOnce({ ...options, url })),
+  );
 }
 
 /** @deprecated Use `readRemoteMediaBuffer` for buffer reads or `saveRemoteMedia` for URL-to-store. */
