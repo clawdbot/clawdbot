@@ -85,9 +85,9 @@ const detected: SystemAgentSetupDetectResult = {
     {
       id: "llama-cpp",
       brandId: "llama-cpp",
-      label: "Local model (llama.cpp)",
-      hint: "Download and run a private GGUF model",
-      actionLabel: "Review download",
+      label: "llama.cpp",
+      hint: "Run one private GGUF model directly inside this Gateway",
+      actionLabel: "Set up model",
     },
   ],
   recommendedInstalls: [
@@ -159,7 +159,11 @@ function text(container: Element): string {
   return container.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
+function wizardStep(
+  step: WizardStep,
+  value: unknown = step.initialValue,
+  wizardMode: ModelSetupViewProps["wizardMode"] = "auth",
+): HTMLDivElement {
   return mount(
     props({
       wizard: {
@@ -169,6 +173,7 @@ function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLD
         busy: false,
         validationError: null,
       },
+      wizardMode,
       wizardValue: value,
     }),
   );
@@ -502,7 +507,7 @@ describe("renderModelSetup", () => {
       '[data-prepare-choice="llama-cpp"] button',
     );
     expect(ollama?.textContent).toContain("Choose connection");
-    expect(llamaCpp?.textContent).toContain("Review download");
+    expect(llamaCpp?.textContent).toContain("Set up model");
     expect(
       container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
         ?.textContent,
@@ -797,7 +802,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).not.toContain("Open Chat");
   });
 
-  it("renders an idle current connection and verifies it", () => {
+  it("renders the selected model and verifies it", () => {
     const onVerify = vi.fn();
     const container = mount(
       props({
@@ -807,7 +812,9 @@ describe("renderModelSetup", () => {
     );
     const current = container.querySelector(".model-setup__current");
     expect(container.querySelector(".settings-section")).toBe(current);
-    expect(text(current!)).toContain("Current connection openai/gpt-5 Verify connection");
+    expect(text(current!)).toContain("Selected model OpenAI gpt-5 · Signed in locally");
+    expect(text(current!)).toContain("Signed in locally");
+    expect(text(current!)).toContain("Check model");
     expect(current?.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     current?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onVerify).toHaveBeenCalledOnce();
@@ -849,7 +856,7 @@ describe("renderModelSetup", () => {
 
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    expect(text(container)).toContain("Current connection openai/gpt-5.6-sol");
+    expect(text(container)).toContain("Selected model OpenAI gpt-5.6-sol");
   });
 
   it("renders connection verification progress", () => {
@@ -873,10 +880,11 @@ describe("renderModelSetup", () => {
         verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 },
       }),
     );
-    expect(text(container)).toContain("Answered in 1234 ms");
+    expect(text(container)).toContain("Ready · 1234 ms");
     const current = container.querySelector(".model-setup__current");
-    expect(current?.textContent).toContain("anthropic/claude-opus-4-8");
-    expect(current?.querySelector("strong")?.textContent).not.toContain("openai/gpt-5");
+    expect(current?.textContent).toContain("Anthropic");
+    expect(current?.textContent).toContain("claude-opus-4-8");
+    expect(current?.textContent).not.toContain("openai/gpt-5");
     expect(current?.querySelector('[data-provider-icon="claude"]')).not.toBeNull();
   });
 
@@ -887,7 +895,9 @@ describe("renderModelSetup", () => {
         verify: { phase: "failed", status: "billing", error: "No credits" },
       }),
     );
-    expect(text(container)).toContain("Billing problem No credits");
+    expect(text(container)).toContain(
+      "Billing problem. No credits Restore provider billing or quota, then retry.",
+    );
   });
 
   it("hides the current connection without a configured model", () => {
@@ -900,11 +910,11 @@ describe("renderModelSetup", () => {
     const nonAdmin = mount(
       props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
     );
-    expect(text(nonAdmin)).toContain("Current connection openai/gpt-5");
+    expect(text(nonAdmin)).toContain("Selected model OpenAI gpt-5");
     expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
 
     const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
-    expect(text(unsupportedGateway)).toContain("Current connection openai/gpt-5");
+    expect(text(unsupportedGateway)).toContain("Selected model OpenAI gpt-5");
     expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
   });
 
@@ -953,12 +963,12 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Expires in 10 minutes");
   });
 
-  it("copies device codes through the plain-HTTP clipboard fallback", async () => {
-    vi.stubGlobal("navigator", {});
-    let copiedText: string | undefined;
+  it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+    vi.stubGlobal("navigator", copied ? {} : { clipboard: { writeText } });
     const execCommand = vi.fn().mockImplementation(() => {
-      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
-      return true;
+      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("ABCD-EFGH");
+      return copied;
     });
     (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
     const container = wizardStep({
@@ -967,14 +977,14 @@ describe("renderModelSetup", () => {
       deviceCode: { code: "ABCD-EFGH" },
     });
 
-    const copy = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Copy",
-    );
-    expect(copy).toBeDefined();
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__device-code button");
     copy?.click();
 
-    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
-    expect(copiedText).toBe("ABCD-EFGH");
+    const feedback = copied ? "Copied!" : "Copy failed";
+    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
+    expect(copy?.getAttribute("aria-label")).toBe(feedback);
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(writeText).toHaveBeenCalledTimes(copied ? 0 : 1);
     expect(document.querySelector("textarea")).toBeNull();
   });
 
@@ -1022,6 +1032,15 @@ describe("renderModelSetup", () => {
     const confirm = wizardStep({ id: "confirm", type: "confirm", message: "Continue?" });
     expect(text(confirm)).toContain("Yes");
     expect(text(confirm)).toContain("No");
+
+    const prepareConfirm = wizardStep(
+      { id: "confirm", type: "confirm", message: "Set up this model?" },
+      undefined,
+      "prepare",
+    );
+    expect(text(prepareConfirm)).toContain("Continue");
+    expect(text(prepareConfirm)).toContain("No");
+    expect(text(prepareConfirm)).not.toContain("Yes");
   });
 
   it.each(["multiselect", "action"] as const)("renders the %s wizard step", (type) => {

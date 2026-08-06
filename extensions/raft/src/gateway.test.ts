@@ -198,6 +198,14 @@ describe("Raft wake gateway", () => {
 
     const wakeEndpoint = await waitFor(() => endpoint);
     const bridgeToken = await waitFor(() => token);
+    expect(ctx.getStatus()).toMatchObject({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
     await expect(fetch(wakeEndpoint.replace("/wake", "/health"))).resolves.toMatchObject({
       status: 200,
     });

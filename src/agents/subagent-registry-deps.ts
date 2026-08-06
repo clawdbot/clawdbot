@@ -7,9 +7,9 @@ import { callGateway } from "../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
-import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import {
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
@@ -50,9 +50,11 @@ export type SubagentRegistryDeps = {
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
   maybeWakeRequesterAfterAllChildrenSettled: RequesterSettleWakeModule["maybeWakeRequesterAfterAllChildrenSettled"];
   ensureContextEnginesInitialized?: () => void;
-  ensureRuntimePluginsLoaded?: (
-    params: Parameters<typeof ensureRuntimePluginsLoadedFn>[0],
-  ) => void | Promise<void>;
+  loadAgentRuntimePluginRegistryHandle?: (params: {
+    config: OpenClawConfig;
+    workspaceDir?: string;
+    allowGatewaySubagentBinding?: boolean;
+  }) => PluginRegistry | undefined;
   resolveContextEngine?: (
     cfg?: OpenClawConfig,
     options?: ResolveContextEngineOptions,
@@ -107,7 +109,6 @@ type SubagentRegistryRuntimeModule = {
     cfg?: OpenClawConfig,
     options?: ResolveContextEngineOptions,
   ) => Promise<ContextEngine>;
-  ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoadedFn;
 };
 
 const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
@@ -119,18 +120,22 @@ const subagentRegistryRuntimeLoader = createLazyPromiseLoader(() =>
     SUBAGENT_REGISTRY_RUNTIME_SPEC,
   ),
 );
+const subagentRegistryPluginRuntimeLoader = createLazyPromiseLoader(
+  () => import("./runtime-plugins.js"),
+);
 
-export async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
+export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
-}) {
-  const ensureRuntimePluginsLoaded = subagentRegistryDeps.ensureRuntimePluginsLoaded;
-  if (ensureRuntimePluginsLoaded) {
-    await ensureRuntimePluginsLoaded(params);
-    return;
+}): Promise<PluginRegistry | undefined> {
+  const configuredLoader = subagentRegistryDeps.loadAgentRuntimePluginRegistryHandle;
+  if (configuredLoader) {
+    return configuredLoader(params);
   }
-  (await subagentRegistryRuntimeLoader.load()).ensureRuntimePluginsLoaded(params);
+  return (await subagentRegistryPluginRuntimeLoader.load()).loadAgentRuntimePluginRegistryHandle(
+    params,
+  );
 }
 
 export async function resolveSubagentRegistryContextEngine(
@@ -154,6 +159,7 @@ export function setSubagentRegistryDepsForTest(overrides?: Partial<SubagentRegis
 
 export function resetSubagentRegistryRuntimeLoadersForTests() {
   subagentRegistryRuntimeLoader.clear();
+  subagentRegistryPluginRuntimeLoader.clear();
   subagentAnnounceLoader.clear();
   browserCleanupLoader.clear();
 }

@@ -126,7 +126,9 @@ describe("scripts/bench-sqlite-reliability", () => {
         },
         operation: async () => {
           fs.writeFileSync(walPath, Buffer.alloc(2048));
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 25);
+          });
           fs.truncateSync(walPath, 0);
           return "complete";
         },

@@ -7,6 +7,7 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -22,7 +23,6 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -656,13 +656,14 @@ export function installSessionToolResultGuard(
   const transcriptSeqByEntryId: TranscriptSeqByEntryId = new Map();
   let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
-  const getSessionFile = () =>
-    (sessionManager as { getSessionFile?: () => string | null }).getSessionFile?.();
-
   const appendMessageAndCacheTranscriptSeq = (
     message: AgentMessage,
     options?: AppendMessageOptions,
-  ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
+  ): {
+    entryId: string;
+    messageSeq?: number;
+    sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
+  } => {
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
     const entryId = originalAppend(message as never, options);
@@ -670,13 +671,13 @@ export function installSessionToolResultGuard(
       return { entryId };
     }
     void opts?.onMessagePersisted?.(message);
-    const sessionFile = getSessionFile();
-    if (!sessionFile) {
-      return { entryId, sessionFile };
+    const sessionTarget = sessionManager.getSessionTarget();
+    if (!sessionTarget) {
+      return { entryId };
     }
     return {
       entryId,
-      sessionFile,
+      sessionTarget,
       messageSeq: resolveAppendedMessageSeq({
         sessionManager,
         entryId,
@@ -888,16 +889,13 @@ export function installSessionToolResultGuard(
     const {
       entryId: result,
       messageSeq,
-      sessionFile,
+      sessionTarget,
     } = appendMessageAndCacheTranscriptSeq(finalMessage, {
       invalidateSerializedPrefixCache:
         callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
     });
-    if (sessionFile) {
-      emitSessionTranscriptUpdate({
-        sessionFile,
-        sessionKey: opts?.sessionKey,
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    if (sessionTarget) {
+      void publishTranscriptUpdate(sessionTarget, {
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),

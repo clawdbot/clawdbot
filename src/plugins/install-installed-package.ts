@@ -196,7 +196,7 @@ export async function validatePackagePluginInstallSource(params: {
         ? { setup: ocManifestResult.manifest.setup }
         : {}),
       hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
-      peerDependencies: manifest.peerDependencies ?? {},
+      peerDependencies: { ...manifest.dependencies, ...manifest.peerDependencies },
     },
   };
 }

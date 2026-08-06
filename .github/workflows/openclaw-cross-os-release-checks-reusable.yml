@@ -638,13 +638,15 @@ jobs:
       - name: Capture baseline metadata
         if: ${{ inputs.mode != 'fresh' }}
         id: baseline_metadata
+        working-directory: workflow
         env:
           BASELINE_PACK_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/pack.json
         run: |
-          node <<'NODE' >>"$GITHUB_OUTPUT"
-          const crypto = require("node:crypto");
-          const fs = require("node:fs");
-          const path = require("node:path");
+          node --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
+          import crypto from "node:crypto";
+          import fs from "node:fs";
+          import path from "node:path";
+          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";
           function resolveTarballFileName(value, label) {
             const fileName = typeof value === "string" ? value.trim() : "";
             if (
@@ -658,7 +660,7 @@ jobs:
             return fileName;
           }
           const payload = JSON.parse(fs.readFileSync(process.env.BASELINE_PACK_JSON, "utf8"));
-          const entry = Array.isArray(payload) ? payload.at(-1) : null;
+          const entry = resolveNpmJsonEntries(payload).at(-1);
           const fileName = resolveTarballFileName(entry?.filename, "Baseline npm pack filename");
           const sha256 = crypto
             .createHash("sha256")
@@ -972,19 +974,39 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
-            --candidate-tgz "${CANDIDATE_TGZ}" \
-            --candidate-version "${CANDIDATE_VERSION}" \
-            --source-sha "${SOURCE_SHA}" \
-            --baseline-spec "${BASELINE_SPEC}" \
-            --previous-version "${PREVIOUS_VERSION}" \
-            --baseline-tgz "${BASELINE_TGZ}" \
-            --provider "${PROVIDER}" \
-            --mode "${MODE}" \
-            --suite "${SUITE}" \
-            --ref "${REF}" \
-            "${DISCORD_ARGS[@]}" \
-            --output-dir "${OUTPUT_DIR}"
+          run_cross_os_release_checks() {
+            bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
+              --candidate-tgz "${CANDIDATE_TGZ}" \
+              --candidate-version "${CANDIDATE_VERSION}" \
+              --source-sha "${SOURCE_SHA}" \
+              --baseline-spec "${BASELINE_SPEC}" \
+              --previous-version "${PREVIOUS_VERSION}" \
+              --baseline-tgz "${BASELINE_TGZ}" \
+              --provider "${PROVIDER}" \
+              --mode "${MODE}" \
+              --suite "${SUITE}" \
+              --ref "${REF}" \
+              "${DISCORD_ARGS[@]}" \
+              --output-dir "${OUTPUT_DIR}"
+          }
+
+          if run_cross_os_release_checks; then
+            exit 0
+          else
+            status=$?
+          fi
+
+          dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"
+          if [[ "${OPENCLAW_RELEASE_CHECK_OS}" != "windows" ||
+                "$status" -ne 127 ||
+                ! -f "${dashboard_log}" ||
+                -f "${OUTPUT_DIR}/summary.json" ]] ||
+            ! grep -q 'attempt=.*url=http://127.0.0.1:' "${dashboard_log}"; then
+            exit "$status"
+          fi
+
+          echo "::warning::retrying Windows release checks after the outer process exited 127 after the dashboard probe and before summary generation"
+          run_cross_os_release_checks
 
       - name: Summarize release checks
         if: always()

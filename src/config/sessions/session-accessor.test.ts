@@ -139,6 +139,40 @@ describe("session accessor seam", () => {
     expect(deleteSessionEntryLifecycle).toBe(deleteSqliteSessionEntryLifecycle);
   });
 
+  it("returns typed sync event append outcomes for missing, rebound, and duplicate rows", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "expected-session",
+      sessionKey: "agent:main:typed-append",
+      storePath,
+    };
+    const event = { type: "custom", id: "typed-event", timestamp: 1 };
+
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({
+      ok: false,
+      error: {
+        code: "session-entry-missing",
+        expectedSessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      },
+    });
+
+    await upsertSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 1 });
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({
+      ok: false,
+      error: {
+        actualSessionId: "replacement-session",
+        code: "session-rebound",
+        expectedSessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      },
+    });
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({ ok: true, value: true });
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({ ok: true, value: false });
+  });
+
   it("loads, lists, and patches session entries without exposing the file store shape", async () => {
     const scope = {
       sessionKey: "agent:main:main",
@@ -1614,6 +1648,27 @@ describe("session accessor seam", () => {
       providerOverride: "openai",
       sessionId: "session-1",
     });
+    expect(loadSessionEntry(scope)?.model).toBeUndefined();
+  });
+
+  it("rejects a patch when its commit-edge ownership guard retires", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+
+    await expect(
+      patchSessionEntry(scope, () => ({ model: "gpt-5.5" }), {
+        assertCommitAllowed: () => {
+          throw new Error("owner retired");
+        },
+      }),
+    ).rejects.toThrow("owner retired");
+
     expect(loadSessionEntry(scope)?.model).toBeUndefined();
   });
 
@@ -3640,6 +3695,50 @@ describe("session accessor seam", () => {
     expect(target).toEqual({
       agentId: "main",
       sessionId: "custom-topic-session",
+      sessionKey,
+      storePath,
+    });
+  });
+
+  it("preserves a matching preloaded entry identity without rereading the session row", () => {
+    const sessionKey = "agent:main:preloaded-read";
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: { sessionId: "preloaded-session" },
+      sessionId: "preloaded-session",
+      sessionKey,
+      storePath,
+    });
+
+    expect(target).toEqual({
+      agentId: "main",
+      sessionId: "preloaded-session",
+      sessionKey,
+      storePath,
+    });
+  });
+
+  it("does not trust a preloaded entry for a different session id", async () => {
+    const sessionKey = "agent:main:mismatched-preloaded-read";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "stored-session",
+        updatedAt: 10,
+      },
+    );
+
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: { sessionId: "different-session" },
+      sessionId: "stored-session",
+      sessionKey,
+      storePath,
+    });
+
+    expect(target).toEqual({
+      agentId: "main",
+      sessionId: "stored-session",
       sessionKey,
       storePath,
     });

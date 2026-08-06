@@ -68,6 +68,10 @@ describe("Microsoft Teams QA transport adapter", () => {
     const config = adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1" });
     const webhookPort = config.channels?.msteams?.webhook?.port;
     expect(webhookPort).toEqual(expect.any(Number));
+    expect(config.channels?.msteams).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["00000000-0000-4000-8000-000000000002"],
+    });
     let inboundActivity: Record<string, unknown> | undefined;
     const webhook = createServer((request, response) => {
       void (async () => {
@@ -89,6 +93,7 @@ describe("Microsoft Teams QA transport adapter", () => {
         senderName: "Driver",
         text: "@openclaw qa ingress",
         threadId: "thread-root",
+        replyToId: "quoted-parent",
       });
       expect(inboundActivity).toMatchObject({
         text: "<at>openclaw</at> qa ingress",
@@ -100,6 +105,11 @@ describe("Microsoft Teams QA transport adapter", () => {
           },
         ],
         serviceUrl: "https://smba.trafficmanager.net/qa",
+        replyToId: "quoted-parent",
+        from: {
+          id: "qa-msteams-driver",
+          aadObjectId: "00000000-0000-4000-8000-000000000002",
+        },
         conversation: {
           id: "19:qa-primary@thread.tacv2;messageid=thread-root",
           conversationType: "channel",

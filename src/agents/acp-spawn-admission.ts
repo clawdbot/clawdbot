@@ -6,7 +6,10 @@ function isActiveTaskStatus(status: string | undefined): boolean {
   return status === "queued" || status === "running";
 }
 
-export function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): number {
+export function countUntrackedActiveAcpRunsForOwner(
+  ownerKey: string | undefined,
+  pendingChildSessionKeys?: ReadonlySet<string>,
+): number {
   const normalizedOwnerKey = normalizeOptionalString(ownerKey);
   if (!normalizedOwnerKey) {
     return 0;
@@ -26,10 +29,13 @@ export function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined
     tasks.flatMap((task) => {
       const childSessionKey = normalizeOptionalString(task.childSessionKey);
       const trackedRun = childSessionKey ? getSubagentRunByChildSessionKey(childSessionKey) : null;
-      const hasActiveRegistryRun = Boolean(trackedRun && typeof trackedRun.endedAt !== "number");
+      const hasActiveRegistryRun = Boolean(
+        trackedRun && typeof trackedRun.execution.endedAt !== "number",
+      );
       return task.runtime === "acp" &&
         isActiveTaskStatus(task.status) &&
         childSessionKey !== undefined &&
+        !pendingChildSessionKeys?.has(childSessionKey) &&
         !hasActiveRegistryRun &&
         !trackedChildSessionKeys.has(childSessionKey)
         ? [childSessionKey]

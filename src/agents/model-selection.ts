@@ -79,7 +79,11 @@ export {
   resolveModelAliasFromPair,
   resolveModelRefFromString,
 };
-export { isCliProvider } from "./model-selection-cli.js";
+export {
+  isCliProvider,
+  prepareCliProviderClassifier,
+  type CliProviderClassifier,
+} from "./model-selection-cli.js";
 // Cron imports this narrow owner directly; the public facade must not fork its policy.
 export { getModelRefStatus } from "./model-selection-resolve.js";
 

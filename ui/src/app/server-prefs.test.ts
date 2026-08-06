@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
@@ -26,55 +27,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function configWithPrefs(prefs: Record<string, unknown>) {
-  return { ui: { prefs } };
-}
-
-type RequestMock = ReturnType<typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>>;
-
 function validationError(message = "invalid config") {
   return new GatewayRequestError({ code: "INVALID_REQUEST", message });
-}
-
-function createServerPrefsWriter(
-  request: RequestMock,
-  gatewayUrl = "ws://gw",
-  connected = true,
-  refresh: { ok: true } | { ok: false; error: string } = { ok: true },
-): Parameters<typeof pushServerUiPrefs>[0] {
-  const client = { request, gatewayUrl, connected } as unknown as GatewayBrowserClient;
-  const writer = {
-    state: { client, connected },
-    runExternalMutation: async <T>(task: (client: GatewayBrowserClient) => Promise<T>) => {
-      if (!writer.state.connected) {
-        return {
-          ok: false as const,
-          reason: "unavailable" as const,
-          error: "offline",
-        };
-      }
-      try {
-        return {
-          ok: true as const,
-          value: await task(client),
-          refresh,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          ok: false as const,
-          reason: message.includes("config changed since last load")
-            ? ("conflict" as const)
-            : error instanceof GatewayRequestError &&
-                (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN")
-              ? ("rejected" as const)
-              : ("error" as const),
-          error: message,
-        };
-      }
-    },
-  };
-  return writer;
 }
 
 describe("server pref extraction", () => {
@@ -156,6 +110,17 @@ describe("server pref extraction", () => {
       provenance: "synced",
       resetValue: "claw",
       value: "claw",
+    });
+    patchSettings({ theme: "knot" });
+    expect(
+      resolveServerUiPrefState(configWithPrefs({ theme: "custom" }), "theme", "", loadSettings(), {
+        canSync: false,
+      }),
+    ).toEqual({
+      overridden: true,
+      provenance: "device-local",
+      resetValue: "claw",
+      value: "knot",
     });
 
     const beforeReset = loadSettings();
@@ -290,8 +255,18 @@ describe("applyServerUiPrefs", () => {
 
   it("ignores a server custom theme until this browser imported one", () => {
     const onApplied = vi.fn();
-    expect(applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied })).toBe(false);
+    const onThemeChanged = vi.fn();
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied, onThemeChanged }),
+    ).toBe(false);
     expect(loadSettings().theme).toBe("claw");
+    expect(onThemeChanged).toHaveBeenLastCalledWith("custom");
+
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "claw" }), { onApplied, onThemeChanged }),
+    ).toBe(false);
+    expect(onThemeChanged).toHaveBeenLastCalledWith("claw");
+    expect(onApplied).not.toHaveBeenCalled();
   });
 });
 
@@ -456,6 +431,37 @@ describe("pushServerUiPrefs", () => {
   const readPending = (scope: string) =>
     JSON.parse(localStorage.getItem(pendingKey(scope)) ?? "{}") as Record<string, unknown>;
   const createClient = createServerPrefsWriter;
+
+  it("does not publish a server theme change shadowed by pending local intent", async () => {
+    const scope = "ws://gw";
+    const requestGate = deferred();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      () => requestGate.promise,
+    );
+    const client = createClient(request, scope);
+    const onApplied = vi.fn();
+    const onThemeChanged = vi.fn();
+    applyServerUiPrefs(configWithPrefs({ theme: "claw" }), {
+      scope,
+      onApplied,
+      onThemeChanged,
+    });
+    onThemeChanged.mockClear();
+
+    pushServerUiPrefs(client, { theme: "knot" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "knot" }), {
+        scope,
+        onApplied,
+        onThemeChanged,
+      }),
+    ).toBe(false);
+    expect(onThemeChanged).not.toHaveBeenCalled();
+
+    requestGate.resolve({});
+    await vi.waitFor(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
+  });
 
   it("keeps a synced default reset as a pending offline null intent", () => {
     const scope = "ws://gw";
@@ -729,6 +735,33 @@ describe("pushServerUiPrefs", () => {
     flushServerUiPrefs(client);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+  });
+
+  it("retains in-memory pending intent when localStorage is unavailable", async () => {
+    const storageError = new Error("storage unavailable");
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw storageError;
+      },
+      removeItem: () => {
+        throw storageError;
+      },
+      setItem: () => {
+        throw storageError;
+      },
+    });
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({}));
+    const client = createClient(request, "ws://gw", false);
+
+    pushServerUiPrefs(client, { locale: "de" });
+    (client.state as { connected: boolean }).connected = true;
+    flushServerUiPrefs(client);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("config.patch", {
+      raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
+      note: "control-ui prefs sync",
+    });
   });
 
   it("retains a connected transient failure and retries it on flush", async () => {

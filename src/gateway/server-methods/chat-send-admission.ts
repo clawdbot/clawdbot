@@ -2,18 +2,18 @@ import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  isReplyRunAbortableForSignal,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import {
   readSessionTranscriptActiveLeafEvents,
   resolveSessionTranscriptActiveLeafEntryId,
 } from "../../config/sessions/session-accessor.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
@@ -48,6 +48,7 @@ export async function admitChatSend(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
+  onAdmissionOwned?: () => Promise<boolean>;
 }) {
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
@@ -68,6 +69,7 @@ export async function admitChatSend(params: {
     agentId,
     resolvedSessionModel,
     resolvedSessionAuthProvider,
+    activeRunScopeKey,
     timeoutMs,
     now,
     restartSafeRequest,
@@ -195,7 +197,14 @@ export async function admitChatSend(params: {
     if (entry && !latestEntry) {
       throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
     }
-    if (commitOutcome && expectedLeafEntryId !== undefined) {
+    // An active owner can advance this branch while a steer is being composed.
+    // The lifecycle admission keeps branch identity fixed after this check; if
+    // the owner clears, acceptance-aware dispatch preserves this turn as follow-up.
+    const hasActiveSteeringOwner =
+      p.queueMode === "steer" &&
+      expectedLeafEntryId !== undefined &&
+      replyRunRegistry.isStreamingFromOriginatingLeaf(activeRunScopeKey, expectedLeafEntryId);
+    if (commitOutcome && expectedLeafEntryId !== undefined && !hasActiveSteeringOwner) {
       // Runtime session identity resolves through the canonical SQLite accessor;
       // legacy/reset-archive files are read-only history fallbacks, never send targets.
       const currentLeafEntryId = latestEntry?.sessionId
@@ -379,11 +388,59 @@ export async function admitChatSend(params: {
     });
     return { ok: false as const };
   }
+  if (params.onAdmissionOwned) {
+    let proceed: boolean;
+    try {
+      proceed = await params.onAdmissionOwned();
+    } catch (error) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      throw error;
+    }
+    if (!proceed) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      return { ok: false as const };
+    }
+  }
 
+  const acquiredGatewayWorkAdmission = gatewayWorkAdmission;
+  let gatewayWorkAdmissionRetains = 1;
+  const releaseGatewayWorkAdmission = () => {
+    if (gatewayWorkAdmissionRetains === 0) {
+      return;
+    }
+    gatewayWorkAdmissionRetains -= 1;
+    if (gatewayWorkAdmissionRetains === 0) {
+      acquiredGatewayWorkAdmission.release();
+    }
+  };
+  let initialGatewayWorkAdmissionReleased = false;
+  const releaseInitialGatewayWorkAdmission = () => {
+    if (initialGatewayWorkAdmissionReleased) {
+      return;
+    }
+    initialGatewayWorkAdmissionReleased = true;
+    releaseGatewayWorkAdmission();
+  };
+  const retainGatewayWorkAdmission = () => {
+    if (gatewayWorkAdmissionRetains === 0) {
+      throw new Error("cannot retain a released chat work admission");
+    }
+    gatewayWorkAdmissionRetains += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      releaseGatewayWorkAdmission();
+    };
+  };
   let releaseGatewayRootContinuation: (() => void) | undefined;
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
     activeRunAbort.cleanup(options);
-    gatewayWorkAdmission?.release();
+    releaseInitialGatewayWorkAdmission();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
   };
@@ -417,6 +474,7 @@ export async function admitChatSend(params: {
       gatewayWorkAdmission,
       lifecycleGeneration,
       originatingRoute,
+      retainGatewayWorkAdmission,
       restartSafeAdmission,
       setReleaseGatewayRootContinuation: (release: (() => void) | undefined) => {
         releaseGatewayRootContinuation = release;

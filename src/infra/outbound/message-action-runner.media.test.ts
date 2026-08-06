@@ -1,8 +1,9 @@
-// Covers message-action media hydration, sandbox path normalization,
-// attachments, and channel/plugin media source aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Covers message-action media hydration, sandbox path normalization,
+// attachments, and channel/plugin media source aliases.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -115,12 +116,7 @@ const runDrySend = (params: {
     sandboxRoot: params.sandboxRoot,
   });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireActionPayload(
   result: Awaited<ReturnType<typeof runMessageAction>>,

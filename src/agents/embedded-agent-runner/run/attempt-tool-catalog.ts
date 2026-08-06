@@ -170,6 +170,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
         toolsEnabled,
         disableTools: attempt.disableTools,
+        toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
       });
   logAgentRuntimeToolDiagnostics({
     runtimePlan: attempt.runtimePlan,

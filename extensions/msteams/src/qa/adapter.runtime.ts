@@ -22,6 +22,7 @@ const SERVICE_URL = "https://smba.trafficmanager.net/qa";
 const APP_ID = "qa-msteams-app";
 const TENANT_ID = "qa-msteams-tenant";
 const DRIVER_ID = "qa-msteams-driver";
+const DRIVER_AAD_OBJECT_ID = "00000000-0000-4000-8000-000000000002";
 const TEAM_ID = "qa-msteams-team";
 const TEAM_AAD_GROUP_ID = "00000000-0000-4000-8000-000000000001";
 const DEFAULT_ACCOUNT_ID = "default";
@@ -170,7 +171,7 @@ export async function createMSTeamsQaTransportAdapter(
         serviceUrl: SERVICE_URL,
         from: {
           id: DRIVER_ID,
-          aadObjectId: DRIVER_ID,
+          aadObjectId: DRIVER_AAD_OBJECT_ID,
           name: input.senderName ?? "Teams QA Driver",
         },
         recipient: { id: APP_ID, name: "OpenClaw QA" },
@@ -184,6 +185,7 @@ export async function createMSTeamsQaTransportAdapter(
                 : "channel",
           tenantId: TENANT_ID,
         },
+        ...(input.replyToId ? { replyToId: input.replyToId } : {}),
         channelData: {
           tenant: { id: TENANT_ID },
           team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
@@ -236,6 +238,8 @@ export async function createMSTeamsQaTransportAdapter(
             appId: APP_ID,
             appPassword: "private-qa-secret",
             tenantId: TENANT_ID,
+            dmPolicy: "allowlist",
+            allowFrom: [DRIVER_AAD_OBJECT_ID],
             groupPolicy: "open",
             requireMention: requireGroupMention,
             replyStyle: "thread",

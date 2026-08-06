@@ -64,6 +64,8 @@ export type TurnAdoptionLifecycle = {
    * Durable ingress sets exclusive; gateway cancel identity sets cancel-only.
    */
   admission?: TurnAdoptionAdmission;
+  /** Transcript branch leaf from which this turn was admitted. */
+  originatingLeafEntryId?: string | null;
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
@@ -79,7 +81,13 @@ export type TurnAdoptionLifecycle = {
 };
 
 /** Partial assistant payload emitted during streaming or replacement updates. */
-export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
+export type PartialReplyPayload = {
+  /**
+   * Sanitized text, which may be an enumerable memoized getter. Content materializes on first
+   * read: direct-delivery consumers pay per partial, while throttled consumers pay per flush.
+   */
+  text?: ReplyPayload["text"];
+  mediaUrls?: ReplyPayload["mediaUrls"];
   delta?: string;
   replace?: true;
 };

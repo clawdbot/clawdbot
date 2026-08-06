@@ -53,7 +53,7 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return [];
   }
-  const mediaList: Array<{ path: string; contentType?: string | null }> = [];
+  const mediaList: Array<{ path?: string; url?: string; contentType?: string | null }> = [];
   for (const attachment of attachments) {
     if (!attachment?.mimeType) {
       continue;
@@ -71,10 +71,17 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
         undefined,
         attachment.fileName,
       );
-      mediaList.push({
-        path: saved.path,
-        contentType: saved.contentType,
-      });
+      mediaList.push(
+        attachment.mediaFactCarrier === "media-store-url"
+          ? {
+              url: `media://inbound/${saved.id}`,
+              contentType: saved.contentType,
+            }
+          : {
+              path: saved.path,
+              contentType: saved.contentType,
+            },
+      );
       continue;
     }
     if (typeof attachment.url === "string" && attachment.url.trim()) {
@@ -349,8 +356,6 @@ export async function handleQaInbound(params: {
         targetSessionKey: route.sessionKey,
       })
     : undefined;
-  const commandBody = nativeCommand ? `/${nativeCommand.name}` : inbound.text;
-
   const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
   const ctxPayload = buildChannelInboundEventContext({
     channel: params.channelId,
@@ -385,14 +390,14 @@ export async function handleQaInbound(params: {
       messageThreadId: inbound.threadId,
       threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
     },
-    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody },
+    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody: inbound.text },
     media,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
     },
     command: nativeCommand
-      ? { kind: "native", name: nativeCommand.name, body: commandBody, authorized: true }
+      ? { kind: "native", name: nativeCommand.name, body: inbound.text, authorized: true }
       : undefined,
     extra: {
       CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,

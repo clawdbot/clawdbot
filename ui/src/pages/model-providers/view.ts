@@ -1,5 +1,6 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing } from "lit";
+import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
@@ -16,7 +17,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { BASE_THINKING_LEVELS, formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/model-providers.css";

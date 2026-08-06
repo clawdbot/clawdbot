@@ -166,6 +166,8 @@ describe("AppSidebar session catalog pagination", () => {
   it.each([
     { id: "claude", label: "Claude Code" },
     { id: "codex", label: "Codex" },
+    { id: "opencode", label: "OpenCode" },
+    { id: "pi", label: "Pi" },
   ])("groups $label catalog rows by their owning host", async ({ id, label }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
@@ -270,6 +272,7 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     );
+    sidebar.connected = true;
     sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",

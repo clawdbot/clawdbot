@@ -439,6 +439,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
 }
 
 export function renderSidebarPreferencesSection(props: ConfigProps) {
+  const hiddenCatalogIds = [...props.hiddenSessionCatalogIds].toSorted();
   const liveActivityDefaultState = renderSettingsDefaultState({
     value: t("common.enabled"),
     overridden: props.sidebarLiveActivity !== UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
@@ -460,6 +461,28 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
           actions: liveActivityDefaultState.action,
         })}
       </div>
+      ${hiddenCatalogIds.length > 0
+        ? html`
+            <div class="settings-section__header settings-section__header--subsection">
+              <h3 class="settings-section__heading">${t("chat.sidebar.hiddenSessionSections")}</h3>
+            </div>
+            <div class="settings-group">
+              ${hiddenCatalogIds.map((catalogId) =>
+                renderSettingsRow({
+                  title: catalogId,
+                  description: t("quickSettings.personal.browserOnly"),
+                  control: html`<button
+                    type="button"
+                    class="btn btn--sm"
+                    @click=${() => props.setSessionCatalogHidden(catalogId, false)}
+                  >
+                    ${t("chat.sidebar.showSessionSection")}
+                  </button>`,
+                }),
+              )}
+            </div>
+          `
+        : nothing}
       <div class="settings-section__header settings-section__header--subsection">
         <h3 class="settings-section__heading">${t("configView.sessionObserver.title")}</h3>
       </div>

@@ -1,27 +1,20 @@
 // Control UI E2E tests cover session ownership dormancy and creator filtering.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { expect as expectBrowser } from "playwright/test";
+import { afterEach, expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI session ownership",
+});
+
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
 
-let browser: Browser;
 let page: Page | undefined;
-let server: ControlUiE2eServer | undefined;
-
 function sessionsList(creators: [string, string]) {
   const creatorFacet = [
     { id: creators[0], label: "Ada" },
@@ -100,17 +93,7 @@ async function replaceGatewayClient(targetPage: Page) {
   });
 }
 
-describeControlUiE2e("Control UI session ownership", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-  });
-
+suite.define(() => {
   afterEach(async () => {
     await page
       ?.context()
@@ -119,13 +102,8 @@ describeControlUiE2e("Control UI session ownership", () => {
     page = undefined;
   });
 
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
-  });
-
   it("shows permanent owner chips and filters existing custom groups", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -134,7 +112,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -170,7 +148,7 @@ describeControlUiE2e("Control UI session ownership", () => {
   });
 
   it("renders zero ownership chrome for a single creator", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
@@ -179,7 +157,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -193,16 +171,17 @@ describeControlUiE2e("Control UI session ownership", () => {
   });
 
   it("keeps grouped single-creator thread actions accessible to keyboard users", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
       sessionKey: "agent:main:ada",
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
@@ -232,7 +211,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
         ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 800, width: 1200 } } }
@@ -246,7 +225,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       methodResponses: { "sessions.list": draftSessionsList() },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();
@@ -269,7 +248,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
         ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 800, width: 1200 } } }
@@ -279,6 +258,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
       allowedSessionVisibilities: ["shared", "draft"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
       hasMultipleSessionSharingIdentities: true,
       methodResponses: {
         "sessions.list": sessionsList(["profile-ada", "profile-bob"]),
@@ -286,7 +266,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}new`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
     const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
     await draftToggle.waitFor();
@@ -308,7 +288,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProofEnabled
         ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 800, width: 1200 } } }
@@ -324,7 +304,15 @@ describeControlUiE2e("Control UI session ownership", () => {
     Object.assign(ownerSession, { sharingRole: "owner" });
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "agent:main:ada",
-      featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "session.visibility.set",
+        "session.members.list",
+        "session.members.add",
+        "session.members.remove",
+      ],
+      operatorScopes: ["operator.write"],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
@@ -343,7 +331,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Thread sharing").click();
     const publish = currentPage.getByText("Publish draft", { exact: true });
@@ -359,8 +347,111 @@ describeControlUiE2e("Control UI session ownership", () => {
     expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
   });
 
+  it("keeps rejected visibility-only sharing changes visible after the menu closes", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessions = draftSessionsList();
+    const ownerSession = sessions.sessions[0];
+    if (!ownerSession) {
+      throw new Error("expected owner draft fixture");
+    }
+    Object.assign(ownerSession, { sharingRole: "owner" });
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      allowedSessionVisibilities: ["shared", "draft"],
+      deferredMethods: ["session.visibility.set"],
+      featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
+      operatorScopes: ["operator.write"],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": sessions },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    await currentPage.getByRole("button", { name: "Thread sharing" }).click();
+    const dropdown = currentPage.locator(".chat-pane__sharing-menu");
+    await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
+    expect(await dropdown.locator(".chat-pane__sharing-title").count()).toBe(1);
+    await currentPage.getByText("Publish draft", { exact: true }).click();
+    await gateway.waitForRequest("session.visibility.set");
+    await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
+    expect(await gateway.getRequests("session.members.list")).toHaveLength(0);
+
+    const message = "visibility change rejected";
+    await gateway.rejectDeferred("session.visibility.set", {
+      code: "INVALID_REQUEST",
+      message,
+    });
+    const alert = currentPage.getByRole("alert").filter({ hasText: message });
+    await expectBrowser(alert).toBeVisible();
+
+    await currentPage.getByRole("button", { name: "Thread sharing" }).click();
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-status--error")).toBeVisible();
+  });
+
+  it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessions = draftSessionsList();
+    const ownerSession = sessions.sessions[0];
+    if (!ownerSession) {
+      throw new Error("expected owner draft fixture");
+    }
+    Object.assign(ownerSession, { sharingRole: "owner" });
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "session.visibility.set",
+        "session.members.list",
+        "session.members.add",
+        "session.members.remove",
+      ],
+      operatorScopes: ["operator.read"],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: {
+        "sessions.list": sessions,
+        "session.members.list": {
+          sessionKey: "agent:main:ada",
+          members: [],
+          identities: [{ type: "human", id: "profile-bob", label: "Bob" }],
+          role: "owner",
+          allowedVisibilities: ["shared", "draft"],
+        },
+      },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    await currentPage.getByLabel("Thread sharing").click();
+    await gateway.waitForRequest("session.members.list");
+    const dropdown = currentPage.locator(".chat-pane__sharing-menu");
+    const publish = dropdown.locator('wa-dropdown-item[value="visibility:shared"]');
+    await publish.waitFor();
+    expect(await publish.getAttribute("disabled")).not.toBeNull();
+
+    await dropdown.evaluate((element) => {
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          detail: { item: { value: "visibility:shared" } },
+        }),
+      );
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          detail: { item: { value: "member:profile-bob" } },
+        }),
+      );
+    });
+
+    expect(await gateway.getRequests("session.visibility.set")).toHaveLength(0);
+    expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
+  });
+
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -369,7 +460,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}new`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
     await draftToggle.check();
     await gateway.setSessionSharingPolicy({
@@ -389,7 +480,7 @@ describeControlUiE2e("Control UI session ownership", () => {
   });
 
   it("keeps create-as-draft dormant for one creator", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
@@ -398,7 +489,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}new`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     await currentPage.locator(".new-session-page__message").waitFor();
     expect(await currentPage.getByRole("switch", { name: "Draft", exact: true }).count()).toBe(0);
   });

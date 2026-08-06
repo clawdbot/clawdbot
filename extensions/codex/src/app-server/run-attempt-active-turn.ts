@@ -2,14 +2,16 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
   embeddedAgentLog,
+  formatErrorMessage,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  interruptCodexTurnBestEffort,
-  retireCodexAppServerClientAfterTimedOutTurn,
-} from "./attempt-client-cleanup.js";
+import { retireCodexAppServerClientAfterTimedOutTurn } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
-import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
+import {
+  CodexSteeringAcceptedUnconfirmedError,
+  createCodexSteeringQueue,
+  type CodexSteeringQueueOptions,
+} from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 import type { CodexTurnStartResponse, JsonObject } from "./protocol.js";
@@ -55,7 +57,8 @@ export async function activateCodexAttemptTurn(
     effectiveCwd,
   } = connection;
   const { dynamicToolParams, computerContextEpoch, toolBridge } = attemptTools;
-  const { state, userInputBridgeRef, steeringQueueRef, turnWatches } = turnRuntime;
+  const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
+    turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
@@ -179,7 +182,7 @@ export async function activateCodexAttemptTurn(
           text,
         });
         if (claimed) {
-          return;
+          return undefined;
         }
       } else if (isInboundUserMessage) {
         try {
@@ -194,7 +197,18 @@ export async function activateCodexAttemptTurn(
           });
         }
       }
-      await activeSteeringQueue.queue(text, optionsLocal);
+      try {
+        await activeSteeringQueue.queue(text, optionsLocal);
+      } catch (error) {
+        if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
+          return {
+            transcriptCommit: "unconfirmed" as const,
+            errorMessage: formatErrorMessage(error),
+          };
+        }
+        throw error;
+      }
+      return undefined;
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
     isAborted: () => runAbortController.signal.aborted,
@@ -246,14 +260,10 @@ export async function activateCodexAttemptTurn(
           reason: String(runAbortController.signal.reason ?? "timeout"),
           suspectPhysicalClient: state.turnWatchTimeoutKind === "terminal",
         });
-      })().finally(() => state.resolveCompletion?.());
+      })().finally(completeTurn);
       return;
     }
-    interruptCodexTurnBestEffort(resourceState.client, {
-      threadId: resourceState.thread.threadId,
-      turnId: activeTurnId,
-    });
-    state.resolveCompletion?.();
+    void interruptTurn(activeTurnId).finally(completeTurn);
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
   if (runAbortController.signal.aborted) {

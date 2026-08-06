@@ -3,6 +3,64 @@ import OpenClawChatUI
 import OpenClawKit
 
 extension OnboardingAISetupModel {
+    struct PersistedActivationState: Equatable {
+        let setupComplete: Bool
+        let configuredModel: String?
+    }
+
+    struct AttemptContext: Equatable {
+        let token: UUID
+        let routeIdentity: String
+    }
+
+    struct PendingVerification {
+        let context: AttemptContext
+        let task: Task<PendingVerificationOutcome, Never>
+    }
+
+    struct CompletedHandoff {
+        let routeIdentity: String
+        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
+    }
+
+    struct DetectResult: Decodable {
+        struct DetectedCandidate: Decodable {
+            let icon: String?
+            let website: String?
+            let kind: String
+            let label: String
+            let detail: String
+            let modelRef: String
+            let credentials: Bool?
+        }
+
+        let candidates: [DetectedCandidate]
+        let unavailableCandidates: [UnavailableCandidate]?
+        let manualProviders: [ManualProvider]?
+        let authOptions: [AuthOption]?
+        let prepareOptions: [PrepareOption]?
+        let recommendedInstalls: [RecommendedInstall]?
+        let configuredModel: String?
+        let setupComplete: Bool?
+
+        var persistedActivationState: PersistedActivationState? {
+            self.setupComplete.map {
+                PersistedActivationState(
+                    setupComplete: $0,
+                    configuredModel: self.configuredModel)
+            }
+        }
+    }
+
+    struct ActivateResult: Decodable {
+        let ok: Bool
+        let modelRef: String?
+        let latencyMs: Double?
+        let lines: [String]?
+        let status: String?
+        let error: String?
+    }
+
     struct Candidate: Identifiable, Equatable {
         let kind: String
         let label: String
@@ -107,6 +165,38 @@ extension OnboardingAISetupModel {
         }
     }
 
+    var selectedManualProvider: ManualProvider? {
+        self.manualProviders.first { $0.id == self.manualProviderID }
+    }
+
+    var prepareOptions: [PrepareOption] {
+        guard self.prepareAvailable else { return [] }
+        return Self.prepareOptions(
+            candidates: self.candidates,
+            advertisedOptions: self.detectedPrepareOptions)
+    }
+
+    var isPreparingModel: Bool {
+        self.providerWizardKind == .prepare
+    }
+
+    var connected: Bool {
+        self.phase == .connected
+    }
+
+    var isBusy: Bool {
+        self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
+            self.pendingActivationVerification
+    }
+
+    /// Once setup starts changing inference, its successful result belongs to
+    /// OpenClaw rather than the existing-Gateway onboarding bypass.
+    var ownsInferenceTransition: Bool {
+        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
+            self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
+            self.pendingActivationVerification
+    }
+
     static func prepareOptions(
         candidates: [Candidate],
         advertisedOptions: [PrepareOption]?) -> [PrepareOption]
@@ -132,9 +222,10 @@ extension OnboardingAISetupModel {
                 website: nil),
         ]
         return (advertisedOptions ?? legacyOptions).filter { choice in
+            let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
             guard !candidates.contains(where: {
                 $0.credentials != false &&
-                    ($0.kind == "provider-auto:\(choice.id)" ||
+                    ($0.kind == providerKind ||
                         $0.modelRef.hasPrefix("\(choice.brandId ?? choice.id)/"))
             }) else { return false }
             return true
@@ -196,6 +287,13 @@ extension OnboardingAISetupModel {
         return params
     }
 
+    static func providerAutoSetupKind(choiceID: String) -> String {
+        let componentCharacters = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        let encoded = choiceID.addingPercentEncoding(withAllowedCharacters: componentCharacters) ?? choiceID
+        return "provider-auto:\(encoded)"
+    }
+
     static func providerAuthCancellationSessionID(requested: String, returned: String) -> String? {
         requested == returned ? nil : returned
     }
@@ -249,7 +347,7 @@ extension OnboardingAISetupModel {
     var connectedSummary: String {
         guard let modelRef = connectedModelRef else { return "Your AI is connected." }
         let label = candidates.first { $0.kind == self.selectedKind }?.label ??
-            (selectedKind == "api-key" ? selectedManualProvider?.label : nil)
+            (selectedKind == "api-key" ? self.selectedManualProvider?.label : nil)
         let via = label.map { " via \($0)" } ?? ""
         if let latency = connectedLatencyMs {
             let seconds = Double(latency) / 1000
@@ -260,5 +358,25 @@ extension OnboardingAISetupModel {
 
     var connectedSetupCopyText: String {
         connectedSetupLines.joined(separator: "\n")
+    }
+
+    static func activationTransitionWasPersisted(
+        expectedModel: String,
+        before: PersistedActivationState?,
+        after: PersistedActivationState?) -> Bool
+    {
+        guard let before, let after else { return false }
+        let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
+        return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
+    }
+
+    static func remainingMilliseconds(
+        until deadline: ContinuousClock.Instant,
+        clock: ContinuousClock,
+        cappedAt capMs: Int) -> Int
+    {
+        let components = clock.now.duration(to: deadline).components
+        let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
+        return max(0, min(capMs, Int(milliseconds)))
     }
 }

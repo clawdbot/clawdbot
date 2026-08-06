@@ -1,4 +1,4 @@
-// Qa Lab tests cover lab server plugin behavior.
+// QA Lab tests cover lab server plugin behavior.
 import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -343,6 +343,62 @@ async function createQaLabRepoRootFixture(params?: {
   return repoRoot;
 }
 
+type QaLabSuiteScenarioFixture = {
+  name: string;
+  status: "pass" | "fail" | "skip";
+  steps: unknown[];
+  details?: string;
+};
+
+async function createQaLabSuiteResultFixture(params?: {
+  scenarios?: QaLabSuiteScenarioFixture[];
+  watchUrl?: string;
+}) {
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-suite-result-"));
+  cleanups.push(async () => {
+    await rm(outputDir, { recursive: true, force: true });
+  });
+  const scenarios = params?.scenarios ?? [
+    { name: "Channel chat baseline", status: "pass" as const, steps: [] },
+  ];
+  const report = "# QA report\n";
+  const evidencePath = path.join(outputDir, "qa-evidence.json");
+  const reportPath = path.join(outputDir, "qa-suite-report.md");
+  const summaryPath = path.join(outputDir, "qa-suite-summary.json");
+  await Promise.all([
+    writeFile(
+      evidencePath,
+      JSON.stringify({
+        entries: scenarios.map((scenario) => ({ result: { status: scenario.status } })),
+      }),
+      "utf8",
+    ),
+    writeFile(reportPath, report, "utf8"),
+    writeFile(
+      summaryPath,
+      JSON.stringify({
+        counts: {
+          total: scenarios.length,
+          passed: scenarios.filter((scenario) => scenario.status === "pass").length,
+          failed: scenarios.filter((scenario) => scenario.status === "fail").length,
+          skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
+        },
+        scenarios,
+      }),
+      "utf8",
+    ),
+  ]);
+  return {
+    evidencePath,
+    outputDir,
+    report,
+    reportPath,
+    scenarios,
+    summaryPath,
+    ...(params?.watchUrl ? { watchUrl: params.watchUrl } : {}),
+  };
+}
+
 describe("qa-lab server", () => {
   it("dispatches explicit mixed-kind selections through the suite planner", async () => {
     const lab = await startQaLabServerForTest();
@@ -351,14 +407,9 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "suite",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture(),
     });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
@@ -408,6 +459,7 @@ describe("qa-lab server", () => {
       expect.objectContaining({
         alternateModel: "openai/gpt-5.6-luna",
         channelDriver: "crabline",
+        controlUiEnabled: true,
         primaryModel: "openai/gpt-5.6-luna",
         providerMode: "live-frontier",
         scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
@@ -431,6 +483,163 @@ describe("qa-lab server", () => {
     });
   });
 
+  it.each([
+    { label: "failed", status: "fail" as const },
+    { label: "skipped", status: "skip" as const },
+  ])(
+    "marks $label suite results failed while preserving generated artifacts",
+    async ({ status }) => {
+      const lab = await startQaLabServerForTest();
+      cleanups.push(async () => {
+        await lab.stop();
+      });
+      const result = await createQaLabSuiteResultFixture({
+        scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
+      });
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
+
+      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channelDriver: "crabline",
+          providerMode: "live-frontier",
+          scenarioIds: ["dm-chat-baseline"],
+        }),
+      });
+
+      expect(response.status).toBe(202);
+      await vi.waitFor(async () => {
+        const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+          latestReport: { outputPath: string; markdown: string };
+          runner: {
+            status: string;
+            error: string;
+            artifacts: {
+              outputDir: string;
+              evidencePath: string;
+              reportPath: string;
+              summaryPath: string;
+            };
+          };
+        };
+        expect(bootstrap.runner.status).toBe("failed");
+        expect(bootstrap.runner.error).toBe("QA suite reported 1 failed or skipped scenario(s).");
+        expect(bootstrap.runner.artifacts).toEqual(
+          expect.objectContaining({
+            outputDir: result.outputDir,
+            evidencePath: result.evidencePath,
+            reportPath: result.reportPath,
+            summaryPath: result.summaryPath,
+          }),
+        );
+        expect(bootstrap.latestReport).toEqual(
+          expect.objectContaining({ outputPath: result.reportPath, markdown: result.report }),
+        );
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "invalid",
+      summary: "{invalid-summary",
+      expectedError: "Could not parse QA summary JSON",
+    },
+    {
+      label: "empty",
+      summary: JSON.stringify({
+        counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
+        scenarios: [],
+      }),
+      expectedError: "did not include any executed scenarios",
+    },
+  ])(
+    "fails closed on an $label suite summary while preserving artifacts",
+    async (invalidResult) => {
+      const lab = await startQaLabServerForTest();
+      cleanups.push(async () => {
+        await lab.stop();
+      });
+      const result = await createQaLabSuiteResultFixture();
+      await writeFile(result.summaryPath, invalidResult.summary, "utf8");
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
+
+      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channelDriver: "crabline",
+          providerMode: "live-frontier",
+          scenarioIds: ["dm-chat-baseline"],
+        }),
+      });
+
+      expect(response.status).toBe(202);
+      await vi.waitFor(async () => {
+        const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+          runner: { status: string; error: string; artifacts: { summaryPath: string } };
+        };
+        expect(bootstrap.runner.status).toBe("failed");
+        expect(bootstrap.runner.error).toContain(invalidResult.expectedError);
+        expect(bootstrap.runner.artifacts.summaryPath).toBe(result.summaryPath);
+      });
+    },
+  );
+
+  it("keeps implicit suites green for catalog-verified report-only optional skips", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    const result = await createQaLabSuiteResultFixture({
+      scenarios: [
+        { name: "Channel chat baseline", status: "pass", steps: [] },
+        {
+          name: "Runtime tool fixture — image_generate",
+          status: "skip",
+          steps: [],
+          details: "image_generate mock provider report-only: tool unavailable",
+        },
+      ],
+    });
+    suiteLaunchMock.runQaSuite.mockResolvedValue({
+      executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
+      result,
+    });
+
+    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        profile: "all",
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    await vi.waitFor(async () => {
+      const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+        runner: { status: string; error: string | null };
+      };
+      expect(bootstrap.runner.status).toBe("completed");
+      expect(bootstrap.runner.error).toBeNull();
+    });
+  });
+
   it("keeps mock providers independent from real channel adapters", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(async () => {
@@ -438,15 +647,9 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-        watchUrl: "http://runtime-watch.invalid",
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
     });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
@@ -509,14 +712,9 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1);
     finishSuite?.({
       executionKind: "flow",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture(),
     });
     await vi.waitFor(async () => {
       const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
@@ -550,15 +748,9 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-        watchUrl: lab.baseUrl,
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
     });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {

@@ -31,9 +31,6 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
     task: "check sqlite persistence",
     cleanup: "keep",
     createdAt: 100,
-    startedAt: 110,
-    endedAt: 250,
-    outcome: { status: "ok", startedAt: 110, endedAt: 250, elapsedMs: 140 },
     expectsCompletionMessage: true,
     execution: {
       status: "terminal",
@@ -45,6 +42,7 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
       required: true,
       resultText: "done",
       capturedAt: 260,
+      terminalReply: { disposition: "visible", text: "done" },
     },
     delivery: {
       status: "pending",
@@ -97,7 +95,12 @@ describe("subagent registry sqlite store", () => {
         requesterTurnYielded: true,
         retireAfterRequesterTurn: true,
         endedReason: "subagent-error",
-        outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
+        execution: {
+          status: "terminal",
+          startedAt: 110,
+          endedAt: 250,
+          outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
+        },
         terminalOwner: "interrupted-recovery",
         completion: { required: true, resultText: null, capturedAt: 250 },
         requesterSettleWake: {
@@ -125,8 +128,7 @@ describe("subagent registry sqlite store", () => {
         requesterTurnRunId: "run-requester",
         requesterTurnYielded: true,
         retireAfterRequesterTurn: true,
-        endedAt: run.endedAt,
-        outcome: run.outcome,
+        execution: run.execution,
         terminalOwner: "interrupted-recovery",
         completion: run.completion,
         delivery: run.delivery,
@@ -136,6 +138,68 @@ describe("subagent registry sqlite store", () => {
       await expect(fs.stat(path.join(tempStateDir!, "subagents", "runs.json"))).rejects.toThrow();
     });
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "restart-visible" } as const,
+      resultText: "restart-visible",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+    },
+  ])(
+    "restores $name terminal reply in completion and pending delivery after restart",
+    async ({ name, terminalReply, resultText }) => {
+      await withTempStateEnv(async () => {
+        const runId = `run-restart-${name}`;
+        const run = createRun({
+          runId,
+          childSessionKey: `agent:main:subagent:${name}`,
+          completion: {
+            required: true,
+            resultText,
+            capturedAt: 260,
+            terminalReply,
+          },
+          delivery: {
+            status: "pending",
+            createdAt: 270,
+            attemptCount: 0,
+            payload: {
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              childSessionKey: `agent:main:subagent:${name}`,
+              childRunId: runId,
+              task: "check terminal reply restart",
+              startedAt: 110,
+              endedAt: 250,
+              outcome: { status: "ok" },
+              expectsCompletionMessage: true,
+              terminalReply,
+            },
+          },
+        });
+
+        saveSubagentRegistryToSqlite(new Map([[runId, run]]));
+        closeOpenClawStateDatabaseForTest();
+
+        const restored = loadSubagentRegistryFromSqlite().get(runId);
+        expect(restored?.completion).toMatchObject({ terminalReply, resultText });
+        expect(restored?.delivery).toMatchObject({
+          status: "pending",
+          payload: { terminalReply },
+        });
+      });
+    },
+  );
 
   it("uses save calls as whole-registry snapshots", async () => {
     await withTempStateEnv(async () => {
@@ -187,10 +251,73 @@ describe("subagent registry sqlite store", () => {
       expect(restored?.completion?.resultText).toBe("done");
       expect(restored?.delivery).toMatchObject({ status: "pending", lastError: "retry later" });
       expect(restored?.requesterSettleWake).toEqual(run.requesterSettleWake);
-      expect(restored?.outcome?.status).toBe("ok");
+      expect(restored?.execution.outcome?.status).toBe("ok");
       const sessionListRun = loadSubagentSessionListRunsFromSqlite().get(run.runId);
-      expect(sessionListRun?.outcome?.status).toBe("ok");
+      expect(sessionListRun?.execution.outcome?.status).toBe("ok");
       expect(sessionListRun?.delivery?.status).toBe("pending");
+    });
+  });
+
+  it("promotes legacy retained results into canonical completion state once", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        completion: { required: true, resultText: "NO_REPLY" },
+        delivery: {
+          status: "suspended",
+          suspendedAt: 300,
+          suspendedReason: "retry-limit",
+          payload: {
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            childSessionKey: "agent:main:subagent:one",
+            childRunId: "run-one",
+            task: "check sqlite persistence",
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+            frozenResultText: "NO_REPLY",
+            fallbackFrozenResultText: "legacy retained result",
+          } as NonNullable<SubagentRunRecord["delivery"]>["payload"] & {
+            frozenResultText: string;
+            fallbackFrozenResultText: string;
+          },
+        },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      closeOpenClawStateDatabaseForTest();
+
+      const restored = loadSubagentRegistryFromSqlite().get(run.runId);
+      expect(restored?.completion).toMatchObject({
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
+      expect(restored?.delivery?.payload).not.toHaveProperty("frozenResultText");
+      expect(restored?.delivery?.payload).not.toHaveProperty("fallbackFrozenResultText");
+
+      const stored = openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT payload_json, frozen_result_text, fallback_frozen_result_text FROM subagent_runs WHERE run_id = ?",
+        )
+        .get(run.runId) as {
+        payload_json: string;
+        frozen_result_text: string | null;
+        fallback_frozen_result_text: string | null;
+      };
+      expect(stored.frozen_result_text).toBe("NO_REPLY");
+      expect(stored.fallback_frozen_result_text).toBe("legacy retained result");
+      const storedPayload = JSON.parse(stored.payload_json) as SubagentRunRecord;
+      expect(storedPayload.completion).toMatchObject({
+        required: true,
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
+      expect(storedPayload.delivery?.payload).not.toHaveProperty("frozenResultText");
+      expect(storedPayload.delivery?.payload).not.toHaveProperty("fallbackFrozenResultText");
+
+      closeOpenClawStateDatabaseForTest();
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.completion).toMatchObject({
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
     });
   });
 
@@ -204,11 +331,16 @@ describe("subagent registry sqlite store", () => {
         runTimeoutSeconds: 7_200,
         endedReason: "subagent-error",
         cleanupCompletedAt: 300,
-        outcome: { status: "error", error: "full payload detail" },
+        execution: {
+          status: "terminal",
+          startedAt: 110,
+          endedAt: 250,
+          outcome: { status: "error", error: "full payload detail" },
+        },
         delivery: {
           status: "suspended",
           suspendedAt: 275,
-          suspendedReason: "retry-limit",
+          suspendedReason: "expiry",
         },
         task: "x".repeat(8_192),
       });
@@ -221,13 +353,15 @@ describe("subagent registry sqlite store", () => {
         model: "openai/gpt-5.6",
         generation: 3,
         createdAt: 100,
-        startedAt: 110,
+        execution: {
+          startedAt: 110,
+          endedAt: 250,
+          outcome: { status: "error" },
+        },
         sessionStartedAt: 105,
         accumulatedRuntimeMs: 90,
-        endedAt: 250,
         runTimeoutSeconds: 7_200,
         endedReason: "subagent-error",
-        outcome: { status: "error" },
         cleanupCompletedAt: 300,
         delivery: { status: "suspended", suspendedAt: 275 },
       });

@@ -6,6 +6,7 @@ import type {
   GatewayEventFrame,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
@@ -70,6 +71,7 @@ function createStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
+    basePath?: string;
   } = {},
 ) {
   const clients: FakeGatewayClient[] = [];
@@ -82,7 +84,10 @@ function createStore(
       clients.push(client);
       return client as unknown as GatewayBrowserClient;
     },
-    { persistDefaultConnectionSettings: params.persistDefaultConnectionSettings },
+    {
+      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
+      basePath: params.basePath,
+    },
   );
   const current = () => {
     const client = clients.at(-1);
@@ -103,14 +108,30 @@ describe("createApplicationGateway connection phase", () => {
       protocol: "http:",
       host: "127.0.0.1:18789",
       hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:18789",
       pathname: "/",
     } as Location);
   });
 
   afterEach(() => {
+    setAvatarGatewayOrigin(null);
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("passes the explicit same-origin base path to avatar resolution", () => {
+    const settings = { ...loadSettings(), gatewayUrl: "ws://127.0.0.1:18789/ws" };
+    const { gateway } = createStore({ settings, basePath: "/wilfred" });
+
+    gateway.start();
+
+    expect(
+      resolveAvatar({ id: "a@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
+    ).toEqual({
+      kind: "profile",
+      url: "http://127.0.0.1:18789/wilfred/api/users/p1/avatar",
+    });
   });
 
   it("follows stopped -> connecting -> connected -> reconnecting -> offline", () => {

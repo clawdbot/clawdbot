@@ -6,6 +6,7 @@ import { QaSuiteArtifactError } from "./errors.js";
 import type { QaEvidenceSummaryJson, QaEvidenceTiming } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
 type QaSuiteSummaryScenario = {
@@ -215,6 +216,23 @@ function isQaSuiteReportOnlyOptionalScenario(
     optionalScenarioNames?.has(scenario.name) === true &&
     typeof scenario.details === "string" &&
     scenario.details.includes("report-only")
+  );
+}
+
+export function resolveQaReportOnlyOptionalScenarioNames(
+  scenarios: readonly QaSeedScenarioWithSource[],
+): ReadonlySet<string> {
+  return new Set(
+    scenarios
+      .filter((scenario) => {
+        const toolCoverage = scenario.execution.config?.toolCoverage;
+        return (
+          scenario.execution.kind === "flow" &&
+          isRecord(toolCoverage) &&
+          toolCoverage.required === false
+        );
+      })
+      .map((scenario) => scenario.title),
   );
 }
 

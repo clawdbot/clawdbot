@@ -1,4 +1,5 @@
 // Configure wizard tests cover guided setup routing across gateway, auth, channels, skills, and search.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -28,7 +29,6 @@ const mocks = vi.hoisted(() => {
       },
     ),
     resolveGatewayPort: vi.fn(),
-    ensureControlUiAssetsBuilt: vi.fn(),
     createClackPrompter: vi.fn(),
     note: vi.fn(),
     printWizardHeader: vi.fn(),
@@ -88,10 +88,6 @@ vi.mock("../config/config.js", () => ({
   writeConfigFile: mocks.writeConfigFile,
   replaceConfigFile: mocks.replaceConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
-}));
-
-vi.mock("../infra/control-ui-assets.js", () => ({
-  ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
@@ -266,12 +262,7 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockCallArg(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
@@ -326,7 +317,6 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.assertConfigPathForWrite.mockImplementation(() => {});
-    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
     mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
@@ -633,7 +623,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.probeGatewayReachable).not.toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 300 }),
     );
-    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
     expect(requireWriteConfig().gateway).toBeUndefined();
   });
@@ -648,7 +637,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
     expect(mocks.promptRemoteGatewayConfig).not.toHaveBeenCalled();
     expect(getGateway(requireWriteConfig()).mode).toBe("remote");
-    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
     expect(mocks.probeGatewayReachable).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(

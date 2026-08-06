@@ -66,7 +66,7 @@ import {
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
 vi.mock("../config.js", async () => ({
@@ -392,26 +392,26 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         }
       };
 
-      await adapter.upsertSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing"), {
+      await adapter.replaceSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing"), {
         sessionId: "missing-lifecycle",
         updatedAt: oldTimestamp,
       });
-      await adapter.upsertSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-removed"), {
+      await adapter.replaceSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-removed"), {
         sessionId: "removed-lifecycle",
         updatedAt: oldTimestamp,
       });
-      await adapter.upsertSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-fresh"), {
+      await adapter.replaceSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-fresh"), {
         sessionId: "fresh-lifecycle",
         updatedAt: nowMs,
       });
-      await adapter.upsertSessionEntry(
+      await adapter.replaceSessionEntry(
         scopedEntry("agent:main:telegram:group:lifecycle-cleanup-room"),
         {
           sessionId: "kept-by-segment",
           updatedAt: oldTimestamp,
         },
       );
-      await adapter.upsertSessionEntry(scopedEntry("agent:main:regular"), {
+      await adapter.replaceSessionEntry(scopedEntry("agent:main:regular"), {
         sessionId: "referenced",
         updatedAt: oldTimestamp,
       });
@@ -434,6 +434,18 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         sessionId: "orphan-lifecycle",
         old: true,
       });
+
+      for (const sessionKey of [
+        "agent:main:lifecycle-cleanup-missing",
+        "agent:main:lifecycle-cleanup-removed",
+        "agent:main:telegram:group:lifecycle-cleanup-room",
+        "agent:main:regular",
+      ]) {
+        expect(adapter.readSessionUpdatedAt(scopedEntry(sessionKey))).toBe(oldTimestamp);
+      }
+      expect(adapter.readSessionUpdatedAt(scopedEntry("agent:main:lifecycle-cleanup-fresh"))).toBe(
+        nowMs,
+      );
 
       await expect(
         adapter.cleanupSessionLifecycleArtifacts({
@@ -2079,12 +2091,14 @@ describe("sqlite session normalization", () => {
         message: { content: "post-two" },
       },
     ]);
-    await upsertSqliteSessionEntry(sourceEntryScope, {
+    const sourceEntry: InternalSessionEntry = {
       label: "Source",
+      lifecycleRunId: "source-run",
       sessionId: "source-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
-    });
+    };
+    await upsertSqliteSessionEntry(sourceEntryScope, sourceEntry);
 
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
@@ -2122,6 +2136,7 @@ describe("sqlite session normalization", () => {
         totalTokensFresh: true,
       }),
     );
+    expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     await expect(loadSqliteTranscriptEvents(branchScope)).resolves.toEqual([
       expect.objectContaining({ type: "session", id: result.entry.sessionId }),
       expect.objectContaining({ id: "pre-msg", type: "message" }),

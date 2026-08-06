@@ -1,4 +1,4 @@
-import { isFastTestRuntimeEnv } from "../infra/env.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
@@ -11,7 +11,7 @@ import {
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
-  ensureSubagentRegistryPluginRuntimeLoaded,
+  loadSubagentRegistryPluginRuntimeHandle,
   resolveSubagentRegistryContextEngine,
   type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
@@ -31,129 +31,98 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
+    options?: { isCurrent?: () => boolean },
   ): Promise<void> {
     const cfg = deps().getRuntimeConfig();
-    await ensureSubagentRegistryPluginRuntimeLoaded({
+    const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
-      workspaceDir: params.workspaceDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       allowGatewaySubagentBinding: true,
     });
-    const engine = await resolveSubagentRegistryContextEngine(cfg, {
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      const engine = await resolveSubagentRegistryContextEngine(cfg, {
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      });
+      if (options?.isCurrent?.() === false) {
+        return;
+      }
+      await engine.onSubagentEnded?.(params);
     });
-    await engine.onSubagentEnded?.(params);
+  }
+
+  async function tryContextEngineSubagentEnded(
+    params: ContextEngineSubagentEndedParams,
+    warning: string,
+    options?: { isCurrent?: () => boolean },
+  ): Promise<boolean> {
+    try {
+      await runContextEngineSubagentEnded(params, options);
+      return true;
+    } catch (err) {
+      warn(warning, { err });
+      return false;
+    }
   }
 
   async function notifyContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
+    options?: { isCurrent?: () => boolean },
   ): Promise<void> {
-    try {
-      await runContextEngineSubagentEnded(params);
-    } catch (err) {
-      warn("context-engine onSubagentEnded failed (best-effort)", { err });
-    }
+    await tryContextEngineSubagentEnded(
+      params,
+      "context-engine onSubagentEnded failed (best-effort)",
+      options,
+    );
   }
 
-  async function finishCollectorContextEngineCleanup(
-    params: ContextEngineSubagentEndedParams,
+  async function cleanupCollectorLaunchResources(
+    entry: SubagentRunRecord,
+    options?: { isCurrent?: () => boolean },
   ): Promise<boolean> {
-    try {
-      await runContextEngineSubagentEnded(params);
-      return true;
-    } catch (err) {
-      warn("context-engine collector cleanup failed", { err });
-      return false;
-    }
-  }
-
-  async function cleanupCollectorLaunchResources(entry: SubagentRunRecord): Promise<boolean> {
+    const isCurrent = () => options?.isCurrent?.() !== false;
     let internalEffectsRemoved = true;
-    try {
-      await removeInternalSessionEffectsSession(entry.execution?.transcriptTarget);
-    } catch (err) {
-      internalEffectsRemoved = false;
-      warn("failed to remove collector internal session effects", {
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-        err,
-      });
+    if (isCurrent()) {
+      try {
+        await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
+      } catch (err) {
+        internalEffectsRemoved = false;
+        warn("failed to remove collector internal session effects", {
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+          err,
+        });
+      }
     }
     const contextAlreadyEnded = typeof entry.contextEngineCleanupCompletedAt === "number";
-    const [attachmentsRemoved, contextEnded] = await Promise.all([
-      safeRemoveAttachmentsDir(entry),
-      contextAlreadyEnded
-        ? true
-        : finishCollectorContextEngineCleanup({
+    const attachmentsRemoved = await safeRemoveAttachmentsDir(entry);
+    if (!isCurrent()) {
+      return false;
+    }
+    const contextEnded = contextAlreadyEnded
+      ? true
+      : await tryContextEngineSubagentEnded(
+          {
             childSessionKey: entry.childSessionKey,
             reason: "deleted",
             agentDir: entry.agentDir,
             workspaceDir: entry.workspaceDir,
-          }),
-    ]);
-    if (!contextAlreadyEnded && contextEnded) {
+          },
+          "context-engine collector cleanup failed",
+          options,
+        );
+    if (!contextAlreadyEnded && contextEnded && isCurrent()) {
       entry.contextEngineCleanupCompletedAt = Date.now();
       persist(entry.runId);
     }
-    return internalEffectsRemoved && attachmentsRemoved && contextEnded;
-  }
-
-  async function terminateAcceptedRestoredCollectorRun(params: {
-    entry: SubagentRunRecord;
-    gatewayRunId: string;
-    timeoutMs: number;
-  }): Promise<void> {
-    // A restored FIFO slot cannot be released until the accepted Gateway run is
-    // definitely stopped; otherwise the group can exceed maxConcurrent.
-    for (;;) {
-      try {
-        await deps().callGateway({
-          method: "chat.abort",
-          params: { sessionKey: params.entry.childSessionKey, runId: params.gatewayRunId },
-          timeoutMs: params.timeoutMs,
-        });
-        return;
-      } catch {
-        try {
-          await deps().callGateway({
-            method: "sessions.delete",
-            params: {
-              key: params.entry.childSessionKey,
-              deleteTranscript: true,
-              emitLifecycleHooks: false,
-            },
-            timeoutMs: params.timeoutMs,
-          });
-          return;
-        } catch {
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-            timer.unref?.();
-          });
-        }
-      }
-    }
-  }
-
-  function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
-    return entry?.suppressAnnounceReason === "steer-restart";
-  }
-
-  function shouldKeepThreadBindingAfterRun(params: {
-    entry: SubagentRunRecord;
-    reason: SubagentLifecycleEndedReason;
-  }) {
-    if (params.reason === SUBAGENT_ENDED_REASON_KILLED) {
-      return false;
-    }
-    return params.entry.spawnMode === "session";
+    return internalEffectsRemoved && attachmentsRemoved && contextEnded && isCurrent();
   }
 
   function shouldEmitEndedHookForRun(params: {
     entry: SubagentRunRecord;
     reason: SubagentLifecycleEndedReason;
   }) {
-    return !shouldKeepThreadBindingAfterRun(params);
+    return params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session";
   }
 
   async function emitSubagentEndedHookForRun(params: {
@@ -167,32 +136,37 @@ export function createSubagentRegistryContextCleanup(config: {
       return;
     }
     const cfg = deps().getRuntimeConfig();
-    await ensureSubagentRegistryPluginRuntimeLoaded({
+    const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
-      workspaceDir: params.entry.workspaceDir,
+      ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
       allowGatewaySubagentBinding: true,
     });
-    if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
-      return;
-    }
-    // Plugin loading yields after the terminal lock is released. Resolve the
-    // event from the canonical row only after that boundary so an older callback
-    // cannot claim the exactly-once hook with a superseded timeout or error.
-    const reason = params.entry.endedReason ?? params.reason ?? SUBAGENT_ENDED_REASON_COMPLETE;
-    const outcome =
-      reason === SUBAGENT_ENDED_REASON_KILLED
-        ? SUBAGENT_ENDED_OUTCOME_KILLED
-        : resolveLifecycleOutcomeFromRunOutcome(params.entry.outcome);
-    const error = params.entry.outcome?.status === "error" ? params.entry.outcome.error : undefined;
-    await emitSubagentEndedHookOnce({
-      entry: params.entry,
-      reason,
-      sendFarewell: params.sendFarewell,
-      accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
-      outcome,
-      error,
-      inFlightRunIds: endedHookInFlightRunIds,
-      persist,
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
+        return;
+      }
+      // Plugin loading yields after the terminal lock is released. Resolve the
+      // event from the canonical row only after that boundary so an older callback
+      // cannot claim the exactly-once hook with a superseded timeout or error.
+      const reason = params.entry.endedReason ?? params.reason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+      const outcome =
+        reason === SUBAGENT_ENDED_REASON_KILLED
+          ? SUBAGENT_ENDED_OUTCOME_KILLED
+          : resolveLifecycleOutcomeFromRunOutcome(params.entry.execution.outcome);
+      const error =
+        params.entry.execution.outcome?.status === "error"
+          ? params.entry.execution.outcome.error
+          : undefined;
+      await emitSubagentEndedHookOnce({
+        entry: params.entry,
+        reason,
+        sendFarewell: params.sendFarewell,
+        accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
+        outcome,
+        error,
+        inFlightRunIds: endedHookInFlightRunIds,
+        persist,
+      });
     });
   }
 
@@ -200,8 +174,8 @@ export function createSubagentRegistryContextCleanup(config: {
     runContextEngineSubagentEnded,
     notifyContextEngineSubagentEnded,
     cleanupCollectorLaunchResources,
-    terminateAcceptedRestoredCollectorRun,
-    suppressAnnounceForSteerRestart,
+    suppressAnnounceForSteerRestart: (entry?: SubagentRunRecord) =>
+      entry?.suppressAnnounceReason === "steer-restart",
     shouldEmitEndedHookForRun,
     emitSubagentEndedHookForRun,
     reset: () => endedHookInFlightRunIds.clear(),

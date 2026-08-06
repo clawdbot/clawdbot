@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  CliBackendPreparedExecution,
-  CliBackendToolAvailability,
+import {
+  CliBackendAuthProfilePreparationError,
+  type CliBackendPreparedExecution,
+  type CliBackendToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -100,6 +101,8 @@ function normalizeString(value: string | undefined): string | undefined {
 }
 
 function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredential): never {
+  // Route compatibility is not credential-health evidence. Keep this local so
+  // a profile that is valid for its owner is not quarantined across providers.
   if (credential.provider === VERCEL_AI_GATEWAY_PROVIDER_ID) {
     throw new Error(
       "Gemini CLI execution cannot use a vercel-ai-gateway auth profile. Use the OpenClaw vercel-ai-gateway provider instead.",
@@ -117,13 +120,15 @@ function throwUnstageableSelectedGeminiProfile(
     throw new Error("Gemini CLI execution requires a selected auth profile.");
   }
   if (!credential) {
-    throw new Error(
+    throw new CliBackendAuthProfilePreparationError(
       `Gemini CLI auth profile was selected but no credential material was found. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
     );
   }
   if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
     throwUnsupportedGeminiCredential(credential);
   }
+  // A materialized token can be healthy even though Gemini CLI cannot use its
+  // type. Only missing or malformed credential material gets the typed signal.
   throw new Error(
     `Gemini CLI execution requires a Google AI Studio API-key profile or a previously configured valid Gemini CLI OAuth profile. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
   );
@@ -150,7 +155,7 @@ function requireGeminiOAuthCredential(
     typeof credential.expires !== "number" ||
     !Number.isFinite(credential.expires)
   ) {
-    throw new Error(
+    throw new CliBackendAuthProfilePreparationError(
       `Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
     );
   }
@@ -185,7 +190,9 @@ function requireGeminiApiKeyCredential(
 
   const key = normalizeString(credential.key);
   if (!key) {
-    throw new Error("Gemini CLI API-key profile is missing usable key material.");
+    throw new CliBackendAuthProfilePreparationError(
+      "Gemini CLI API-key profile is missing usable key material.",
+    );
   }
 
   return {

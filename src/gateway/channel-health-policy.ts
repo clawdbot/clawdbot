@@ -20,6 +20,8 @@ type ChannelHealthSnapshot = {
   reconnectAttempts?: number;
   mode?: string;
   ingressUnavailable?: true;
+  lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
+  healthState?: string;
   terminalDisconnect?: boolean;
 };
 
@@ -28,6 +30,7 @@ type ChannelHealthEvaluationReason =
   | "unmanaged"
   | "not-running"
   | "terminal-disconnect"
+  | "blocked"
   | "busy"
   | "stuck"
   | "startup-connect-grace"
@@ -46,6 +49,16 @@ export type ChannelHealthPolicy = {
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
 };
+
+/** Keep channel-authored terminal detail above the shared unhealthy projection. */
+export function resolveChannelHealthState(
+  snapshot: ChannelHealthSnapshot,
+  evaluation: ChannelHealthEvaluation,
+): string | undefined {
+  return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
+    ? evaluation.reason
+    : snapshot.healthState;
+}
 
 type ChannelRestartReason =
   | "gave-up"
@@ -84,6 +97,25 @@ export function evaluateChannelHealth(
   if (snapshot.ingressUnavailable === true) {
     return { healthy: false, reason: "ingress-unavailable" };
   }
+  if (snapshot.lifecycle === "blocked") {
+    return { healthy: false, reason: "blocked" };
+  }
+  const lastStartAt =
+    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
+      ? snapshot.lastStartAt
+      : null;
+  // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
+  // the window, no progress is indistinguishable from a hang, so inference keeps restart authority.
+  if (
+    (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") &&
+    lastStartAt != null &&
+    policy.now - lastStartAt < policy.channelConnectGraceMs
+  ) {
+    return { healthy: true, reason: "startup-connect-grace" };
+  }
+  if (snapshot.lifecycle === "stopped") {
+    return { healthy: false, reason: "not-running" };
+  }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
   }
@@ -92,10 +124,6 @@ export function evaluateChannelHealth(
       ? Math.max(0, Math.trunc(snapshot.activeRuns))
       : 0;
   const isBusy = snapshot.busy === true || activeRuns > 0;
-  const lastStartAt =
-    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
-      ? snapshot.lastStartAt
-      : null;
   const lastRunActivityAt =
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
@@ -134,8 +162,8 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stuck" };
     }
   }
-  if (snapshot.lastStartAt != null) {
-    const upDuration = policy.now - snapshot.lastStartAt;
+  if (snapshot.lifecycle === undefined && lastStartAt != null) {
+    const upDuration = policy.now - lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
     }

@@ -1,7 +1,8 @@
-// Onboard auth tests cover provider auth setup, credential persistence, and auth-profile state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Onboard auth tests cover provider auth setup, credential persistence, and auth-profile state.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
 import {
@@ -97,12 +98,7 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
   }),
 }));
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectFields(value: unknown, expected: Record<string, unknown>, label = "record") {
   const record = requireRecord(value, label);

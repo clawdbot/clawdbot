@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type OfficialExternalPluginRepairHint,
   resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints,
 } from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
@@ -91,15 +92,10 @@ function listConfiguredOfficialExternalRepairHints(
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
     return [];
   }
-  return Object.keys(channels)
-    .filter((channelId) => isConfiguredChannel(cfg, channelId))
-    .map((channelId) =>
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: cfg,
-        channelId,
-      }),
-    )
-    .filter((hint): hint is OfficialExternalPluginRepairHint => Boolean(hint));
+  return resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    channelIds: Object.keys(channels).filter((channelId) => isConfiguredChannel(cfg, channelId)),
+  });
 }
 
 function formatMissingOfficialExternalChannelsMessage(

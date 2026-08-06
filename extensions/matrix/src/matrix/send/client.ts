@@ -32,7 +32,7 @@ export async function withResolvedMatrixSendClient<T>(
     timeoutMs?: number;
     accountId?: string | null;
   },
-  run: (client: MatrixClient) => Promise<T>,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedMatrixClient(
     {
@@ -55,7 +55,7 @@ export async function withResolvedMatrixControlClient<T>(
     timeoutMs?: number;
     accountId?: string | null;
   },
-  run: (client: MatrixClient) => Promise<T>,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedMatrixClient(
     {
@@ -74,7 +74,7 @@ async function withResolvedMatrixClient<T>(
     accountId?: string | null;
     readiness: "started" | "none";
   },
-  run: (client: MatrixClient) => Promise<T>,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
   shutdownBehavior?: "persist",
 ): Promise<T> {
   if (opts.client) {

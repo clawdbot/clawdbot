@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { normalizeCliModel } from "./cli-runner/helpers.js";
@@ -22,12 +23,14 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
+import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
+import type { UsageLike } from "./usage.js";
 
 type RunIsolatedCompletionParams = {
   config?: OpenClawConfig;
@@ -56,7 +59,7 @@ export type IsolatedCompletionResult = {
   model: string;
   owner: { kind: "cli" | "harness"; id: string };
   /** CLI runtimes may not report token usage; absence must not be projected as zero. */
-  usage?: AssistantMessage["usage"];
+  usage?: UsageLike;
 };
 
 type IsolatedCompletionErrorCode =
@@ -139,7 +142,7 @@ async function runCliIsolatedCompletion(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-}): Promise<{ model: string; text: string }> {
+}): Promise<{ model: string; text: string; usage?: UsageLike }> {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
     async ({ dir }) => {
@@ -217,7 +220,12 @@ async function runCliIsolatedCompletion(params: {
           `CLI backend ${params.provider} became unavailable after execution.`,
         );
       }
-      return { text, model: normalizeCliModel(params.request.model, backend.config) };
+      const usage = result.meta?.agentMeta?.usage;
+      return {
+        text,
+        model: normalizeCliModel(params.request.model, backend.config),
+        ...(usage ? { usage } : {}),
+      };
     },
   );
 }
@@ -317,93 +325,118 @@ export async function runIsolatedCompletion(
       config,
       includeSetupRegistry: true,
     }) ?? request.provider;
-
-  await ensureSelectedAgentHarnessPlugin({
-    provider,
-    modelId: request.model,
+  const lease = await acquireAgentRunPreparedModelRuntime({
     config,
-    agentId,
-    agentHarnessId: request.agentHarnessRuntimeOverride,
-    agentHarnessRuntimeOverride: request.agentHarnessRuntimeOverride,
-    workspaceDir,
-  });
-  const runtime =
-    request.agentHarnessRuntimeOverride ??
-    resolveEffectiveAgentRuntime({ cfg: config, provider, modelId: request.model, agentId });
-  const cliOwner = resolveCliOwner({
-    request,
-    provider,
-    runtime,
     agentId,
     agentDir,
     workspaceDir,
+    runtimePluginSelections: [
+      {
+        provider,
+        modelId: request.model,
+        ...(request.agentHarnessRuntimeOverride
+          ? { runtime: request.agentHarnessRuntimeOverride }
+          : {}),
+        agentId,
+      },
+    ],
   });
-  if (cliOwner) {
-    const completion = await runCliIsolatedCompletion({
-      request,
-      provider: cliOwner,
-      modelProvider: provider,
-      agentId,
-      agentDir,
-      workspaceDir,
-    });
-    return {
-      text: completion.text,
-      provider,
-      model: completion.model,
-      owner: { kind: "cli", id: cliOwner },
+  const pluginRegistry = lease.snapshot.pluginRegistry;
+  try {
+    const run = async (): Promise<IsolatedCompletionResult> => {
+      await ensureSelectedAgentHarnessPlugin({
+        provider,
+        modelId: request.model,
+        config,
+        agentId,
+        agentHarnessId: request.agentHarnessRuntimeOverride,
+        agentHarnessRuntimeOverride: request.agentHarnessRuntimeOverride,
+        workspaceDir,
+        pluginRegistry,
+      });
+      const runtime =
+        request.agentHarnessRuntimeOverride ??
+        resolveEffectiveAgentRuntime({ cfg: config, provider, modelId: request.model, agentId });
+      const cliOwner = resolveCliOwner({
+        request,
+        provider,
+        runtime,
+        agentId,
+        agentDir,
+        workspaceDir,
+      });
+      if (cliOwner) {
+        const completion = await runCliIsolatedCompletion({
+          request,
+          provider: cliOwner,
+          modelProvider: provider,
+          agentId,
+          agentDir,
+          workspaceDir,
+        });
+        return {
+          text: completion.text,
+          provider,
+          model: completion.model,
+          owner: { kind: "cli", id: cliOwner },
+          ...(completion.usage ? { usage: completion.usage } : {}),
+        };
+      }
+
+      const harness = await resolveHarness(runtime);
+      if (!harness.runIsolatedCompletion) {
+        throw new IsolatedCompletionError(
+          "unsupported",
+          `Agent harness ${harness.id} does not support isolated completion.`,
+        );
+      }
+      const prepared = await prepareSimpleCompletionModel({
+        cfg: config,
+        agentId,
+        provider,
+        modelId: request.model,
+        agentDir,
+        profileId: request.authProfileId,
+        allowMissingApiKeyModes: ["aws-sdk"],
+        allowBundledStaticCatalogFallback: true,
+        skipAgentDiscovery: true,
+        bindAuthOwner: true,
+      });
+      if ("error" in prepared) {
+        throw new Error(`Isolated completion preparation failed: ${prepared.error}`);
+      }
+      const harnessParams: AgentHarnessIsolatedCompletionParams = {
+        provider,
+        modelId: request.model,
+        model: prepared.model,
+        auth: prepared.auth,
+        ...(prepared.sourceAuthFingerprint
+          ? { sourceAuthFingerprint: prepared.sourceAuthFingerprint }
+          : {}),
+        config,
+        agentId,
+        agentDir,
+        workspaceDir,
+        systemPrompt: request.systemPrompt,
+        prompt: request.prompt,
+        timeoutMs: request.timeoutMs,
+        abortSignal: request.abortSignal,
+        thinkLevel: request.thinkLevel,
+        streamParams: request.streamParams,
+      };
+      const result = await harness.runIsolatedCompletion(
+        prepareIsolatedHarnessParams(harness, harnessParams),
+      );
+      return {
+        text: requireIsolatedAssistantText(result.assistant),
+        provider: result.assistant.provider,
+        model: result.assistant.model,
+        owner: { kind: "harness", id: harness.id },
+        usage: result.assistant.usage,
+      };
     };
+    return await withPluginRuntimeRegistryScope(pluginRegistry, run);
+  } finally {
+    lease.release();
   }
-
-  const harness = await resolveHarness(runtime);
-  if (!harness.runIsolatedCompletion) {
-    throw new IsolatedCompletionError(
-      "unsupported",
-      `Agent harness ${harness.id} does not support isolated completion.`,
-    );
-  }
-  const prepared = await prepareSimpleCompletionModel({
-    cfg: config,
-    agentId,
-    provider,
-    modelId: request.model,
-    agentDir,
-    profileId: request.authProfileId,
-    allowMissingApiKeyModes: ["aws-sdk"],
-    allowBundledStaticCatalogFallback: true,
-    skipAgentDiscovery: true,
-    bindAuthOwner: true,
-  });
-  if ("error" in prepared) {
-    throw new Error(`Isolated completion preparation failed: ${prepared.error}`);
-  }
-  const harnessParams: AgentHarnessIsolatedCompletionParams = {
-    provider,
-    modelId: request.model,
-    model: prepared.model,
-    auth: prepared.auth,
-    ...(prepared.sourceAuthFingerprint
-      ? { sourceAuthFingerprint: prepared.sourceAuthFingerprint }
-      : {}),
-    config,
-    agentId,
-    agentDir,
-    workspaceDir,
-    systemPrompt: request.systemPrompt,
-    prompt: request.prompt,
-    timeoutMs: request.timeoutMs,
-    abortSignal: request.abortSignal,
-    thinkLevel: request.thinkLevel,
-    streamParams: request.streamParams,
-  };
-  const result = await harness.runIsolatedCompletion(
-    prepareIsolatedHarnessParams(harness, harnessParams),
-  );
-  return {
-    text: requireIsolatedAssistantText(result.assistant),
-    provider: result.assistant.provider,
-    model: result.assistant.model,
-    owner: { kind: "harness", id: harness.id },
-    usage: result.assistant.usage,
-  };
 }

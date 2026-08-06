@@ -2680,6 +2680,35 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("keeps JSON-Accept requests for explicit assets and plugin recovery routes", async () => {
+    await withControlUiRoot({
+      indexHtml: "<html><body>plugin-recovery</body></html>\n",
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+
+        const asset = await runControlUiRequest({
+          url: "/assets/actual.txt",
+          method: "GET",
+          rootPath: tmp,
+          headers: { accept: "application/json" },
+        });
+        expect(asset.handled).toBe(true);
+        expect(asset.res.statusCode).toBe(200);
+        expect(responseBody(asset.end)).toBe("inside-ok\n");
+
+        const recovery = await runControlUiRequest({
+          url: "/settings/plugins",
+          method: "GET",
+          rootPath: tmp,
+          headers: { accept: "application/json" },
+        });
+        expect(recovery.handled).toBe(true);
+        expect(recovery.res.statusCode).toBe(200);
+        expect(responseBody(recovery.end)).toContain("plugin-recovery");
+      },
+    });
+  });
+
   it("compresses bundled assets and caches them immutably", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

@@ -782,7 +782,7 @@ async function runAttachmentEntries(params: {
               config: params.config,
               secretOwnerId: candidate.secretOwnerId,
             });
-      if (result) {
+      if (result?.text) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
         if (result.provider) {
           decision.provider = result.provider;

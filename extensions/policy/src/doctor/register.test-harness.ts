@@ -32,6 +32,20 @@ export function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawC
   };
 }
 
+export async function writePolicyFixture(
+  ...json: Parameters<typeof JSON.stringify>
+): Promise<string> {
+  const [policy] = json;
+  const configPath = join(workspaceDir, "openclaw.jsonc");
+  await fs.writeFile(configPath, "{}", "utf-8");
+  await fs.writeFile(
+    join(workspaceDir, "policy.jsonc"),
+    typeof policy === "string" ? policy : JSON.stringify(...json),
+    "utf-8",
+  );
+  return configPath;
+}
+
 export function ctx(configPath: string, cfg: OpenClawConfig = {}): HealthCheckContext {
   return {
     mode: "lint",
@@ -74,6 +88,13 @@ export async function runPolicyChecks(checkCtx: HealthCheckContext): Promise<{
   return { findings };
 }
 
+export async function runPolicyChecksFixture(
+  policy: unknown,
+  cfg: OpenClawConfig = cfgWithPolicy(),
+) {
+  return runPolicyChecks(ctx(await writePolicyFixture(policy), cfg));
+}
+
 export async function runPolicyDoctorLint(checkCtx: HealthCheckContext) {
   return runDoctorLintChecks(checkCtx, { checks: registerChecks() });
 }
@@ -103,7 +124,7 @@ export async function runPolicyRepairCheck(checkId: string, repairCheckCtx: Heal
   return { ...result, findings, config, remainingFindings };
 }
 
-export const describe0BeforeEach0 = async () => {
+export const setupPolicyDoctorTest = async () => {
   clearHealthChecksForTest();
   originalOpenClawHome = process.env.OPENCLAW_HOME;
   originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -125,7 +146,7 @@ export const describe0BeforeEach0 = async () => {
   }
 };
 
-export const describe0AfterEach1 = async () => {
+export const teardownPolicyDoctorTest = async () => {
   if (originalOpenClawHome === undefined) {
     delete process.env.OPENCLAW_HOME;
   } else {

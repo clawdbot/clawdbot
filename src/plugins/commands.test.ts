@@ -11,8 +11,9 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { setActivePluginRegistry, withPluginRegistrationContext } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
@@ -61,6 +62,7 @@ function registerHostTrustedReservedCommandForTest(
     activateGlobalSideEffects: true,
   });
   pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
+  setActivePluginRegistry(pluginRegistry.registry);
 }
 
 function registerVoiceCommandForTest(
@@ -284,6 +286,21 @@ afterEach(() => {
 });
 
 describe("registerPluginCommand", () => {
+  it("writes direct registrations into the synchronous builder context", () => {
+    const active = createEmptyPluginRegistry();
+    const building = createEmptyPluginRegistry();
+    setActivePluginRegistry(active);
+
+    expect(
+      withPluginRegistrationContext(building, "demo-plugin", () =>
+        registerPluginCommand("spoofed-plugin", createVoiceCommand()),
+      ),
+    ).toEqual({ ok: true });
+    expect(active.commands).toStrictEqual([]);
+    expect(building.commands.map((entry) => entry.command.name)).toEqual(["voice"]);
+    expect(building.commands[0]?.pluginId).toBe("demo-plugin");
+  });
+
   it.each([
     {
       name: "rejects invalid command names",
@@ -825,6 +842,7 @@ describe("registerPluginCommand", () => {
         },
       },
     );
+    setActivePluginRegistry(pluginRegistry.registry);
     const match = requirePluginCommandMatch("/external");
 
     await executePluginCommand({
@@ -860,6 +878,7 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
+    setActivePluginRegistry(pluginRegistry.registry);
     const match = requirePluginCommandMatch("/pair_test");
 
     await executePluginCommand({

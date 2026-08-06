@@ -1,7 +1,7 @@
+import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 // Control UI view renders config form.shared screen content.
 import { t } from "../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 
 export type JsonSchema = {
   type?: string | string[];
@@ -104,27 +104,6 @@ export function humanize(raw: string) {
     .replace(/^./, (m) => m.toUpperCase());
 }
 
-const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
-  "maxtokens",
-  "maxoutputtokens",
-  "maxinputtokens",
-  "maxcompletiontokens",
-  "contexttokens",
-  "totaltokens",
-  "tokencount",
-  "tokenlimit",
-  "tokenbudget",
-  "passwordfile",
-] as const;
-
-const SENSITIVE_PATTERNS = [
-  /token$/i,
-  /password/i,
-  /secret/i,
-  /api.?key/i,
-  /serviceaccount(?:ref)?$/i,
-];
-
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
 export function redactedPlaceholder(): string {
@@ -155,12 +134,6 @@ function enterSensitiveScanNode(state: SensitiveScanState, depth: number): boole
 
 function isEnvVarPlaceholder(value: string): boolean {
   return ENV_VAR_PLACEHOLDER_PATTERN.test(value.trim());
-}
-
-export function isSensitiveConfigPath(path: string): boolean {
-  const lowerPath = normalizeLowercaseStringOrEmpty(path);
-  const whitelisted = SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
-  return !whitelisted && SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
 function isSensitiveLeafValue(value: unknown): boolean {

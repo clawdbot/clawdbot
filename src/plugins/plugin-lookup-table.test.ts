@@ -88,9 +88,6 @@ function createIndex(
       startup: {
         sidecar: false,
         memory: false,
-        deferConfiguredChannelFullLoadUntilAfterListen: Boolean(
-          plugin.startupDeferConfiguredChannelFullLoadUntilAfterListen,
-        ),
         agentHarnesses: [],
         configPaths: plugin.activation?.onConfigPaths ?? [],
       },
@@ -246,7 +243,6 @@ describe("loadPluginLookUpTable", () => {
     expect(table.metrics.indexPluginCount).toBe(2);
     expect(table.metrics.manifestPluginCount).toBe(2);
     expect(table.metrics.startupPluginCount).toBe(1);
-    expect(table.metrics.deferredChannelPluginCount).toBe(0);
     for (const metricName of [
       "registrySnapshotMs",
       "manifestRegistryMs",
@@ -269,7 +265,6 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);
     expect(table.startup.channelPluginIds).toEqual(["telegram"]);
-    expect(table.startup.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(table.startup.pluginIds).toEqual(["telegram"]);
   });
 

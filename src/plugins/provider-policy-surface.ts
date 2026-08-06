@@ -12,6 +12,7 @@ import type {
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -22,10 +23,18 @@ import {
 } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
-const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
 
-/** Provider policy hooks loaded from bundled plugin public artifacts. */
-export type BundledProviderPolicySurface = {
+type ProviderProjectConfiguredModelRowContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+};
+
+/** Provider policy hooks supported by bundled and trusted official plugins. */
+export type ProviderPolicySurface = {
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
@@ -42,34 +51,68 @@ export type BundledProviderPolicySurface = {
   ) => string | null | undefined;
 };
 
-function hasProviderPolicyHook(
-  mod: Record<string, unknown>,
-): mod is Record<string, unknown> & BundledProviderPolicySurface {
-  return (
-    typeof mod.normalizeConfig === "function" ||
-    typeof mod.applyConfigDefaults === "function" ||
-    typeof mod.resolveConfigApiKey === "function" ||
-    typeof mod.resolveThinkingProfile === "function" ||
-    typeof mod.resolveModelRoutes === "function" ||
-    typeof mod.normalizeModelCatalogId === "function"
-  );
+/** Provider policy hooks loaded only from bundled plugin public artifacts. */
+export type BundledProviderPolicySurface = ProviderPolicySurface & {
+  projectConfiguredModelRow?: (
+    ctx: ProviderProjectConfiguredModelRowContext,
+  ) => ProviderRuntimeModel | null | undefined;
+};
+
+const bundledProviderPolicySurfaceByPluginId = new Map<
+  string,
+  BundledProviderPolicySurface | null
+>();
+const externalProviderPolicySurfaceByPluginId = new Map<string, ProviderPolicySurface | null>();
+
+const PROVIDER_POLICY_HOOK_KEYS = [
+  "normalizeConfig",
+  "applyConfigDefaults",
+  "resolveConfigApiKey",
+  "resolveThinkingProfile",
+  "resolveModelRoutes",
+  "normalizeModelCatalogId",
+] as const satisfies readonly (keyof ProviderPolicySurface)[];
+
+function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPolicySurface | null {
+  const surface: ProviderPolicySurface = {};
+  for (const key of PROVIDER_POLICY_HOOK_KEYS) {
+    const hook = mod[key];
+    if (typeof hook === "function") {
+      Object.assign(surface, { [key]: hook });
+    }
+  }
+  return Object.keys(surface).length > 0 ? surface : null;
 }
 
-function resolveCachedProviderPolicySurface(params: {
+function extractBundledProviderPolicySurface(
+  mod: Record<string, unknown>,
+): BundledProviderPolicySurface | null {
+  const surface: BundledProviderPolicySurface = extractProviderPolicySurface(mod) ?? {};
+  if (typeof mod.projectConfiguredModelRow === "function") {
+    surface.projectConfiguredModelRow =
+      mod.projectConfiguredModelRow as BundledProviderPolicySurface["projectConfiguredModelRow"];
+  }
+  return Object.keys(surface).length > 0 ? surface : null;
+}
+
+function resolveCachedProviderPolicySurface<T extends ProviderPolicySurface>(params: {
+  cache: Map<string, T | null>;
   cacheKey: string;
   loadModule: (artifactBasename: string) => Record<string, unknown>;
   missingSurfacePrefix: string;
-}): BundledProviderPolicySurface | null {
-  const cached = providerPolicySurfaceByPluginId.get(params.cacheKey);
+  extractSurface: (mod: Record<string, unknown>) => T | null;
+}): T | null {
+  const cached = params.cache.get(params.cacheKey);
   if (cached !== undefined) {
     return cached;
   }
   for (const artifactBasename of PROVIDER_POLICY_ARTIFACT_CANDIDATES) {
     try {
       const mod = params.loadModule(artifactBasename);
-      if (hasProviderPolicyHook(mod)) {
-        providerPolicySurfaceByPluginId.set(params.cacheKey, mod);
-        return mod;
+      const surface = params.extractSurface(mod);
+      if (surface) {
+        params.cache.set(params.cacheKey, surface);
+        return surface;
       }
     } catch (error) {
       if (error instanceof Error && error.message.startsWith(params.missingSurfacePrefix)) {
@@ -78,7 +121,7 @@ function resolveCachedProviderPolicySurface(params: {
       throw error;
     }
   }
-  providerPolicySurfaceByPluginId.set(params.cacheKey, null);
+  params.cache.set(params.cacheKey, null);
   return null;
 }
 
@@ -98,6 +141,7 @@ export function resolveDirectBundledProviderPolicySurface(
     return null;
   }
   return resolveCachedProviderPolicySurface({
+    cache: bundledProviderPolicySurfaceByPluginId,
     cacheKey: `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`,
     loadModule: (artifactBasename) =>
       loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
@@ -105,6 +149,7 @@ export function resolveDirectBundledProviderPolicySurface(
         artifactBasename,
       }),
     missingSurfacePrefix: "Unable to resolve bundled plugin public surface ",
+    extractSurface: extractBundledProviderPolicySurface,
   });
 }
 
@@ -113,11 +158,12 @@ export function resolveTrustedExternalProviderPolicySurface(params: {
   pluginId: string;
   pluginRoot: string;
   trustedOfficialInstall?: boolean;
-}): BundledProviderPolicySurface | null {
+}): ProviderPolicySurface | null {
   if (params.trustedOfficialInstall !== true) {
     return null;
   }
   return resolveCachedProviderPolicySurface({
+    cache: externalProviderPolicySurfaceByPluginId,
     cacheKey: `${params.pluginRoot}\0${params.pluginId}`,
     loadModule: (artifactBasename) =>
       loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
@@ -125,5 +171,6 @@ export function resolveTrustedExternalProviderPolicySurface(params: {
         artifactBasename,
       }),
     missingSurfacePrefix: "Unable to resolve plugin public surface ",
+    extractSurface: extractProviderPolicySurface,
   });
 }

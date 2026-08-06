@@ -63,7 +63,7 @@ export class ChatAttachmentReadLifecycle {
   }
 }
 
-export function isFileDrag(dataTransfer: DataTransfer | null): boolean {
+function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
 
@@ -81,7 +81,7 @@ const TEXT_ENTRY_INPUT_TYPES = new Set([
 // actually accept it; anywhere else (disabled/readonly inputs, non-text
 // controls like checkbox/range) an uncancelled URL drop navigates the app
 // away and discards unsent drafts.
-export function isEditableDropTarget(event: DragEvent): boolean {
+function isEditableDropTarget(event: DragEvent): boolean {
   const target = event.target;
   if (!(target instanceof Element)) {
     return false;
@@ -100,7 +100,7 @@ function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[
   return props.getAttachments?.() ?? props.attachments ?? [];
 }
 
-export function clickComposerInput(target: HTMLElement, selector: string) {
+function clickComposerInput(target: HTMLElement, selector: string) {
   target.closest("details")?.removeAttribute("open");
   target
     .closest(".agent-chat__composer-shell, .new-session-page__composer")
@@ -363,7 +363,7 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   void appendAttachmentFiles(files, props);
 }
 
-export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
+function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
   e.preventDefault();
   void appendAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
 }
@@ -372,6 +372,8 @@ type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
   canCompose: boolean;
 };
 
+// Both composers share balanced nested drag state and cancel non-editable
+// text/URL drops so disabled surfaces cannot navigate away from a draft.
 export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps) {
   let depth = 0;
   const setActive = (event: DragEvent, active: boolean) => {
@@ -432,42 +434,74 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
 
 export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
   return html`
-    <input
-      type="file"
-      accept=${CHAT_ATTACHMENT_ACCEPT}
-      multiple
-      class="agent-chat__file-input"
-      ?disabled=${props.disabled}
-      @change=${(event: Event) => {
-        if (!props.disabled) {
-          handleChatAttachmentFileSelect(event, props);
+    ${(["file", "photo", "camera"] as const).map(
+      (kind) => html`
+        <input
+          type="file"
+          accept=${kind === "file" ? CHAT_ATTACHMENT_ACCEPT : "image/*"}
+          ?multiple=${kind !== "camera"}
+          capture=${kind === "camera" ? "environment" : nothing}
+          class=${`agent-chat__${kind}-input`}
+          ?disabled=${props.disabled}
+          @change=${(event: Event) => {
+            if (!props.disabled) {
+              handleChatAttachmentFileSelect(event, props);
+            }
+          }}
+        />
+      `,
+    )}
+  `;
+}
+
+export function handleChatAttachmentMenuSelection(
+  event: CustomEvent<{ item: { value?: string } }>,
+): boolean {
+  const value = event.detail.item.value;
+  if (value !== "camera" && value !== "photo" && value !== "file") {
+    return false;
+  }
+  clickComposerInput(event.currentTarget as HTMLElement, `.agent-chat__${value}-input`);
+  return true;
+}
+
+export function renderChatAttachmentMenuTrigger(disabled: boolean | undefined) {
+  return html`
+    <button
+      slot="trigger"
+      type="button"
+      class="agent-chat__input-btn agent-chat__input-btn--attach"
+      aria-label=${t("chat.composer.addAttachment")}
+      ?disabled=${disabled}
+      title=${t("chat.composer.addAttachment")}
+      @pointerdown=${(event: PointerEvent) => {
+        const composer = (event.currentTarget as HTMLElement)
+          .closest(".agent-chat__composer-shell")
+          ?.querySelector("textarea");
+        if (document.activeElement === composer) {
+          event.preventDefault();
         }
       }}
-    />
-    <input
-      type="file"
-      accept="image/*"
-      multiple
-      class="agent-chat__photo-input"
-      ?disabled=${props.disabled}
-      @change=${(event: Event) => {
-        if (!props.disabled) {
-          handleChatAttachmentFileSelect(event, props);
-        }
-      }}
-    />
-    <input
-      type="file"
-      accept="image/*"
-      capture="environment"
-      class="agent-chat__camera-input"
-      ?disabled=${props.disabled}
-      @change=${(event: Event) => {
-        if (!props.disabled) {
-          handleChatAttachmentFileSelect(event, props);
-        }
-      }}
-    />
+    >
+      ${icons.plus}
+    </button>
+  `;
+}
+
+export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
+  return html`
+    <wa-dropdown-item class="agent-chat__attach-menu-option" value="camera">
+      <span slot="icon" aria-hidden="true">${icons.camera}</span>
+      <span>${t("chat.composer.takePhoto")}</span>
+    </wa-dropdown-item>
+    <wa-dropdown-item class="agent-chat__attach-menu-option" value="photo">
+      <span slot="icon" aria-hidden="true">${icons.image}</span>
+      <span>${t("chat.composer.attachPhoto")}</span>
+    </wa-dropdown-item>
+    <wa-dropdown-item class="agent-chat__attach-menu-option" value="file">
+      <span slot="icon" aria-hidden="true">${fileIcon}</span>
+      <span>${t("chat.composer.attachFileOption")}</span>
+    </wa-dropdown-item>
   `;
 }
 
@@ -477,51 +511,9 @@ export function renderChatAttachmentMenu(props: ChatAttachmentControlsProps) {
       class="agent-chat__attach-menu"
       placement="top-start"
       aria-label=${t("chat.composer.addAttachment")}
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        const menu = event.currentTarget as HTMLElement;
-        const selector =
-          event.detail.item.value === "camera"
-            ? ".agent-chat__camera-input"
-            : event.detail.item.value === "photo"
-              ? ".agent-chat__photo-input"
-              : event.detail.item.value === "file"
-                ? ".agent-chat__file-input"
-                : null;
-        if (selector) {
-          clickComposerInput(menu, selector);
-        }
-      }}
+      @wa-select=${handleChatAttachmentMenuSelection}
     >
-      <button
-        slot="trigger"
-        type="button"
-        class="agent-chat__input-btn agent-chat__input-btn--attach"
-        aria-label=${t("chat.composer.addAttachment")}
-        ?disabled=${props.disabled}
-        title=${t("chat.composer.addAttachment")}
-        @pointerdown=${(event: PointerEvent) => {
-          const composer = (event.currentTarget as HTMLElement)
-            .closest(".agent-chat__composer-shell")
-            ?.querySelector("textarea");
-          if (document.activeElement === composer) {
-            event.preventDefault();
-          }
-        }}
-      >
-        ${icons.plus}
-      </button>
-      <wa-dropdown-item class="agent-chat__attach-menu-option" value="camera">
-        <span slot="icon" aria-hidden="true">${icons.camera}</span>
-        <span>${t("chat.composer.takePhoto")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="agent-chat__attach-menu-option" value="photo">
-        <span slot="icon" aria-hidden="true">${icons.image}</span>
-        <span>${t("chat.composer.attachPhoto")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="agent-chat__attach-menu-option" value="file">
-        <span slot="icon" aria-hidden="true">${icons.folder}</span>
-        <span>${t("chat.composer.attachFileOption")}</span>
-      </wa-dropdown-item>
+      ${renderChatAttachmentMenuTrigger(props.disabled)} ${renderChatAttachmentMenuOptions()}
     </wa-dropdown>
   `;
 }

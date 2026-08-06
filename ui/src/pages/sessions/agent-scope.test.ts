@@ -84,7 +84,7 @@ describe("searchVisibleSessionTranscripts", () => {
     );
   });
 
-  it("recovers a thread that moves across an updated-at pagination boundary", async () => {
+  it("recovers a moving thread when a later page omits the authoritative total", async () => {
     const first = { key: "agent:main:first" } as GatewaySessionRow;
     const moved = { key: "agent:main:moved" } as GatewaySessionRow;
     const missed = { key: "agent:main:missed" } as GatewaySessionRow;
@@ -107,7 +107,6 @@ describe("searchVisibleSessionTranscripts", () => {
       .fn()
       .mockResolvedValueOnce({
         count: 1,
-        totalCount: 3,
         sessions: [moved],
         offset: 2,
         hasMore: false,

@@ -65,10 +65,13 @@ describe("subagents tool", () => {
       task: "report the killed child",
       cleanup: "keep",
       createdAt: now - 2_000,
-      startedAt: now - 2_000,
-      endedAt: now - 1_000,
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "agent run aborted" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 2_000,
+        endedAt: now - 1_000,
+        outcome: { status: "error", error: "agent run aborted" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 

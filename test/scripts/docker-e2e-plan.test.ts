@@ -244,12 +244,22 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.command).toContain('bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"');
   });
 
-  it("plans package-backed Compose and package artifact proofs", () => {
+  it("plans package-backed installer, Compose, and package artifact proofs", () => {
     const plan = planFor({
-      selectedLaneNames: ["compose-setup", "docker-package-install"],
+      selectedLaneNames: ["cli-installer-distribution", "compose-setup", "docker-package-install"],
     });
 
     expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cli-installer-distribution",
+        imageKind: "bare",
+        live: false,
+        name: "cli-installer-distribution",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 1_800_000,
+        weight: 3,
+      },
       {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup",
         imageKind: "functional",
@@ -590,7 +600,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
-          'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} OPENCLAW_SKIP_DOCKER_BUILD=1 bash .release-harness/scripts/e2e/upgrade-survivor-docker.sh',
+          'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/upgrade-survivor-docker.sh"\'',
         imageKind: "bare",
         live: false,
         name: "update-restart-auth",

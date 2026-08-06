@@ -12,7 +12,6 @@ import {
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
@@ -33,6 +32,8 @@ import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  normalizeServiceEnvKey,
+  normalizeServiceEnvKeys,
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
@@ -58,7 +59,6 @@ import {
 } from "./systemd-unavailable.js";
 import {
   buildSystemdUnit,
-  parseSystemdEnvAssignment,
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   renderSystemdEnvAssignment,
@@ -328,8 +328,7 @@ export async function readSystemdServiceExecStart(
         workingDirectory = line.slice("WorkingDirectory=".length).trim();
       } else if (line.startsWith("Environment=")) {
         const raw = line.slice("Environment=".length).trim();
-        const parsed = parseSystemdEnvAssignment(raw);
-        if (parsed) {
+        for (const parsed of parseSystemdEnvAssignments(raw)) {
           inlineEnvironment[parsed.key] = parsed.value;
         }
       } else if (line.startsWith("EnvironmentFile=")) {
@@ -388,10 +387,6 @@ function mergeEnvironmentValueSources(
   return sources;
 }
 
-function normalizeSystemdEnvironmentKey(key: string): string | null {
-  return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
-}
-
 function collectSystemdInlineManagedKeys(params: {
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
@@ -406,7 +401,7 @@ function collectSystemdInlineManagedKeys(params: {
     if (typeof value !== "string" || !value.trim()) {
       continue;
     }
-    const key = normalizeSystemdEnvironmentKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (!key) {
       continue;
     }
@@ -423,7 +418,7 @@ function collectSystemdFileManagedKeys(params: {
 }): Set<string> {
   const keys = new Set<string>();
   for (const [rawKey, source] of Object.entries(params.environmentValueSources ?? {})) {
-    const key = normalizeSystemdEnvironmentKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (key && isEnvironmentFileOnlySource(source)) {
       keys.add(key);
     }
@@ -443,7 +438,7 @@ function collectSystemdFileBackedEnvironment(params: {
     if (typeof rawValue !== "string" || !rawValue.trim()) {
       continue;
     }
-    const key = normalizeSystemdEnvironmentKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (key && params.fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
       environment[rawKey] = rawValue;
     }
@@ -473,7 +468,7 @@ function sanitizeSystemdUnitBackupContent(params: {
       continue;
     }
     const keptAssignments = assignments.filter(({ key }) => {
-      const normalizedKey = normalizeSystemdEnvironmentKey(key);
+      const normalizedKey = normalizeServiceEnvKey(key);
       return !normalizedKey || !params.fileManagedKeys.has(normalizedKey);
     });
     if (keptAssignments.length === assignments.length) {
@@ -1180,7 +1175,7 @@ async function writeSystemdUnit({
         if (hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) {
           return false;
         }
-        const normalizedKey = normalizeSystemdEnvironmentKey(key);
+        const normalizedKey = normalizeServiceEnvKey(key);
         if (
           normalizedKey &&
           environmentFileResult.environmentKeys.has(normalizedKey) &&
@@ -1368,17 +1363,14 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       // File does not exist yet — nothing to preserve.
     }
   }
-  const managedKeysToDrop = new Set([
+  const managedKeysToDrop = normalizeServiceEnvKeys([
     ...(params.inlineManagedKeys ?? []),
     ...(params.fileManagedKeys ?? []),
-    ...[...(params.skippedManagedKeys ?? [])].flatMap((key) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
-      return normalized ? [normalized] : [];
-    }),
+    ...(params.skippedManagedKeys ?? []),
   ]);
   const operatorOnly = Object.fromEntries(
     Object.entries(existing).filter(([key, value]) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
+      const normalized = normalizeServiceEnvKey(key);
       if (normalized && managedKeysToDrop.has(normalized)) {
         return false;
       }
@@ -1388,12 +1380,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
     }),
   );
   const merged = { ...operatorOnly, ...incoming };
-  const environmentKeys = new Set(
-    Object.keys(merged).flatMap((key) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
-      return normalized ? [normalized] : [];
-    }),
-  );
+  const environmentKeys = normalizeServiceEnvKeys(Object.keys(merged));
 
   // If the merged result is empty there is nothing to write and no file needed.
   if (Object.keys(merged).length === 0) {
@@ -1426,7 +1413,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   const managedKeys = new Set(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
   const remaining = Object.fromEntries(
     Object.entries(existingFile.environment).filter(([key, value]) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
+      const normalized = normalizeServiceEnvKey(key);
       if (normalized && managedKeys.has(normalized)) {
         return false;
       }
@@ -1602,35 +1589,27 @@ async function runSystemdServiceAction(params: {
   const env = params.env ?? process.env;
   const installed = await findInstalledSystemdGatewayScope(env);
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
   if (installed?.scope === "system") {
     if (!isRunningAsRoot()) {
       throw new Error(
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
+    runSystemctl = (args) => execSystemctl(args, env);
+  } else {
+    await assertSystemdAvailable(env);
     if (params.action !== "stop") {
-      // systemd latches a unit into failed/start-limit-hit after it crashes faster
-      // than StartLimitBurst allows and then stops auto-restarting it. Clear the
-      // latch before start/restart so an operator can recover a crash-looped
-      // gateway with the natural start command. Idempotent on healthy units.
-      await execSystemctl(["reset-failed", unitName], env);
+      await assertNoSystemGatewayOwnership(env);
     }
-    const res = await execSystemctl([params.action, unitName], env);
-    if (res.code !== 0) {
-      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
-    }
-    params.onMutation?.();
-    params.stdout.write(`${formatLine(params.label, unitName)}\n`);
-    return;
+    runSystemctl = (args) => execSystemctlUser(env, args);
   }
-  await assertSystemdAvailable(env);
   if (params.action !== "stop") {
-    await assertNoSystemGatewayOwnership(env);
-    // Clear the same latch for user-scope start/restart after the ownership
-    // guard, so a conflicting system unit is never mutated.
-    await execSystemctlUser(env, ["reset-failed", unitName]);
+    // Clear crash-loop start-limit latches only after scope ownership is proven;
+    // otherwise resetting a conflicting manager could mutate the wrong service.
+    await runSystemctl(["reset-failed", unitName]);
   }
-  const res = await execSystemctlUser(env, [params.action, unitName]);
+  const res = await runSystemctl([params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
   }

@@ -107,6 +107,7 @@ function canRunPluginHttpRouteWithoutAdmission(route: PluginHttpRouteRegistratio
 }
 
 function createPluginRouteRuntimeScope(params: {
+  registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
   gatewayRequestContext?: GatewayRequestContext;
@@ -131,6 +132,7 @@ function createPluginRouteRuntimeScope(params: {
     params.gatewayRequestClientIp,
   );
   return {
+    pluginRegistry: params.registry,
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     isWebchatConnect: () => false,
@@ -254,6 +256,7 @@ export function createGatewayPluginRequestHandler(params: {
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
+              registry: params.registry,
               route,
               req,
               gatewayRequestContext,
@@ -333,6 +336,7 @@ export function createGatewayPluginUpgradeHandler(params: {
           async () =>
             (await withPluginRuntimeGatewayRequestScope(
               createPluginRouteRuntimeScope({
+                registry: params.registry,
                 route,
                 req,
                 gatewayRequestContext,

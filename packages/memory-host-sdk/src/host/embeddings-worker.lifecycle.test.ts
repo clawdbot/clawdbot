@@ -7,22 +7,77 @@ const accessMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    fork: forkMock,
-  };
+  return { ...actual, fork: forkMock };
 });
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: { ...actual, access: accessMock },
-    access: accessMock,
-  };
+  return { ...actual, default: { ...actual, access: accessMock }, access: accessMock };
 });
 
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
+
+type WorkerMessage = { id: number; type?: string; text?: string };
+type WorkerReply = { id: number; ok: boolean; value?: number[]; error?: string };
+type MockWorkerChild = EventEmitter & {
+  connected: boolean;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  disconnect: ReturnType<typeof vi.fn>;
+  kill: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+};
+
+const LOCAL_PROVIDER_OPTIONS = {
+  config: {} as never,
+  provider: "local",
+  model: "",
+  fallback: "none",
+} as const;
+
+function createMockWorkerChild(
+  options: {
+    onKill?: (child: MockWorkerChild, signal: NodeJS.Signals) => boolean;
+    onMessage?: (message: WorkerMessage, child: MockWorkerChild) => WorkerReply | null;
+  } = {},
+): MockWorkerChild {
+  const child = Object.assign(new EventEmitter(), {
+    connected: true,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    disconnect: vi.fn(),
+    kill: vi.fn(),
+    send: vi.fn(),
+  }) as MockWorkerChild;
+  child.disconnect.mockImplementation(() => {
+    child.connected = false;
+  });
+  child.kill.mockImplementation((signal: NodeJS.Signals = "SIGTERM") => {
+    if (options.onKill) {
+      return options.onKill(child, signal);
+    }
+    child.signalCode = signal;
+    queueMicrotask(() => child.emit("close", null, signal));
+    return true;
+  });
+  child.send.mockImplementation(
+    (message: WorkerMessage, callback: (err?: Error | null) => void) => {
+      callback();
+      const customReply = options.onMessage?.(message, child);
+      const reply = customReply === undefined ? { id: message.id, ok: true } : customReply;
+      if (reply) {
+        queueMicrotask(() => child.emit("message", reply));
+      }
+      return true;
+    },
+  );
+  return child;
+}
+
+function failWorkerKill(child: MockWorkerChild): boolean {
+  queueMicrotask(() => child.emit("error", new Error("kill failed")));
+  return false;
+}
 
 beforeEach(() => {
   forkMock.mockReset();
@@ -41,34 +96,13 @@ it("forks workers through a stable Homebrew Node path", async () => {
     }
     throw new Error("missing");
   });
-  const child = Object.assign(new EventEmitter(), {
-    connected: true,
-    exitCode: null as number | null,
-    signalCode: null as NodeJS.Signals | null,
-    disconnect: vi.fn(function (this: { connected: boolean }) {
-      this.connected = false;
-    }),
-    kill: vi.fn(function (this: EventEmitter, signal: NodeJS.Signals) {
-      queueMicrotask(() => this.emit("close", null, signal));
-      return true;
-    }),
-    send: vi.fn(function (
-      this: EventEmitter,
-      message: { id: number },
-      callback: (err?: Error | null) => void,
-    ) {
-      callback();
-      queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
-      return true;
-    }),
-  });
+  const child = createMockWorkerChild();
   forkMock.mockReturnValue(child);
 
   try {
-    const provider = await createLocalEmbeddingWorkerProvider(
-      { config: {} as never, provider: "local", model: "", fallback: "none" },
-      { workerScriptPath: "/mock/worker.cjs" },
-    );
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: "/mock/worker.cjs",
+    });
 
     expect(forkMock).toHaveBeenCalledWith(
       "/mock/worker.cjs",
@@ -86,48 +120,25 @@ it("forks workers through a stable Homebrew Node path", async () => {
 
 it("keeps an active worker alive when a queued embedding request is aborted", async () => {
   let completeActiveRequest: (() => void) | undefined;
-  const child = Object.assign(new EventEmitter(), {
-    connected: true,
-    exitCode: null as number | null,
-    signalCode: null as NodeJS.Signals | null,
-    disconnect: vi.fn(function (this: { connected: boolean }) {
-      this.connected = false;
-    }),
-    kill: vi.fn(function (
-      this: EventEmitter & { signalCode: NodeJS.Signals | null },
-      signal: NodeJS.Signals,
-    ) {
-      this.signalCode = signal;
-      queueMicrotask(() => this.emit("close", null, signal));
-      return true;
-    }),
-    send: vi.fn(function (
-      this: EventEmitter,
-      message: { id: number; type: string; text?: string },
-      callback: (err?: Error | null) => void,
-    ) {
-      callback();
+  const child = createMockWorkerChild({
+    onMessage: (message, emitter) => {
       if (message.type === "embedQuery" && message.text === "active") {
         completeActiveRequest = () => {
-          this.emit("message", { id: message.id, ok: true, value: [1, 0] });
+          emitter.emit("message", { id: message.id, ok: true, value: [1, 0] });
         };
-      } else {
-        queueMicrotask(() => {
-          this.emit("message", {
-            id: message.id,
-            ok: true,
-            ...(message.type === "embedQuery" ? { value: [0, 1] } : {}),
-          });
-        });
+        return null;
       }
-      return true;
-    }),
+      return {
+        id: message.id,
+        ok: true,
+        ...(message.type === "embedQuery" ? { value: [0, 1] } : {}),
+      };
+    },
   });
   forkMock.mockReturnValue(child);
-  const provider = await createLocalEmbeddingWorkerProvider(
-    { config: {} as never, provider: "local", model: "", fallback: "none" },
-    { workerScriptPath: "/mock/worker.cjs" },
-  );
+  const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+    workerScriptPath: "/mock/worker.cjs",
+  });
   const activeRequest = provider.embedQuery("active");
   await vi.waitFor(() => expect(completeActiveRequest).toBeDefined());
 
@@ -150,36 +161,11 @@ it("keeps an active worker alive when a queued embedding request is aborted", as
 });
 
 it("terminates a disconnected live worker without forking a replacement", async () => {
-  const child = Object.assign(new EventEmitter(), {
-    connected: true,
-    exitCode: null as number | null,
-    signalCode: null as NodeJS.Signals | null,
-    disconnect: vi.fn(function (this: { connected: boolean }) {
-      this.connected = false;
-    }),
-    kill: vi.fn(function (
-      this: EventEmitter & { signalCode: NodeJS.Signals | null },
-      signal: NodeJS.Signals,
-    ) {
-      this.signalCode = signal;
-      queueMicrotask(() => this.emit("close", null, signal));
-      return true;
-    }),
-    send: vi.fn(function (
-      this: EventEmitter,
-      message: { id: number },
-      callback: (err?: Error | null) => void,
-    ) {
-      callback();
-      queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
-      return true;
-    }),
-  });
+  const child = createMockWorkerChild();
   forkMock.mockReturnValue(child);
-  const provider = await createLocalEmbeddingWorkerProvider(
-    { config: {} as never, provider: "local", model: "", fallback: "none" },
-    { workerScriptPath: "/mock/worker.cjs" },
-  );
+  const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+    workerScriptPath: "/mock/worker.cjs",
+  });
   child.connected = false;
 
   await expect(provider.close?.()).resolves.toBeUndefined();
@@ -190,76 +176,29 @@ it("terminates a disconnected live worker without forking a replacement", async 
 });
 
 it("drains failed construction clients before forking another worker", async () => {
-  const failedChild = Object.assign(new EventEmitter(), {
-    connected: true,
-    exitCode: null as number | null,
-    signalCode: null as NodeJS.Signals | null,
-    disconnect: vi.fn(function (this: { connected: boolean }) {
-      this.connected = false;
-    }),
-    kill: vi.fn(function (this: EventEmitter, _signal?: NodeJS.Signals) {
-      queueMicrotask(() => this.emit("error", new Error("kill failed")));
-      return false;
-    }),
-    send: vi.fn(function (
-      this: EventEmitter,
-      message: { id: number; type: string },
-      callback: (err?: Error | null) => void,
-    ) {
-      callback();
-      queueMicrotask(() =>
-        this.emit(
-          "message",
-          message.type === "initialize"
-            ? { id: message.id, ok: false, error: "initialization failed" }
-            : { id: message.id, ok: true },
-        ),
-      );
-      return true;
-    }),
+  const failedChild = createMockWorkerChild({
+    onKill: failWorkerKill,
+    onMessage: (message) =>
+      message.type === "initialize"
+        ? { id: message.id, ok: false, error: "initialization failed" }
+        : { id: message.id, ok: true },
   });
-  const replacementChild = Object.assign(new EventEmitter(), {
-    connected: true,
-    exitCode: null as number | null,
-    signalCode: null as NodeJS.Signals | null,
-    disconnect: vi.fn(function (this: { connected: boolean }) {
-      this.connected = false;
-    }),
-    kill: vi.fn(function (
-      this: EventEmitter & { signalCode: NodeJS.Signals | null },
-      signal: NodeJS.Signals,
-    ) {
-      this.signalCode = signal;
-      queueMicrotask(() => this.emit("close", null, signal));
-      return true;
-    }),
-    send: vi.fn(function (
-      this: EventEmitter,
-      message: { id: number },
-      callback: (err?: Error | null) => void,
-    ) {
-      callback();
-      queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
-      return true;
-    }),
-  });
+  const replacementChild = createMockWorkerChild();
   forkMock.mockReturnValueOnce(failedChild).mockReturnValueOnce(replacementChild);
-  const options = { config: {} as never, provider: "local", model: "", fallback: "none" };
 
   await expect(
-    createLocalEmbeddingWorkerProvider(options, { workerScriptPath: "/mock/worker.cjs" }),
+    createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: "/mock/worker.cjs",
+    }),
   ).rejects.toThrow("initialization failed");
   expect(forkMock).toHaveBeenCalledTimes(1);
 
-  failedChild.kill.mockImplementationOnce(function (
-    this: typeof failedChild,
-    signal: NodeJS.Signals = "SIGTERM",
-  ) {
-    this.signalCode = signal;
-    queueMicrotask(() => this.emit("close", null, signal));
+  failedChild.kill.mockImplementationOnce((signal: NodeJS.Signals = "SIGTERM") => {
+    failedChild.signalCode = signal;
+    queueMicrotask(() => failedChild.emit("close", null, signal));
     return true;
   });
-  const provider = await createLocalEmbeddingWorkerProvider(options, {
+  const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
     workerScriptPath: "/mock/worker.cjs",
   });
   expect(forkMock).toHaveBeenCalledTimes(2);
@@ -268,50 +207,25 @@ it("drains failed construction clients before forking another worker", async () 
 });
 
 it("retries failed construction cleanup without another provider creation", async () => {
-  const failedChild = Object.assign(new EventEmitter(), {
-    connected: true,
-    exitCode: null as number | null,
-    signalCode: null as NodeJS.Signals | null,
-    disconnect: vi.fn(function (this: { connected: boolean }) {
-      this.connected = false;
-    }),
-    kill: vi.fn(function (this: EventEmitter, _signal?: NodeJS.Signals) {
-      queueMicrotask(() => this.emit("error", new Error("kill failed")));
-      return false;
-    }),
-    send: vi.fn(function (
-      this: EventEmitter,
-      message: { id: number; type: string },
-      callback: (err?: Error | null) => void,
-    ) {
-      callback();
-      queueMicrotask(() =>
-        this.emit(
-          "message",
-          message.type === "initialize"
-            ? { id: message.id, ok: false, error: "initialization failed" }
-            : { id: message.id, ok: true },
-        ),
-      );
-      return true;
-    }),
+  const failedChild = createMockWorkerChild({
+    onKill: failWorkerKill,
+    onMessage: (message) =>
+      message.type === "initialize"
+        ? { id: message.id, ok: false, error: "initialization failed" }
+        : { id: message.id, ok: true },
   });
   forkMock.mockReturnValue(failedChild);
 
   await expect(
-    createLocalEmbeddingWorkerProvider(
-      { config: {} as never, provider: "local", model: "", fallback: "none" },
-      { workerScriptPath: "/mock/worker.cjs" },
-    ),
+    createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: "/mock/worker.cjs",
+    }),
   ).rejects.toThrow("initialization failed");
   expect(forkMock).toHaveBeenCalledTimes(1);
 
-  failedChild.kill.mockImplementationOnce(function (
-    this: typeof failedChild,
-    signal: NodeJS.Signals = "SIGTERM",
-  ) {
-    this.signalCode = signal;
-    queueMicrotask(() => this.emit("close", null, signal));
+  failedChild.kill.mockImplementationOnce((signal: NodeJS.Signals = "SIGTERM") => {
+    failedChild.signalCode = signal;
+    queueMicrotask(() => failedChild.emit("close", null, signal));
     return true;
   });
   await vi.waitFor(() => expect(failedChild.kill).toHaveBeenCalledTimes(3), { timeout: 2_000 });
@@ -321,40 +235,16 @@ it("retries failed construction cleanup without another provider creation", asyn
 });
 
 it("retries failed provider close without another owner call", async () => {
-  const child = Object.assign(new EventEmitter(), {
-    connected: true,
-    exitCode: null as number | null,
-    signalCode: null as NodeJS.Signals | null,
-    disconnect: vi.fn(function (this: { connected: boolean }) {
-      this.connected = false;
-    }),
-    kill: vi.fn(function (this: EventEmitter, _signal?: NodeJS.Signals) {
-      queueMicrotask(() => this.emit("error", new Error("kill failed")));
-      return false;
-    }),
-    send: vi.fn(function (
-      this: EventEmitter,
-      message: { id: number },
-      callback: (err?: Error | null) => void,
-    ) {
-      callback();
-      queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
-      return true;
-    }),
-  });
+  const child = createMockWorkerChild({ onKill: failWorkerKill });
   forkMock.mockReturnValue(child);
-  const provider = await createLocalEmbeddingWorkerProvider(
-    { config: {} as never, provider: "local", model: "", fallback: "none" },
-    { workerScriptPath: "/mock/worker.cjs" },
-  );
+  const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+    workerScriptPath: "/mock/worker.cjs",
+  });
 
   await expect(provider.close?.()).rejects.toThrow("did not exit after SIGKILL");
-  child.kill.mockImplementationOnce(function (
-    this: typeof child,
-    signal: NodeJS.Signals = "SIGTERM",
-  ) {
-    this.signalCode = signal;
-    queueMicrotask(() => this.emit("close", null, signal));
+  child.kill.mockImplementationOnce((signal: NodeJS.Signals = "SIGTERM") => {
+    child.signalCode = signal;
+    queueMicrotask(() => child.emit("close", null, signal));
     return true;
   });
   await vi.waitFor(() => expect(child.kill).toHaveBeenCalledTimes(3), { timeout: 2_000 });

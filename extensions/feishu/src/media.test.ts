@@ -27,9 +27,7 @@ const validPngImage = Buffer.from(
   "hex",
 );
 
-vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
-}));
+vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
@@ -42,11 +40,7 @@ vi.mock("./targets.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    media: {
-      loadWebMedia: loadWebMediaMock,
-    },
-  }),
+  getFeishuRuntime: () => ({ media: { loadWebMedia: loadWebMediaMock } }),
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
@@ -143,40 +137,17 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     createFeishuClientMock.mockReturnValue({
       im: {
-        file: {
-          create: fileCreateMock,
-        },
-        image: {
-          create: imageCreateMock,
-        },
-        message: {
-          create: messageCreateMock,
-          reply: messageReplyMock,
-        },
-        messageResource: {
-          get: messageResourceGetMock,
-        },
+        file: { create: fileCreateMock },
+        image: { create: imageCreateMock },
+        message: { create: messageCreateMock, reply: messageReplyMock },
+        messageResource: { get: messageResourceGetMock },
       },
     });
 
-    fileCreateMock.mockResolvedValue({
-      code: 0,
-      data: { file_key: "file_key_1" },
-    });
-    imageCreateMock.mockResolvedValue({
-      code: 0,
-      data: { image_key: "image_key_1" },
-    });
-
-    messageCreateMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "msg_1" },
-    });
-
-    messageReplyMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "reply_1" },
-    });
+    fileCreateMock.mockResolvedValue({ code: 0, data: { file_key: "file_key_1" } });
+    imageCreateMock.mockResolvedValue({ code: 0, data: { image_key: "image_key_1" } });
+    messageCreateMock.mockResolvedValue({ code: 0, data: { message_id: "msg_1" } });
+    messageReplyMock.mockResolvedValue({ code: 0, data: { message_id: "reply_1" } });
 
     loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("remote-audio"),
@@ -650,14 +621,56 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(mockCallArg(loadWebMediaMock, 0, 0)).toBe("/allowed/workspace/file.pdf");
-    const options = mockCallArg<{
-      localRoots?: string[];
-      maxBytes?: number;
-      optimizeImages?: boolean;
-    }>(loadWebMediaMock, 0, 1);
-    expect(typeof options.maxBytes).toBe("number");
-    expect(options.optimizeImages).toBe(false);
+    const options = mockCallArg<{ localRoots: readonly string[] }>(loadWebMediaMock, 0, 1);
+    expect(options).toEqual({
+      maxBytes: expect.any(Number),
+      optimizeImages: false,
+      localRoots: roots,
+    });
     expect(options.localRoots).toBe(roots);
+  });
+
+  it("keeps approved workspace access authoritative over legacy access", async () => {
+    const readFile = vi.fn(async () => Buffer.from("approved image"));
+    const legacyReadFile = vi.fn(async () => Buffer.from("legacy image"));
+    const localRoots = ["/approved/workspace"];
+    const mediaAccess = { localRoots, workspaceDir: "/approved/workspace", readFile };
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: ["/legacy/workspace"],
+      mediaReadFile: legacyReadFile,
+    });
+    expect(mockCallArg(loadWebMediaMock, 0, 0)).toBe("chart.png");
+    const options = mockCallArg<{ localRoots: readonly string[] }>(loadWebMediaMock, 0, 1);
+    expect(options).toEqual({
+      maxBytes: expect.any(Number),
+      localRoots,
+      readFile,
+      hostReadCapability: true,
+      optimizeImages: false,
+      workspaceDir: "/approved/workspace",
+    });
+    expect(options.localRoots).toBe(localRoots);
+  });
+
+  it("rejects host readers without approved roots before any media dispatch", async () => {
+    const readFile = vi.fn(async () => Buffer.from("unapproved image"));
+    await expect(
+      sendMediaFeishu({
+        cfg: emptyConfig,
+        to: "user:ou_target",
+        mediaUrl: "chart.png",
+        mediaAccess: { readFile, workspaceDir: "/unapproved/workspace" },
+      }),
+    ).rejects.toThrow("Host media read requires explicit localRoots");
+    expect(loadWebMediaMock).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(fileCreateMock).not.toHaveBeenCalled();
+    expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(messageCreateMock).not.toHaveBeenCalled();
   });
 
   it("fails closed when media URL fetch is blocked", async () => {

@@ -37,6 +37,10 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import {
+  formatNodeInvokeFailureToolResult,
+  invokeNodeSystemRun,
+} from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -49,7 +53,8 @@ type NodeExecutionTarget = {
   platform?: string | null;
   argv: string[];
   env: Record<string, string> | undefined;
-  invokeTimeoutMs: number;
+  invokeDeadlineMs: number;
+  invokeWaitMs: number;
   runTimeoutSec: number;
   supportsSystemRunPrepare: boolean;
 };
@@ -88,13 +93,23 @@ function resolveNodeRunTimeoutSec(
     : defaultTimeoutSec;
 }
 
-function resolveNodeInvokeTimeoutMs(runTimeoutSec: number, defaultTimeoutSec: number): number {
+// Gateway invocation deadline: the node program budget plus transport grace. A
+// `timeout: 0` run keeps no program timer, so the deadline falls back to the
+// default budget instead of becoming unbounded.
+function resolveNodeInvokeDeadlineMs(runTimeoutSec: number, defaultTimeoutSec: number): number {
   const baseTimeoutSec =
     Number.isFinite(runTimeoutSec) && runTimeoutSec > 0 ? runTimeoutSec : defaultTimeoutSec;
   if (!Number.isFinite(baseTimeoutSec) || baseTimeoutSec <= 0) {
     return 10_000;
   }
   return Math.max(10_000, addSafeTimeoutDelayGraceMs(baseTimeoutSec * 1000, 5_000));
+}
+
+// Caller wait must outlast the Gateway deadline so the deadline expiry answer
+// wins the race instead of the caller giving up first. Both saturate together at
+// MAX_SAFE_TIMEOUT_DELAY_MS, where the ordering degenerates by design.
+function resolveNodeInvokeWaitMs(invokeDeadlineMs: number): number {
+  return addSafeTimeoutDelayGraceMs(invokeDeadlineMs, 5_000);
 }
 
 function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
@@ -327,12 +342,14 @@ export async function resolveNodeExecutionTarget(
   }
 
   const runTimeoutSec = resolveNodeRunTimeoutSec(params.timeoutSec, params.defaultTimeoutSec);
+  const invokeDeadlineMs = resolveNodeInvokeDeadlineMs(runTimeoutSec, params.defaultTimeoutSec);
   return {
     nodeId,
     platform: nodeInfo?.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeTimeoutMs: resolveNodeInvokeTimeoutMs(runTimeoutSec, params.defaultTimeoutSec),
+    invokeDeadlineMs,
+    invokeWaitMs: resolveNodeInvokeWaitMs(invokeDeadlineMs),
     runTimeoutSec,
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
@@ -363,6 +380,10 @@ export function buildNodeSystemRunInvoke(params: {
   return {
     nodeId: params.target.nodeId,
     command: "system.run",
+    // Top-level timeout arms the Gateway invocation deadline; the nested value is
+    // the node program timer. Without this the Gateway falls back to a fixed 30s
+    // pending-invoke timer and discards a later node result as `ignored`.
+    timeoutMs: params.target.invokeDeadlineMs,
     params: {
       command: params.command,
       rawCommand: params.rawCommand,
@@ -407,13 +428,23 @@ export async function invokeNodeSystemRunDirect(params: {
     notifyOnExit: params.request.notifyOnExit,
   });
   params.request.signal?.throwIfAborted();
-  const raw = params.request.signal
-    ? await callGatewayTool("node.invoke", { timeoutMs: params.target.invokeTimeoutMs }, invoke, {
-        signal: params.request.signal,
-      })
-    : await callGatewayTool("node.invoke", { timeoutMs: params.target.invokeTimeoutMs }, invoke);
+  const result = await invokeNodeSystemRun({
+    invokeWaitMs: params.target.invokeWaitMs,
+    invoke,
+    signal: params.request.signal,
+  });
+  if (!result.ok) {
+    return formatNodeInvokeFailureToolResult({
+      failure: result.failure,
+      nodeId: params.target.nodeId,
+      command: params.request.command,
+      startedAt,
+      cwd: params.request.workdir,
+      warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+    });
+  }
   return formatNodeRunToolResult({
-    raw,
+    raw: result.raw,
     startedAt,
     cwd: params.request.workdir,
     warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],

@@ -602,108 +602,6 @@ describe("qa-channel plugin", () => {
     }
   });
 
-  it("exposes thread and message actions against the qa bus", async () => {
-    installQaChannelTestRegistry();
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-
-    try {
-      const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl });
-
-      const handleAction = requireQaActionHandler();
-
-      const threadResult = await handleAction({
-        channel: "qa-channel",
-        action: "thread-create",
-        cfg,
-        accountId: "default",
-        params: {
-          channelId: "qa-room",
-          title: "QA thread",
-        },
-      });
-      const threadPayload = extractToolPayload(threadResult) as {
-        thread: { id: string };
-        target: string;
-      };
-      expect(threadPayload.thread.id).toMatch(/^thread-/);
-      expect(threadPayload.target).toContain(threadPayload.thread.id);
-
-      const outbound = state.addOutboundMessage({
-        to: threadPayload.target,
-        text: "message",
-        threadId: threadPayload.thread.id,
-      });
-
-      await handleAction({
-        channel: "qa-channel",
-        action: "react",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-          emoji: "white_check_mark",
-        },
-      });
-
-      await handleAction({
-        channel: "qa-channel",
-        action: "edit",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-          text: "message (edited)",
-        },
-      });
-
-      const readResult = await handleAction({
-        channel: "qa-channel",
-        action: "read",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-        },
-      });
-      const readPayload = extractToolPayload(readResult) as { message: { text: string } };
-      expect(readPayload.message.text).toContain("(edited)");
-
-      const searchResult = await handleAction({
-        channel: "qa-channel",
-        action: "search",
-        cfg,
-        accountId: "default",
-        params: {
-          query: "edited",
-          channelId: "qa-room",
-          threadId: threadPayload.thread.id,
-        },
-      });
-      const searchPayload = extractToolPayload(searchResult) as {
-        messages: Array<{ id: string }>;
-      };
-      expect(searchPayload.messages.map((message) => message.id)).toContain(outbound.id);
-
-      await handleAction({
-        channel: "qa-channel",
-        action: "delete",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-        },
-      });
-      expect(state.readMessage({ messageId: outbound.id }).deleted).toBe(true);
-    } finally {
-      await bus.stop();
-    }
-  });
-
   it("keeps deleted messages out of channel actions and makes reactions idempotent", async () => {
     installQaChannelTestRegistry();
     const state = createQaBusState();
@@ -865,7 +763,7 @@ describe("qa-channel plugin", () => {
         { action: "read", params: {} },
         { action: "reactions", params: {} },
         { action: "react", params: { emoji: "eyes" } },
-        { action: "edit", params: { text: "foreign edit" } },
+        { action: "edit", params: { message: "foreign edit" } },
         { action: "delete", params: {} },
       ];
       for (const testCase of crossedActions) {

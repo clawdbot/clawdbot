@@ -62,6 +62,7 @@ const MIN_PREVIEW_DWELL_MS = 4_000;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
+  updateLazy: (resolveText: () => string | undefined) => void;
   updatePreview: (preview: TelegramDraftPreview) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
@@ -94,6 +95,8 @@ export type TelegramDraftStream = {
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
 };
+
+type TelegramDraftUpdate = string | { resolveText: () => string | undefined };
 
 type TelegramDraftMessageSnapshot = {
   text: string;
@@ -246,6 +249,8 @@ export function createTelegramDraftStream(params: {
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a completed page remains visible after the stream advances. */
   onRetainedPage?: (page: RetainedTelegramDraftPage) => void;
+  /** Validates Telegram's response before another preview message can be sent. */
+  validateProviderMessage?: (message: Message) => Promise<void> | void;
   /** Called with Telegram's response after a new preview message becomes durable. */
   onProviderMessage?: (message: Message) => Promise<void> | void;
   log?: (message: string) => void;
@@ -310,6 +315,7 @@ export function createTelegramDraftStream(params: {
   let streamMessageId: number | undefined;
   let streamMessageSnapshot: TelegramDraftMessageSnapshot | undefined;
   let streamProviderMessage: Message | undefined;
+  let terminalDeliveryError: Error | undefined;
   const pendingProviderObservations = new Set<Promise<void>>();
   let streamVisibleSinceMs: number | undefined;
   let lastSentPreviewKey = "";
@@ -521,6 +527,24 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     retainReplyTarget(sendGeneration, normalizedMessageId);
+    try {
+      if (params.validateProviderMessage) {
+        await params.validateProviderMessage(sent.message);
+      }
+    } catch (error) {
+      terminalDeliveryError ??=
+        error instanceof Error ? error : new Error(formatErrorMessage(error));
+      streamState.stopped = true;
+      if (sendGeneration === generation) {
+        streamMessageId = normalizedMessageId;
+        streamMessageSnapshot = sent.snapshot;
+        streamProviderMessage = sent.message;
+        streamVisibleSinceMs = Date.now();
+      } else if (repositionedSendGenerations.delete(sendGeneration)) {
+        scheduleDetachedDelete(normalizedMessageId, Date.now(), REPOSITION_DELETE_DELAY_MS);
+      }
+      return false;
+    }
     if (sendGeneration !== generation) {
       const visibleSinceMs = Date.now();
       if (repositionedSendGenerations.delete(sendGeneration)) {
@@ -647,7 +671,18 @@ export function createTelegramDraftStream(params: {
       : undefined;
   };
 
-  const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
+  const sendOrEditStreamMessage = async (update: TelegramDraftUpdate): Promise<boolean> => {
+    const isLazy = typeof update !== "string";
+    const text = isLazy ? update.resolveText() : update;
+    if (text === undefined) {
+      // Sanitizer-empty newest values consume their pending slot without sending or mutating the
+      // last delivered draft. Counting the consumed slot as a flush is intentional.
+      return true;
+    }
+    if (isLazy) {
+      lastRequestedPreview = undefined;
+      lastRequestedText = text;
+    }
     if (streamState.stopped && !streamState.final) {
       return false;
     }
@@ -718,6 +753,19 @@ export function createTelegramDraftStream(params: {
     sendOrEditStreamMessage,
   });
 
+  const throwTerminalDeliveryError = () => {
+    if (terminalDeliveryError !== undefined) {
+      throw terminalDeliveryError;
+    }
+  };
+  const flush = async () => {
+    await loop.waitForInFlight();
+    if (!streamState.stopped) {
+      await loop.flush();
+    }
+    throwTerminalDeliveryError();
+  };
+
   const requestDraftUpdate = (text: string, preview?: TelegramDraftPreview) => {
     if (streamState.stopped || streamState.final) {
       return;
@@ -725,6 +773,13 @@ export function createTelegramDraftStream(params: {
     lastRequestedPreview = preview;
     lastRequestedText = text;
     updateDraft(text);
+  };
+
+  const requestLazyDraftUpdate = (resolveText: () => string | undefined) => {
+    if (streamState.stopped || streamState.final) {
+      return;
+    }
+    updateDraft({ resolveText });
   };
 
   const updatePreview = (preview: TelegramDraftPreview) => {
@@ -750,6 +805,7 @@ export function createTelegramDraftStream(params: {
     // 429 may establish the retry window that gates the initial final flush.
     loop.resetThrottleWindow();
     await loop.waitForInFlight();
+    throwTerminalDeliveryError();
     if (generation !== stopGeneration || streamState.stopped) {
       return;
     }
@@ -757,7 +813,7 @@ export function createTelegramDraftStream(params: {
     if (generation !== stopGeneration || streamState.stopped) {
       return;
     }
-    await loop.flush();
+    await flush();
     if (generation !== stopGeneration || streamState.stopped) {
       return;
     }
@@ -772,6 +828,7 @@ export function createTelegramDraftStream(params: {
           return;
         }
         const sent = await sendOrEditStreamMessage(finalText);
+        throwTerminalDeliveryError();
         if (generation !== stopGeneration) {
           return;
         }
@@ -937,7 +994,7 @@ export function createTelegramDraftStream(params: {
     }
     // Settle pending updates so we edit the real, current window message.
     streamState.final = true;
-    await loop.flush();
+    await flush();
     if (generation !== finalizeGeneration) {
       return undefined;
     }
@@ -988,8 +1045,9 @@ export function createTelegramDraftStream(params: {
 
   return {
     update: requestDraftUpdate,
+    updateLazy: requestLazyDraftUpdate,
     updatePreview,
-    flush: loop.flush,
+    flush,
     messageId: () => streamMessageId,
     lastDeliveredText: () => lastDeliveredText,
     currentMessageSnapshot: () => streamMessageSnapshot,

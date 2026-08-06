@@ -37,7 +37,9 @@ const MAX_INCREMENTAL_ENTRY_READ_KEYS = 500;
 // One parsed snapshot per opened agent database bounds memory to the process's database set.
 // Weak connection ownership lets closed read-only and evicted database handles release their
 // snapshots. The connection-local validity token plus tracked-write invalidation keeps live
-// snapshots current; without both, every read would re-query and re-parse every entry_json document.
+// snapshots current; narrow tracked upserts patch one authoritative row after commit, while
+// structural/unknown writes invalidate. Without both, every read would re-query and re-parse
+// every entry_json document.
 const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
 
 function readDataVersion(database: DatabaseSync): number {
@@ -203,7 +205,8 @@ export function readSqliteSessionEntryCache(
   if (cached && cached.validityToken.dataVersion === validityToken.dataVersion) {
     // updated_at is entry-controlled, not a rowversion. Other connections can rewrite entry_json
     // without advancing it, so data_version changes must fully reload or same-ms rewrites go stale.
-    // Accessor-owned writes on this connection hard-invalidate; unrelated local writes can safely diff.
+    // Tracked single-row upserts patch their row but retain this old token; unrelated local writes
+    // and any other same-connection changes are still discovered by this incremental diff.
     const revalidated = incrementallyRevalidateSessionEntrySnapshot(
       database,
       cached,
@@ -242,6 +245,74 @@ function invalidateTrackedCache(database: OpenClawAgentDatabase): void {
   invalidate();
 }
 
-export function publishSqliteSessionEntryCacheInvalidation(database: OpenClawAgentDatabase): void {
+function publishTrackedCacheUpdate(database: OpenClawAgentDatabase, publish: () => void): void {
+  if (deferOpenClawAgentPostCommitPublication(database, publish)) {
+    return;
+  }
+  if (database.db.isTransaction) {
+    throw new Error(
+      "SQLite session entry writes must use runOpenClawAgentWriteTransaction for cache publication",
+    );
+  }
+  publish();
+}
+
+function publishSqliteSessionEntryCacheUpsert(
+  database: OpenClawAgentDatabase,
+  row: {
+    current_session_id: string;
+    entry_json: string;
+    session_key: string;
+    updated_at: number;
+  },
+): void {
+  const entry = parseSqliteSessionEntryJson({
+    current_session_id: row.current_session_id,
+    entry_json: row.entry_json,
+    updated_at: row.updated_at,
+  });
+  if (!entry) {
+    invalidateTrackedCache(database);
+    return;
+  }
+  publishTrackedCacheUpdate(database, () => {
+    const cached = sessionEntryCaches.get(database.db);
+    if (!cached) {
+      return;
+    }
+    const entries = new Map(cached.entries);
+    entries.set(row.session_key, entry);
+    const listProjections = new Map(cached.listProjections);
+    listProjections.delete(row.session_key);
+    const updatedAtByKey = new Map(cached.updatedAtByKey);
+    const knownKey = updatedAtByKey.has(row.session_key);
+    updatedAtByKey.set(row.session_key, row.updated_at);
+    // Patch only the authoritative row but retain the old validity token. The next read
+    // must still reconcile any other local total_changes, while a changed data_version
+    // forces a full reload; advancing either here could mask an earlier unknown write.
+    sessionEntryCaches.set(database.db, {
+      entries,
+      keys: knownKey ? cached.keys : [...cached.keys, row.session_key].toSorted(),
+      listEntries: createLazyListProjections(entries, listProjections),
+      listProjections,
+      updatedAtByKey,
+      validityToken: cached.validityToken,
+    });
+  });
+}
+
+export function publishSqliteSessionEntryCacheInvalidation(
+  database: OpenClawAgentDatabase,
+  row?: {
+    current_session_id: string;
+    entry_json: string;
+    session_key: string;
+    updated_at: number;
+  },
+): void {
+  if (row) {
+    publishSqliteSessionEntryCacheUpsert(database, row);
+    return;
+  }
   invalidateTrackedCache(database);
 }

@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codeModeFailureCode } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools, resolveCodeModeConfig } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -302,6 +303,9 @@ describe("Code Mode runtime and output limits", () => {
   });
 
   it("normalizes QuickJS interrupt timeout errors", () => {
+    expect(
+      codeModeFailureCode(new Error("interrupted", { cause: new Error("worker stopped") })),
+    ).toBe("timeout");
     expect(
       testing.normalizeCodeModeWorkerResult({
         status: "failed",

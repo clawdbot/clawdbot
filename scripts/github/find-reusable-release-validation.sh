@@ -253,7 +253,17 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.verifier.schemaVersion == 3)
       and (.verifier.sourceSha == $verifier_sha)
       and ([.children[].role] | sort) ==
-        ["normalCi", "pluginPrerelease", "productPerformance", "releaseChecks"]
+        (if (
+          .rerunGroup == "all"
+          and (
+            ((.validationInputs.npmTelegramPackageSpec // "") | length) > 0
+            or ((.validationInputs.releasePackageSpec // "") | length) > 0
+          )
+        ) then
+          ["normalCi", "npmTelegram", "pluginPrerelease", "productPerformance", "releaseChecks"]
+        else
+          ["normalCi", "pluginPrerelease", "productPerformance", "releaseChecks"]
+        end)
       and ([.children[].runId] | length == (unique | length))
       and ([.children[]
         | select(.role == "productPerformance")

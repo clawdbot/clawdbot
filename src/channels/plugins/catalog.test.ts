@@ -29,7 +29,12 @@ afterEach(() => {
   }
 });
 
-function writeChannelCatalog(catalogPath: string, id: string, label: string): void {
+function writeChannelCatalog(
+  catalogPath: string,
+  id: string,
+  label: string,
+  defaultChoice?: string,
+): void {
   fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
   fs.writeFileSync(
     catalogPath,
@@ -39,7 +44,7 @@ function writeChannelCatalog(catalogPath: string, id: string, label: string): vo
           name: `@example/${id}`,
           openclaw: {
             channel: { id, label, selectionLabel: label, docsPath: `/channels/${id}`, blurb: id },
-            install: { npmSpec: `@example/${id}` },
+            install: { npmSpec: `@example/${id}`, ...(defaultChoice ? { defaultChoice } : {}) },
           },
         },
       ],
@@ -105,6 +110,24 @@ describe("channel plugin catalog", () => {
       })?.origin,
     ).toBe("bundled");
   });
+
+  it.each(["__proto__", "constructor", "toString"])(
+    "rejects inherited install default choice %s from external catalog input",
+    (defaultChoice) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-choice-"));
+      tempDirs.push(root);
+      const catalogPath = path.join(root, "catalog.json");
+      writeChannelCatalog(catalogPath, "unsafe-choice", "Unsafe Choice", defaultChoice);
+
+      const entry = getChannelPluginCatalogEntry("unsafe-choice", {
+        catalogPaths: [catalogPath],
+        workspaceDir: root,
+        env: {},
+      });
+      expect(entry?.install.defaultChoice).toBe("npm");
+    },
+  );
+
   it("reloads external catalog entries after the explicit plugin metadata lifecycle reset", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-external-catalog-"));
     tempDirs.push(root);

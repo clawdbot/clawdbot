@@ -164,7 +164,7 @@ describe("huggingface models", () => {
     expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
-    expect(read).toHaveBeenCalledTimes(17);
+    expect(read).toHaveBeenCalledTimes(5);
   });
 
   it("parses a valid bounded discovery response", async () => {

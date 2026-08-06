@@ -26,7 +26,8 @@ import {
   dismissTaskSuggestion,
   listTaskSuggestions,
 } from "../task-suggestion-registry.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionCreateHandlers } from "./sessions-create.js";
+import { sessionDeleteHandlers } from "./sessions-delete.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function invalidParams(method: string, errors: Parameters<typeof formatValidationErrors>[0]) {
@@ -49,7 +50,7 @@ async function rollbackSuggestedTaskSession(params: {
 }): Promise<boolean> {
   let deletionConfirmed = false;
   try {
-    await sessionsHandlers["sessions.delete"]?.({
+    await sessionDeleteHandlers["sessions.delete"]?.({
       ...params.options,
       params: {
         key: params.key,
@@ -147,7 +148,7 @@ async function createSuggestedTaskSession(params: {
   );
   const sessionKey = buildDashboardSessionKey(agentId);
   try {
-    await sessionsHandlers["sessions.create"]?.({
+    await sessionCreateHandlers["sessions.create"]?.({
       ...params.options,
       params: {
         key: sessionKey,

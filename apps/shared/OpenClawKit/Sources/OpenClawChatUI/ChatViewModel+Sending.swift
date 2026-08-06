@@ -515,10 +515,12 @@ extension OpenClawChatViewModel {
         }
         let routeResult = await transport.acquireOutboxRouteLease()
         guard isCurrentSession(draft.session) else { return .stop }
-        guard case let .unavailable(reason) = routeResult,
-              reason == OpenClawChatTransportUpgradeMessage.routingContract
-        else {
+        guard case let .unavailable(reason, allowsLiveSend) = routeResult else {
             return .persistIfAvailable
+        }
+        guard allowsLiveSend else {
+            errorText = "Could not verify this attachment's delivery route. Reconnect, then try again."
+            return .stop
         }
         guard hasRestoredOutboxMessages else {
             errorText = "Restoring queued messages. Try again in a moment."
@@ -527,7 +529,7 @@ extension OpenClawChatViewModel {
         guard !mustPreserveOutboxOrder else {
             // A legacy gateway cannot drain the existing durable rows, so keep
             // this new attachment in the composer behind them.
-            errorText = reason
+            errorText = reason ?? OpenClawChatTransportUpgradeMessage.routingContract
             return .stop
         }
         // Older healthy gateways can send attachments live but cannot safely

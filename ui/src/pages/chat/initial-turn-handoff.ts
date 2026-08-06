@@ -14,11 +14,9 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import {
-  markLocalRecoveryItem,
-  markVolatileQueuedMessage,
+  keepVolatileQueuedMessage,
   readChatQueueForScope,
   type ChatQueueScopedSessionHost,
-  writeChatQueueForScope,
 } from "./chat-queue.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -198,10 +196,8 @@ export function admitInitialTurnHandoff(
   }
   const queue = readChatQueueForScope(host, sessionKey, item.agentId);
   if (!queue.some((entry) => entry.id === item.id)) {
-    writeChatQueueForScope(host, sessionKey, [...queue, item], item.agentId);
+    keepVolatileQueuedMessage(host, sessionKey, item, item.agentId, { retryable: true });
   }
-  markLocalRecoveryItem(host, item.id);
-  markVolatileQueuedMessage(host, item.id);
   return true;
 }
 

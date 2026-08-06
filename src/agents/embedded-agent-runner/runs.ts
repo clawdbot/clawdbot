@@ -25,10 +25,12 @@ import {
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -85,6 +87,9 @@ export type EmbeddedAgentQueueMessageOutcome =
       sessionId: string;
       target: "embedded_run" | "reply_run";
       gatewayHealth: "live";
+      /** Present only when acceptance was irreversible but transcript confirmation failed. */
+      transcriptCommit?: "unconfirmed";
+      errorMessage?: string;
       deliveredAtMs?: number;
       enqueuedAtMs?: number;
     }
@@ -343,7 +348,7 @@ export function queueEmbeddedAgentMessageWithOutcome(
     .queueMessage(text, options ?? { steeringMode: "all" })
     .catch((err: unknown) => {
       diag.debug(
-        `queue message rejected after enqueue: sessionId=${sessionId} err=${formatQueueError(err)}`,
+        `queue message rejected after enqueue: sessionId=${sessionId} err=${formatErrorMessage(err)}`,
       );
     });
   return {
@@ -353,10 +358,6 @@ export function queueEmbeddedAgentMessageWithOutcome(
     gatewayHealth: "live",
     enqueuedAtMs: Date.now(),
   };
-}
-
-function formatQueueError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function logActiveRunMessageAccepted(sessionId: string): void {
@@ -449,9 +450,27 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
+  const enqueuedAtMs = Date.now();
   try {
-    const enqueuedAtMs = Date.now();
-    await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
+    const queueResult = await prepared.handle.queueMessage(
+      text,
+      options ?? { steeringMode: "all" },
+    );
+    if (queueResult?.transcriptCommit === "unconfirmed") {
+      diag.warn(
+        `queue message accepted without transcript confirmation: sessionId=${sessionId} err=${queueResult.errorMessage}`,
+      );
+      logActiveRunMessageAccepted(sessionId);
+      return {
+        queued: true,
+        sessionId,
+        target: "embedded_run",
+        gatewayHealth: "live",
+        transcriptCommit: "unconfirmed",
+        errorMessage: queueResult.errorMessage,
+        enqueuedAtMs,
+      };
+    }
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
     logActiveRunMessageAccepted(sessionId);
     return {
@@ -463,7 +482,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
       enqueuedAtMs,
     };
   } catch (err) {
-    const errorMessage = formatQueueError(err);
+    const errorMessage = formatErrorMessage(err);
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
     return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
   }
@@ -940,7 +959,8 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
   try {
     await updateSessionEntry(
       { sessionKey: params.sessionKey, storePath: params.storePath },
-      (entry) => {
+      (storedEntry) => {
+        const entry = storedEntry as InternalSessionEntry;
         // A replacement can reuse the session id; bind this patch to both owners' exact snapshot.
         if (
           ACTIVE_EMBEDDED_RUNS.has(params.sessionId) ||
@@ -958,6 +978,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         return {
           status: "killed",
           abortedLastRun: true,
+          lifecycleRunId: undefined,
           endedAt,
           updatedAt: endedAt,
         };
@@ -1112,6 +1133,7 @@ function forceClearEmbeddedAgentRun(
 }
 
 const testing = {
+  persistForceClearedEmbeddedRunTerminalState,
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
       for (const waiter of waiters) {

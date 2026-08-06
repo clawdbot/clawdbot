@@ -18,13 +18,18 @@ import {
   defaultExecAutoReviewer,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
-import { tail } from "./bash-process-registry.js";
+import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import {
+  formatNodeInvokeFailureFollowup,
+  formatNodeInvokeFailureToolResult,
+  invokeNodeSystemRun,
+} from "./bash-tools.exec-host-node-failure.js";
 import {
   analyzeNodeApprovalRequirement,
   buildNodeSystemRunInvoke,
@@ -36,11 +41,7 @@ import {
 } from "./bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
-import {
-  DEFAULT_NOTIFY_TAIL_CHARS,
-  createApprovalSlug,
-  normalizeNotifyOutput,
-} from "./bash-tools.exec-runtime.js";
+import { createApprovalSlug } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -572,10 +573,9 @@ export async function executeNodeHostCommand(
             }
             // Approved follow-up invocations need approval scopes because they mutate remote node state.
             nodeInvocationStarted = true;
-            const raw = await callGatewayTool(
-              "node.invoke",
-              { timeoutMs: target.invokeTimeoutMs },
-              buildNodeSystemRunInvoke({
+            const invocation = await invokeNodeSystemRun({
+              invokeWaitMs: target.invokeWaitMs,
+              invoke: buildNodeSystemRunInvoke({
                 target,
                 command: prepared.argv,
                 rawCommand: prepared.transportRawCommand,
@@ -598,12 +598,23 @@ export async function executeNodeHostCommand(
                 notifyOnExit: params.notifyOnExit,
                 systemRunPlan: prepared.plan,
               }),
-              {
-                scopes: APPROVED_NODE_INVOKE_SCOPES,
-                ...(params.signal ? { signal: params.signal } : {}),
-              },
-            );
+              scopes: APPROVED_NODE_INVOKE_SCOPES,
+              signal: params.signal,
+            });
             nodeInvocationCompleted = true;
+            if (!invocation.ok) {
+              await execHostShared.sendExecApprovalFollowupResult(
+                followupTarget,
+                formatNodeInvokeFailureFollowup({
+                  failure: invocation.failure,
+                  nodeId: target.nodeId,
+                  approvalId,
+                  command: params.command,
+                }),
+              );
+              return;
+            }
+            const raw = invocation.raw as { payload?: unknown };
             const payload =
               raw?.payload && typeof raw.payload === "object"
                 ? (raw.payload as {
@@ -614,10 +625,11 @@ export async function executeNodeHostCommand(
                     timedOut?: boolean;
                   })
                 : {};
-            const combined = [payload.stdout, payload.stderr, payload.error]
-              .filter(Boolean)
-              .join("\n");
-            const output = normalizeNotifyOutput(tail(combined, DEFAULT_NOTIFY_TAIL_CHARS));
+            const output = formatExecApprovalContinuationSourceOutput([
+              { label: "stdout", value: payload.stdout },
+              { label: "stderr", value: payload.stderr },
+              { label: "error", value: payload.error },
+            ]);
             const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
             const summary = output
               ? `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})\n${output}`
@@ -694,19 +706,26 @@ export async function executeNodeHostCommand(
       !requiresSecurityAuditSuppressionApproval,
   });
   params.signal?.throwIfAborted();
-  const raw =
-    (inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
-      ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
-          scopes: APPROVED_NODE_INVOKE_SCOPES,
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-      : params.signal
-        ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
-            signal: params.signal,
-          })
-        : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
+  const invocation = await invokeNodeSystemRun({
+    invokeWaitMs: target.invokeWaitMs,
+    invoke,
+    signal: params.signal,
+    ...((inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
+      ? { scopes: APPROVED_NODE_INVOKE_SCOPES }
+      : {}),
+  });
+  if (!invocation.ok) {
+    return formatNodeInvokeFailureToolResult({
+      failure: invocation.failure,
+      nodeId: target.nodeId,
+      command: params.command,
+      startedAt,
+      cwd: params.workdir,
+      warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
+    });
+  }
   return formatNodeRunToolResult({
-    raw,
+    raw: invocation.raw,
     startedAt,
     cwd: params.workdir,
     warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],

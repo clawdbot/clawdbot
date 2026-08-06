@@ -15,7 +15,7 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -32,6 +32,7 @@ import {
   resolveQaBundledPluginSourceDir,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaRuntimeHostVersion,
+  resolveQaStagedBundledPluginsRoot,
 } from "./bundled-plugin-staging.js";
 import {
   appendQaChildOutput,
@@ -43,7 +44,7 @@ import {
 } from "./child-output.js";
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
-import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
   createQaGatewayProcessBoundaryController,
@@ -88,6 +89,7 @@ const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
 // Loaded Docker runners can take several seconds to reap a force-killed process group.
 const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS = 5_000;
+const QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS = 2_048;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
@@ -136,6 +138,18 @@ function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   return env;
 }
 
+function scrubQaGatewayChildTestRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // The Gateway is a product child, not a nested Vitest worker. Leaking runner
+  // markers makes the dist launcher select test-only startup behavior.
+  delete env.VITEST;
+  delete env.VITEST_POOL_ID;
+  delete env.VITEST_WORKER_ID;
+  if (env.NODE_ENV === "test") {
+    delete env.NODE_ENV;
+  }
+  return env;
+}
+
 function createQaGatewayEmptyTransport() {
   return {
     requiredPluginIds: [] as const,
@@ -144,7 +158,7 @@ function createQaGatewayEmptyTransport() {
 }
 
 function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
-  for (const relativePath of ["dist/index.mjs", "dist/index.js"]) {
+  for (const relativePath of ["scripts/run-node.mjs", "dist/index.mjs", "dist/index.js"]) {
     const entryPath = path.join(repoRoot, relativePath);
     if (existsSync(entryPath)) {
       return {
@@ -156,16 +170,9 @@ function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
     }
   }
 
-  const sourceEntryPath = path.join(repoRoot, "src/entry.ts");
-  if (existsSync(sourceEntryPath)) {
-    return {
-      executablePath: process.execPath,
-      argsPrefix: ["--import", "tsx", sourceEntryPath],
-      cwd: repoRoot,
-    };
-  }
-
-  throw new Error("OpenClaw CLI entry not found: expected dist/index.(m)js or src/entry.ts");
+  throw new Error(
+    "OpenClaw CLI entry not found: expected scripts/run-node.mjs or dist/index.(m)js",
+  );
 }
 
 async function runQaGatewayCliCommand(params: {
@@ -210,7 +217,7 @@ async function readQaGatewayCliCommand(child: ChildProcess): Promise<string> {
   const exitCode = await new Promise<number>((resolve, reject) => {
     monitorQaChildFailure(child, (failure) => {
       if (failure.source === "process") {
-        reject(toQaErrorObject(failure.error, "OpenClaw CLI process failed"));
+        reject(toErrorObject(failure.error, "OpenClaw CLI process failed"));
         return;
       }
       if (!hasChildExited(child) && !child.killed) {
@@ -348,13 +355,47 @@ async function preserveQaGatewayDebugArtifacts(params: {
   );
 }
 
-function isRetryableGatewayStartupError(details: string) {
-  return (
+type QaGatewayStartupRetryKind = "bind-collision" | "migration-convergence-restart";
+
+const QA_GATEWAY_MIGRATION_CONVERGENCE_RESTART_PREFIX =
+  "OpenClaw plugin migration inputs changed during startup convergence;";
+
+function classifyQaGatewayStartupRetry(details: string): QaGatewayStartupRetryKind | null {
+  if (details.includes(QA_GATEWAY_MIGRATION_CONVERGENCE_RESTART_PREFIX)) {
+    return "migration-convergence-restart";
+  }
+  if (
     details.includes("another gateway instance is already listening on ws://") ||
     details.includes("failed to bind gateway socket on ws://") ||
     details.includes("EADDRINUSE") ||
     details.includes("address already in use")
-  );
+  ) {
+    return "bind-collision";
+  }
+  return null;
+}
+
+function resolveQaGatewayStartupRetry(params: {
+  attempt: number;
+  details: string;
+  migrationConvergenceRestartUsed: boolean;
+}) {
+  if (params.attempt >= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS) {
+    return null;
+  }
+  const kind = classifyQaGatewayStartupRetry(params.details);
+  if (
+    !kind ||
+    (kind === "migration-convergence-restart" && params.migrationConvergenceRestartUsed)
+  ) {
+    return null;
+  }
+  return {
+    kind,
+    reuseLaunchState: kind === "migration-convergence-restart",
+    migrationConvergenceRestartUsed:
+      params.migrationConvergenceRestartUsed || kind === "migration-convergence-restart",
+  };
 }
 
 function appendQaGatewayTempRoot(details: string, tempRoot: string) {
@@ -450,9 +491,10 @@ export function buildQaRuntimeEnv(params: {
   };
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  return scrubQaGatewayChildSecretEnv(normalizedEnv);
+  return scrubQaGatewayChildSecretEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
 }
 
 async function stageQaCodexMockModelCatalog(params: {
@@ -658,7 +700,8 @@ export const testing = {
   fetchLocalGatewayHealth,
   isRetryableGatewayCallError,
   isRetryableRpcStartupError,
-  isRetryableGatewayStartupError,
+  classifyQaGatewayStartupRetry,
+  resolveQaGatewayStartupRetry,
   preserveQaGatewayDebugArtifacts,
   redactQaGatewayDebugText,
   readQaLiveProviderConfigOverrides,
@@ -686,7 +729,8 @@ export const testing = {
   signalQaGatewayChildProcessTree,
   resolveQaGatewayChildStopTimeouts,
   stopQaGatewayChildProcessTree,
-  classifyLinuxProcessGroupStats,
+  inspectLinuxProcessGroupStats,
+  isQaGatewayChildProcessTreeAlive,
   closeWriteStream,
 };
 
@@ -699,36 +743,73 @@ function isProcessAlreadyExitedError(error: unknown): boolean {
 }
 
 function parseLinuxProcessStat(raw: string) {
+  const commandStart = raw.indexOf("(");
   const commandEnd = raw.lastIndexOf(")");
-  if (commandEnd < 0) {
+  if (commandStart <= 0 || commandEnd <= commandStart) {
     return null;
   }
+  const pid = Number.parseInt(raw.slice(0, commandStart).trim(), 10);
   const fields = raw
     .slice(commandEnd + 1)
     .trim()
     .split(/\s+/u);
   const state = fields[0];
   const processGroupId = Number.parseInt(fields[2] ?? "", 10);
-  if (!state || !Number.isSafeInteger(processGroupId) || processGroupId <= 0) {
+  if (
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    !state ||
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 0
+  ) {
     return null;
   }
-  return { processGroupId, state };
+  return {
+    command: raw.slice(commandStart + 1, commandEnd),
+    pid,
+    processGroupId,
+    state,
+  };
 }
 
-function classifyLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
+function boundQaGatewayProcessTreeDiagnostics(details: string) {
+  if (details.length <= QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS) {
+    return details;
+  }
+  return `${sliceUtf16Safe(details, 0, QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS - 3)}...`;
+}
+
+function inspectLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
   const members = stats
     .map((raw) => parseLinuxProcessStat(raw))
     .filter(
       (entry): entry is NonNullable<ReturnType<typeof parseLinuxProcessStat>> =>
         entry?.processGroupId === processGroupId,
-    );
-  if (members.length === 0) {
-    return null;
-  }
-  return members.some((entry) => entry.state !== "Z" && entry.state !== "X");
+    )
+    .toSorted((left, right) => left.pid - right.pid);
+  const diagnostics = members
+    .map(
+      (member) =>
+        `pid=${member.pid} state=${member.state} command=${JSON.stringify(member.command)}`,
+    )
+    .join(", ");
+  return {
+    alive:
+      members.length === 0
+        ? null
+        : members.some((entry) => entry.state !== "Z" && entry.state !== "X"),
+    diagnostics: boundQaGatewayProcessTreeDiagnostics(
+      `pgid=${processGroupId} members=[${diagnostics}]`,
+    ),
+  };
 }
 
-function inspectLinuxProcessGroupLiveness(processGroupId: number) {
+type QaLinuxProcessGroupInspection = ReturnType<typeof inspectLinuxProcessGroupStats>;
+type QaLinuxProcessGroupInspector = (
+  processGroupId: number,
+) => QaLinuxProcessGroupInspection | null;
+
+function inspectLinuxProcessGroup(processGroupId: number): QaLinuxProcessGroupInspection | null {
   if (process.platform !== "linux") {
     return null;
   }
@@ -745,14 +826,20 @@ function inspectLinuxProcessGroupLiveness(processGroupId: number) {
     }
     try {
       stats.push(readFileSync(path.join("/proc", entry.name, "stat"), "utf8"));
-    } catch {
+    } catch (error) {
       // Processes can exit while /proc is being scanned.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return null;
+      }
     }
   }
-  return classifyLinuxProcessGroupStats(processGroupId, stats);
+  return inspectLinuxProcessGroupStats(processGroupId, stats);
 }
 
-function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
+function isQaGatewayChildProcessTreeAlive(
+  child: ChildProcess,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector = inspectLinuxProcessGroup,
+) {
   if (!child.pid) {
     return false;
   }
@@ -761,12 +848,12 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
   }
   try {
     process.kill(-child.pid, 0);
-    if (!hasChildExited(child)) {
-      return true;
+    if (process.platform === "linux") {
+      // Linux can retain zombie-only process groups after SIGKILL while Node's
+      // child metadata is still unsettled. Runnable /proc members are the owner.
+      return inspectLinuxProcessGroupFn(child.pid)?.alive ?? true;
     }
-    // Container PID 1 can leave killed descendants as zombies. They cannot
-    // retain ports or execute work, so do not make release QA wait forever.
-    return inspectLinuxProcessGroupLiveness(child.pid) ?? true;
+    return true;
   } catch (error) {
     if (!isProcessAlreadyExitedError(error) && !hasChildExited(child)) {
       return true;
@@ -832,43 +919,78 @@ function signalQaGatewayChildProcessTree(
   }
 }
 
-async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number) {
+async function waitForQaGatewayChildExit(
+  child: ChildProcess,
+  timeoutMs: number,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
-    if (!isQaGatewayChildProcessTreeAlive(child)) {
+    if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
       return true;
     }
     await sleep(Math.min(25, Math.max(0, deadline - Date.now())));
   }
-  return !isQaGatewayChildProcessTreeAlive(child);
+  return !isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn);
 }
 
-function resolveQaGatewayChildStopTimeouts(opts?: {
+type QaGatewayChildStopOptions = {
   gracefulTimeoutMs?: number;
   forceTimeoutMs?: number;
-}) {
+  inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
+};
+
+function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
   return {
     gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
     forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
   };
 }
 
+function formatQaGatewayProcessTreeDiagnostics(
+  child: ChildProcess,
+  inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
+) {
+  const childExitRecorded = hasChildExited(child);
+  if (process.platform !== "linux" || !child.pid) {
+    return `pid=${child.pid ?? "unknown"} childExitRecorded=${childExitRecorded}`;
+  }
+  const inspection = inspectLinuxProcessGroupFn(child.pid);
+  const processGroupDetails =
+    inspection?.diagnostics ?? `pgid=${child.pid} members=unknown (/proc unavailable)`;
+  return boundQaGatewayProcessTreeDiagnostics(
+    `${processGroupDetails} childExitRecorded=${childExitRecorded}`,
+  );
+}
+
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+  opts?: QaGatewayChildStopOptions,
 ) {
-  if (!isQaGatewayChildProcessTreeAlive(child)) {
+  const inspectLinuxProcessGroupFn = opts?.inspectLinuxProcessGroup ?? inspectLinuxProcessGroup;
+  if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
     return;
   }
   const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
-  if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
+  if (
+    await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)
+  ) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
+  const stopped = await waitForQaGatewayChildExit(
+    child,
+    timeouts.forceTimeoutMs,
+    inspectLinuxProcessGroupFn,
+  );
   if (!stopped) {
-    throw new Error("qa gateway process tree remained alive after forced shutdown");
+    throw new Error(
+      `qa gateway process tree remained alive after forced shutdown: ${formatQaGatewayProcessTreeDiagnostics(
+        child,
+        inspectLinuxProcessGroupFn,
+      )}`,
+    );
   }
 }
 
@@ -1069,6 +1191,7 @@ export async function startQaGatewayChild(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
+  allowUnhealthyStartup?: boolean;
   forwardHostHome?: boolean;
   mockAuthAgentIds?: readonly string[];
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
@@ -1078,139 +1201,146 @@ export async function startQaGatewayChild(params: {
   // Verified launchers may require every runtime artifact to stay inside their
   // prepared root; carry that root forward instead of rediscovering host temp policy.
   const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
-  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
-  const runtimeCwd = tempRoot;
-  const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
-  const gatewayCommand =
-    params.command ??
-    (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
-  const gatewayExecutablePath = gatewayCommand?.executablePath;
-  const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
-  const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
-  const gatewayCwd = gatewayCommand?.cwd ?? runtimeCwd;
-  const workspaceDir = path.join(tempRoot, "workspace");
-  const stateDir = path.join(tempRoot, "state");
-  const homeDir = path.join(tempRoot, "home");
-  const xdgConfigHome = path.join(tempRoot, "xdg-config");
-  const xdgDataHome = path.join(tempRoot, "xdg-data");
-  const xdgCacheHome = path.join(tempRoot, "xdg-cache");
-  const configPath = path.join(tempRoot, "openclaw.json");
-  const gatewayToken = `qa-suite-${randomUUID()}`;
-  const transport = params.transport ?? createQaGatewayEmptyTransport();
-  await seedQaAgentWorkspace({
-    workspaceDir,
-    repoRoot: params.repoRoot,
-  });
-  await Promise.all([
-    fs.mkdir(stateDir, { recursive: true }),
-    fs.mkdir(homeDir, { recursive: true }),
-    fs.mkdir(xdgConfigHome, { recursive: true }),
-    fs.mkdir(xdgDataHome, { recursive: true }),
-    fs.mkdir(xdgCacheHome, { recursive: true }),
-  ]);
-  const providerMode = resolveQaGatewayChildProviderMode(params.providerMode);
-  const codexModelCatalogPath = await stageQaCodexMockModelCatalog({
-    tempRoot,
-    forcedRuntime: params.forcedRuntime,
-    providerMode,
-    primaryModel: params.primaryModel,
-    alternateModel: params.alternateModel,
-  });
-  const resolvedProvider = getQaProvider(providerMode);
-  const liveProviderIds = resolvedProvider.usesModelProviderPlugins
-    ? [params.primaryModel, params.alternateModel]
-        .map((modelRef) =>
-          typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
-        )
-        .filter((providerId): providerId is string => Boolean(providerId))
-    : [];
-  const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
-    providerIds: liveProviderIds,
-  });
-  const liveOwnerPluginIds =
-    liveProviderIds.length > 0
-      ? await resolveQaOwnerPluginIdsForProviderIds({
-          repoRoot: params.repoRoot,
-          providerIds: liveProviderIds,
-          providerConfigs: liveProviderConfigs,
-        })
-      : [];
-  const enabledPluginIds = [
-    ...new Set([...(liveOwnerPluginIds ?? []), ...(params.enabledPluginIds ?? [])]),
-  ];
-  const buildGatewayConfig = (gatewayPort: number) =>
-    buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort,
-      gatewayToken,
-      providerBaseUrl: params.providerBaseUrl,
-      workspaceDir,
-      controlUiRoot: resolveQaControlUiRoot({
-        repoRoot: params.repoRoot,
-        controlUiEnabled: params.controlUiEnabled,
-      }),
-      controlUiAllowedOrigins: params.controlUiAllowedOrigins,
-      providerMode,
-      primaryModel: params.primaryModel,
-      alternateModel: params.alternateModel,
-      enabledPluginIds,
-      transportPluginIds: transport.requiredPluginIds,
-      transportConfig: transport.createGatewayConfig({
-        baseUrl: params.transportBaseUrl,
-      }),
-      liveProviderConfigs,
-      fastMode: params.fastMode,
-      thinkingDefault: params.thinkingDefault,
-      forcedRuntime: params.forcedRuntime,
-      controlUiEnabled: params.controlUiEnabled,
-    });
-  const buildStagedGatewayConfig = async (gatewayPort: number) => {
-    let cfg = buildGatewayConfig(gatewayPort);
-    cfg = await stageQaLiveApiKeyProfiles({
-      cfg,
-      stateDir,
-      providerIds: liveProviderIds,
-    });
-    cfg = await stageQaLiveAnthropicSetupToken({
-      cfg,
-      stateDir,
-    });
-    const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
-    if (mockAuthProviders && mockAuthProviders.length > 0) {
-      cfg = await stageQaMockAuthProfiles({
-        cfg,
-        stateDir,
-        agentIds: params.mockAuthAgentIds,
-        providers: mockAuthProviders,
-      });
-    }
-    return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
-  };
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  const output = createQaGatewayChildLogCollector();
-  const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
-  const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
-  const stdoutLog = createWriteStream(stdoutLogPath, { flags: "a" });
-  const stderrLog = createWriteStream(stderrLogPath, { flags: "a" });
-
-  const logs = () => redactQaGatewayDebugText(output.text());
   const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
-  let gatewayPort = 0;
-  let baseUrl = "";
-  let wsUrl = "";
+  const gatewayLogStreams: Array<["stdout" | "stderr", WriteStream]> = [];
   let child: ReturnType<typeof spawn> | null = null;
   let childIdentity: QaGatewayVerifiedProcessIdentity | null = null;
   let processBoundaryController: Awaited<
     ReturnType<typeof createQaGatewayProcessBoundaryController>
   > | null = null;
-  let cfg!: OpenClawConfig;
   let rpcClient: Awaited<ReturnType<typeof startQaGatewayRpcClient>> | null = null;
-  let getChildFailure: (() => QaChildFailure | null) | null = null;
   let stagedBundledPluginsRoot: string | null = null;
-  let env: NodeJS.ProcessEnv | null = null;
-
+  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
+  // The startup owner must release its temp root even when launcher or staging
+  // setup fails before a child process or log streams have been created.
   try {
+    const runtimeCwd = tempRoot;
+    const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
+    const gatewayCommand =
+      params.command ??
+      (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
+    const gatewayExecutablePath = gatewayCommand?.executablePath;
+    const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
+    const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
+    const gatewayCwd = gatewayCommand?.cwd ?? runtimeCwd;
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const homeDir = path.join(tempRoot, "home");
+    const xdgConfigHome = path.join(tempRoot, "xdg-config");
+    const xdgDataHome = path.join(tempRoot, "xdg-data");
+    const xdgCacheHome = path.join(tempRoot, "xdg-cache");
+    const configPath = path.join(tempRoot, "openclaw.json");
+    const gatewayToken = `qa-suite-${randomUUID()}`;
+    const transport = params.transport ?? createQaGatewayEmptyTransport();
+    await seedQaAgentWorkspace({
+      workspaceDir,
+      repoRoot: params.repoRoot,
+    });
+    await Promise.all([
+      fs.mkdir(stateDir, { recursive: true }),
+      fs.mkdir(homeDir, { recursive: true }),
+      fs.mkdir(xdgConfigHome, { recursive: true }),
+      fs.mkdir(xdgDataHome, { recursive: true }),
+      fs.mkdir(xdgCacheHome, { recursive: true }),
+    ]);
+    const providerMode = resolveQaGatewayChildProviderMode(params.providerMode);
+    const codexModelCatalogPath = await stageQaCodexMockModelCatalog({
+      tempRoot,
+      forcedRuntime: params.forcedRuntime,
+      providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+    });
+    const resolvedProvider = getQaProvider(providerMode);
+    const liveProviderIds = resolvedProvider.usesModelProviderPlugins
+      ? [params.primaryModel, params.alternateModel]
+          .map((modelRef) =>
+            typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
+          )
+          .filter((providerId): providerId is string => Boolean(providerId))
+      : [];
+    const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
+      providerIds: liveProviderIds,
+    });
+    const liveOwnerPluginIds =
+      liveProviderIds.length > 0
+        ? await resolveQaOwnerPluginIdsForProviderIds({
+            repoRoot: params.repoRoot,
+            providerIds: liveProviderIds,
+            providerConfigs: liveProviderConfigs,
+          })
+        : [];
+    const enabledPluginIds = [
+      ...new Set([...(liveOwnerPluginIds ?? []), ...(params.enabledPluginIds ?? [])]),
+    ];
+    const buildGatewayConfig = (gatewayPort: number) =>
+      buildQaGatewayConfig({
+        bind: "loopback",
+        gatewayPort,
+        gatewayToken,
+        providerBaseUrl: params.providerBaseUrl,
+        workspaceDir,
+        controlUiRoot: resolveQaControlUiRoot({
+          repoRoot: params.repoRoot,
+          controlUiEnabled: params.controlUiEnabled,
+        }),
+        controlUiAllowedOrigins: params.controlUiAllowedOrigins,
+        providerMode,
+        primaryModel: params.primaryModel,
+        alternateModel: params.alternateModel,
+        enabledPluginIds,
+        transportPluginIds: transport.requiredPluginIds,
+        transportConfig: transport.createGatewayConfig({
+          baseUrl: params.transportBaseUrl,
+        }),
+        liveProviderConfigs,
+        fastMode: params.fastMode,
+        thinkingDefault: params.thinkingDefault,
+        forcedRuntime: params.forcedRuntime,
+        controlUiEnabled: params.controlUiEnabled,
+      });
+    const buildStagedGatewayConfig = async (gatewayPort: number) => {
+      let cfg = buildGatewayConfig(gatewayPort);
+      cfg = await stageQaLiveApiKeyProfiles({
+        cfg,
+        stateDir,
+        providerIds: liveProviderIds,
+      });
+      cfg = await stageQaLiveAnthropicSetupToken({
+        cfg,
+        stateDir,
+      });
+      const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+      if (mockAuthProviders && mockAuthProviders.length > 0) {
+        cfg = await stageQaMockAuthProfiles({
+          cfg,
+          stateDir,
+          agentIds: params.mockAuthAgentIds,
+          providers: mockAuthProviders,
+        });
+      }
+      return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
+    };
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    const output = createQaGatewayChildLogCollector();
+    const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
+    const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
+    const stdoutLog = createWriteStream(stdoutLogPath, { flags: "a" });
+    gatewayLogStreams.push(["stdout", stdoutLog]);
+    const stderrLog = createWriteStream(stderrLogPath, { flags: "a" });
+    gatewayLogStreams.push(["stderr", stderrLog]);
+
+    const logs = () => redactQaGatewayDebugText(output.text());
+    let gatewayPort = 0;
+    let baseUrl = "";
+    let wsUrl = "";
+    let cfg!: OpenClawConfig;
+    let getChildFailure: (() => QaChildFailure | null) | null = null;
+    let env: NodeJS.ProcessEnv | null = null;
+    let migrationConvergenceRestartUsed = false;
+    let reuseStartupLaunchState = false;
+
     const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
     const cliArgsPrefix = gatewayExecutablePath
       ? gatewayArgsPrefix
@@ -1332,75 +1462,87 @@ export async function startQaGatewayChild(params: {
       }
     };
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
-      gatewayPort = await getFreePort();
-      baseUrl = `http://127.0.0.1:${gatewayPort}`;
-      wsUrl = `ws://127.0.0.1:${gatewayPort}`;
-      cfg = await buildStagedGatewayConfig(gatewayPort);
-      if (!env) {
-        const allowedPluginIds = uniqueStrings(
-          [...(cfg.plugins?.allow ?? []), "openai"].filter(
-            (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
-          ),
-        );
-        const stagedPluginRuntime = gatewayCommand?.usePackagedPlugins
-          ? { bundledPluginsDir: undefined, runtimeHostVersion: undefined }
-          : {
-              ...(await createQaBundledPluginsDir({
-                repoRoot: params.repoRoot,
-                tempRoot,
-                allowedPluginIds,
-              })),
-              runtimeHostVersion: await resolveQaRuntimeHostVersion({
-                repoRoot: params.repoRoot,
-                allowedPluginIds,
+      if (!reuseStartupLaunchState) {
+        gatewayPort = await getFreePort();
+        baseUrl = `http://127.0.0.1:${gatewayPort}`;
+        wsUrl = `ws://127.0.0.1:${gatewayPort}`;
+        cfg = await buildStagedGatewayConfig(gatewayPort);
+        if (!env) {
+          const allowedPluginIds = uniqueStrings(
+            [...(cfg.plugins?.allow ?? []), "openai"].filter(
+              (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
+            ),
+          );
+          if (!gatewayCommand?.usePackagedPlugins) {
+            // Register the external root before staging so one lifecycle owner
+            // also cleans partial copies and host-version resolution failures.
+            stagedBundledPluginsRoot = resolveQaStagedBundledPluginsRoot({
+              repoRoot: params.repoRoot,
+              tempRoot,
+            });
+          }
+          const stagedPluginRuntime = gatewayCommand?.usePackagedPlugins
+            ? { bundledPluginsDir: undefined, runtimeHostVersion: undefined }
+            : {
+                ...(await createQaBundledPluginsDir({
+                  repoRoot: params.repoRoot,
+                  tempRoot,
+                  allowedPluginIds,
+                })),
+                runtimeHostVersion: await resolveQaRuntimeHostVersion({
+                  repoRoot: params.repoRoot,
+                  allowedPluginIds,
+                }),
+              };
+          env = buildQaRuntimeEnv({
+            configPath,
+            gatewayToken,
+            homeDir,
+            forwardHostHome: params.forwardHostHome,
+            stateDir,
+            tempRoot,
+            xdgConfigHome,
+            xdgDataHome,
+            xdgCacheHome,
+            bundledPluginsDir: stagedPluginRuntime.bundledPluginsDir,
+            stagedBundledPluginsRoot,
+            compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
+            providerMode,
+            runtimeEnvPatch: {
+              ...params.runtimeEnvPatch,
+              ...buildQaForcedRuntimeEnvPatch({
+                forcedRuntime: params.forcedRuntime,
+                providerMode,
+                providerBaseUrl: params.providerBaseUrl,
+                codexModelCatalogPath,
+                nativeAppServerArgs:
+                  params.runtimeEnvPatch?.OPENCLAW_CODEX_APP_SERVER_ARGS ??
+                  process.env.OPENCLAW_CODEX_APP_SERVER_ARGS,
               }),
-            };
-        if ("stagedRoot" in stagedPluginRuntime) {
-          stagedBundledPluginsRoot = stagedPluginRuntime.stagedRoot;
+            },
+            forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
+            claudeCliAuthMode: params.claudeCliAuthMode,
+          });
         }
-        env = buildQaRuntimeEnv({
-          configPath,
-          gatewayToken,
-          homeDir,
-          forwardHostHome: params.forwardHostHome,
-          stateDir,
-          tempRoot,
-          xdgConfigHome,
-          xdgDataHome,
-          xdgCacheHome,
-          bundledPluginsDir: stagedPluginRuntime.bundledPluginsDir,
-          stagedBundledPluginsRoot,
-          compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
-          providerMode,
-          runtimeEnvPatch: {
-            ...params.runtimeEnvPatch,
-            ...buildQaForcedRuntimeEnvPatch({
-              forcedRuntime: params.forcedRuntime,
-              providerMode,
-              providerBaseUrl: params.providerBaseUrl,
-              codexModelCatalogPath,
-              nativeAppServerArgs:
-                params.runtimeEnvPatch?.OPENCLAW_CODEX_APP_SERVER_ARGS ??
-                process.env.OPENCLAW_CODEX_APP_SERVER_ARGS,
-            }),
-          },
-          forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
-          claudeCliAuthMode: params.claudeCliAuthMode,
+        if (!env) {
+          throw new Error("qa gateway runtime env not initialized");
+        }
+        assertQaLiveCodexAuthAvailable({
+          cfg,
+          providerIds: liveProviderIds,
+          env,
+        });
+        await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
         });
       }
       if (!env) {
         throw new Error("qa gateway runtime env not initialized");
       }
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: liveProviderIds,
-        env,
-      });
-      await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+      reuseStartupLaunchState = false;
 
+      const attemptLogOffset = logs().length;
       const spawnedAttempt = await spawnGatewayProcess(env);
       const attemptChild = spawnedAttempt.child;
       child = attemptChild;
@@ -1423,13 +1565,15 @@ export async function startQaGatewayChild(params: {
           configPath,
           runtimeEnv: env,
         });
-        await waitForGatewayReady({
-          baseUrl,
-          logs,
-          child: attemptChild,
-          getChildFailure: getAttemptChildFailure,
-          timeoutMs: 120_000,
-        });
+        if (!params.allowUnhealthyStartup) {
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: attemptChild,
+            getChildFailure: getAttemptChildFailure,
+            timeoutMs: 120_000,
+          });
+        }
         const attemptRpcClient = await startQaGatewayRpcClient({
           wsUrl,
           token: gatewayToken,
@@ -1465,7 +1609,7 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw toQaErrorObject(
+            throw toErrorObject(
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );
@@ -1483,10 +1627,16 @@ export async function startQaGatewayChild(params: {
         break;
       } catch (error) {
         const details = formatErrorMessage(error);
-        const retryable =
+        const attemptLogs = logs().slice(attemptLogOffset);
+        const startupRetry = resolveQaGatewayStartupRetry({
+          attempt,
+          details: attemptLogs.trim() ? attemptLogs : details,
+          migrationConvergenceRestartUsed,
+        });
+        const retryableRpcStartup =
           attempt < QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS &&
-          (isRetryableGatewayStartupError(`${details}\n${logs()}`) ||
-            isRetryableRpcStartupError(error));
+          !startupRetry &&
+          isRetryableRpcStartupError(error);
         if (rpcClient) {
           await rpcClient.stop().catch(() => {});
           rpcClient = null;
@@ -1502,12 +1652,19 @@ export async function startQaGatewayChild(params: {
         });
         child = null;
         childIdentity = null;
-        if (!retryable) {
+        if (!startupRetry && !retryableRpcStartup) {
           throw error;
         }
-        stdoutLog.write(
-          `[qa-lab] gateway child startup attempt ${attempt}/${QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS} hit a transient startup race on port ${gatewayPort}; retrying with a new port\n`,
-        );
+        migrationConvergenceRestartUsed =
+          startupRetry?.migrationConvergenceRestartUsed ?? migrationConvergenceRestartUsed;
+        reuseStartupLaunchState = startupRetry?.reuseLaunchState ?? false;
+        const retryMessage =
+          startupRetry?.kind === "migration-convergence-restart"
+            ? `[qa-lab] gateway child startup attempt ${attempt}/${QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS} completed plugin migration convergence; restarting once with the same state, config, and port ${gatewayPort}\n`
+            : `[qa-lab] gateway child startup attempt ${attempt}/${QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS} hit a transient startup race on port ${gatewayPort}; retrying with a new port\n`;
+        const retryBuffer = Buffer.from(retryMessage);
+        output.push(retryBuffer);
+        stdoutLog.write(retryBuffer);
       }
     }
 
@@ -1573,7 +1730,7 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw toQaErrorObject(
+            throw toErrorObject(
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );
@@ -1740,10 +1897,7 @@ export async function startQaGatewayChild(params: {
           processStopped = false;
           cleanupErrors.push(error);
         }
-        for (const [label, stream] of [
-          ["stdout", stdoutLog],
-          ["stderr", stderrLog],
-        ] as const) {
+        for (const [label, stream] of gatewayLogStreams) {
           try {
             await closeWriteStream(stream, label);
           } catch (error) {
@@ -1811,10 +1965,7 @@ export async function startQaGatewayChild(params: {
         cleanupErrors.push(cleanupError);
       }
     }
-    for (const [label, stream] of [
-      ["stdout", stdoutLog],
-      ["stderr", stderrLog],
-    ] as const) {
+    for (const [label, stream] of gatewayLogStreams) {
       try {
         await closeWriteStream(stream, label);
       } catch (cleanupError) {

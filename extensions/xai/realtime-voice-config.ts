@@ -2,7 +2,6 @@ import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
@@ -44,6 +43,17 @@ export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   resolveApiKey?: () => Promise<string>;
 };
 
+type XaiRealtimeResponseItem = {
+  id?: string;
+  type?: string;
+  status?: "completed" | "incomplete" | "in_progress";
+  role?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
+  content?: Array<{ type?: string; text?: string; transcript?: string }>;
+};
+
 export type XaiRealtimeEvent = {
   type: string;
   delta?: string;
@@ -59,15 +69,10 @@ export type XaiRealtimeEvent = {
     id?: string;
     status?: string;
     status_details?: unknown;
+    output?: XaiRealtimeResponseItem[];
   };
   conversation?: { id?: string };
-  item?: {
-    id?: string;
-    type?: string;
-    call_id?: string;
-    name?: string;
-    arguments?: string;
-  };
+  item?: XaiRealtimeResponseItem;
   error?: unknown;
 };
 
@@ -108,6 +113,7 @@ export const XAI_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 export const XAI_REALTIME_BASE_RECONNECT_DELAY_MS = 1000;
 export const XAI_REALTIME_MAX_PENDING_TOOL_RESULTS = 128;
 export const XAI_REALTIME_MAX_PENDING_USER_MESSAGES = 128;
+export const XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS = 1_024;
 export const XAI_REALTIME_DEFAULT_VAD_THRESHOLD = 0.85;
 export const XAI_REALTIME_DEFAULT_PREFIX_PADDING_MS = 333;
 export const XAI_REALTIME_DEFAULT_SILENCE_DURATION_MS = 500;
@@ -219,25 +225,6 @@ export function toXaiRealtimeWsUrl(
     url.searchParams.set("conversation_id", conversationId);
   }
   return url.toString();
-}
-
-export async function resolveXaiRealtimeApiKey(
-  configApiKey: string | undefined,
-  cfg: OpenClawConfig | undefined,
-): Promise<string> {
-  const direct =
-    normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
-  if (direct) {
-    return direct;
-  }
-  const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
-  const oauthKey = normalizeOptionalString(auth?.apiKey);
-  if (oauthKey) {
-    return oauthKey;
-  }
-  throw new Error(
-    "xAI credentials missing for realtime voice. Sign in with `openclaw onboard --auth-choice xai-oauth`, run `openclaw onboard --auth-choice xai-api-key`, or set XAI_API_KEY.",
-  );
 }
 
 export function hasXaiRealtimeApiKeyInput(

@@ -150,6 +150,7 @@ describe("openrouter image generation provider", () => {
         "HTTP-Referer": "https://openclaw.ai",
         "X-OpenRouter-Title": "OpenClaw",
       },
+      request: undefined,
       provider: "openrouter",
       capability: "image",
       transport: "http",
@@ -189,6 +190,84 @@ describe("openrouter image generation provider", () => {
     const image = requireGeneratedImage(result, 0);
     expect(image.buffer.toString()).toBe("png-one");
     expect(image.mimeType).toBe("image/png");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("applies configured image request transport without weakening private-network policy", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Trace": "image-trace" },
+      auth: { mode: "authorization-bearer" as const, token: "override-image-token" },
+      proxy: { mode: "explicit-proxy" as const, url: "http://proxy.example.test:8443" },
+      tls: { ca: "synthetic-provider-ca", serverName: "provider.example.test" },
+    };
+    const dispatcherPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: requestPolicy.proxy.url,
+    };
+    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
+      const headers = new Headers(params.defaultHeaders);
+      for (const [name, value] of Object.entries(params.request?.headers ?? {})) {
+        headers.set(name, value);
+      }
+      if (params.request?.auth?.mode === "authorization-bearer") {
+        headers.set("Authorization", `Bearer ${params.request.auth.token}`);
+      }
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork:
+          (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
+        headers,
+        dispatcherPolicy,
+      };
+    });
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: Response.json({
+        choices: [
+          {
+            message: {
+              images: [{ image_url: { url: "data:image/png;base64,cG5n" } }],
+            },
+          },
+        ],
+      }),
+      release,
+    });
+
+    const result = await buildOpenRouterImageGenerationProvider().generateImage({
+      provider: "openrouter",
+      model: "google/gemini-3.1-flash-image-preview",
+      prompt: "draw through the configured transport",
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://custom.openrouter.test/api/v1",
+              request: requestPolicy,
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(requireOpenRouterConfigRequest()).toMatchObject({
+      baseUrl: "https://custom.openrouter.test/api/v1",
+      provider: "openrouter",
+      capability: "image",
+      allowPrivateNetwork: false,
+      request: requestPolicy,
+    });
+    const request = requireOpenRouterPostRequest();
+    const headers = requireHeaders(request.headers);
+    expect(headers.get("authorization")).toBe("Bearer override-image-token");
+    expect(headers.get("x-openrouter-trace")).toBe("image-trace");
+    expect(request).toMatchObject({
+      allowPrivateNetwork: false,
+      dispatcherPolicy,
+    });
+    expect(requireGeneratedImage(result, 0).buffer.toString()).toBe("png");
     expect(release).toHaveBeenCalledOnce();
   });
 

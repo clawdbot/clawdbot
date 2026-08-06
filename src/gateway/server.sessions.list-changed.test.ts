@@ -3,26 +3,16 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -42,7 +32,6 @@ const {
 } = setupGatewaySessionsTestHarness();
 
 afterEach(() => {
-  releasePinnedPluginSessionExtensionRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -157,7 +146,7 @@ async function invokeSessionsList({
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      loadGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => [],
       ...context,
     } as never,
   });
@@ -229,78 +218,6 @@ function expectMainPatchBroadcast(
     ...expected,
   });
 }
-
-test("sessions.pluginPatch over WebSocket keeps pinned startup extensions after active churn", async () => {
-  const { config, registry } = createPluginRegistryFixture();
-  registerTestPlugin({
-    registry,
-    config,
-    record: createPluginRecord({
-      id: "session-pin-ws-fixture",
-      name: "Session Pin WS Fixture",
-    }),
-    register(api) {
-      api.registerSessionExtension({
-        namespace: "workflow",
-        description: "Pinned workflow state",
-      });
-    },
-  });
-  setActivePluginRegistry(registry.registry);
-  pinActivePluginSessionExtensionRegistry(registry.registry);
-  setActivePluginRegistry(createEmptyPluginRegistry());
-
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
-
-  const { ws } = await openClient();
-  const patched = await rpcReq<{ ok: boolean; key: string; value: { state: string } }>(
-    ws,
-    "sessions.pluginPatch",
-    {
-      key: "main",
-      pluginId: "session-pin-ws-fixture",
-      namespace: "workflow",
-      value: { state: "after-active-registry-churn" },
-    },
-  );
-  ws.close();
-
-  expect(patched.ok).toBe(true);
-  expect(patched.payload).toEqual({
-    ok: true,
-    key: "agent:main:main",
-    value: { state: "after-active-registry-churn" },
-  });
-
-  const entry = loadSessionEntry({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  expect(entry).toBeDefined();
-  if (!entry) {
-    throw new Error("expected persisted session entry");
-  }
-  const row = buildGatewaySessionRow({
-    cfg: { session: { store: storePath } },
-    entry,
-    key: "agent:main:main",
-    store: { "agent:main:main": entry },
-    storePath,
-  });
-  expect(row.pluginExtensions).toEqual([
-    {
-      pluginId: "session-pin-ws-fixture",
-      namespace: "workflow",
-      value: { state: "after-active-registry-churn" },
-    },
-  ]);
-});
 
 async function invokeSessionsCompact({
   getRuntimeConfig,
@@ -490,7 +407,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   const { respond } = await invokeSessionsList({
     requestId: "req-sessions-list-thinking-default",
     context: {
-      loadGatewayModelCatalog: async () => [
+      readPreparedGatewayModelCatalog: async () => [
         {
           provider: "test-provider",
           id: "reasoner",

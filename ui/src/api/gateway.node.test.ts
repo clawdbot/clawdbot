@@ -39,6 +39,15 @@ const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.talk.secrets",
   "operator.write",
 ] as const;
+const CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.approvals",
+  "operator.pairing",
+  "operator.questions",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+] as const;
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(
     async (): Promise<DeviceIdentity> => ({
@@ -525,6 +534,25 @@ describe("GatewayBrowserClient", () => {
     expectSignedPayloadFields(signedPayload, {
       scopes: [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES],
       token: "boot-1",
+      nonce: "nonce-1",
+    });
+  });
+
+  it("requests the exact owner profile for host-authorized bootstrap auth", async () => {
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      bootstrapToken: "boot-owner",
+      bootstrapProfile: "owner",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-owner");
+    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
+    const [, signedPayload] = requireFirstSignCall();
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+      token: "boot-owner",
       nonce: "nonce-1",
     });
   });

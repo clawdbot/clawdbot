@@ -85,11 +85,6 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     legacyIssues: Map<number, unknown>;
     pullRequests: Map<number, ContributionRecord>;
   };
-  export function contributionRecordTarget(section: { source: string }): string | undefined;
-  export function pullRequestTitleFromCommitSubject(
-    subject: string,
-    number: number,
-  ): string | undefined;
   export function recoverUnavailablePullRequests(params: {
     numbers: Iterable<number>;
     nodes: Map<number, unknown>;
@@ -161,9 +156,6 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     associatedPullRequests: number[],
     hasProvenanceOverride: boolean,
   ): number[];
-  export function recoverUnavailablePullRequests(
-    params: Record<string, unknown>,
-  ): Map<number, Record<string, unknown>>;
   export function validateReleaseProvenanceOverrides(
     provenanceOverrides: Map<string, number[]>,
     nodes: Map<number, unknown>,
@@ -197,6 +189,15 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     release?: () => void;
   };
   export function originMatches(remoteUrl: string): boolean;
+  export function formatUpdateFailure(error: unknown): {
+    schemaVersion: 1;
+    ok: false;
+    error: {
+      code: string;
+      message: string;
+      diagnostics: Record<string, unknown>;
+    };
+  };
   export function isOwnedGatewayEntrypoint(
     checkout: string,
     home: string,
@@ -249,7 +250,23 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     requestedPath?: string,
   ): {
     acquired: boolean;
-    owner: { pid: number; checkout?: string; startedAt?: string };
+    owner: {
+      pid: number;
+      checkout?: string;
+      manualRecoveryRequired?: boolean;
+      processGroupId?: number;
+      processTreeState?: string;
+      reason?: string;
+      serviceState?: string;
+      startedAt?: string;
+    };
+    retainForCleanupFailure?: (details?: {
+      manualRecoveryRequired?: boolean;
+      phase?: string;
+      processGroupId?: number;
+      processTreeState?: string;
+      serviceState?: string;
+    }) => Record<string, unknown>;
     release?: () => void;
   };
   export function parseGatewayLogAudit(
@@ -288,10 +305,15 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     options?: { stderr?: "inherit" | "pipe"; timeoutMs?: number },
   ): string;
   export function verifyGatewayReadiness(
-    runCommand: (command: string, args: string[], checkout: string) => unknown,
+    runCommand: (
+      command: string,
+      args: string[],
+      checkout: string,
+      options?: Record<string, unknown>,
+    ) => unknown | Promise<unknown>,
     checkout: string,
     expectedSha: string,
-    sleep?: (ms: number) => void,
+    sleep?: (ms: number) => void | Promise<void>,
     deployment?: GatewayDeployment | null,
     options?: {
       now?: () => number;
@@ -302,7 +324,7 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
       };
       timing?: Record<string, unknown>;
     },
-  ): Record<string, unknown>;
+  ): Promise<Record<string, unknown>>;
   export function findExactMacTarget(
     processes: string,
     executable: string,
@@ -310,5 +332,9 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
   export function maintainMain(
     options: Record<string, unknown>,
     dependencies?: Record<string, unknown>,
-  ): UpdateResult;
+  ): Promise<UpdateResult>;
+  export function runLiveUpdaterMain(
+    argv?: string[],
+    dependencies?: Record<string, unknown>,
+  ): Promise<void>;
 }

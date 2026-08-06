@@ -1,3 +1,4 @@
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
@@ -150,8 +151,10 @@ export function assertCodexAppServerAllowedForOpenClawExecMode(
   mode: OpenClawExecMode | undefined,
 ): void {
   if (mode === "deny" || mode === "allowlist") {
-    throw new Error(
-      `Codex app-server local execution is not available when tools.exec.mode=${mode}`,
+    throw new AgentHarnessPreflightError(
+      `Codex app-server local execution is unavailable because effective tools.exec.mode=${mode}. ` +
+        "Execution-host approvals are authoritative. For gateway turns, inspect them with `openclaw approvals get --gateway` and update that same target with `openclaw approvals set --gateway --stdin`; for local `agent exec`, omit `--gateway`. Intentionally align that host policy before retrying.",
+      { scope: "harness" },
     );
   }
 }

@@ -599,7 +599,14 @@ export async function markDeliveryPlatformOutcomeUnknown(
     stateDir,
     (entry) => ({
       ...entry,
-      availableAt: undefined,
+      // An explicit stable producer keeps its exact lease through the
+      // ambiguous outcome so recovery cannot race its remaining cleanup.
+      availableAt:
+        expectedPlatformSendAttemptId &&
+        entry.requiresProducerClaim === true &&
+        entry.platformSendAttemptId === expectedPlatformSendAttemptId
+          ? entry.availableAt
+          : undefined,
       producerClaimId: undefined,
       platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
       recoveryState: "unknown_after_send",

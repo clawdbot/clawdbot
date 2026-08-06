@@ -2,13 +2,11 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  clearAgentRunContext,
-  onAgentAuditEvent,
-  onAgentRuntimeEvent,
-} from "../infra/agent-events.js";
+import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -74,6 +72,9 @@ export function startGatewayEventSubscriptions(params: {
   const auditRecorder = createAuditEventRecorder({
     messageMode: auditEnabled ? auditMessageMode : "off",
   });
+  const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
+    auditRecorder.recordExecutionIdentity,
+  );
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
     subscribers: params.sessionMessageSubscribers,
@@ -325,6 +326,7 @@ export function startGatewayEventSubscriptions(params: {
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
+    clearExecutionIdentityAdmissionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())

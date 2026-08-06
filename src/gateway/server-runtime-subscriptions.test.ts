@@ -1,6 +1,11 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  configureExecutionIdentityAdmissionSink,
+  enqueueExecutionIdentityContextAtAdmission,
+  hasExecutionIdentityAdmissionSink,
+} from "../audit/execution-identity-admission.js";
+import {
   emitAgentAuditEvent,
   emitAgentEvent,
   resetAgentEventsForTest,
@@ -49,10 +54,15 @@ const auditTestState = vi.hoisted(() => ({
   messageMode: "off" as "off" | "direct" | "all",
   created: 0,
   recorded: 0,
+  identityRecorded: 0,
   stopped: 0,
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
+}));
+const transcriptBroadcastMocks = vi.hoisted(() => ({
+  useActualHandler: false,
+  readMessageCount: vi.fn(),
 }));
 
 vi.mock("../audit/audit-config.js", () => ({
@@ -69,6 +79,10 @@ vi.mock("../audit/audit-recorder.js", () => ({
       }),
       recordTool: vi.fn(),
       recordMessage: vi.fn(),
+      recordExecutionIdentity: vi.fn(() => {
+        auditTestState.identityRecorded += 1;
+        return true;
+      }),
       stop: vi.fn(async () => {
         auditTestState.stopped += 1;
       }),
@@ -84,14 +98,33 @@ vi.mock("./server-session-key.js", () => ({
   resolveSessionKeyForRun: () => "agent:main:main",
 }));
 
-vi.mock("./server-session-events.js", () => ({
-  createTranscriptUpdateBroadcastHandler: () => () => {
-    throw new Error("transcript handler failure");
-  },
-  createLifecycleEventBroadcastHandler: () => () => {
-    throw new Error("lifecycle handler failure");
-  },
-}));
+vi.mock("./session-transcript-readers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
+  return {
+    ...actual,
+    readSessionMessageCountAsync: transcriptBroadcastMocks.readMessageCount,
+  };
+});
+
+vi.mock("./server-session-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-session-events.js")>();
+  return {
+    ...actual,
+    createTranscriptUpdateBroadcastHandler: (
+      ...args: Parameters<typeof actual.createTranscriptUpdateBroadcastHandler>
+    ) => {
+      if (transcriptBroadcastMocks.useActualHandler) {
+        return actual.createTranscriptUpdateBroadcastHandler(...args);
+      }
+      return () => {
+        throw new Error("transcript handler failure");
+      };
+    },
+    createLifecycleEventBroadcastHandler: () => () => {
+      throw new Error("lifecycle handler failure");
+    },
+  };
+});
 
 const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
 type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
@@ -121,7 +154,10 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.messageMode = "off";
     auditTestState.created = 0;
     auditTestState.recorded = 0;
+    auditTestState.identityRecorded = 0;
     auditTestState.stopped = 0;
+    transcriptBroadcastMocks.useActualHandler = false;
+    transcriptBroadcastMocks.readMessageCount.mockReset();
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
@@ -136,6 +172,7 @@ describe("startGatewayEventSubscriptions", () => {
     void unsubs?.taskUnsub();
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
+    configureExecutionIdentityAdmissionSink(() => false)();
   });
 
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
@@ -148,8 +185,22 @@ describe("startGatewayEventSubscriptions", () => {
       data: { phase: "start", startedAt: 1_000 },
     });
     expect(auditTestState.recorded).toBe(1);
+    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
+    expect(
+      enqueueExecutionIdentityContextAtAdmission(
+        {
+          runId: "gateway-admission",
+          agentId: "main",
+          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+          runtime: { kind: "embedded" },
+        },
+        { enabled: true, runtimeInstanceId: "runtime-1" },
+      )?.accepted,
+    ).toBe(true);
+    expect(auditTestState.identityRecorded).toBe(1);
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
+    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
   });
 
   it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {
@@ -217,6 +268,58 @@ describe("startGatewayEventSubscriptions", () => {
       "Transcript update dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
+  });
+
+  it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
+    transcriptBroadcastMocks.useActualHandler = true;
+    const persistenceFailure = new Error("session transcript read failed");
+    transcriptBroadcastMocks.readMessageCount
+      .mockRejectedValueOnce(persistenceFailure)
+      .mockResolvedValueOnce(2);
+
+    const params = createParams();
+    params.sessionEventSubscribers.subscribe("conn-transcript");
+    unsubs = startGatewayEventSubscriptions(params);
+
+    const emitMessage = (messageId: string) =>
+      emitSessionTranscriptUpdate({
+        sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
+        sessionKey: "agent:main:main",
+        message: { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        messageId,
+        target: {
+          agentId: "main",
+          sessionId: "sess-transcript",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/openclaw-transcript-dispatch-sessions.json",
+        },
+      });
+
+    emitMessage("failed-message");
+    await waitForFast(() =>
+      expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledOnce(),
+    );
+    await waitForFast(() =>
+      expect(warn).toHaveBeenCalledWith("Transcript update dispatch failed", {
+        sessionKey: "agent:main:main",
+        error: persistenceFailure,
+      }),
+    );
+    expect(params.broadcastToConnIds).not.toHaveBeenCalled();
+
+    emitMessage("recovered-message");
+    await waitForFast(() => expect(params.broadcastToConnIds).toHaveBeenCalledOnce());
+    expect(params.broadcastToConnIds).toHaveBeenCalledWith(
+      "session.message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        messageId: "recovered-message",
+        messageSeq: 2,
+      }),
+      new Set(["conn-transcript"]),
+    );
+    expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledOnce();
   });
 
   it("logs lifecycle handler failures", async () => {

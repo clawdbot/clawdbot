@@ -1,9 +1,10 @@
-/**
- * Session message event indexing and broadcast tests.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+/**
+ * Session message event indexing and broadcast tests.
+ */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { RawData } from "ws";
 import {
@@ -22,11 +23,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  emitAgentEvent,
-} from "../infra/agent-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
@@ -167,12 +165,7 @@ async function expectNoMessageWithin(params: {
   await expect(received).resolves.toBe(false);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
   const record = requireRecord(value, "record");
@@ -580,7 +573,7 @@ describe("session.message websocket events", () => {
       task: "finish recovered child work",
       cleanup: "keep",
       createdAt: 1_000,
-      startedAt: 2_000,
+      execution: { status: "running", startedAt: 2_000 },
     };
     await writeSessionStore({
       entries: {

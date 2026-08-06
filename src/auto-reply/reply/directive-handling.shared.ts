@@ -11,9 +11,35 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { ReplyPayload } from "../types.js";
+import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
+
+export const DIRECTIVE_ACK_MESSAGES = {
+  verbose: {
+    off: "Verbose logging disabled.",
+    on: "Verbose logging enabled.",
+    full: "Verbose logging set to full.",
+  },
+  trace: {
+    off: "Trace disabled.",
+    on: "Trace enabled. Warning: trace output may contain sensitive information.",
+    raw: "Trace set to raw. Warning: trace output may contain sensitive information.",
+  },
+  reasoning: {
+    off: "Reasoning visibility disabled.",
+    on: "Reasoning visibility enabled.",
+    stream: "Reasoning stream enabled.",
+  },
+  elevated: {
+    off: "Elevated mode disabled.",
+    on: "Elevated mode set to ask (approvals may still apply).",
+    ask: "Elevated mode set to ask (approvals may still apply).",
+    full: "Elevated mode set to full (auto-approve).",
+  },
+} as const;
 
 export const formatDirectiveAck = (text: string): string => {
   return prefixSystemMessage(text);
@@ -118,6 +144,60 @@ export function resolveDirectiveTouchedSessionFields(params: {
   return [...fields];
 }
 
+export type IgnoredSessionDirectiveFlag = Extract<keyof InlineDirectives, `has${string}Directive`>;
+
+export function rejectSessionDirectiveTransaction(
+  persistenceState: HandleDirectiveOnlyParams["persistenceState"],
+  errorText: string,
+): ReplyPayload {
+  if (persistenceState) {
+    persistenceState.outcome = { kind: "rejected", errorText };
+  }
+  return { text: errorText };
+}
+
+/** Keeps the first informational/denied acknowledgement while committing valid siblings once. */
+export async function acknowledgeIgnoredSessionDirective(params: {
+  reply: ReplyPayload;
+  directives: InlineDirectives;
+  ignoredDirective: IgnoredSessionDirectiveFlag;
+  persistenceState: HandleDirectiveOnlyParams["persistenceState"];
+  allowPrivilegedPersistence: boolean;
+  applyRemainingDirectives: (directives: InlineDirectives) => Promise<ReplyPayload | undefined>;
+}): Promise<ReplyPayload> {
+  if (!params.persistenceState) {
+    return params.reply;
+  }
+  const { directives, ignoredDirective } = params;
+  const remainingDirectives =
+    ignoredDirective === "hasExecDirective" && directives.hasExecOptions
+      ? {
+          ...directives,
+          invalidExecHost: false,
+          invalidExecSecurity: false,
+          invalidExecAsk: false,
+          invalidExecNode: false,
+        }
+      : {
+          ...directives,
+          [ignoredDirective]: false,
+          ...(ignoredDirective === "hasThinkDirective" ? { clearThinkLevel: false } : {}),
+          ...(ignoredDirective === "hasFastDirective" ? { clearFastMode: false } : {}),
+          ...(ignoredDirective === "hasModelDirective" ? { rawModelProfile: undefined } : {}),
+        };
+  const touchedFields = resolveDirectiveTouchedSessionFields({
+    directives: remainingDirectives,
+    allowPrivilegedPersistence: params.allowPrivilegedPersistence,
+  });
+  if (touchedFields.length > 0) {
+    const siblingReply = await params.applyRemainingDirectives(remainingDirectives);
+    if (params.persistenceState.outcome.kind === "rejected") {
+      return siblingReply ?? params.reply;
+    }
+  }
+  return params.reply;
+}
+
 /** Applies canonical session settings while each caller retains its authorization boundaries. */
 export function applySessionDirectiveFields(params: {
   directives: InlineDirectives;
@@ -219,7 +299,7 @@ export async function persistSessionDirectiveSnapshot(params: {
   touchedFields: Array<keyof SessionEntry>;
   hasModelSelection: boolean;
   reassertLiveModelSwitchPending: boolean;
-}): Promise<{ sessionChangesApplied: boolean; modelSelectionApplied: boolean }> {
+}): Promise<{ status: "applied" | "conflict" | "model-selection-locked" }> {
   const { sessionEntry, sessionKey, sessionStore } = params;
   const persistence = await persistReplySessionEntry({
     storePath: params.storePath,
@@ -227,13 +307,17 @@ export async function persistSessionDirectiveSnapshot(params: {
     initialEntry: params.initialEntry,
     entry: sessionEntry,
     reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
+    requireModelSelectionUnlocked: params.hasModelSelection,
     touchedFields: params.touchedFields,
   });
   if (persistence.status !== "current") {
     if (persistence.entry) {
       sessionStore[sessionKey] = persistence.entry;
+      adoptPersistedSessionSnapshot(sessionEntry, persistence.entry);
     }
-    return { sessionChangesApplied: false, modelSelectionApplied: false };
+    return {
+      status: persistence.status === "model-selection-locked" ? persistence.status : "conflict",
+    };
   }
 
   const persistedEntry = persistence.entry;
@@ -254,7 +338,7 @@ export async function persistSessionDirectiveSnapshot(params: {
         reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
       }));
   adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
-  return { sessionChangesApplied, modelSelectionApplied };
+  return { status: sessionChangesApplied && modelSelectionApplied ? "applied" : "conflict" };
 }
 
 const formatElevatedEvent = (level: ElevatedLevel) => {

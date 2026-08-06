@@ -1,4 +1,6 @@
 // Plans release workflow matrix entries from profile and suite inputs.
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+
 const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "core",
@@ -94,7 +96,7 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "MiniMax",
     providers: "minimax",
-    models: "minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7",
+    models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
     max_models: "2",
     profiles: "stable full",
   },
@@ -236,7 +238,7 @@ function writeOutputs(plan) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plan = createReleaseWorkflowMatrixPlan({
     dockerLanes: process.env.DOCKER_LANES,
     includeLiveSuites: process.env.INCLUDE_LIVE_SUITES,

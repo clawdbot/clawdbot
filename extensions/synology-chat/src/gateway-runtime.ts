@@ -234,6 +234,7 @@ export async function registerSynologyWebhookRoute(params: {
       pluginId: CHANNEL_ID,
       accountId: account.accountId,
       log: (msg: string) => log?.info?.(msg),
+      throwOnFailure: true,
       handler,
     });
   } catch (error) {
