@@ -24,6 +24,7 @@ export const {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,
   formatContextUsageShort,
+  formatTokenCount,
   incrementCompactionCount,
   isCurrentSessionEntry,
   isEmbeddedAgentRunAbortableForCompaction,

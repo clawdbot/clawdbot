@@ -55,6 +55,26 @@ describe("sessionsCompactCommand", () => {
     expect(logged).toContain("34941");
   });
 
+  it.each([
+    { tokensBefore: 20, tokensAfter: 30 },
+    { tokensBefore: 36, tokensAfter: 36 },
+  ])(
+    "does not print a growth arrow for $tokensBefore -> $tokensAfter token counts",
+    async ({ tokensBefore, tokensAfter }) => {
+      callGatewayCli.mockResolvedValue({
+        ok: true,
+        key: "agent:main:main",
+        compacted: true,
+        result: { tokensBefore, tokensAfter },
+      });
+      const runtime = createRuntime();
+
+      await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+
+      expect(joinedArgs(runtime.log)).toBe("Compacted session agent:main:main.");
+    },
+  );
+
   it("preserves an explicit client timeout override", async () => {
     callGatewayCli.mockResolvedValue({
       ok: true,

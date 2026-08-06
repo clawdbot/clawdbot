@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveCompactionTokenDecrease } from "../../agents/compaction-token-counts.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   classifyCompactionReason,
@@ -349,18 +350,28 @@ export const handleCompactCommand: CommandHandler = async (params) => {
 
   const tokensBeforeCompaction = result.result?.tokensBefore;
   const tokensAfterCompaction = result.result?.tokensAfter;
+  const tokenDecrease = resolveCompactionTokenDecrease(
+    tokensBeforeCompaction,
+    tokensAfterCompaction,
+  );
   const didCompact = result.ok && result.compacted;
+  const formattedTokenDecrease =
+    didCompact && tokenDecrease
+      ? {
+          before: runtime.formatTokenCount(tokenDecrease.before),
+          after: runtime.formatTokenCount(tokenDecrease.after),
+        }
+      : undefined;
+  const completedLabel =
+    result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted";
   const compactLabel =
     result.ok || isBenignCompactionSkipResult(result)
       ? didCompact
         ? typeof tokensAfterCompaction !== "number"
           ? "Compaction finished (resulting context unknown)"
-          : typeof tokensBeforeCompaction === "number" &&
-              tokensBeforeCompaction > tokensAfterCompaction
-            ? `${result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted"} (${runtime.formatTokenCount(tokensBeforeCompaction)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-            : result.compactionKind === "server-endpoint"
-              ? "Server-side compaction"
-              : "Compacted"
+          : formattedTokenDecrease && formattedTokenDecrease.before !== formattedTokenDecrease.after
+            ? `${completedLabel} (${formattedTokenDecrease.before} → ${formattedTokenDecrease.after})`
+            : completedLabel
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {

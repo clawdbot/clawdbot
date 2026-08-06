@@ -1,5 +1,6 @@
 // Compaction notifier hook sends notifications when session compaction occurs.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { resolveCompactionTokenDecrease } from "../../../agents/compaction-token-counts.js";
 import type { HookHandler } from "../../hooks.js";
 
 /** Read optional numeric compaction metadata without trusting hook context shape. */
@@ -26,10 +27,10 @@ const handler: HookHandler = async (event) => {
     if (event.type === "session" && event.action === "compact:after") {
       const tokensBefore = readOptionalNumber(context, "tokensBefore");
       const tokensAfter = readOptionalNumber(context, "tokensAfter");
-      const tokenDelta =
-        tokensBefore !== undefined && tokensAfter !== undefined
-          ? ` (${tokensBefore.toLocaleString()} → ${tokensAfter.toLocaleString()} tokens)`
-          : "";
+      const tokenDecrease = resolveCompactionTokenDecrease(tokensBefore, tokensAfter);
+      const tokenDelta = tokenDecrease
+        ? ` (${tokenDecrease.before.toLocaleString()} → ${tokenDecrease.after.toLocaleString()} tokens)`
+        : "";
       event.messages.push(`✅ Context compacted${tokenDelta}. Continuing from where I left off.`);
     }
   } catch (error) {

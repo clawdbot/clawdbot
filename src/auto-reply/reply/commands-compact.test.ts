@@ -11,6 +11,7 @@ import {
   buildCompactParams,
   compactEmbeddedAgentSession,
   formatContextUsageShort,
+  formatTokenCount,
   handleCompactCommand,
   incrementCompactionCount,
   requireCompactEmbeddedAgentSessionCall,
@@ -570,6 +571,38 @@ describe("handleCompactCommand", () => {
       }
     },
   );
+
+  it("does not render a token arrow when a decrease formats to equal labels", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 12_499,
+        tokensAfter: 12_001,
+      },
+    });
+    vi.mocked(formatTokenCount)
+      .mockImplementationOnce(() => "12k")
+      .mockImplementationOnce(() => "12k");
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "target-session",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toBe("⚙️ Compacted • Context 12.1k");
+  });
 
   it("prefers the target session entry when incrementing compaction count", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({

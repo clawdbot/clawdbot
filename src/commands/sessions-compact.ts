@@ -1,3 +1,4 @@
+import { resolveCompactionTokenDecrease } from "../agents/compaction-token-counts.js";
 /**
  * Sessions compact command.
  *
@@ -59,9 +60,10 @@ function describeCompaction(result: SessionsCompactResult, fallbackKey: string):
   }
   const before = result.result?.tokensBefore;
   const after = result.result?.tokensAfter;
+  const tokenDecrease = resolveCompactionTokenDecrease(before, after);
   let detail = "";
-  if (typeof before === "number" && typeof after === "number") {
-    detail = ` (${before} → ${after} tokens)`;
+  if (tokenDecrease) {
+    detail = ` (${tokenDecrease.before} → ${tokenDecrease.after} tokens)`;
   } else if (typeof result.kept === "number") {
     detail = ` (kept ${result.kept} lines)`;
   }
