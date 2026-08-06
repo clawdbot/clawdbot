@@ -332,12 +332,20 @@ export function createGatewayHooksRequestHandler(params: {
       });
       if (value.wakeMode === "now") {
         // Before config resolves, the error belongs to the fallback main session.
-        // Wake that exact session; the requested hook agent may not own it.
+        // Global scope has no session-owned target, so carry the explicit or
+        // current default agent without the shared sentinel session key.
+        const fallbackHeartbeatTarget = isUnscopedSessionKeySentinel(eventSessionKey)
+          ? {
+              agentId:
+                normalizeOptionalString(value.agentId) ??
+                resolveDefaultAgentId(getRuntimeConfig()),
+            }
+          : { sessionKey: eventSessionKey };
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
-          ...(hookEventTarget?.heartbeatTarget ?? { sessionKey: eventSessionKey }),
+          ...(hookEventTarget?.heartbeatTarget ?? fallbackHeartbeatTarget),
         });
       }
     };

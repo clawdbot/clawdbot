@@ -962,4 +962,56 @@ describe("dispatchAgentHook trust handling", () => {
       sessionKey: "global",
     });
   });
+
+  it("carries the explicit agent on the recovered global failure wake when the initial key is absent", async () => {
+    // Early config resolution fails before the event key resolves, so
+    // hookEventSessionKey is absent; recovery still yields the unscoped
+    // "global" sentinel. The failure wake must reuse the recovered key and
+    // attach the explicit agent so the queued failure event is consumed.
+    loadConfigMock.mockImplementationOnce(() => {
+      throw new Error("config exploded");
+    });
+    resolveMainSessionKeyMock.mockReturnValueOnce("global").mockReturnValueOnce("global");
+
+    const result = await dispatchAgentHook(buildAgentPayload("Config", "hooks"));
+
+    expect(result).toMatchObject({
+      ok: false,
+      statusCode: 502,
+      error: "hook agent run failed before entering the agent runner",
+      runId: expect.any(String),
+    });
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Config (error): Error: config exploded",
+        { sessionKey: "global" },
+      ),
+    );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      agentId: "hooks",
+    });
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
+  });
+
+  it("carries the fresh default agent on the recovered global failure wake when no agent is named", async () => {
+    loadConfigMock.mockImplementationOnce(() => {
+      throw new Error("config exploded");
+    });
+    resolveMainSessionKeyMock.mockReturnValueOnce("global").mockReturnValueOnce("global");
+
+    dispatchAgentHook(buildAgentPayload("Config"));
+
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      agentId: "main",
+    });
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
+  });
 });
