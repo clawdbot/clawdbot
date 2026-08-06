@@ -1,4 +1,5 @@
 // Unit tests for shared run-staleness threshold policy.
+import { emitTrustedDiagnosticEvent as emitPluginTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
@@ -8,6 +9,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   clearDiagnosticEmbeddedRunActivityForSession,
@@ -604,12 +606,10 @@ describe("repeated request liveness", () => {
 
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "queued-old-owner" });
-    emitTrustedDiagnosticEvent({
-      type: "run.progress",
+    emitCoreSemanticRunProgressDiagnosticEvent({
       ...ref,
       runId: "queued-old-owner",
       reason: "delayed-old-owner-output",
-      progressKind: "semantic",
     });
 
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "queued-new-owner" });
@@ -631,7 +631,7 @@ describe("repeated request liveness", () => {
     });
   });
 
-  it("keeps active-owner evidence across untrusted semantic progress", async () => {
+  it("reserves active-owner semantic progress for the core result boundary", async () => {
     const ref = { sessionId: "untrusted-session", sessionKey: "agent:main:untrusted" };
     const runId = "untrusted-run";
 
@@ -661,12 +661,25 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: expect.any(Number),
     });
 
-    emitTrustedDiagnosticEvent({
+    emitPluginTrustedDiagnosticEvent({
       type: "run.progress",
       ...ref,
       runId,
-      reason: "model_result:semantic",
+      reason: "plugin_trusted:semantic",
       progressKind: "semantic",
+      coreSemanticRunProgress: true,
+    } as Parameters<typeof emitPluginTrustedDiagnosticEvent>[0]);
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "plugin_trusted:semantic",
+      repeatedRequestNoProgressAgeMs: expect.any(Number),
+    });
+
+    emitCoreSemanticRunProgressDiagnosticEvent({
+      ...ref,
+      runId,
+      reason: "model_result:semantic",
     });
     await waitForDiagnosticEventsDrained();
 

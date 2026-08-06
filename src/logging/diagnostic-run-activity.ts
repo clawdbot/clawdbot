@@ -4,6 +4,7 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { isCoreSemanticRunProgressDiagnosticMetadata } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   applyArgumentChurnObservation,
   clearArgumentChurnActivity,
@@ -324,8 +325,8 @@ function recordModelEnded(
   touchSessionActivity(activity, "model_call:ended");
 }
 
-function recordRunProgress(event: DiagnosticRunProgressActivityEvent, trusted: boolean): void {
-  markDiagnosticRunProgress(trusted ? event : { ...event, progressKind: "liveness" });
+function recordRunProgress(event: DiagnosticRunProgressActivityEvent, coreSemantic: boolean): void {
+  markDiagnosticRunProgress(coreSemantic ? event : { ...event, progressKind: "liveness" });
 }
 
 export function markDiagnosticArgumentChurnObservation(
@@ -756,7 +757,7 @@ export function startDiagnosticRunActivityTracking(): void {
         recordModelEnded(event);
         return;
       case "run.progress":
-        recordRunProgress(event, metadata.trusted);
+        recordRunProgress(event, isCoreSemanticRunProgressDiagnosticMetadata(metadata));
         return;
       case "run.completed":
         recordRunCompleted(event);

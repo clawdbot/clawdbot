@@ -14,6 +14,7 @@ import {
   type DiagnosticEventPayload,
   waitForDiagnosticEventsDrained,
 } from "../../../infra/diagnostic-events.js";
+import { isCoreSemanticRunProgressDiagnosticMetadata } from "../../../infra/diagnostic-semantic-run-progress.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { registerDiagnosticTracePropagationBridge } from "../../../infra/diagnostic-trace-propagation.js";
 import {
@@ -82,7 +83,7 @@ async function collectSemanticProgressEvents(run: () => Promise<void>) {
   const events: DiagnosticEventPayload[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (
-      metadata.trusted &&
+      isCoreSemanticRunProgressDiagnosticMetadata(metadata) &&
       event.type === "run.progress" &&
       event.reason === "model_call:semantic_result"
     ) {

@@ -22,6 +22,7 @@ import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -349,13 +350,11 @@ function maybeEmitModelCallSemanticProgress(
     return;
   }
   state.semanticProgressEmitted = true;
-  emitTrustedDiagnosticEvent({
-    type: "run.progress",
+  emitCoreSemanticRunProgressDiagnosticEvent({
     runId: eventBase.runId,
     ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
     ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
     reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
-    progressKind: "semantic",
   });
 }
 
