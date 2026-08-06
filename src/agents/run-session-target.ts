@@ -30,7 +30,7 @@ export type AgentRunSessionTarget = {
 /** Canonical SQLite target resolved from the storage-neutral run identity. */
 type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;
 
-export class AgentRunSessionTargetResolutionError extends Error {
+class AgentRunSessionTargetResolutionError extends Error {
   readonly code = "session-key-missing";
 
   constructor(sessionId: string) {
