@@ -1,0 +1,169 @@
+name: Vercel Container Registry Publish
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Final stable or extended-stable version without the v prefix
+        required: true
+        type: string
+      source_image:
+        description: Source registry image containing the verified release tags
+        required: true
+        type: string
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  VERCEL_CLI_VERSION: 58.4.4
+  REGCTL_VERSION: v0.11.5
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted registry tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Install regctl
+        uses: regclient/actions/regctl-installer@1b705e32d40851370799ea5814e83d0a5f6a70dc # v0.1.0
+        with:
+          release: ${{ env.REGCTL_VERSION }}
+
+      - name: Validate Vercel Container Registry configuration
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_VCR_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+        run: |
+          set -euo pipefail
+          for name in VERCEL_PROJECT_ID VERCEL_SCOPE VERCEL_TOKEN VERCEL_VCR_IMAGE; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::${name} is required for Vercel Container Registry publishing."
+              exit 1
+            fi
+          done
+          if [[ "${VERCEL_VCR_IMAGE}" != vcr.vercel.com/*/*/* ]]; then
+            echo "::error::VERCEL_VCR_IMAGE must be a full vcr.vercel.com/team/project/repository image name."
+            exit 1
+          fi
+
+      - name: Authenticate Docker to Vercel Container Registry
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx --yes "vercel@${VERCEL_CLI_VERSION}" vcr login docker \
+            --project "${VERCEL_PROJECT_ID}" \
+            --scope "${VERCEL_SCOPE}" \
+            --format json
+
+      - name: Copy and verify immutable release images
+        env:
+          SOURCE_IMAGE: ${{ inputs.source_image }}
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/vercel-container-registry-publish.mjs \
+            --version "${VERSION}" \
+            --source-image "${SOURCE_IMAGE}" \
+            --target-image "${TARGET_IMAGE}"
+
+      - name: Promote and verify Vercel channel aliases
+        env:
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/docker-channel-promote.mjs \
+            --version "${VERSION}" \
+            --image "${TARGET_IMAGE}"
+
+      - name: Wait for Sandbox-ready release images
+        env:
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          repository="${TARGET_IMAGE##*/}"
+          for tag in "${VERSION}" "${VERSION}-slim" "${VERSION}-browser"; do
+            ready=0
+            for attempt in $(seq 1 30); do
+              tag_json="$(npx --yes "vercel@${VERCEL_CLI_VERSION}" vcr tag inspect \
+                "${repository}" "${tag}" \
+                --project "${VERCEL_PROJECT_ID}" \
+                --scope "${VERCEL_SCOPE}" \
+                --format json)"
+              status="$(jq -r '.status // ""' <<< "${tag_json}")"
+              if [[ "${status}" == "ready" ]]; then
+                ready=1
+                break
+              fi
+              if [[ "${status}" == "unoptimized" ]]; then
+                echo "::error::${repository}:${tag} has no Sandbox-ready linux/amd64 image."
+                exit 1
+              fi
+              if [[ "${attempt}" -eq 30 ]]; then
+                break
+              fi
+              sleep 20
+            done
+            if [[ "${ready}" != "1" ]]; then
+              echo "::error::${repository}:${tag} did not become Sandbox-ready within 10 minutes."
+              exit 1
+            fi
+            echo "Verified ${repository}:${tag} is Sandbox-ready."
+          done
+
+      - name: Run custom-image Sandbox smoke
+        env:
+          VERCEL_AUTH_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+          VERCEL_VCR_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          repository="${VERCEL_VCR_IMAGE##*/}"
+          npx --yes "vercel@${VERCEL_CLI_VERSION}" sandbox run \
+            --silent \
+            --rm \
+            --non-persistent \
+            --network-policy deny-all \
+            --timeout 3m \
+            --project "${VERCEL_PROJECT_ID}" \
+            --scope "${VERCEL_SCOPE}" \
+            --image "${repository}:${VERSION}" \
+            --workdir /app \
+            --env "EXPECTED_VERSION=${VERSION}" \
+            -- /bin/sh -lc 'test "$(node -p "require(\"./package.json\").version")" = "${EXPECTED_VERSION}" && node openclaw.mjs --version'
+
+      - name: Summarize Vercel publication
+        env:
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          {
+            echo "## Vercel Container Registry"
+            echo "- Image: ${TARGET_IMAGE}:${VERSION}"
+            echo "- Variants: default, slim, browser"
+            echo "- Platforms: linux/amd64, linux/arm64"
+            echo "- Sandbox smoke: passed"
+          } >> "${GITHUB_STEP_SUMMARY}"

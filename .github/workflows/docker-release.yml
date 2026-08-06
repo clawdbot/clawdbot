@@ -16,6 +16,8 @@ on:
         required: true
       DOCKERHUB_TOKEN:
         required: true
+      VERCEL_TOKEN:
+        required: true
 
 concurrency:
   # Alias promotion checks are read-then-write; serialize every Docker publish
@@ -912,3 +914,16 @@ jobs:
             --version "${VERSION}" \
             --image "${GHCR_IMAGE}" \
             --image "${DOCKERHUB_IMAGE}"
+
+  publish-vcr:
+    name: Publish Vercel Container Registry images
+    needs: [resolve_release_policy, verify-attestations]
+    if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.resolve_release_policy.outputs.channel != 'beta' && needs.verify-attestations.result == 'success' }}
+    uses: ./.github/workflows/vercel-container-registry-publish.yml
+    with:
+      version: ${{ needs.resolve_release_policy.outputs.version }}
+      source_image: ${{ format('ghcr.io/{0}', github.repository) }}
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    permissions:
+      contents: read
