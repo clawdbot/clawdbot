@@ -1,6 +1,7 @@
-// Covers installed plugin index read, write, and policy behavior.
 import fs from "node:fs";
 import path from "node:path";
+// Covers installed plugin index read, write, and policy behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
@@ -51,12 +52,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function readRecordField(record: Record<string, unknown>, key: string, label: string) {
   const value = record[key];

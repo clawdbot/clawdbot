@@ -1,5 +1,6 @@
 // Covers session binding adapter registration, generic current-conversation
 // fallback, capability errors, deduping, and duplicate graph teardown.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -79,12 +80,7 @@ function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },

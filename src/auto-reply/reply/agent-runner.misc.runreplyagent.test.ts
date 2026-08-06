@@ -1,7 +1,8 @@
-// Tests miscellaneous run-reply-agent behaviors and artifact output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Tests miscellaneous run-reply-agent behaviors and artifact output.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
@@ -242,12 +243,7 @@ type RunWithModelFallbackParams = {
   run: (provider: string, model: string) => Promise<unknown>;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(
   value: unknown,

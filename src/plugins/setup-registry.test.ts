@@ -1,7 +1,8 @@
-// Verifies plugin setup registry discovery and lookup behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+// Verifies plugin setup registry discovery and lookup behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -171,12 +172,7 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
   expect(unhandledRejections).toStrictEqual([]);
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCall(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },

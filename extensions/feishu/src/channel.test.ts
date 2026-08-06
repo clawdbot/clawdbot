@@ -1,4 +1,5 @@
 // Feishu tests cover channel plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
@@ -82,12 +83,7 @@ function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] 
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {

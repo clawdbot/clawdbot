@@ -1,23 +1,19 @@
 // Control UI tests cover server preference replay and reconciliation through real reconnects.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI server prefs reconnect sync",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
 function configResponse(prefs: Record<string, unknown>, hash: string) {
   const config = { ui: { prefs } };
@@ -49,7 +45,7 @@ function patchPrefs(request: MockGatewayRequest): Record<string, unknown> {
 }
 
 async function createContext(): Promise<BrowserContext> {
-  return browser.newContext({
+  return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
@@ -138,22 +134,7 @@ function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
   return page.locator(`wa-radio.settings-segmented__btn[value="${mode}"]`);
 }
 
-describeControlUiE2e("Control UI server prefs reconnect sync", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not available at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("replays an offline theme edit after a same-client reconnect", async () => {
     const context = await createContext();
     const page = await context.newPage();
@@ -164,7 +145,7 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
@@ -199,7 +180,7 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
@@ -244,8 +225,8 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
     });
     try {
       await Promise.all([
-        pageA.goto(`${server.baseUrl}settings/appearance`),
-        pageB.goto(`${server.baseUrl}settings/appearance`),
+        pageA.goto(`${suite.server.baseUrl}settings/appearance`),
+        pageB.goto(`${suite.server.baseUrl}settings/appearance`),
       ]);
       await Promise.all([themeCard(pageA, "claw").waitFor(), themeCard(pageB, "claw").waitFor()]);
       await Promise.all([
@@ -294,8 +275,8 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
 
     try {
       await Promise.all([
-        pageA.goto(`${server.baseUrl}settings/appearance`),
-        pageB.goto(`${server.baseUrl}settings/appearance`),
+        pageA.goto(`${suite.server.baseUrl}settings/appearance`),
+        pageB.goto(`${suite.server.baseUrl}settings/appearance`),
       ]);
       await Promise.all([themeCard(pageA, "claw").waitFor(), themeCard(pageB, "claw").waitFor()]);
       await Promise.all([gatewayA.deferNext("config.patch"), gatewayB.deferNext("config.patch")]);
@@ -352,7 +333,7 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}settings/appearance`);
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
       const initialConfigGets = (await gateway.getRequests("config.get")).length;
