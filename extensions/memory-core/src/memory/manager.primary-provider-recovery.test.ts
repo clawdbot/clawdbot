@@ -312,6 +312,50 @@ describe("memory manager primary provider recovery", () => {
     expect(manager.lastPrimaryRecoveryAttemptMs).toBe(1_000);
   });
 
+  it("does not retire a recovered primary when a stale sync fails", async () => {
+    const manager = createRecoveryHarness();
+    const fallbackProvider = manager.provider;
+    // The sync captured the fallback provider in its generation; primary
+    // recovery has since promoted a different primary instance in flight.
+    const recoveredPrimary = createProvider("mock");
+    const managerWithSync = manager as unknown as {
+      syncProviderGeneration: { provider: EmbeddingProvider } | null;
+      endSyncProviderGeneration: () => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      activateFallbackForSync: (reason: string) => Promise<string>;
+    };
+    managerWithSync.syncProviderGeneration = { provider: fallbackProvider! };
+    managerWithSync.endSyncProviderGeneration = vi.fn();
+    managerWithSync.activateFallbackProvider = vi.fn(async () => true);
+    manager.provider = recoveredPrimary;
+
+    const result = await managerWithSync.activateFallbackForSync("stale sync failure");
+
+    expect(result).toBe("suppressed");
+    expect(managerWithSync.endSyncProviderGeneration).toHaveBeenCalledTimes(1);
+    expect(managerWithSync.activateFallbackProvider).not.toHaveBeenCalled();
+    expect(manager.provider).toBe(recoveredPrimary);
+  });
+
+  it("activates fallback for a sync when the provider is still current", async () => {
+    const manager = createRecoveryHarness();
+    const fallbackProvider = manager.provider;
+    const managerWithSync = manager as unknown as {
+      syncProviderGeneration: { provider: EmbeddingProvider } | null;
+      endSyncProviderGeneration: () => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      activateFallbackForSync: (reason: string) => Promise<string>;
+    };
+    managerWithSync.syncProviderGeneration = { provider: fallbackProvider! };
+    managerWithSync.endSyncProviderGeneration = vi.fn();
+    managerWithSync.activateFallbackProvider = vi.fn(async () => true);
+
+    const result = await managerWithSync.activateFallbackForSync("sync failure");
+
+    expect(result).toBe("activated");
+    expect(managerWithSync.activateFallbackProvider).toHaveBeenCalledWith("sync failure");
+  });
+
   it("serializes overlapping primary recovery probes", async () => {
     const manager = createRecoveryHarness();
     const fallbackProvider = manager.provider;
