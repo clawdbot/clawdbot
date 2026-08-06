@@ -1,5 +1,4 @@
 // CLI adapter for invoking native provider hooks through direct relay or gateway fallback.
-import { readFileSync } from "node:fs";
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
@@ -89,156 +88,11 @@ function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptio
   return opts;
 }
 
-type ProcStatResult =
-  | { status: "present"; startTime: number; ppid: number }
-  | { status: "missing" }
-  | { status: "unreadable" };
-
-/**
- * Reads the starttime (clock ticks since boot) and ppid from /proc/[pid]/stat.
- *
- * Returns a discriminated status:
- * - "present" — the entry was read and the fields parsed successfully.
- * - "missing"  — the proc entry does not exist (ENOENT; process is gone).
- * - "unreadable" — the entry exists but cannot be read or parsed (transient
- *   I/O, EACCES, malformed content). The caller should retry, not exit.
- */
-export function readProcStat(pid: number): ProcStatResult {
-  try {
-    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
-    // /proc/[pid]/stat: pid (comm) state ppid ... starttime
-    const closeParen = raw.lastIndexOf(")");
-    if (closeParen < 0) {
-      // Malformed /proc content — treat as unreadable since the entry existed
-      // enough to produce output but could not be parsed.
-      return { status: "unreadable" };
-    }
-    const fields = raw.slice(closeParen + 2).split(" ");
-    // Validate field count — need at least 20 fields after comm for
-    // ppid (index 1) and starttime (index 19).
-    if (fields.length <= 19) {
-      return { status: "unreadable" };
-    }
-    const ppid = Number(fields[1]);
-    const startTime = Number(fields[19]);
-    // Number() of an undefined or non-numeric entry produces NaN.
-    // NaN !== NaN in the poll loop would take the PID-reuse branch
-    // and exit a live relay. Reject non-numeric field values.
-    if (!Number.isFinite(ppid) || !Number.isFinite(startTime) || startTime < 0) {
-      return { status: "unreadable" };
-    }
-    return { status: "present", startTime, ppid };
-  } catch (error) {
-    // ENOENT means the /proc/[pid] directory is gone — the process exited.
-    if (isNodeErrorCode(error, "ENOENT")) {
-      return { status: "missing" };
-    }
-    // Any other error (EACCES, EIO, EAGAIN, etc.) is a transient read failure;
-    // the process may still be alive.
-    return { status: "unreadable" };
-  }
-}
-
-function isNodeErrorCode(error: unknown, code: string): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
-}
-
-/**
- * On Linux, polls the relay's direct parent process identity and exits when
- * that parent disappears or is replaced. Hook relay helpers are spawned per
- * tool call by the Codex app-server. When the app-server is SIGKILLed
- * (cgroup OOM, container memory cap), the relay process is reparented to
- * PID 1 without cleanup.
- *
- * This watch covers the app-server-death path. The gateway-death path is
- * handled separately by the relay's own call timeout: when the gateway is
- * unreachable the bridge or gateway RPC times out and the relay exits
- * through the normal deadline path. The parent watch and the deadline are
- * complementary — each covers a different failure mode.
- *
- * A signal-0 existence probe (process.kill(pid, 0)) cannot distinguish the
- * original parent from an unrelated process that reused the same numeric
- * PID after the parent died. This watch instead compares the parent's
- * /proc/[pid]/stat start time against the value captured at startup so a
- * recycled PID or reparenting both trigger exit.
- */
-export function installParentDeathWatchLinux(
-  parentPid: number,
-  deps?: { readProcStat?: typeof readProcStat },
-): { dispose: () => void } {
-  const read = deps?.readProcStat ?? readProcStat;
-  const initial = read(parentPid);
-  if (initial.status === "missing") {
-    // Parent already gone; exit immediately.
-    process.exit(0);
-  }
-  // On "unreadable" at startup, start the poll and retry — we cannot
-  // confirm death. A persistent read failure will eventually be bounded
-  // by the relay's own deadline.
-
-  const pollMs = 5000;
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let disposed = false;
-
-  const disposeTimer = () => {
-    if (timer) {
-      clearInterval(timer);
-      timer = undefined;
-    }
-  };
-
-  timer = setInterval(() => {
-    if (disposed) {
-      return;
-    }
-    const current = read(parentPid);
-    if (current.status === "missing") {
-      // /proc entry missing — parent process no longer exists.
-      disposeTimer();
-      process.exit(0);
-      return;
-    }
-    if (current.status === "unreadable") {
-      // Transient read failure — retry next poll interval.
-      return;
-    }
-    if (initial.status === "present" && current.startTime !== initial.startTime) {
-      // Start time changed — the original parent died and this PID was
-      // recycled for an unrelated process.
-      disposeTimer();
-      process.exit(0);
-      return;
-    }
-    // Detect reparenting: when the parent dies the kernel reparents the
-    // orphan to PID 1 (or a subreaper). Self-stat ppid is live (unlike
-    // cached process.ppid).
-    const self = read(process.pid);
-    if (self.status === "present" && self.ppid !== parentPid) {
-      disposeTimer();
-      process.exit(0);
-    }
-  }, pollMs);
-  timer.unref();
-
-  return {
-    dispose: () => {
-      disposed = true;
-      disposeTimer();
-    },
-  };
-}
-
 /** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
 export async function runNativeHookRelayCli(
   opts: NativeHookRelayCliOptions,
   deps: NativeHookRelayCliDeps = {},
 ): Promise<number> {
-  // Start parent-death watch on Linux so this relay process exits when the
-  // spawning Codex app-server is SIGKILLed (container OOM, cgroup cap).
-  // The relay's own deadline handles the gateway-unreachable case separately.
-  const parentDeathWatch =
-    process.platform === "linux" ? installParentDeathWatchLinux(process.ppid) : undefined;
-
   const stdin = deps.stdin ?? process.stdin;
   const stdout = deps.stdout ?? process.stdout;
   const stderr = deps.stderr ?? process.stderr;
@@ -344,7 +198,6 @@ export async function runNativeHookRelayCli(
     }
   } finally {
     deadline.dispose();
-    parentDeathWatch?.dispose();
   }
 }
 
