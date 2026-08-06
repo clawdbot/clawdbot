@@ -80,6 +80,7 @@ import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
 
 type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
@@ -92,7 +93,7 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe.test-helpers.js";
-import { startGatewayServer } from "./server.impl.js";
+import { startGatewayServer } from "./server.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -4570,18 +4571,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     );
   }
   const [ultraUpstreamBaseUrl] = [...ultraUpstreamBaseUrls];
-  const previous = {
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    token: process.env.OPENCLAW_GATEWAY_TOKEN,
-    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.OPENCLAW_SKIP_CRON,
-    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-    disableBonjour: process.env.OPENCLAW_DISABLE_BONJOUR,
-    logLevel: process.env.OPENCLAW_LOG_LEVEL,
-    agentDir: process.env.OPENCLAW_AGENT_DIR,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
+  const previousEnv = snapshotLiveEnv([
+    "OPENCLAW_DISABLE_BONJOUR",
+    "OPENCLAW_LOG_LEVEL",
+    "OPENCLAW_AGENT_DIR",
+  ]);
   let runtimeEnv: ReturnType<typeof enterProductionEnvForLiveRun> | undefined;
   let cleanupTempStateDir: string | undefined;
   let cleanupTempAgentDir: string | undefined;
@@ -5481,16 +5475,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         if (runtimeEnv) {
           restoreProductionEnvForLiveRun(runtimeEnv);
         }
-        restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-        restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-        restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-        restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-        restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-        restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-        restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
-        restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
-        restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-        restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+        restoreLiveEnv(previousEnv);
       }
     }
   }
@@ -5747,16 +5732,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     }
     clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
-    const previous = {
-      configPath: process.env.OPENCLAW_CONFIG_PATH,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN,
-      skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-      skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.OPENCLAW_SKIP_CRON,
-      skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-      agentDir: process.env.OPENCLAW_AGENT_DIR,
-      stateDir: process.env.OPENCLAW_STATE_DIR,
-    };
+    const previousEnv = snapshotLiveEnv(["OPENCLAW_AGENT_DIR"]);
 
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -5972,14 +5948,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
       }
 
-      restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-      restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-      restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-      restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-      restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-      restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-      restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-      restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+      restoreLiveEnv(previousEnv);
     }
   }, 180_000);
 });
