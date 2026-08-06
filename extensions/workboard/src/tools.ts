@@ -485,7 +485,7 @@ export function createWorkboardTools(params: {
       name: "workboard_proof_list",
       label: "Workboard Proof List",
       description:
-        "Read one bounded page of durable Workboard proof history, starting with the newest records.",
+        "Read one durable Workboard proof page bounded by record count and serialized bytes, starting with the newest records.",
       parameters: Type.Object(
         {
           id: cardIdField(),

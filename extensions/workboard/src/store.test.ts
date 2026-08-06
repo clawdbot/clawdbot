@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { toBoundedWorkboardCard } from "./card-output.js";
+import { toBoundedWorkboardCard, WORKBOARD_MODEL_OUTPUT_BYTES } from "./card-output.js";
 import {
   WorkboardStaleSnapshotError,
   type PersistedWorkboardAttachment,
@@ -18,8 +18,6 @@ import {
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { normalizeExecution } from "./store-normalizers.js";
 import { WorkboardStore } from "./store.js";
-
-const EMBEDDED_PROOF_BYTES = 24 * 1024;
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
   beforeRegister?: (key: string, value: T) => Promise<void> | void;
@@ -1521,10 +1519,10 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("keeps a single oversized proof canonical and available through paging and export", async () => {
+  it("keeps a single oversized proof canonical when model-safe paging rejects it", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proof = {
-      id: `proof-${"x".repeat(EMBEDDED_PROOF_BYTES)}`,
+      id: `proof-${"x".repeat(WORKBOARD_MODEL_OUTPUT_BYTES)}`,
       status: "passed" as const,
       createdAt: 1,
       label: "Oversized id",
@@ -1538,11 +1536,9 @@ describe("WorkboardStore", () => {
     expect(view.metadata?.proof).toBeUndefined();
     expect(view.proofPage).toEqual({ total: 1, hasMore: true });
 
-    await expect(store.listProof(card.id)).resolves.toEqual({
-      proof: [proof],
-      total: 1,
-      hasMore: false,
-    });
+    await expect(store.listProof(card.id)).rejects.toThrow(
+      "proof record exceeds the model-safe page budget",
+    );
     await expect(store.get(card.id)).resolves.toMatchObject({ metadata: { proof: [proof] } });
     await expect(store.exportCards()).resolves.toMatchObject({
       cards: [{ id: card.id, metadata: { proof: [proof] } }],

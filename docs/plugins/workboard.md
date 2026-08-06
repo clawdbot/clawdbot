@@ -103,10 +103,11 @@ duplicate ids and other attempts to rewrite or truncate history are rejected.
 Existing Gateway card responses retain complete proof history unless a client
 explicitly requests a bounded view. The model-facing `workboard_read` agent
 tool always uses the bounded view; older proof is available only through
-`workboard_proof_list`. The bounded proof array stays in chronological order
-and is limited to 40 records and a 24 KiB UTF-8 JSON budget. This is a
-proof-array output boundary, not a full-card size limit, and it does not discard
-other card metadata or canonical proof rows.
+`workboard_proof_list`. Bounded card views keep canonical identity and current
+state plus the newest history that fits within a 24 KiB UTF-8 JSON budget. The
+budget covers the complete serialized card view, not only proof. Projection can
+omit older output-only history; it never changes SQLite rows or full-history
+exports.
 
 Every bounded card view includes top-level `proofPage`, including cards with no
 proof:
@@ -126,6 +127,13 @@ proof, and `nextCursor` is an opaque token for requesting rows older than the
 oldest embedded proof. If one proof record is too large to embed, the view can
 contain no proof with `hasMore: true` and no cursor; start pagination without a
 cursor in that case.
+
+Explicit proof pages are limited by both 40 records and the same 24 KiB
+serialized-page budget. When bytes shorten a page, `hasMore` remains true and
+`nextCursor` resumes immediately before the oldest returned proof, so cursor
+traversal neither overlaps nor skips fitting records. A single legacy proof
+that cannot fit is retained canonically and produces an explicit size error
+instead of an oversized model result.
 
 Gateway `workboard.cards.list` returns complete proof history by default.
 Passing `{ "proofView": "bounded" }` opts into bounded card views without

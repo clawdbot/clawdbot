@@ -5,13 +5,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
+import { WORKBOARD_MODEL_OUTPUT_BYTES } from "./card-output.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
-
-const EMBEDDED_PROOF_BYTES = 24 * 1024;
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -277,8 +276,8 @@ describe("workboard tools", () => {
     expect(embeddedProof.length).toBeGreaterThan(0);
     expect(embeddedProof.length).toBeLessThan(40);
     expect(embeddedProof.at(-1)?.id).toBe("proof-99");
-    expect(Buffer.byteLength(JSON.stringify(embeddedProof), "utf8")).toBeLessThanOrEqual(
-      EMBEDDED_PROOF_BYTES,
+    expect(Buffer.byteLength(JSON.stringify(read.card), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
     );
     expect(read.card).toMatchObject({
       proofPage: {
@@ -307,8 +306,8 @@ describe("workboard tools", () => {
     const commentedProof = (commented.metadata as { proof?: unknown[] }).proof ?? [];
     expect(commented).toMatchObject({ proofPage: { total: 100, hasMore: true } });
     expect(commentedProof.length).toBeLessThan(40);
-    expect(Buffer.byteLength(JSON.stringify(commentedProof), "utf8")).toBeLessThanOrEqual(
-      EMBEDDED_PROOF_BYTES,
+    expect(Buffer.byteLength(JSON.stringify(commented), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
     );
 
     const added = readPayload(
@@ -326,20 +325,23 @@ describe("workboard tools", () => {
     const addedProof = addedCard.metadata?.proof ?? [];
     expect(addedCard.proofPage).toMatchObject({ total: 101, hasMore: true });
     expect(addedProof.length).toBeLessThan(40);
-    expect(Buffer.byteLength(JSON.stringify(addedProof), "utf8")).toBeLessThanOrEqual(
-      EMBEDDED_PROOF_BYTES,
+    expect(Buffer.byteLength(JSON.stringify(addedCard), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
     );
 
-    const older = readPayload(
-      await tools.get("workboard_proof_list")?.execute("proof-list-older", {
-        id: card.id,
-        limit: 40,
-        cursor: olderCursor,
-      }),
-    );
+    const olderResult = await tools.get("workboard_proof_list")?.execute("proof-list-older", {
+      id: card.id,
+      limit: 40,
+      cursor: olderCursor,
+    });
+    const older = readPayload(olderResult);
     const olderProof = older.proof as Array<{ id: string }>;
     expect(older).toMatchObject({ total: 101, hasMore: true });
-    expect(olderProof).toHaveLength(40);
+    expect(olderProof.length).toBeGreaterThan(0);
+    expect(olderProof.length).toBeLessThan(40);
+    const olderText =
+      (olderResult as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "";
+    expect(Buffer.byteLength(olderText, "utf8")).toBeLessThanOrEqual(WORKBOARD_MODEL_OUTPUT_BYTES);
     expect(olderProof).not.toContainEqual(expect.objectContaining({ id: oldestEmbeddedId }));
     const newestOlderId = expectDefined(olderProof.at(-1), "newest older Workboard proof").id;
     expect(Number(newestOlderId.split("-")[1])).toBe(Number(oldestEmbeddedId.split("-")[1]) - 1);

@@ -1,13 +1,15 @@
 import type {
   WorkboardCard,
   WorkboardCardView,
+  WorkboardLink,
   WorkboardProof,
   WorkboardProofPage,
 } from "@openclaw/workboard-contract";
 import { redactClaimToken } from "./card-redaction.js";
+import { removeUndefinedMetadataFields } from "./store-normalizers.js";
 
 export const WORKBOARD_PROOF_VIEW_LIMIT = 40;
-const WORKBOARD_EMBEDDED_PROOF_BYTES = 24 * 1024;
+export const WORKBOARD_MODEL_OUTPUT_BYTES = 24 * 1024;
 
 const WORKBOARD_PROOF_CURSOR_PREFIX = "proof-v2.";
 
@@ -16,8 +18,23 @@ export type WorkboardProofPageRequest = {
   limit: number;
 };
 
-function proofBytes(proof: readonly WorkboardProof[]): number {
-  return Buffer.byteLength(JSON.stringify(proof), "utf8");
+function serializedBytes(value: unknown, pretty = false): number {
+  return Buffer.byteLength(JSON.stringify(value, null, pretty ? 2 : undefined), "utf8");
+}
+
+function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
+  const next = items?.slice(1);
+  return next?.length ? next : undefined;
+}
+
+function slimDependencyLinks(links: readonly WorkboardLink[]): WorkboardLink[] {
+  return links.map((link) => {
+    if (link.type !== "parent" && link.type !== "child") {
+      return link;
+    }
+    const { title: _title, url: _url, ...essential } = link;
+    return essential;
+  });
 }
 
 function encodeProofCursor(cardId: string, proofId: string): string {
@@ -83,14 +100,27 @@ export function createWorkboardProofPage(
     hasMore: boolean;
   },
 ): WorkboardProofPage {
-  return {
-    proof: params.proof,
-    total: params.total,
-    hasMore: params.hasMore,
-    ...(params.hasMore && params.proof[0]
-      ? { nextCursor: encodeProofCursor(cardId, params.proof[0].id) }
-      : {}),
-  };
+  let proof = params.proof.slice();
+  let hasMore = params.hasMore;
+  while (true) {
+    const page: WorkboardProofPage = {
+      proof,
+      total: params.total,
+      hasMore,
+      ...(hasMore && proof[0] ? { nextCursor: encodeProofCursor(cardId, proof[0].id) } : {}),
+    };
+    // jsonResult pretty-prints tool payloads, so page budgeting includes that exact model text.
+    if (serializedBytes(page, true) <= WORKBOARD_MODEL_OUTPUT_BYTES) {
+      return structuredClone(page);
+    }
+    if (proof.length <= 1) {
+      throw new Error(
+        "proof record exceeds the model-safe page budget; use Workboard CLI or export for complete history.",
+      );
+    }
+    proof = proof.slice(1);
+    hasMore = true;
+  }
 }
 
 export function paginateWorkboardProof(
@@ -121,29 +151,162 @@ export function toBoundedWorkboardCardFromPage(
     hasMore: boolean;
   },
 ): WorkboardCardView {
-  let proof = page.proof.slice(-WORKBOARD_PROOF_VIEW_LIMIT);
-  let hasMore = page.hasMore || proof.length < page.proof.length;
-  while (proof.length > 0 && proofBytes(proof) > WORKBOARD_EMBEDDED_PROOF_BYTES) {
-    proof = proof.slice(1);
-    hasMore = true;
-  }
   const redacted = redactClaimToken(card);
-  const metadata =
-    redacted.metadata || proof.length > 0
-      ? {
-          ...redacted.metadata,
-          ...(proof.length > 0 ? { proof } : { proof: undefined }),
-        }
-      : undefined;
-  const projected = {
-    ...redacted,
-    ...(metadata ? { metadata } : {}),
-    proofPage: {
-      total: page.total,
-      hasMore,
-      ...(hasMore && proof[0] ? { nextCursor: encodeProofCursor(card.id, proof[0].id) } : {}),
-    },
+  const initialProof = page.proof.slice(-WORKBOARD_PROOF_VIEW_LIMIT);
+  let hasMore = page.hasMore || initialProof.length < page.proof.length;
+  let metadata = removeUndefinedMetadataFields({
+    ...redacted.metadata,
+    proof: initialProof.length ? initialProof : undefined,
+  });
+  let events = redacted.events?.slice();
+  const base: WorkboardCard = { ...redacted };
+  delete base.events;
+  delete base.metadata;
+
+  const project = (): WorkboardCardView => {
+    const proof = metadata.proof ?? [];
+    return {
+      ...base,
+      ...(events?.length ? { events } : {}),
+      ...(Object.keys(metadata).length ? { metadata } : {}),
+      proofPage: {
+        total: page.total,
+        hasMore,
+        ...(hasMore && proof[0] ? { nextCursor: encodeProofCursor(card.id, proof[0].id) } : {}),
+      },
+    };
   };
+
+  let projected = project();
+  while (serializedBytes(projected) > WORKBOARD_MODEL_OUTPUT_BYTES) {
+    const previousBytes = serializedBytes(projected);
+    if (events?.length) {
+      events = dropFirst(events);
+    } else if (metadata.attempts?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        attempts: dropFirst(metadata.attempts),
+      });
+    } else if (metadata.diagnostics?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        diagnostics: dropFirst(metadata.diagnostics),
+      });
+    } else if (metadata.notifications?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        notifications: dropFirst(metadata.notifications),
+      });
+    } else if (metadata.proof?.length) {
+      metadata = removeUndefinedMetadataFields({ ...metadata, proof: dropFirst(metadata.proof) });
+      hasMore = true;
+    } else if (metadata.artifacts?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        artifacts: dropFirst(metadata.artifacts),
+      });
+    } else if (metadata.attachments?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        attachments: dropFirst(metadata.attachments),
+      });
+    } else if (metadata.workerLogs?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        workerLogs: dropFirst(metadata.workerLogs),
+      });
+    } else if (metadata.links?.some((link) => link.type !== "parent" && link.type !== "child")) {
+      const index = metadata.links.findIndex(
+        (link) => link.type !== "parent" && link.type !== "child",
+      );
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        links: metadata.links.filter((_, linkIndex) => linkIndex !== index),
+      });
+    } else if (metadata.comments?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        comments: dropFirst(metadata.comments),
+      });
+    } else if (
+      metadata.links?.some(
+        (link) => (link.type === "parent" || link.type === "child") && (link.title || link.url),
+      )
+    ) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        links: slimDependencyLinks(metadata.links),
+      });
+    } else if (base.sourceUrl) {
+      delete base.sourceUrl;
+    } else if (base.taskId) {
+      delete base.taskId;
+    } else if (metadata.automation?.summary) {
+      const { summary: _summary, ...automation } = metadata.automation;
+      metadata = removeUndefinedMetadataFields({ ...metadata, automation });
+    } else if (metadata.automation?.createdCardIds?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        automation: { ...metadata.automation, createdCardIds: undefined },
+      });
+    } else if (metadata.automation?.idempotencyKey) {
+      const { idempotencyKey: _idempotencyKey, ...automation } = metadata.automation;
+      metadata = removeUndefinedMetadataFields({ ...metadata, automation });
+    } else if (metadata.automation?.workspaceAccess) {
+      const { workspaceAccess: _workspaceAccess, ...automation } = metadata.automation;
+      metadata = removeUndefinedMetadataFields({ ...metadata, automation });
+    } else if (metadata.automation?.workspace?.sourcePath) {
+      const { sourcePath: _sourcePath, ...workspace } = metadata.automation.workspace;
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        automation: { ...metadata.automation, workspace },
+      });
+    } else if (metadata.automation?.workspace?.sourceBranch) {
+      const { sourceBranch: _sourceBranch, ...workspace } = metadata.automation.workspace;
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        automation: { ...metadata.automation, workspace },
+      });
+    } else if (base.execution) {
+      delete base.execution;
+    } else if (base.runId) {
+      delete base.runId;
+    } else if (base.sessionKey) {
+      delete base.sessionKey;
+    } else if (base.agentId) {
+      delete base.agentId;
+    } else if (metadata.stale) {
+      metadata = removeUndefinedMetadataFields({ ...metadata, stale: undefined });
+    } else if (metadata.workerProtocol?.detail) {
+      const { detail: _detail, ...workerProtocol } = metadata.workerProtocol;
+      metadata = removeUndefinedMetadataFields({ ...metadata, workerProtocol });
+    } else if (metadata.automation?.skills?.length) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        automation: { ...metadata.automation, skills: undefined },
+      });
+    } else if (metadata.automation?.workspace?.branch) {
+      const { branch: _branch, ...workspace } = metadata.automation.workspace;
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        automation: { ...metadata.automation, workspace },
+      });
+    } else if (metadata.automation?.workspace?.path) {
+      const { path: _path, ...workspace } = metadata.automation.workspace;
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        automation: { ...metadata.automation, workspace },
+      });
+    } else if (base.notes) {
+      delete base.notes;
+    } else {
+      throw new Error("Workboard card required fields exceed the model-safe output budget.");
+    }
+    projected = project();
+    if (serializedBytes(projected) >= previousBytes) {
+      throw new Error("Workboard card projection could not satisfy the model-safe output budget.");
+    }
+  }
   // Structured cloning strips SQLite's private snapshot symbol and prevents output consumers from
   // mutating canonical nested objects before the view is serialized.
   return structuredClone(projected) as WorkboardCardView;

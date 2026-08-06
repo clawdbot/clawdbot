@@ -4,9 +4,9 @@ import {
   paginateWorkboardProof,
   readWorkboardProofPageRequest,
   toBoundedWorkboardCard,
+  WORKBOARD_MODEL_OUTPUT_BYTES,
 } from "./card-output.js";
 
-const EMBEDDED_PROOF_BYTES = 24 * 1024;
 const CARD_ID = "card-1";
 
 function createProof(count: number, note?: string): WorkboardProof[] {
@@ -64,8 +64,8 @@ describe("Workboard card output projection", () => {
     expect(projectedProof.length).toBeGreaterThan(0);
     expect(projectedProof.length).toBeLessThan(40);
     expect(projectedProof.at(-1)?.id).toBe("proof-99");
-    expect(Buffer.byteLength(JSON.stringify(projectedProof), "utf8")).toBeLessThanOrEqual(
-      EMBEDDED_PROOF_BYTES,
+    expect(Buffer.byteLength(JSON.stringify(view), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
     );
     expect(view.proofPage).toMatchObject({ total: 100, hasMore: true });
   });
@@ -86,6 +86,68 @@ describe("Workboard card output projection", () => {
     }
     expect(card.metadata?.proof?.[1]?.label).toBe("Proof 1");
     expect(card.metadata?.comments?.[0]?.body).toBe("Keep canonical");
+  });
+
+  it("bounds the complete card view without mutating large non-proof metadata", () => {
+    const card = createCard(createProof(20));
+    card.events = Array.from({ length: 50 }, (_, index) => ({
+      id: `event-${index}`,
+      kind: "edited" as const,
+      at: index + 1,
+      sessionKey: "event-session".repeat(100),
+    }));
+    card.metadata = {
+      ...card.metadata,
+      comments: Array.from({ length: 50 }, (_, index) => ({
+        id: `comment-${index}`,
+        body: `Comment ${index} ${"🧪".repeat(1000)}`,
+        createdAt: index + 1,
+      })),
+      artifacts: Array.from({ length: 40 }, (_, index) => ({
+        id: `artifact-${index}`,
+        label: `Artifact ${index}`,
+        url: `https://example.com/${"a".repeat(2000)}`,
+        createdAt: index + 1,
+      })),
+      workerLogs: Array.from({ length: 40 }, (_, index) => ({
+        id: `log-${index}`,
+        level: "info" as const,
+        message: `Log ${index} ${"🧪".repeat(400)}`,
+        createdAt: index + 1,
+      })),
+    };
+    const before = JSON.stringify(card);
+
+    const view = toBoundedWorkboardCard(card);
+
+    expect(Buffer.byteLength(JSON.stringify(view), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
+    );
+    expect(view.metadata?.comments?.at(-1)?.id).toBe("comment-49");
+    expect(view.proofPage).toMatchObject({ total: 20, hasMore: true });
+    expect(JSON.stringify(card)).toBe(before);
+  });
+
+  it("omits optional scalar fields only in the view when history trimming is insufficient", () => {
+    const card = createCard([]);
+    card.notes = "ࠀ".repeat(4000);
+    card.sourceUrl = "ࠀ".repeat(5000);
+    card.taskId = "ࠀ".repeat(5000);
+    card.metadata = {
+      automation: {
+        boardId: "default",
+        summary: "ࠀ".repeat(2000),
+      },
+    };
+    const before = JSON.stringify(card);
+
+    const view = toBoundedWorkboardCard(card);
+
+    expect(Buffer.byteLength(JSON.stringify(view), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
+    );
+    expect(view).toMatchObject({ id: CARD_ID, title: "Projected proof", status: "review" });
+    expect(JSON.stringify(card)).toBe(before);
   });
 
   it("uses opaque stable cursors to drain older proof in chronological pages", () => {
@@ -113,6 +175,39 @@ describe("Workboard card output projection", () => {
     );
     expect(third).toMatchObject({ total: 100, hasMore: false });
     expect(third.nextCursor).toBeUndefined();
+  });
+
+  it("drains byte-bounded proof pages without gaps or duplicates", () => {
+    const proof = createProof(100).map((entry) => ({
+      ...entry,
+      label: "l".repeat(160),
+      command: "c".repeat(1000),
+      url: `https://example.com/${"u".repeat(1980)}`,
+      note: "n".repeat(2000),
+    }));
+    const chunks: string[][] = [];
+    let cursor: string | undefined;
+
+    for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+      const page = paginateWorkboardProof(
+        CARD_ID,
+        proof,
+        readWorkboardProofPageRequest(CARD_ID, { cursor }),
+      );
+      expect(Buffer.byteLength(JSON.stringify(page, null, 2), "utf8")).toBeLessThanOrEqual(
+        WORKBOARD_MODEL_OUTPUT_BYTES,
+      );
+      chunks.unshift(page.proof.map((entry) => entry.id));
+      if (!page.hasMore) {
+        break;
+      }
+      cursor = page.nextCursor;
+      expect(cursor).toEqual(expect.any(String));
+    }
+
+    const ids = chunks.flat();
+    expect(ids).toEqual(proof.map((entry) => entry.id));
+    expect(new Set(ids).size).toBe(proof.length);
   });
 
   it("accepts every opaque cursor it issues for an arbitrarily long canonical proof id", () => {
@@ -163,21 +258,22 @@ describe("Workboard card output projection", () => {
     expect(second).toMatchObject({ total: 2, hasMore: false });
   });
 
-  it("omits a single oversized embedded proof while explicit pagination retains it", () => {
+  it("rejects an individually oversized model page while retaining the canonical proof", () => {
     const proof = createProof(1);
     const oversized = proof[0];
     if (!oversized) {
       throw new Error("expected oversized proof");
     }
-    oversized.id = `proof-${"x".repeat(EMBEDDED_PROOF_BYTES)}`;
+    oversized.id = `proof-${"x".repeat(WORKBOARD_MODEL_OUTPUT_BYTES)}`;
 
     const view = toBoundedWorkboardCard(createCard(proof));
     expect(view.metadata?.proof).toBeUndefined();
     expect(view.proofPage).toEqual({ total: 1, hasMore: true });
 
-    const page = paginateWorkboardProof(CARD_ID, proof, readWorkboardProofPageRequest(CARD_ID));
-    expect(page).toMatchObject({ total: 1, hasMore: false });
-    expect(page.proof).toEqual(proof);
+    expect(() =>
+      paginateWorkboardProof(CARD_ID, proof, readWorkboardProofPageRequest(CARD_ID)),
+    ).toThrow("proof record exceeds the model-safe page budget");
+    expect(proof[0]?.id).toBe(oversized.id);
   });
 
   it("rejects invalid limits and cursors issued for another card", () => {
