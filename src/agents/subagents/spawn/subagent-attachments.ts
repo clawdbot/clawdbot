@@ -304,6 +304,14 @@ export async function removeSubagentAttachmentsDir(params: {
     if (!isPathInside(rootDir, absDir)) {
       return false;
     }
+    try {
+      await fs.access(rootDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return true;
+      }
+      throw error;
+    }
     await removePathWithinRoot({
       rootDir,
       relativePath: path.relative(rootDir, absDir),

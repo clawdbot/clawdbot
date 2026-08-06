@@ -219,6 +219,40 @@ function finalizeResumedAnnounceGiveUpInBackground(
   });
 }
 
+function reconcileOrphanedRunInBackground(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: NonNullable<ReturnType<typeof resolveSubagentRunOrphanReason>>;
+}) {
+  resumedRuns.add(params.runId);
+  void runWithGatewayIndependentRootWorkAdmission(async () => {
+    const removed = await reconcileOrphanedRun({
+      ...params,
+      source: "resume",
+      runs: subagentRuns,
+      resumedRuns,
+    });
+    if (removed) {
+      persistSubagentRuns(params.runId);
+      return;
+    }
+    if (subagentRuns.get(params.runId) === params.entry) {
+      resumedRuns.delete(params.runId);
+      scheduleSubagentRegistrySweep();
+    }
+  }).catch((error: unknown) => {
+    log.warn("failed to reconcile orphaned subagent attachments", {
+      runId: params.runId,
+      childSessionKey: params.entry.childSessionKey,
+      error,
+    });
+    if (subagentRuns.get(params.runId) === params.entry) {
+      resumedRuns.delete(params.runId);
+      scheduleSubagentRegistrySweep({ delayMs: GATEWAY_ADMISSION_RETRY_DELAY_MS });
+    }
+  });
+}
+
 export function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) {
     return;
@@ -285,18 +319,7 @@ export function resumeSubagentRun(runId: string) {
     }
     const orphanReason = resolveSubagentRunOrphanReason({ entry });
     if (orphanReason) {
-      if (
-        reconcileOrphanedRun({
-          runId,
-          entry,
-          reason: orphanReason,
-          source: "resume",
-          runs: subagentRuns,
-          resumedRuns,
-        })
-      ) {
-        persistSubagentRuns(runId);
-      }
+      reconcileOrphanedRunInBackground({ runId, entry, reason: orphanReason });
       return;
     }
     if (contextCleanup.suppressAnnounceForSteerRestart(entry)) {

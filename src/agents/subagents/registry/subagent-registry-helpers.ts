@@ -191,37 +191,54 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   });
 }
 
-/** Marks an orphaned registry run finished, cleans attachments, and removes it. */
-export function reconcileOrphanedRun(params: {
+function shouldDeleteAttachments(entry: SubagentRunRecord): boolean {
+  return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
+function removeOrphanedRun(params: {
   runId: string;
   entry: SubagentRunRecord;
   reason: SubagentRunOrphanReason;
   source: "restore" | "resume";
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
-}) {
-  const shouldDeleteAttachments =
-    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
-  if (shouldDeleteAttachments) {
-    // Restore pruning is synchronous, but recursive deletion must keep using the
-    // rooted async remover; a raw sync rm would reintroduce a parent-swap race.
-    void safeRemoveAttachmentsDir(params.entry);
-  }
-  const removed = params.runs.delete(params.runId);
-  params.resumedRuns.delete(params.runId);
-  if (!removed) {
+}): boolean {
+  if (params.runs.get(params.runId) !== params.entry) {
     return false;
   }
+  params.runs.delete(params.runId);
+  params.resumedRuns.delete(params.runId);
   defaultRuntime.log(
     `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
   );
   return true;
 }
 
+/** Marks an orphaned registry run finished, cleans attachments, and removes it. */
+export async function reconcileOrphanedRun(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: SubagentRunOrphanReason;
+  source: "restore" | "resume";
+  runs: Map<string, SubagentRunRecord>;
+  resumedRuns: Set<string>;
+}): Promise<boolean> {
+  if (params.runs.get(params.runId) !== params.entry) {
+    return false;
+  }
+  if (shouldDeleteAttachments(params.entry) && !(await safeRemoveAttachmentsDir(params.entry))) {
+    return false;
+  }
+  // Cleanup can yield. Recheck the authoritative row before deleting so a
+  // replacement lifecycle owner cannot be removed by stale orphan work.
+  return removeOrphanedRun(params);
+}
+
 /** Reconciles orphaned runs found when restoring persisted subagent registry state. */
 export function reconcileOrphanedRestoredRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
+  deferredCleanupRunIds?: Set<string>;
 }) {
   const now = Date.now();
   let changed = false;
@@ -254,7 +271,17 @@ export function reconcileOrphanedRestoredRuns(params: {
       continue;
     }
     if (
-      reconcileOrphanedRun({
+      shouldDeleteAttachments(entry) &&
+      Boolean(entry.attachmentsDir) &&
+      Boolean(entry.attachmentsRootDir)
+    ) {
+      // The synchronous restore entry point cannot safely remove directory trees.
+      // Keep the durable row for resume/sweeper cleanup instead of dropping its owner.
+      params.deferredCleanupRunIds?.add(runId);
+      continue;
+    }
+    if (
+      removeOrphanedRun({
         runId,
         entry,
         reason: orphanReason,

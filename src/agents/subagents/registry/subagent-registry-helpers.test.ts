@@ -3,6 +3,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../../runtime.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
@@ -288,9 +289,10 @@ describe("safeRemoveAttachmentsDir", () => {
 describe("reconcileOrphanedRun", () => {
   afterEach(() => {
     vi.useRealTimers();
+    __setFsSafeTestHooksForTest(undefined);
   });
 
-  it("removes orphaned runs without publishing a discarded terminal projection", () => {
+  it("removes orphaned runs without publishing a discarded terminal projection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
     const entry = createRunEntry();
@@ -298,7 +300,7 @@ describe("reconcileOrphanedRun", () => {
     const resumedRuns = new Set([entry.runId]);
 
     expect(
-      reconcileOrphanedRun({
+      await reconcileOrphanedRun({
         runId: entry.runId,
         entry,
         reason: "missing-session-id",
@@ -311,6 +313,59 @@ describe("reconcileOrphanedRun", () => {
     expect(entry.execution).toEqual({ status: "running", startedAt: 1_000 });
     expect(runs.has(entry.runId)).toBe(false);
     expect(resumedRuns.has(entry.runId)).toBe(false);
+  });
+
+  it("keeps the orphan row until rooted attachment cleanup settles", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-owner-"));
+    const attachmentsDir = path.join(rootDir, "receipt");
+    await fs.mkdir(attachmentsDir);
+    await fs.writeFile(path.join(attachmentsDir, "attachment.txt"), "private");
+    const entry = createRunEntry({
+      cleanup: "delete",
+      attachmentsRootDir: rootDir,
+      attachmentsDir,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+    let releaseRemoval!: () => void;
+    const removalReleased = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    let cleanupStarted!: () => void;
+    const cleanupStartedPromise = new Promise<void>((resolve) => {
+      cleanupStarted = resolve;
+    });
+    let blocked = false;
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation: async (operation) => {
+        if (operation !== "remove" || blocked) {
+          return;
+        }
+        blocked = true;
+        cleanupStarted();
+        await removalReleased;
+      },
+    });
+    try {
+      const reconciliation = reconcileOrphanedRun({
+        runId: entry.runId,
+        entry,
+        reason: "missing-session-id",
+        source: "resume",
+        runs,
+        resumedRuns,
+      });
+
+      await cleanupStartedPromise;
+      expect(runs.get(entry.runId)).toBe(entry);
+      releaseRemoval();
+      await expect(reconciliation).resolves.toBe(true);
+      expect(runs.has(entry.runId)).toBe(false);
+      expect(resumedRuns.has(entry.runId)).toBe(false);
+    } finally {
+      releaseRemoval();
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
   });
 });
 

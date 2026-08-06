@@ -370,7 +370,7 @@ export function createSubagentRegistrySweeper(params: {
             const orphanReason = resolveSubagentRunOrphanReason({ entry });
             if (orphanReason) {
               if (
-                reconcileOrphanedRun({
+                await reconcileOrphanedRun({
                   runId,
                   entry,
                   reason: orphanReason,
