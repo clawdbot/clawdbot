@@ -76,16 +76,19 @@ export async function withZalouserIngressTestQueue<T>(
   try {
     return await fn(queue);
   } finally {
+    // Agent close releases leases through shared state; closing shared state first
+    // can reopen it during teardown and leave Windows handles under the state dir.
+    // Both closes must run before OPENCLAW_STATE_DIR is restored: cached agent
+    // databases captured the child env, and lease release after restoration would
+    // write through the parent fixture's shared state instead.
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    // Agent close releases leases through shared state; closing shared state first
-    // can reopen it during teardown and leave Windows handles under the state dir.
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
