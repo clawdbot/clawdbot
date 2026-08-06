@@ -320,7 +320,12 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTrigger) {
             patch.trigger = null;
           } else if (triggerScriptPath) {
+            // Preserve existing trigger metadata (especially once) when only the
+            // script body changes. Gateway replaces patch.trigger wholesale, and
+            // stream schedule edits already merge sibling metadata the same way.
+            const existing = await readExistingCronJob();
             patch.trigger = {
+              ...(existing.trigger ?? {}),
               script: await readCronTriggerScript(triggerScriptPath),
               ...(opts.triggerOnce ? { once: true } : {}),
             };

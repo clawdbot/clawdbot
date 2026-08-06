@@ -1,4 +1,7 @@
 // Cron edit register tests cover cron edit command registration and option wiring.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
@@ -950,5 +953,128 @@ describe("cron edit command", () => {
 
     errorSpy.mockRestore();
     exitSpy.mockRestore();
+  });
+
+  it("preserves trigger.once when --trigger-script replaces the script body", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-edit-trigger-"));
+    const scriptPath = path.join(dir, "next.js");
+    await fs.writeFile(scriptPath, "return { fire: true };\n", "utf8");
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          trigger: { script: "return { fire: false };", once: true },
+        };
+      }
+      return { ok: true };
+    });
+
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--trigger-script", scriptPath], {
+        from: "user",
+      });
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+        id: "job-1",
+        patch: {
+          trigger: {
+            script: "return { fire: true };",
+            once: true,
+          },
+        },
+      });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies --trigger-once when combined with --trigger-script", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-edit-trigger-once-"));
+    const scriptPath = path.join(dir, "next.js");
+    await fs.writeFile(scriptPath, "return { fire: true };\n", "utf8");
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          trigger: { script: "return { fire: false };" },
+        };
+      }
+      return { ok: true };
+    });
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--trigger-script", scriptPath, "--trigger-once"],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+        id: "job-1",
+        patch: {
+          trigger: {
+            script: "return { fire: true };",
+            once: true,
+          },
+        },
+      });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not invent trigger.once when replacing a repeatable trigger script", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-edit-trigger-repeat-"));
+    const scriptPath = path.join(dir, "next.js");
+    await fs.writeFile(scriptPath, "return { fire: true };\n", "utf8");
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          trigger: { script: "return { fire: false };" },
+        };
+      }
+      return { ok: true };
+    });
+
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--trigger-script", scriptPath], {
+        from: "user",
+      });
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+        id: "job-1",
+        patch: {
+          trigger: {
+            script: "return { fire: true };",
+          },
+        },
+      });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects --clear-trigger combined with --trigger-script", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-edit-trigger-clear-"));
+    const scriptPath = path.join(dir, "next.js");
+    await fs.writeFile(scriptPath, "return { fire: true };\n", "utf8");
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--clear-trigger", "--trigger-script", scriptPath],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Use --clear-trigger or trigger options, not both"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
