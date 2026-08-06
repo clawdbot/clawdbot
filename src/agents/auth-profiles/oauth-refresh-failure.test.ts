@@ -45,6 +45,20 @@ describe("buildAuthProfileUnusableHint", () => {
       }),
     ).not.toContain("claude auth login");
   });
+
+  it("routes legacy Gemini CLI profiles to supported Google API-key setup", () => {
+    const hint = buildAuthProfileUnusableHint({
+      kind: "cooldown",
+      reason: "session_expired",
+      provider: "google-gemini-cli",
+      profileId: "google-gemini-cli:legacy",
+    });
+
+    expect(hint).toBe(
+      "Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using `openclaw models auth login --provider google`, then select that Google profile for the Gemini CLI runtime.",
+    );
+    expect(hint).not.toContain("--provider google-gemini-cli");
+  });
 });
 
 describe("oauth refresh failure hints", () => {

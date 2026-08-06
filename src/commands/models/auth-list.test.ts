@@ -162,6 +162,40 @@ describe("modelsAuthListCommand", () => {
     });
   });
 
+  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "google-gemini-cli:legacy": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "secret",
+          refresh: "secret",
+          expires: 1_900_000_000_000,
+        },
+      },
+      usageStats: {
+        "google-gemini-cli:legacy": {
+          cooldownUntil: 1_900_000_100_000,
+          cooldownReason: "session_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const runtime = createRuntime();
+    await modelsAuthListCommand({ json: true }, runtime);
+
+    expect(runtime.jsonPayloads[0]).toMatchObject({
+      profiles: [
+        expect.objectContaining({
+          id: "google-gemini-cli:legacy",
+          recoveryHint: expect.stringContaining("--provider google`"),
+        }),
+      ],
+    });
+    expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("--provider google-gemini-cli");
+  });
+
   it("treats the OpenAI filter as the friendly view over API-key and OAuth profiles", async () => {
     const store: AuthProfileStore = {
       version: 1,

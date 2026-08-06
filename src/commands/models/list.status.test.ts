@@ -596,6 +596,43 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
+    const now = Date.now();
+    const profileId = "google-gemini-cli:legacy";
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<string, { cooldownUntil: number; cooldownReason: "session_expired" }>;
+    };
+    store.profiles[profileId] = {
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: now + 60_000,
+    };
+    store.usageStats = {
+      [profileId]: { cooldownUntil: now + 60_000, cooldownReason: "session_expired" },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, candidate) =>
+      candidate === profileId ? now + 60_000 : undefined,
+    );
+
+    try {
+      const statusRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, statusRuntime as never);
+      const [unusable] = parseFirstJsonLog(statusRuntime).auth.unusableProfiles;
+      expect(unusable).toMatchObject({
+        profileId,
+        provider: "google-gemini-cli",
+        recoveryHint: expect.stringContaining("--provider google`"),
+      });
+      expect(unusable.recoveryHint).not.toContain("--provider google-gemini-cli");
+    } finally {
+      delete store.profiles[profileId];
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("does not restore over plugin metadata published while status is running", async () => {
     const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
     const config = mocks.loadConfig();

@@ -29,6 +29,7 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
+import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
   CliBackendAuthEpochMode,
@@ -1176,23 +1177,38 @@ export async function prepareCliRunContext(
           isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
         }
       : prepareExecutionContext;
-    preparedExecution =
-      (await backendResolved.prepareExecution?.(
-        (backendAuthPolicy
-          ? {
-              ...privatePrepareExecutionContext,
-              // The core-internal auth policy table owns this private credential and isolated
-              // completion bridge; third-party backends cannot opt into either capability.
-              authCredential,
-            }
-          : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
-          authCredential?: AuthProfileCredential;
-          isolatedCompletionCwd?: string;
-          isolatedCompletionModelId?: string;
-          isolatedCompletionPrompt?: string;
-          isolatedCompletionSystemPrompt?: string;
-        },
-      )) ?? undefined;
+    try {
+      preparedExecution =
+        (await backendResolved.prepareExecution?.(
+          (backendAuthPolicy
+            ? {
+                ...privatePrepareExecutionContext,
+                // The core-internal auth policy table owns this private credential and isolated
+                // completion bridge; third-party backends cannot opt into either capability.
+                authCredential,
+              }
+            : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
+            authCredential?: AuthProfileCredential;
+            isolatedCompletionCwd?: string;
+            isolatedCompletionModelId?: string;
+            isolatedCompletionPrompt?: string;
+            isolatedCompletionSystemPrompt?: string;
+          },
+        )) ?? undefined;
+    } catch (error) {
+      if (error instanceof CliBackendAuthProfilePreparationError && effectiveAuthProfileId) {
+        // Preserve the selected-profile fact across lazy plugin preparation so
+        // the generic runner can settle it once without backend-owned writes.
+        throw new CliAuthProfilePreparationError({
+          message: error.message,
+          profileId: effectiveAuthProfileId,
+          provider: authStore?.profiles[effectiveAuthProfileId]?.provider ?? params.provider,
+          agentDir,
+          cause: error,
+        });
+      }
+      throw error;
+    }
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {

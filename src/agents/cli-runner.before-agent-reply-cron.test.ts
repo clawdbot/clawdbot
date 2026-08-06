@@ -225,36 +225,39 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(markAuthProfileSuccessMock).not.toHaveBeenCalled();
   });
 
-  it("settles a typed selected-profile preparation failure before fallback", async () => {
-    const profileId = "claude-cli:selected";
-    const store = {
-      version: 1,
-      profiles: { [profileId]: { type: "oauth", provider: "claude-cli" } },
-    };
-    loadAuthProfileStoreForRuntimeMock.mockReturnValue(store);
-    prepareCliRunContextMock.mockRejectedValueOnce(
-      new CliAuthProfilePreparationError({
-        message: "selected profile needs login",
+  it.each(["claude-cli", "google-gemini-cli"])(
+    "settles a typed %s selected-profile preparation failure before fallback",
+    async (provider) => {
+      const profileId = `${provider}:selected`;
+      const store = {
+        version: 1,
+        profiles: { [profileId]: { type: "oauth", provider } },
+      };
+      loadAuthProfileStoreForRuntimeMock.mockReturnValue(store);
+      prepareCliRunContextMock.mockRejectedValueOnce(
+        new CliAuthProfilePreparationError({
+          message: "selected profile needs login",
+          profileId,
+          provider,
+          agentDir: "/tmp/agent",
+        }),
+      );
+
+      await expect(runCliAgent({ ...baseRunParams, provider })).rejects.toMatchObject({
+        name: "CliAuthProfilePreparationError",
+        reason: "auth",
         profileId,
-        provider: "claude-cli",
-        agentDir: "/tmp/agent",
-      }),
-    );
+      });
 
-    await expect(runCliAgent({ ...baseRunParams, provider: "claude-cli" })).rejects.toMatchObject({
-      name: "CliAuthProfilePreparationError",
-      reason: "auth",
-      profileId,
-    });
-
-    expect(loadAuthProfileStoreForRuntimeMock).toHaveBeenCalledWith(
-      "/tmp/agent",
-      expect.any(Object),
-    );
-    expect(markAuthProfileFailureMock).toHaveBeenCalledWith(
-      expect.objectContaining({ store, profileId, reason: "auth" }),
-    );
-  });
+      expect(loadAuthProfileStoreForRuntimeMock).toHaveBeenCalledWith(
+        "/tmp/agent",
+        expect.any(Object),
+      );
+      expect(markAuthProfileFailureMock).toHaveBeenCalledWith(
+        expect.objectContaining({ store, profileId, reason: "auth" }),
+      );
+    },
+  );
 
   it("records only success when fresh-session recovery succeeds and clears stale health", async () => {
     const profileId = "google-gemini-cli:selected";
