@@ -642,6 +642,38 @@ describe("compaction-safeguard summary budgets", () => {
     }
   });
 
+  it("keeps the newest raw split-turn messages, not the oldest", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+
+    // These messages never reached the summarizer, so the latest tool results
+    // and execution state are the part nothing else reproduces.
+    expect(section).toContain("turn-199");
+    expect(section).not.toContain("turn-0 ");
+    expect(section).toContain("**Turn Context (split turn):**");
+    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+  });
+
+  it("drops a trailing suffix fragment when no line boundary survives", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body = "## Decisions\n".padEnd(max, "b");
+    // One very long unbroken line: any tail slice of it is a mid-turn fragment.
+    const suffix = `- Assistant: ${"z".repeat(max)}`;
+
+    const out = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(out.length).toBeLessThanOrEqual(max);
+    expect(out).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // Nothing of the unbroken line survives, rather than a fragment that reads
+    // as a whole message.
+    expect(out).not.toContain("zz");
+  });
+
   it("never exceeds the cap, down to a one-character budget", () => {
     const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
     const suffix =
@@ -661,8 +693,10 @@ describe("compaction-safeguard summary budgets", () => {
 
     for (const size of [max - 1, max, max * 2]) {
       // "~" appears nowhere in the body or either marker, so its first index is
-      // exactly where the body's share ends.
-      const out = capCompactionSummaryPreservingSuffix(body, "~".repeat(size));
+      // exactly where the body's share ends. Line-broken because an unbroken
+      // run has no surviving boundary and is dropped whole by design.
+      const suffix = Array.from({ length: Math.ceil(size / 80) }, () => "~".repeat(79)).join("\n");
+      const out = capCompactionSummaryPreservingSuffix(body, suffix);
 
       expect(out.length, `length at suffix=${size}`).toBeLessThanOrEqual(max);
       // Half the budget is the floor; a truncated body still says it was cut.
@@ -689,21 +723,6 @@ describe("compaction-safeguard summary budgets", () => {
     expect(section).toContain("turn-0 ");
     expect(section).toContain("turn-11 ");
     expect(section).not.toContain(SUFFIX_TRUNCATED_MARKER.trim());
-  });
-
-  it("keeps the earliest lines when a split-turn prefix exceeds its cap", () => {
-    const messages = Array.from({ length: 200 }, (_, i) => ({
-      role: "assistant" as const,
-      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
-      timestamp: 0,
-    }));
-
-    const section = formatSplitTurnContextSection(messages);
-
-    // Summarized front-to-back per TURN_PREFIX_INSTRUCTIONS, so the head stays.
-    expect(section).toContain("turn-0 ");
-    expect(section).not.toContain("turn-199");
-    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
   });
 
   it("bounds a split-turn context section so it cannot outgrow the summary budget", () => {
