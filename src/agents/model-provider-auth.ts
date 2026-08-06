@@ -36,14 +36,17 @@ import {
   hasRuntimeAvailableProviderAuth,
   type RuntimeProviderAuthLookup,
 } from "./model-auth.js";
+import { buildDefaultModelRouteAuthEvidence } from "./model-provider-auth-default-route.js";
 import {
   cancelCurrentProviderAuthWarmWorker,
   claimCurrentProviderAuthStateGeneration,
   clearCurrentProviderAuthState,
   clearCurrentProviderAuthWarmWorker,
   getCurrentProviderAuthStates,
+  isProviderAuthWarmSnapshot,
   isCurrentProviderAuthStateGeneration,
   publishProviderAuthWarmSnapshot,
+  serializeProviderAuthStates,
   setCurrentProviderAuthWarmWorker,
   type PreparedProviderAuthState,
   type ProviderAuthWarmSnapshot,
@@ -345,18 +348,6 @@ export function createProviderAuthChecker(params: {
   );
 }
 
-function serializeProviderAuthStates(
-  states: ReadonlyMap<string, PreparedProviderAuthState>,
-): ProviderAuthWarmSnapshot {
-  return {
-    agents: [...states.values()].map((state) => ({
-      agentId: state.agentId,
-      configFingerprint: state.configFingerprint,
-      providers: [...state.providers.entries()],
-    })),
-  };
-}
-
 function resolveProviderConfigApi(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -448,6 +439,16 @@ export async function buildCurrentProviderAuthStateSnapshot(
           config: cfg,
           externalCli,
         });
+    const defaultModelRoute = buildDefaultModelRouteAuthEvidence({
+      cfg,
+      agentId,
+      agentDir,
+      workspaceDir,
+      authStore: store,
+      runtimeAuthLookup,
+      metadataSnapshot: preparedOwner.metadataSnapshot,
+      modelCatalog: preparedOwner.modelCatalog,
+    });
     const state = new Map<string, boolean>();
     for (const provider of providers) {
       if (isWarmStale()) {
@@ -478,6 +479,7 @@ export async function buildCurrentProviderAuthStateSnapshot(
       agentId,
       configFingerprint,
       providers: state,
+      ...(defaultModelRoute ? { defaultModelRoute } : {}),
     });
   }
   return serializeProviderAuthStates(states);
@@ -493,29 +495,6 @@ function resolveProviderAuthWarmWorkerUrl(currentModuleUrl: string): URL {
   }
   const extension = path.extname(currentPath) || ".js";
   return new URL(`./model-provider-auth.worker${extension}`, currentModuleUrl);
-}
-
-function isProviderAuthWarmSnapshot(value: unknown): value is ProviderAuthWarmSnapshot {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !Array.isArray((value as { agents?: unknown }).agents)
-  ) {
-    return false;
-  }
-  return (value as ProviderAuthWarmSnapshot).agents.every(
-    (agent) =>
-      typeof agent.agentId === "string" &&
-      typeof agent.configFingerprint === "string" &&
-      Array.isArray(agent.providers) &&
-      agent.providers.every(
-        (entry) =>
-          Array.isArray(entry) &&
-          entry.length === 2 &&
-          typeof entry[0] === "string" &&
-          typeof entry[1] === "boolean",
-      ),
-  );
 }
 
 function isProviderAuthWarmWorkerResult(value: unknown): value is ProviderAuthWarmWorkerResult {

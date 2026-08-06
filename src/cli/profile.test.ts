@@ -70,6 +70,32 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "status", "--deep"]);
   });
 
+  it("parses gateway subcommand --profile as a root profile", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "gateway", "status", "--profile", "work"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway", "status"]);
+  });
+
+  it("parses gateway run --profile as a root profile", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "gateway",
+      "run",
+      "--profile",
+      "work",
+      "--allow-unconfigured",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway", "run", "--allow-unconfigured"]);
+  });
+
   it("preserves Matrix QA --profile for the command parser", () => {
     const res = parseCliProfileArgs([
       "node",

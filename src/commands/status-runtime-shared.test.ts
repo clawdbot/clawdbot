@@ -10,6 +10,16 @@ import {
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
 
+const ready = {
+  contractVersion: 1,
+  evaluatedAtMs: 1234,
+  identity: { producerRef: "openclaw/gateway/current", subjects: [] },
+  ready: true,
+  conditions: [],
+  failures: [],
+  advisories: [],
+};
+
 const mocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn(),
   runSecurityAudit: vi.fn(),
@@ -425,6 +435,56 @@ describe("status-runtime-shared", () => {
       loadPluginSecurityCollectors: false,
       plugins: [{ id: "telegram" }],
     });
+  });
+
+  it("includes readiness from deep gateway health when requested", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true, readiness: ready });
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        includeReadiness: true,
+        gatewayReachable: true,
+      }),
+    ).resolves.toMatchObject({
+      readiness: ready,
+      health: { ok: true, readiness: ready },
+    });
+  });
+
+  it("fetches readiness without deep health when requested", async () => {
+    mocks.callGateway.mockResolvedValueOnce(ready);
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        includeReadiness: true,
+        gatewayReachable: true,
+      }),
+    ).resolves.toMatchObject({
+      readiness: ready,
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "ready",
+      params: {},
+      timeoutMs: undefined,
+      config: { gateway: {} },
+    });
+  });
+
+  it("does not fetch readiness when the caller will not render it", async () => {
+    await resolveStatusRuntimeSnapshot({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      gatewayReachable: true,
+    });
+
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ready" }),
+    );
   });
 
   it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {

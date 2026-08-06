@@ -556,6 +556,58 @@ See [Plugins](/tools/plugin).
 
 ---
 
+## Gateway readiness
+
+```json5
+{
+  gateway: {
+    readiness: {
+      requiredCriteria: ["openclaw.workspace-writable", "plugin.storage.backend"],
+      advisoryCriteria: ["openclaw.config-current", "openclaw.secrets-ready"],
+    },
+  },
+}
+```
+
+- `requiredCriteria`: registered criteria that must report `True` for readiness.
+- `advisoryCriteria`: registered criteria included in diagnostics without blocking readiness.
+
+Built-in selectors include `openclaw.workspace-writable`,
+`openclaw.state-ready`, `openclaw.delivery-runtime-ready`, and
+`openclaw.scheduler-ready`. `openclaw.session-storage-ready` adds a bounded
+write, flush, and cleanup probe over the state root and configured session-store
+parents. The lifecycle selectors only observe already-published owner facts.
+
+Omitting `gateway.readiness` preserves the legacy Gateway readiness decision
+path. Adding the section opts into bounded canonical condition evaluation; an
+empty object enables canonical evaluation without selecting extra criteria.
+
+The Gateway's lifecycle conditions always apply. Explicit criteria add to that
+baseline and do not require a hosting profile. See [Health checks](/gateway/health#selected-readiness-criteria)
+for the core selector catalog and evaluation semantics, and the
+[Plugin SDK](/plugins/sdk-overview#infrastructure) for plugin registration.
+
+Built-in capability selectors include `openclaw.workspace-writable`,
+`openclaw.context-engine-ready`, `openclaw.tool-catalog-ready`,
+`openclaw.mcp-runtime-ready`, `openclaw.sandbox-ready`, and
+`openclaw.harness-ready`. They are not enabled unless listed by the operator.
+
+## Hosting profile
+
+```json5
+{
+  hosting: {
+    profile: "container", // local | container | reverse-proxy | node-mode
+  },
+}
+```
+
+`hosting.profile` selects an optional, release-tested readiness posture. A Gateway with no selected
+profile retains the universal lifecycle baseline and does not add profile-only requirements.
+`OPENCLAW_HOSTING_PROFILE` overrides config, and `gateway run --hosting-profile` overrides both.
+Invalid values stop Gateway startup. See [Hosting profiles](/gateway/hosting-profiles) for the
+condition set and operator examples for each profile.
+
 ## Gateway
 
 ```json5

@@ -244,6 +244,57 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.command).toContain('bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"');
   });
 
+  it("plans the hosting profile conformance lane", () => {
+    const plan = planFor({ selectedLaneNames: ["hosting-profiles"] });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/hosting-profiles-docker.sh",
+        imageKind: "functional",
+        live: false,
+        name: "hosting-profiles",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        weight: 2,
+      },
+    ]);
+  });
+
+  it("checks workspace readiness by emitted condition type", () => {
+    const client = readFileSync("scripts/e2e/hosting-profiles-client.mjs", "utf8");
+    const script = readFileSync("scripts/e2e/hosting-profiles-docker.sh", "utf8");
+
+    expect(client).toContain('condition("WorkspaceWritable")');
+    expect(client).not.toContain('condition("openclaw.workspace-writable")');
+    expect(client).toContain('scenario === "node-unapproved"');
+    expect(script).toContain(
+      'local runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,uid=1001,gid=1001,mode=0700,size=8m")',
+    );
+    expect(script).toContain('-e "OPENCLAW_WORKSPACE_DIR=/tmp/hosting-profile-workspace"');
+    expect(script).toContain('nodes approve "$request_id" --json');
+    expect(script).toContain('hosting profiles validate "${args[@]}" --json --timeout 5000');
+    expect(script).toContain('auth_args=(-e "OPENCLAW_GATEWAY_PASSWORD=$TOKEN")');
+    expect(script).toContain("tsx scripts/e2e/docker-openai-seed.ts");
+    expect(script).toContain('ARTIFACT_PATH="$ARTIFACT_DIR/hosting-profile-conformance.json"');
+    expect(script).toContain('[ -f "$OPENCLAW_CURRENT_PACKAGE_TGZ" ]');
+    expect(script).toContain("org.opencontainers.image.openclaw.package.sha256");
+    expect(script).toContain('if [ "$IMAGE_PACKAGE_SHA256" != "$PACKAGE_SHA256" ]; then');
+    expect(script).toContain('record_profile_validation "$container_name" node-ready');
+    expect(script).toContain('node "$CONFORMANCE_WRITER" finalize "$ARTIFACT_PATH"');
+  });
+
+  it("binds the functional Docker image to its package digest", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+    const imageLibrary = readFileSync("scripts/lib/docker-e2e-image.sh", "utf8");
+
+    expect(dockerfile).toContain(
+      "LABEL org.opencontainers.image.openclaw.package.sha256=$OPENCLAW_PACKAGE_SHA256",
+    );
+    expect(imageLibrary).toContain(
+      'build_args+=(--build-arg "OPENCLAW_PACKAGE_SHA256=$package_sha256")',
+    );
+  });
+
   it("plans package-backed installer, Compose, and package artifact proofs", () => {
     const plan = planFor({
       selectedLaneNames: ["cli-installer-distribution", "compose-setup", "docker-package-install"],

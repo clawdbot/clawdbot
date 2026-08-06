@@ -59,6 +59,7 @@ const SECTION_DOCS_URLS = {
   memory: "https://docs.openclaw.ai/concepts/memory",
   talk: "https://docs.openclaw.ai/nodes/talk",
   gateway: "https://docs.openclaw.ai/gateway/configuration",
+  hosting: "https://docs.openclaw.ai/gateway/hosting-profiles",
   browser: "https://docs.openclaw.ai/tools/browser",
   nodeHost: "https://docs.openclaw.ai/nodes",
   discovery: "https://docs.openclaw.ai/gateway/discovery",

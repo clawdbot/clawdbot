@@ -1,0 +1,119 @@
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { callGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { CanonicalReadinessResult, ReadinessCondition } from "../readiness/conditions.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+
+type ReadyCommandOptions = { json?: boolean; timeoutMs?: number };
+
+type ReadyCommandResult = Omit<
+  CanonicalReadinessResult,
+  "contractVersion" | "evaluatedAtMs" | "identity"
+> &
+  Partial<Pick<CanonicalReadinessResult, "contractVersion" | "evaluatedAtMs" | "identity">>;
+
+type ReadyCommandError = {
+  ready: false;
+  error: {
+    reason: "GatewayReadinessUnavailable";
+    message: string;
+  };
+};
+
+function conditionMark(condition: ReadinessCondition): string {
+  if (condition.status === "True") {
+    return "PASS";
+  }
+  return condition.requirement === "required" ? "FAIL" : "WARN";
+}
+
+function formatReadyResult(result: ReadyCommandResult): string {
+  const required = result.conditions.filter((condition) => condition.requirement === "required");
+  const requiredPassing = required.filter((condition) => condition.status === "True").length;
+  const producer = result.identity?.subjects.find(
+    (subject) => subject.ref === result.identity?.producerRef,
+  );
+  const producerLabel = result.identity
+    ? `${result.identity.producerRef}${producer?.id ? ` (${producer.id})` : ""}`
+    : "legacy Gateway";
+  const lines = [
+    `Ready: ${result.ready ? "yes" : "no"}`,
+    `Producer: ${producerLabel}`,
+    `Required: ${requiredPassing}/${required.length}`,
+    `Advisories: ${result.advisories.length}`,
+  ];
+
+  if (result.conditions.length > 0) {
+    lines.push(
+      "",
+      renderTable({
+        width: getTerminalTableWidth(),
+        border: "none",
+        columns: [
+          { key: "result", header: "RESULT", minWidth: 4 },
+          { key: "requirement", header: "CLASS", minWidth: 8 },
+          { key: "condition", header: "CONDITION", minWidth: 16 },
+          { key: "subject", header: "SUBJECT", minWidth: 16 },
+          { key: "reason", header: "REASON", minWidth: 16 },
+          { key: "message", header: "DETAIL", flex: true, minWidth: 20 },
+        ],
+        rows: result.conditions.map((condition) => ({
+          result: conditionMark(condition),
+          requirement: condition.requirement,
+          condition: condition.type,
+          subject: condition.subjectRef ?? "legacy",
+          reason: condition.reason,
+          message: condition.message,
+        })),
+      }),
+    );
+  }
+  return lines.join("\n");
+}
+
+function emitError(runtime: RuntimeEnv, json: boolean, error: ReadyCommandError): void {
+  if (json) {
+    writeRuntimeJson(runtime, error);
+  } else {
+    runtime.error("Ready: no");
+    runtime.error(`${error.error.reason}: ${error.error.message}`);
+  }
+  runtime.exit(1);
+}
+
+export async function readyCommand(
+  opts: ReadyCommandOptions,
+  runtime: RuntimeEnv,
+  dependencies: {
+    callReady?: (params: { timeoutMs?: number }) => Promise<ReadyCommandResult>;
+  } = {},
+): Promise<void> {
+  const callReady =
+    dependencies.callReady ??
+    (async ({ timeoutMs }) =>
+      await callGateway<ReadyCommandResult>({
+        method: "ready",
+        params: {},
+        timeoutMs,
+      }));
+
+  let readiness: ReadyCommandResult;
+  try {
+    readiness = await callReady({ timeoutMs: opts.timeoutMs });
+  } catch (error) {
+    emitError(runtime, Boolean(opts.json), {
+      ready: false,
+      error: { reason: "GatewayReadinessUnavailable", message: formatErrorMessage(error) },
+    });
+    return;
+  }
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, readiness);
+  } else {
+    runtime.log(formatReadyResult(readiness));
+  }
+  if (!readiness.ready) {
+    runtime.exit(1);
+  }
+}

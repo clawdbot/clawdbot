@@ -33,6 +33,13 @@ vi.mock("./register.maintenance.js", () => ({
   },
 }));
 
+vi.mock("./register.hosting.js", () => ({
+  registerHostingCommands: (program: Command) => {
+    const hosting = program.command("hosting");
+    hosting.command("profiles");
+  },
+}));
+
 vi.mock("./register.status-health-sessions.js", () => ({
   registerStatusHealthSessionsCommands: (program: Command) => {
     program.command("status");
@@ -110,6 +117,7 @@ describe("command-registry", () => {
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
     expect(names).toContain("agent");
+    expect(names).toContain("hosting");
     expect(names).not.toContain("setup");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");
@@ -132,6 +140,13 @@ describe("command-registry", () => {
     const program = createProgram();
     const found = await registerCoreCliByName(program, testProgramContext, "nonexistent");
     expect(found).toBe(false);
+  });
+
+  it("registers hosting profile discovery by name", async () => {
+    const program = createProgram();
+
+    await expect(registerCoreCliByName(program, testProgramContext, "hosting")).resolves.toBe(true);
+    expect(namesOf(program)).toEqual(["hosting"]);
   });
 
   it("registers doctor placeholder for doctor primary command", () => {
@@ -190,7 +205,7 @@ describe("command-registry", () => {
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
     const program = createProgram();
 
-    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+    for (const name of ["status", "health", "ready", "sessions", "commitments", "tasks"]) {
       await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
     }
 

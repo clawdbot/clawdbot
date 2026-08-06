@@ -56,6 +56,126 @@ Channel connectivity and inbound admission are separate failure domains. A chann
 
 External uptime monitoring services should use the dedicated `/health` endpoint, not `/v1/chat/completions`.
 
+## Selected readiness criteria
+
+Without a `gateway.readiness` section, `/ready` and `/readyz` use the existing
+Gateway lifecycle and channel checks projected into a versioned canonical
+result. Adding the section opts the Gateway into additional bounded condition
+evaluation; an empty section selects no additional criteria.
+
+An operator can add registered criteria to the Gateway's lifecycle readiness
+conditions without selecting a hosting profile:
+
+```json5
+{
+  gateway: {
+    readiness: {
+      requiredCriteria: ["openclaw.workspace-writable", "plugin.storage.backend"],
+      advisoryCriteria: [
+        "openclaw.config-current",
+        "openclaw.event-loop-healthy",
+        "openclaw.model-route-ready",
+        "openclaw.secrets-ready",
+        "plugin.policy.conformant",
+        "plugin.metrics.exporter",
+      ],
+    },
+  },
+}
+```
+
+A plugin criterion is advisory when registered. Listing it in
+`requiredCriteria` makes `False`, `Unknown`, timeout, plugin absence, and
+registration absence block `/ready` and `/readyz`. Listing it in
+`advisoryCriteria` includes failures in diagnostics without blocking readiness.
+A criterion cannot appear in both lists.
+
+Core selector IDs are configuration identifiers, not condition types. For
+example, selecting `openclaw.workspace-writable` emits the canonical
+`WorkspaceWritable` condition; plugin criteria use their namespaced ID as the
+condition type.
+
+Canonical results declare observed runtime subjects once under `identity`, and
+each condition references its primary `subjectRef`. Every ID follows its
+owner's renewal boundary: a host instance ID lasts for one host-defined
+workload, a process ID lasts for one OS process, and a Gateway ID lasts for one
+serving lifecycle. OpenClaw always generates the process and Gateway IDs. Set
+`OPENCLAW_INSTANCE_ID` only when a host needs a separate workload correlation
+subject; OpenClaw emits a one-way fingerprint rather than the supplied value.
+Rotate the value when that host-level workload identity is replaced.
+
+`generation` records an owner-defined revision that does not replace the
+subject, such as an active config revision. When
+`ReadinessEvaluationComplete` is not `True`, consumers must not interpret
+missing conditions as deselection or owner deactivation.
+
+Dynamic subject IDs, generations, node-specific references, and messages are
+diagnostic fields, not metric labels. Telemetry exporters should use bounded
+dimensions such as condition type, status, requirement, reason, subject kind,
+and selected profile.
+
+Core activation criteria inspect the Gateway's already-published runtime
+generation. They do not read configuration or credentials from disk, discover
+providers, call a model, or probe an external service.
+
+| Selector ID                   | Condition           | What it verifies                                       |
+| ----------------------------- | ------------------- | ------------------------------------------------------ |
+| `openclaw.config-current`     | `ConfigCurrent`     | Active config matches the latest source generation     |
+| `openclaw.event-loop-healthy` | `EventLoopHealthy`  | Gateway event-loop delay remains below its threshold   |
+| `openclaw.model-route-ready`  | `ModelRouteReady`   | Default model is cataloged and has available auth      |
+| `openclaw.plugins-loaded`     | `PluginsLoaded`     | Selected plugins loaded without activation failures    |
+| `openclaw.secrets-ready`      | `SecretsReady`      | No runtime owner is degraded by secret resolution      |
+| `openclaw.workspace-writable` | `WorkspaceWritable` | Default workspace accepts a bounded write/delete check |
+
+These criteria are evaluated only when selected. Put one in
+`advisoryCriteria` to observe it first, then move it to `requiredCriteria` when
+that condition should block new work. `PluginsLoaded` and `EventLoopHealthy`
+remain always-present advisories unless their selectors promote them. The plugin
+condition includes plugins quarantined before activation as well as loader
+errors.
+
+The bundled Policy plugin demonstrates a plugin-owned criterion. When selected,
+`plugin.policy.conformant` reuses the plugin's policy evaluation and reports
+whether it produced any findings. Keep it in `advisoryCriteria` to expose drift
+without changing the HTTP readiness status; promote it to `requiredCriteria`
+only when policy conformance is an admission requirement.
+
+OpenClaw also exposes opt-in criteria for the agent execution surfaces that a
+host may depend on:
+
+| Selector ID                     | Condition            | What it observes                                                               |
+| ------------------------------- | -------------------- | ------------------------------------------------------------------------------ |
+| `openclaw.context-engine-ready` | `ContextEngineReady` | The selected context engine has a runtime registration and is not quarantined. |
+| `openclaw.tool-catalog-ready`   | `ToolCatalogReady`   | The runtime health store has no active tool-schema quarantines.                |
+| `openclaw.mcp-runtime-ready`    | `McpRuntimeReady`    | Every configured agent's MCP definitions loaded without owner diagnostics.     |
+| `openclaw.sandbox-ready`        | `SandboxReady`       | Every sandbox-enabled agent references a registered sandbox backend.           |
+| `openclaw.harness-ready`        | `HarnessReady`       | Every configured native harness runtime is registered.                         |
+
+These checks are observational. They do not create a session, connect to an MCP
+server, start a sandbox, invoke a tool, instantiate a context engine, or call a
+model. MCP discovery is captured when the Gateway accepts the runtime
+configuration; readiness requests read that captured summary. The other checks
+read bounded owner registries, configuration, or capped runtime-health records.
+Select only the capabilities that the deployment promises, and promote one to
+`requiredCriteria` only when its absence means the Gateway must not receive
+work.
+
+Built-in state and background-service lifecycle selectors are observational.
+They never open a database, install a delivery callback, start cron, or run
+recovery from a readiness request. Session storage is the one active check in
+this group and only creates bounded temporary probes:
+
+- `openclaw.state-ready` reports whether the shared state database is active.
+- `openclaw.session-storage-ready` verifies the state root and configured
+  session-store parents with bounded, cached write, flush, and cleanup probes.
+- `openclaw.delivery-runtime-ready` reports whether durable session delivery
+  recovery has an active runtime owner.
+- `openclaw.scheduler-ready` reports the scheduler lifecycle and startup
+  recovery state. A scheduler disabled by configuration is satisfied.
+
+These criteria are not evaluated until selected. Put them in
+`requiredCriteria` only when that service is required by the deployment.
+
 - **DO use:** `GET /health` - instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
 - **DON'T use:** `/v1/chat/completions` for health checks - each request creates a full agent session with skill snapshot, context assembly, and LLM calls
 
