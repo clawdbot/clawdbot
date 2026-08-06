@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   issueDeviceBootstrapToken,
 } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
 import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
@@ -26,7 +26,13 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
 const RATE_LIMIT_MAX_KEYS = 1024;
 const replayCache = new Map<string, number>();
-const rateLimit = new Map<string, { count: number; resetAtMs: number }>();
+// The SDK limiter owns expiry pruning, the max-key eviction cap, and recency refresh; the
+// telegram webhook ingress uses the same guard. Keep the miniapp auth policy per-IP.
+const authRateLimiter = createFixedWindowRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX,
+  maxTrackedKeys: RATE_LIMIT_MAX_KEYS,
+});
 
 export function registerTelegramMiniAppRoutes(
   api: OpenClawPluginApi,
@@ -86,7 +92,7 @@ async function handleAuth(
     return;
   }
   const ip = req.socket.remoteAddress ?? "unknown";
-  if (!consumeRateLimit(ip)) {
+  if (authRateLimiter.isRateLimited(ip)) {
     sendText(res, 429, "Too many requests");
     return;
   }
@@ -185,32 +191,6 @@ async function readJsonBody(
   } catch {
     return null;
   }
-}
-
-function consumeRateLimit(ip: string): boolean {
-  const now = Date.now();
-  // Sweep expired windows before capping: expired keys were previously only overwritten on a
-  // same-IP revisit, so one-shot IPs accumulated without bound. Entries are reinserted on
-  // every hit, so insertion order doubles as last-seen order and pruneMapToMaxSize evicts
-  // the stalest live entry first.
-  for (const [key, entry] of rateLimit) {
-    if (entry.resetAtMs <= now) {
-      rateLimit.delete(key);
-    }
-  }
-  const current = rateLimit.get(ip);
-  if (!current) {
-    rateLimit.set(ip, { count: 1, resetAtMs: now + RATE_LIMIT_WINDOW_MS });
-    pruneMapToMaxSize(rateLimit, RATE_LIMIT_MAX_KEYS);
-    return true;
-  }
-  current.count += 1;
-  // Reinsert to move the entry to the tail; mutating in place would keep an actively
-  // attacking IP at the front of the map where the cap could evict it mid-window,
-  // silently resetting its counter (fail-open).
-  rateLimit.delete(ip);
-  rateLimit.set(ip, current);
-  return current.count <= RATE_LIMIT_MAX;
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {
