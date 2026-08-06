@@ -14,7 +14,9 @@ import {
 } from "../infra/diagnostic-events.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output.js";
+import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import { FailoverError } from "./failover-error.js";
 
 // vi.mock factories are hoisted above imports, so any references inside them
 // must come from vi.hoisted() so they exist at hoist time (otherwise they'd
@@ -38,6 +40,9 @@ const {
   closeMcpLoopbackServerMock,
   retireSessionMcpRuntimeForSessionKeyMock,
   retireSessionMcpRuntimeMock,
+  loadAuthProfileStoreForRuntimeMock,
+  markAuthProfileFailureMock,
+  markAuthProfileSuccessMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
@@ -51,6 +56,9 @@ const {
   closeMcpLoopbackServerMock: vi.fn(),
   retireSessionMcpRuntimeForSessionKeyMock: vi.fn(),
   retireSessionMcpRuntimeMock: vi.fn(),
+  loadAuthProfileStoreForRuntimeMock: vi.fn(),
+  markAuthProfileFailureMock: vi.fn(),
+  markAuthProfileSuccessMock: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -98,6 +106,8 @@ const baseRunParams = {
 } as const;
 
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
+let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
+let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
 
 async function captureRejectedClaudeRun(
   params: Parameters<typeof runCliAgent>[0],
@@ -157,19 +167,184 @@ beforeEach(() => {
   retireSessionMcpRuntimeForSessionKeyMock.mockResolvedValue(true);
   retireSessionMcpRuntimeMock.mockReset();
   retireSessionMcpRuntimeMock.mockResolvedValue(true);
+  loadAuthProfileStoreForRuntimeMock.mockReset();
+  markAuthProfileFailureMock.mockReset().mockResolvedValue(undefined);
+  markAuthProfileSuccessMock.mockReset().mockResolvedValue(undefined);
+  setCliRunnerTestDeps?.({
+    loadAuthProfileStoreForRuntime: loadAuthProfileStoreForRuntimeMock,
+    markAuthProfileFailure: markAuthProfileFailureMock,
+    markAuthProfileSuccess: markAuthProfileSuccessMock,
+  });
 });
 
 beforeAll(async () => {
-  ({ runCliAgent } = await import("./cli-runner.js"));
+  ({ runCliAgent, restoreCliRunnerTestDeps, setCliRunnerTestDeps } =
+    await import("./cli-runner.js"));
 });
 
 afterEach(() => {
+  restoreCliRunnerTestDeps();
   cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
   resetDiagnosticEventsForTest();
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it.each([
+    ["claude-cli", "user"],
+    ["google-gemini-cli", "cron"],
+  ])("settles one exhausted %s profile failure for a %s caller", async (provider, trigger) => {
+    const profileId = `${provider}:selected`;
+    const store = {
+      version: 1,
+      profiles: { [profileId]: { type: "api_key", provider, key: "secret" } },
+    } as const;
+    prepareCliRunContextMock.mockImplementationOnce(async (params) => ({
+      ...(makeStubContext(params as typeof baseRunParams & { trigger?: string }) as object),
+      effectiveAuthProfileId: profileId,
+      authProfileStore: store,
+      agentDir: "/tmp/agent",
+    }));
+    executePreparedCliRunMock.mockRejectedValueOnce(
+      new FailoverError("selected session expired", { reason: "session_expired", provider }),
+    );
+
+    await expect(
+      runCliAgent({ ...baseRunParams, provider, trigger: trigger as "user" | "cron" }),
+    ).rejects.toMatchObject({ reason: "session_expired" });
+
+    expect(markAuthProfileFailureMock).toHaveBeenCalledOnce();
+    expect(markAuthProfileFailureMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        store,
+        profileId,
+        reason: "session_expired",
+        agentDir: "/tmp/agent",
+      }),
+    );
+    expect(markAuthProfileSuccessMock).not.toHaveBeenCalled();
+  });
+
+  it("settles a typed selected-profile preparation failure before fallback", async () => {
+    const profileId = "claude-cli:selected";
+    const store = {
+      version: 1,
+      profiles: { [profileId]: { type: "oauth", provider: "claude-cli" } },
+    };
+    loadAuthProfileStoreForRuntimeMock.mockReturnValue(store);
+    prepareCliRunContextMock.mockRejectedValueOnce(
+      new CliAuthProfilePreparationError({
+        message: "selected profile needs login",
+        profileId,
+        provider: "claude-cli",
+        agentDir: "/tmp/agent",
+      }),
+    );
+
+    await expect(runCliAgent({ ...baseRunParams, provider: "claude-cli" })).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId,
+    });
+
+    expect(loadAuthProfileStoreForRuntimeMock).toHaveBeenCalledWith(
+      "/tmp/agent",
+      expect.any(Object),
+    );
+    expect(markAuthProfileFailureMock).toHaveBeenCalledWith(
+      expect.objectContaining({ store, profileId, reason: "auth" }),
+    );
+  });
+
+  it("records only success when fresh-session recovery succeeds and clears stale health", async () => {
+    const profileId = "google-gemini-cli:selected";
+    const store = {
+      version: 1,
+      profiles: {
+        [profileId]: { type: "oauth", provider: "google-gemini-cli", access: "secret" },
+      },
+      usageStats: {
+        [profileId]: { cooldownUntil: Date.now() + 60_000, cooldownReason: "session_expired" },
+      },
+    };
+    prepareCliRunContextMock.mockImplementationOnce(async (params) => ({
+      ...(makeStubContext(params as typeof baseRunParams & { trigger?: string }) as object),
+      effectiveAuthProfileId: profileId,
+      authProfileStore: store,
+      agentDir: "/tmp/agent",
+      openClawHistoryPrompt: "history",
+      reusableCliSession: { mode: "reuse", sessionId: "stale-session" },
+      params: {
+        ...(params as typeof baseRunParams),
+        onBeforeFreshCliSessionRetry: vi.fn(async () => true),
+      },
+    }));
+    executePreparedCliRunMock
+      .mockRejectedValueOnce(
+        new FailoverError("stale session", {
+          reason: "session_expired",
+          provider: "google-gemini-cli",
+        }),
+      )
+      .mockResolvedValueOnce({ text: "recovered" });
+
+    await expect(
+      runCliAgent({ ...baseRunParams, provider: "google-gemini-cli" }),
+    ).resolves.toBeDefined();
+
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(2);
+    expect(markAuthProfileFailureMock).not.toHaveBeenCalled();
+    expect(markAuthProfileSuccessMock).toHaveBeenCalledOnce();
+    expect(markAuthProfileSuccessMock).toHaveBeenCalledWith({
+      store,
+      profileId,
+      provider: "google-gemini-cli",
+      agentDir: "/tmp/agent",
+    });
+  });
+
+  it.each([
+    new FailoverError("bad transcript", { reason: "format" }),
+    new FailoverError("context full", { reason: "context_overflow" }),
+    new FailoverError("pre-provider timeout", {
+      reason: "timeout",
+      cliTimeout: {
+        mode: "no-output",
+        timeoutSeconds: 30,
+        observedActivity: false,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
+    }),
+  ])("does not settle selected-profile health for local failure %#", async (error) => {
+    const profileId = "claude-cli:selected";
+    prepareCliRunContextMock.mockImplementationOnce(async (params) => ({
+      ...(makeStubContext(params as typeof baseRunParams & { trigger?: string }) as object),
+      effectiveAuthProfileId: profileId,
+      authProfileStore: {
+        version: 1,
+        profiles: { [profileId]: { type: "api_key", provider: "claude-cli", key: "secret" } },
+      },
+    }));
+    executePreparedCliRunMock.mockRejectedValueOnce(error);
+
+    await expect(runCliAgent({ ...baseRunParams, provider: "claude-cli" })).rejects.toBe(error);
+    expect(markAuthProfileFailureMock).not.toHaveBeenCalled();
+    expect(markAuthProfileSuccessMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves ambient no-profile failures out of shared health", async () => {
+    executePreparedCliRunMock.mockRejectedValueOnce(
+      new FailoverError("ambient auth failed", { reason: "auth", provider: "claude-cli" }),
+    );
+
+    await expect(runCliAgent({ ...baseRunParams, provider: "claude-cli" })).rejects.toMatchObject({
+      reason: "auth",
+    });
+    expect(markAuthProfileFailureMock).not.toHaveBeenCalled();
+    expect(markAuthProfileSuccessMock).not.toHaveBeenCalled();
+  });
+
   it("adds Claude CLI harness and run ownership at the runner entrypoint", async () => {
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {

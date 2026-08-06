@@ -114,6 +114,7 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
+import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
@@ -376,15 +377,19 @@ function buildCliAuthProfileResolutionError(params: {
   backendId: string;
   profileId: string;
   provider: string;
+  agentDir: string;
   failure: CliAuthProfileResolutionFailure;
-}): Error {
+}): CliAuthProfilePreparationError {
   const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
     profileId: params.profileId,
   });
   const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
-  return new Error(
-    `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
-  );
+  return new CliAuthProfilePreparationError({
+    message: `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+    profileId: params.profileId,
+    provider: params.provider,
+    agentDir: params.agentDir,
+  });
 }
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
@@ -590,6 +595,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: nativeClaudeCliCredential.provider,
+        agentDir,
         failure: { kind: "native-login-missing" },
       });
     }
@@ -598,6 +604,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: nativeClaudeCliCredential.provider,
+        agentDir,
         failure: { kind: "native-login-identity-mismatch" },
       });
     }
@@ -629,6 +636,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        agentDir,
         failure: { kind: "unmaterialized" },
       });
     }
@@ -641,6 +649,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        agentDir,
         failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
       });
     }
@@ -656,6 +665,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: resolvedAuth?.provider ?? params.provider,
+        agentDir,
         failure: { kind: "unmaterialized" },
       });
     }
@@ -1597,6 +1607,7 @@ export async function prepareCliRunContext(
       return {
         params: preparedParams,
         effectiveAuthProfileId,
+        ...(authStore ? { authProfileStore: authStore } : {}),
         agentDir,
         started,
         workspaceDir,
@@ -1669,6 +1680,7 @@ export async function prepareCliRunContext(
     return {
       params: preparedParams,
       effectiveAuthProfileId,
+      ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,
       started,
       workspaceDir,

@@ -984,6 +984,13 @@ describe("prepareCliRunContext", () => {
     await expect(preparation).rejects.toThrow(
       `could not materialize selected auth profile "${authProfileId}"`,
     );
+    await expect(preparation).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "anthropic",
+      agentDir,
+    });
     await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
     expect(prepareExecution).not.toHaveBeenCalled();
   });

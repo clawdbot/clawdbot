@@ -554,6 +554,48 @@ async function withOpenAIStatusFixture<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
+  it("shows cooldown reasons and recovery guidance in JSON and text output", async () => {
+    const now = Date.now();
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<string, { cooldownUntil: number; cooldownReason: "session_expired" }>;
+    };
+    store.usageStats = {
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "session_expired",
+      },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, profileId) =>
+      profileId === "anthropic:default" ? now + 60_000 : undefined,
+    );
+
+    try {
+      const jsonRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
+        expect.objectContaining({
+          profileId: "anthropic:default",
+          kind: "cooldown",
+          reason: "session_expired",
+          recoveryHint:
+            "Re-authenticate with `openclaw models auth login --provider anthropic --profile-id 'anthropic:default'`.",
+        }),
+      ]);
+
+      const textRuntime = createRuntime();
+      await modelsStatusCommand({}, textRuntime as never);
+      const output = (textRuntime.log as Mock).mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("Unavailable auth profiles");
+      expect(output).toContain("anthropic:default (anthropic) cooldown:session_expired");
+      expect(output).toContain("openclaw models auth login --provider anthropic");
+    } finally {
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("does not restore over plugin metadata published while status is running", async () => {
     const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
     const config = mocks.loadConfig();

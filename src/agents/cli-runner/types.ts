@@ -33,6 +33,7 @@ import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -288,6 +289,8 @@ export type CliSessionBindingFacts = {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
   effectiveAuthProfileId?: string;
+  /** Selected profile snapshot used only for terminal health settlement. */
+  authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
   workspaceDir: string;
