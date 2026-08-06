@@ -174,6 +174,24 @@ describe("retryAsync", () => {
     expect(retryEvent.label).toBe("telegram");
   });
 
+  it("uses an operation-specific backoff sleeper", async () => {
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 25,
+        maxDelayMs: 25,
+        jitter: 0,
+        sleep,
+      }),
+    ).resolves.toBe("ok");
+
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(25);
+  });
+
   it("retries immediately when the resolved delay is zero", async () => {
     const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
     await expect(

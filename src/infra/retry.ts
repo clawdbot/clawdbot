@@ -28,6 +28,7 @@ export type RetryOptions = RetryConfig & {
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
   onRetry?: (info: RetryInfo) => void;
+  sleep?: (ms: number) => Promise<void>;
 };
 
 const DEFAULT_RETRY_CONFIG = {
@@ -137,6 +138,7 @@ export async function retryAsync<T>(
       ? resolved.maxDelayMs
       : Number.POSITIVE_INFINITY;
   const jitter = resolved.jitter;
+  const sleepFn = options.sleep ?? sleep;
   const shouldRetry = options.shouldRetry ?? (() => true);
   let lastErr: unknown;
 
@@ -193,7 +195,7 @@ export async function retryAsync<T>(
         label: options.label,
       });
       if (delay > 0) {
-        await sleep(delay);
+        await sleepFn(delay);
       }
     }
   }
