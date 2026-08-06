@@ -846,6 +846,22 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("invalidates retained plugin metadata after rewriting a legacy manifest", async () => {
+    mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValueOnce(true);
+    const invalidatePluginMetadataSnapshot = vi.fn();
+    const contribution = requireDoctorContribution("doctor:legacy-plugin-manifests");
+    const ctx = {
+      cfg: {},
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: buildDoctorPrompter(true),
+      invalidatePluginMetadataSnapshot,
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(invalidatePluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("runs release configured plugin install repair before plugin registry and final config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
@@ -855,6 +871,9 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:plugin-registry"),
     );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+    expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(
+      ids.indexOf("doctor:active-tool-schema-warnings"),
+    );
   });
 
   it("repairs canonical session rows before downstream agent-state checks", () => {
@@ -1109,7 +1128,9 @@ describe("doctor health contributions", () => {
       changes: ["Installed configured plugin matrix."],
       warnings: [],
       touchedConfig: true,
+      pluginInventoryChanged: true,
     });
+    const invalidatePluginMetadataSnapshot = vi.fn();
     const contribution = requireDoctorContribution("doctor:release-configured-plugin-installs");
     const ctx = {
       cfg: {},
@@ -1117,6 +1138,7 @@ describe("doctor health contributions", () => {
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       env: {},
+      invalidatePluginMetadataSnapshot,
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
 
     await contribution.run(ctx);
@@ -1131,6 +1153,7 @@ describe("doctor health contributions", () => {
       "Doctor changes",
     );
     expect(ctx.cfg.meta?.lastTouchedVersion).toBe("2026.5.2-test");
+    expect(invalidatePluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("keeps legacy parent writable release repairs old-parent-readable", async () => {
@@ -1681,6 +1704,7 @@ describe("doctor health contributions", () => {
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     const ctx = {
       cfg,
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1721,6 +1745,7 @@ describe("doctor health contributions", () => {
     }));
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(false),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1761,6 +1786,7 @@ describe("doctor health contributions", () => {
     }));
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1782,6 +1808,7 @@ describe("doctor health contributions", () => {
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     const ctx = {
       cfg,
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -1813,6 +1840,7 @@ describe("doctor health contributions", () => {
     });
     const ctx = {
       cfg: {},
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },

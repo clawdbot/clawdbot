@@ -24,7 +24,7 @@ scenario:
     - Visible completion output reaches the originating QA DM exactly once.
     - Exact NO_REPLY completion output produces no channel delivery.
     - Genuinely empty completion output is represented intentionally once.
-    - Gateway restart does not replay prior terminal payloads, represents the interrupted handoff explicitly, and a post-restart completion is delivered exactly once.
+    - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
     - Direct fallback strips protected internal metadata before one channel delivery.
   docsRefs:
     - docs/tools/subagents.md
@@ -179,29 +179,6 @@ flow:
           args:
             - ref: env
             - 180000
-        - call: waitForCondition
-          args:
-            - lambda:
-                expr: "state.getSnapshot().messages.find((message) => message.direction === 'outbound' && verdicts.some((verdict) => verdict.conversationId === message.conversation.id) && !preRestartOutbound.some((before) => before.id === message.id) && String(message.text ?? '').includes('interrupted by a gateway restart'))"
-            - 60000
-            - 250
-        - set: postRestartOutbound
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && verdicts.some((verdict) => verdict.conversationId === message.conversation.id)).map((message) => ({ id: message.id, conversationId: message.conversation.id, text: String(message.text ?? '') }))"
-        - set: postRestartTerminalPayloads
-          value:
-            expr: "postRestartOutbound.filter((message) => verdicts.some((verdict) => verdict.capturedTerminalPayloads.includes(message.text)))"
-        - set: restartInterruptionPayloads
-          value:
-            expr: "postRestartOutbound.filter((message) => !preRestartOutbound.some((before) => before.id === message.id))"
-        - assert:
-            expr: "JSON.stringify(postRestartTerminalPayloads) === JSON.stringify(preRestartTerminalPayloads)"
-            message:
-              expr: "`Gateway restart replayed or lost a prior terminal payload: before=${JSON.stringify(preRestartTerminalPayloads)} after=${JSON.stringify(postRestartTerminalPayloads)}`"
-        - assert:
-            expr: "restartInterruptionPayloads.length === 1 && restartInterruptionPayloads.every((message) => message.text.includes('interrupted by a gateway restart'))"
-            message:
-              expr: "`Gateway restart did not represent the interrupted completion handoff exactly once: ${JSON.stringify(restartInterruptionPayloads)}`"
         - set: restartStartIndex
           value:
             expr: state.getSnapshot().messages.length
@@ -241,9 +218,28 @@ flow:
             expr: "restartTask.title === 'qa-terminal-restart' && restartTask.status === 'completed' && restartTask.deliveryStatus === 'delivered'"
             message:
               expr: "`restart completion task lifecycle did not settle authoritatively; task=${JSON.stringify(restartTask)}`"
+        # Use a new durably delivered task as the observation boundary. By then,
+        # restart recovery must not have replayed or invented output for settled tasks.
+        - set: postRestartOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && verdicts.some((verdict) => verdict.conversationId === message.conversation.id)).map((message) => ({ id: message.id, conversationId: message.conversation.id, text: String(message.text ?? '') }))"
+        - set: postRestartTerminalPayloads
+          value:
+            expr: "postRestartOutbound.filter((message) => verdicts.some((verdict) => verdict.capturedTerminalPayloads.includes(message.text)))"
+        - set: postRestartUnexpectedPayloads
+          value:
+            expr: "postRestartOutbound.filter((message) => !preRestartOutbound.some((before) => before.id === message.id))"
+        - assert:
+            expr: "JSON.stringify(postRestartTerminalPayloads) === JSON.stringify(preRestartTerminalPayloads)"
+            message:
+              expr: "`Gateway restart replayed or lost a prior terminal payload: before=${JSON.stringify(preRestartTerminalPayloads)} after=${JSON.stringify(postRestartTerminalPayloads)}`"
+        - assert:
+            expr: "postRestartUnexpectedPayloads.length === 0"
+            message:
+              expr: "`Gateway restart synthesized output for already-settled handoffs: ${JSON.stringify(postRestartUnexpectedPayloads)}`"
         - set: appendRestartVerdict
           value:
-            expr: "verdicts.push({ case: 'restart', conversationId: restartConversationId, taskId: restartTask.taskId, taskDeliveryStatus: restartTask.deliveryStatus, inputDisposition: 'visible', restart: true, fallback: true, preRestartTerminalMessageCount: preRestartTerminalPayloads.length, postRestartTerminalPayloadCount: postRestartTerminalPayloads.length, priorTerminalPayloadReplayCount: postRestartTerminalPayloads.length - preRestartTerminalPayloads.length, interruptedHandoffRepresentationCount: restartInterruptionPayloads.length, interruptedHandoffPayloads: restartInterruptionPayloads.map((message) => message.text), expectedTerminalSendCount: 1, actualTerminalSendCount: restartMatches.length, capturedTerminalPayloads: restartMatches.map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
+            expr: "verdicts.push({ case: 'restart', conversationId: restartConversationId, taskId: restartTask.taskId, taskDeliveryStatus: restartTask.deliveryStatus, inputDisposition: 'visible', restart: true, fallback: true, preRestartTerminalMessageCount: preRestartTerminalPayloads.length, postRestartTerminalPayloadCount: postRestartTerminalPayloads.length, priorTerminalPayloadReplayCount: postRestartTerminalPayloads.length - preRestartTerminalPayloads.length, unexpectedPostRestartPayloadCount: postRestartUnexpectedPayloads.length, unexpectedPostRestartPayloads: postRestartUnexpectedPayloads.map((message) => message.text), expectedTerminalSendCount: 1, actualTerminalSendCount: restartMatches.length, capturedTerminalPayloads: restartMatches.map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
         - set: emptyStartIndex
           value:
             expr: state.getSnapshot().messages.length

@@ -82,15 +82,16 @@ export function createTelegramDraftController(params: {
   threadSpec: TelegramThreadSpec;
 }) {
   const streamDeliveryEnabled = !params.isRoomEvent && params.streamMode !== "off";
-  const accountBlockStreamingEnabled =
-    resolveChannelStreamingBlockEnabled(params.telegramCfg) ??
-    params.cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamAnswerDraft =
+  const previewAvailable =
     params.allowProviderPreview &&
     streamDeliveryEnabled &&
     !params.hasTelegramQuoteReply &&
-    !accountBlockStreamingEnabled &&
     !params.forceBlockStreamingForReasoning;
+  const accountBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.telegramCfg, {
+    previewAvailable,
+    blockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
+  });
+  const canStreamAnswerDraft = previewAvailable && !accountBlockStreamingEnabled;
   const streamReasoningDraft = params.resolvedReasoningLevel === "stream";
   const streamReasoningInProgressDraft =
     streamReasoningDraft && params.streamMode === "progress" && canStreamAnswerDraft;

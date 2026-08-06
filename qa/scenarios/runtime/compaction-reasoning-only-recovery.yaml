@@ -27,6 +27,7 @@ scenario:
     kind: flow
     summary: Reject one reasoning-only overflow-compaction summary, retry it, and verify the recovered summary persists.
     config:
+      requiredProviderMode: mock-openai
       faultMode: reasoning-only-output-once
       faultMarkerPrefix: QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE
       summaryMarker: QA-COMPACTION-REASONING-RECOVERED-SUMMARY

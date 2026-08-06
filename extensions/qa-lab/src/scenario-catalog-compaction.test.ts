@@ -71,6 +71,7 @@ describe("qa compaction scenario catalog", () => {
     const postWriteContinuationsExpr = readSetExpression("postWriteContinuations");
     const writeTranscriptToolCallIdExpr = readSetExpression("writeTranscriptToolCallId");
     const continuationChainExpr = readSetExpression("continuationChain");
+    const compactionSummaryRequestsExpr = readSetExpression("compactionSummaryRequests");
     const continuationAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes("continuationChain.valid === true"),
     );
@@ -97,6 +98,10 @@ describe("qa compaction scenario catalog", () => {
     const terminalEvidenceAssertExpr = readAssertExpression(
       "terminalContinuations[0].providerVariant === 'openai'",
     );
+    const compactionSummaryAssertExpr = readAssertExpression(
+      "compactionSummaryRequests.length > 0",
+    );
+    const noQualityRetryAssertExpr = readAssertExpression("Previous summary failed quality checks");
     const knownGap =
       "known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.";
 
@@ -274,11 +279,19 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).not.toContain("config.expectedOpenClawToolResult");
     expect(flow).not.toContain("String(request.toolOutput ?? '').includes(`---");
     expect(flow).not.toContain("String(request.toolOutput ?? '').includes(`+++");
-    expect(flow).toContain(
-      "compactionSummaryRequests.length === 1 && compactionSummaryRequests[0].outcome === 'success' && compactionSummaryRequests[0].plannedToolName === undefined && compactionSummaryRequests[0].toolOutputStructuredError !== true",
+    expect(compactionSummaryRequestsExpr).toContain("request.requestKind === 'compaction-summary'");
+    expect(compactionSummaryAssertExpr).toContain("compactionSummaryRequests.length > 0");
+    expect(compactionSummaryAssertExpr).toContain(
+      "request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor",
     );
-    expect(flow).not.toContain("compactionSummaryRequests.every(");
-    expect(flow).not.toContain("compactionSummaryRequests.length >= 1");
+    expect(compactionSummaryAssertExpr).toContain("request.outcome === 'success'");
+    expect(compactionSummaryAssertExpr).toContain("request.plannedToolName === undefined");
+    expect(compactionSummaryAssertExpr).toContain("request.toolOutputStructuredError !== true");
+    expect(noQualityRetryAssertExpr).toContain("compactionSummaryRequests.every");
+    expect(noQualityRetryAssertExpr).toContain(
+      "!String(request.allInputText ?? '').includes('Previous summary failed quality checks')",
+    );
+    expect(flow).not.toContain("compactionSummaryRequests.length === 1");
     expect(flow).toContain(
       "writeRequest.rawByteLength < config.overflowThresholdBytes && writeRequest.rawByteLength < overflowRequest.rawByteLength",
     );
@@ -292,6 +305,7 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain('"set":"requestEvidence"');
     expect(flow).toContain("durable: String(request.allInputText ?? '')");
     expect(flow).toContain("bulky: String(request.allInputText ?? '')");
+    expect(flow).toContain("qualityRetry: String(request.allInputText ?? '')");
     expect(flow).toContain("inputChars: String(request.allInputText ?? '').length");
     expect(flow).toContain(
       "resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null",

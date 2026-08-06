@@ -156,7 +156,7 @@ describe("AppSidebar interleaved zone", () => {
     expect(iconFor("agent:main:unknown")?.querySelector('path[d^="M21 15"]')).not.toBeNull();
   });
 
-  it("rings a running pinned icon instead of trailing the row", async () => {
+  it("keeps a pinned icon leading while activity trails the row", async () => {
     const keys = ["agent:main:main", "agent:main:page"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
@@ -173,15 +173,16 @@ describe("AppSidebar interleaved zone", () => {
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
-    const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph--running");
+    const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
     expect(glyph?.querySelector(".sidebar-pinned-session__icon")?.textContent).toContain("🦞");
-    expect(glyph?.querySelector(".session-glyph__ring")).not.toBeNull();
-    expect(glyph?.querySelector(".session-glyph__badge--unread")).not.toBeNull();
+    expect(glyph?.classList.contains("session-glyph--running")).toBe(false);
+    expect(glyph?.querySelector(".session-glyph__ring")).toBeNull();
+    expect(glyph?.querySelector(".session-glyph__badge--unread")).toBeNull();
     expect(row?.querySelector(".nav-item__state")).toBeNull();
-    expect(row?.querySelector(".sidebar-recent-session__state")).toBeNull();
+    expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
   });
 
-  it("keeps unread on a pinned attention row's glyph", async () => {
+  it("keeps pinned attention leading while unread trails the row", async () => {
     const keys = ["agent:main:main", "agent:main:page"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
@@ -207,7 +208,8 @@ describe("AppSidebar interleaved zone", () => {
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
     const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
     expect(glyph?.querySelector(".sidebar-session-attention__icon")).not.toBeNull();
-    expect(glyph?.querySelector(".session-glyph__badge--unread")).not.toBeNull();
+    expect(glyph?.querySelector(".session-glyph__badge--unread")).toBeNull();
+    expect(row?.querySelector(".session-row-state .sidebar-recent-session__unread")).not.toBeNull();
     expect(row?.querySelector(".nav-item__state")).toBeNull();
   });
 

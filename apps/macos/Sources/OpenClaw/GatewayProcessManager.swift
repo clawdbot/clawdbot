@@ -346,6 +346,15 @@ final class GatewayProcessManager {
             self.status = .stopped
             return
         }
+        guard OpenClawConfigFile.migrateRetiredAppMetadataForGatewayStart() else {
+            let message =
+                "Could not repair retired macOS config metadata. Run `openclaw doctor --fix`, then retry."
+            self.status = .failed(message)
+            self.lastFailureReason = message
+            self.appendLog("[gateway] \(message)\n")
+            self.logger.error("gateway config metadata migration failed")
+            return
+        }
         // Many surfaces can call `setActive(true)` in quick succession (startup, Canvas, health checks).
         // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the port.
         switch self.status {

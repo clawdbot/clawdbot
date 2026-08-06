@@ -8,6 +8,7 @@ import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -110,6 +111,177 @@ describe("current plugin metadata snapshot", () => {
     expect(
       getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/b" }),
     ).toBeUndefined();
+  });
+
+  it("keeps owner-prepared metadata scoped to nested async work", async () => {
+    const globalConfig = { plugins: { allow: ["global"] } };
+    const scopedConfig = { plugins: { allow: ["scoped"] } };
+    const globalSnapshot = createSnapshot({
+      config: globalConfig,
+      workspaceDir: "/workspace/global",
+    });
+    const scopedSnapshot = createSnapshot({
+      config: scopedConfig,
+      workspaceDir: "/workspace/scoped",
+    });
+    setCurrentPluginMetadataSnapshot(globalSnapshot, { config: globalConfig });
+
+    await withPluginMetadataSnapshotScope(
+      scopedSnapshot,
+      async () => {
+        await Promise.resolve();
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            config: scopedConfig,
+            workspaceDir: "/workspace/scoped",
+          }),
+        ).toBe(scopedSnapshot);
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            config: globalConfig,
+            workspaceDir: "/workspace/global",
+          }),
+        ).toBe(globalSnapshot);
+      },
+      { config: scopedConfig },
+    );
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config: scopedConfig,
+        workspaceDir: "/workspace/scoped",
+      }),
+    ).toBeUndefined();
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config: globalConfig,
+        workspaceDir: "/workspace/global",
+      }),
+    ).toBe(globalSnapshot);
+  });
+
+  it("lets configless nested readers inherit explicit owner discovery context", () => {
+    const config = {
+      plugins: {
+        allow: ["scoped"],
+        load: { paths: ["/plugins/scoped"] },
+      },
+    };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/scoped" });
+    setCurrentPluginMetadataSnapshot(undefined);
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            allowWorkspaceScopedSnapshot: true,
+            requireDefaultDiscoveryContext: true,
+          }),
+        ).toBe(snapshot);
+      },
+      { config },
+    );
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("isolates concurrent owner-prepared metadata scopes", async () => {
+    const firstConfig = { plugins: { allow: ["first"] } };
+    const secondConfig = { plugins: { allow: ["second"] } };
+    const first = createSnapshot({ config: firstConfig, workspaceDir: "/workspace/first" });
+    const second = createSnapshot({ config: secondConfig, workspaceDir: "/workspace/second" });
+
+    const [firstResult, secondResult] = await Promise.all([
+      withPluginMetadataSnapshotScope(
+        first,
+        async () => {
+          await Promise.resolve();
+          return getCurrentPluginMetadataSnapshot({
+            config: firstConfig,
+            workspaceDir: "/workspace/first",
+          });
+        },
+        { config: firstConfig },
+      ),
+      withPluginMetadataSnapshotScope(
+        second,
+        async () => {
+          await Promise.resolve();
+          return getCurrentPluginMetadataSnapshot({
+            config: secondConfig,
+            workspaceDir: "/workspace/second",
+          });
+        },
+        { config: secondConfig },
+      ),
+    ]);
+
+    expect(firstResult).toBe(first);
+    expect(secondResult).toBe(second);
+  });
+
+  it("falls through nested scopes and restores the parent after rejection", async () => {
+    const outerConfig = { plugins: { allow: ["outer"] } };
+    const innerConfig = { plugins: { allow: ["inner"] } };
+    const outer = createSnapshot({ config: outerConfig, workspaceDir: "/workspace/outer" });
+    const inner = createSnapshot({ config: innerConfig, workspaceDir: "/workspace/inner" });
+    setCurrentPluginMetadataSnapshot(undefined);
+
+    await withPluginMetadataSnapshotScope(
+      outer,
+      async () => {
+        await expect(
+          withPluginMetadataSnapshotScope(
+            inner,
+            async () => {
+              expect(
+                getCurrentPluginMetadataSnapshot({
+                  config: outerConfig,
+                  workspaceDir: "/workspace/outer",
+                }),
+              ).toBe(outer);
+              throw new Error("scope failed");
+            },
+            { config: innerConfig },
+          ),
+        ).rejects.toThrow("scope failed");
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            config: outerConfig,
+            workspaceDir: "/workspace/outer",
+          }),
+        ).toBe(outer);
+      },
+      { config: outerConfig },
+    );
+  });
+
+  it("supports compatible config identities within an owner-prepared scope", () => {
+    const sourceConfig = { plugins: { allow: ["source"] } };
+    const runtimeConfig = { plugins: { allow: ["runtime"] } };
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir: "/workspace" });
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            config: runtimeConfig,
+            workspaceDir: "/workspace",
+          }),
+        ).toBe(snapshot);
+      },
+      {
+        config: sourceConfig,
+        compatibleConfigs: [runtimeConfig],
+      },
+    );
   });
 
   it("rejects a workspace-scoped snapshot when the caller does not provide workspace scope", () => {

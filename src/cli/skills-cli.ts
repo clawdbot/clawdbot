@@ -123,6 +123,15 @@ type ResolveSkillsWorkspaceOptions = {
 };
 
 type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
+type SkillProposalDraftCliOptions = {
+  agent?: string;
+  json?: boolean;
+  proposal?: string;
+  proposalDir?: string;
+  description?: string;
+  goal?: string;
+  evidence?: string;
+};
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS = 650_000;
@@ -961,24 +970,61 @@ export function registerSkillsCli(program: Command) {
       "Target agent workspace (defaults to cwd-inferred, then default agent)",
     );
 
+  const runWorkshopAction = async <T>(
+    opts: { agent?: string; json?: boolean },
+    action: (resolved: ResolvedSkillsWorkspace) => Promise<T>,
+    format: (result: T) => string,
+  ): Promise<void> => {
+    try {
+      const result = await action(resolveSkillsWorkspaceForCommand(workshop, opts));
+      if (hasJsonOutput(opts)) {
+        defaultRuntime.writeJson(result);
+        return;
+      }
+      defaultRuntime.writeStdout(format(result));
+    } catch (err) {
+      defaultRuntime.error(String(err));
+      defaultRuntime.exit(1);
+    }
+  };
+
+  const runWorkshopDraftAction = (
+    opts: SkillProposalDraftCliOptions,
+    action: (
+      input: Omit<Parameters<typeof proposeUpdateSkill>[0], "skillName">,
+    ) => Promise<SkillProposalReadResult>,
+    format: (proposal: SkillProposalReadResult) => string = (proposal) => `${proposal.record.id}\n`,
+  ): Promise<void> =>
+    runWorkshopAction(
+      opts,
+      async ({ config, workspaceDir, agentId }) => {
+        const draft = await readSkillProposalInput(opts);
+        return await action({
+          workspaceDir,
+          agentId,
+          eventActor: { type: "system", id: "cli" },
+          config,
+          content: draft.content,
+          supportFiles: draft.supportFiles,
+          description: opts.description,
+          goal: opts.goal,
+          evidence: opts.evidence,
+        });
+      },
+      format,
+    );
+
   workshop
     .command("list")
     .description("List pending and completed skill proposals")
     .option("--json", "Output as JSON", false)
-    .action(async (opts: { json?: boolean; agent?: string }) => {
-      try {
-        const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
-        const manifest = await listSkillProposals({ agentId, workspaceDir });
-        if (hasJsonOutput(opts)) {
-          defaultRuntime.writeJson(manifest);
-          return;
-        }
-        defaultRuntime.writeStdout(formatSkillProposalList(manifest));
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
-    });
+    .action((opts: { json?: boolean; agent?: string }) =>
+      runWorkshopAction(
+        opts,
+        ({ agentId, workspaceDir }) => listSkillProposals({ agentId, workspaceDir }),
+        formatSkillProposalList,
+      ),
+    );
 
   workshop
     .command("inspect")
@@ -1018,49 +1064,15 @@ export function registerSkillsCli(program: Command) {
     .option("--goal <text>", "Proposal or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
-    .action(
-      async (
-        opts: {
-          name: string;
-          description: string;
-          proposal?: string;
-          proposalDir?: string;
-          goal?: string;
-          evidence?: string;
-          json?: boolean;
-          agent?: string;
-        },
-        command: Command,
-      ) => {
-        try {
-          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
-            command.parent,
-            opts,
-          );
-          const draft = await readSkillProposalInput(opts);
-          const proposal = await proposeCreateSkill({
-            workspaceDir,
-            agentId,
-            eventActor: { type: "system", id: "cli" },
-            config,
-            name: opts.name,
-            description: opts.description,
-            content: draft.content,
-            supportFiles: draft.supportFiles,
-            createdBy: "cli",
-            goal: opts.goal,
-            evidence: opts.evidence,
-          });
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(proposal);
-            return;
-          }
-          defaultRuntime.writeStdout(`${proposal.record.id}\n`);
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      },
+    .action((opts: SkillProposalDraftCliOptions & { name: string; description: string }) =>
+      runWorkshopDraftAction(opts, (input) =>
+        proposeCreateSkill({
+          ...input,
+          name: opts.name,
+          description: opts.description,
+          createdBy: "cli",
+        }),
+      ),
     );
 
   workshop
@@ -1076,49 +1088,10 @@ export function registerSkillsCli(program: Command) {
     .option("--goal <text>", "Proposal or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
-    .action(
-      async (
-        skill: string,
-        opts: {
-          proposal?: string;
-          proposalDir?: string;
-          description?: string;
-          goal?: string;
-          evidence?: string;
-          json?: boolean;
-          agent?: string;
-        },
-        command: Command,
-      ) => {
-        try {
-          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
-            command.parent,
-            opts,
-          );
-          const draft = await readSkillProposalInput(opts);
-          const proposal = await proposeUpdateSkill({
-            workspaceDir,
-            config,
-            agentId,
-            eventActor: { type: "system", id: "cli" },
-            skillName: skill,
-            description: opts.description,
-            content: draft.content,
-            supportFiles: draft.supportFiles,
-            createdBy: "cli",
-            goal: opts.goal,
-            evidence: opts.evidence,
-          });
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(proposal);
-            return;
-          }
-          defaultRuntime.writeStdout(`${proposal.record.id}\n`);
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      },
+    .action((skill: string, opts: SkillProposalDraftCliOptions) =>
+      runWorkshopDraftAction(opts, (input) =>
+        proposeUpdateSkill({ ...input, skillName: skill, createdBy: "cli" }),
+      ),
     );
 
   workshop
@@ -1134,50 +1107,12 @@ export function registerSkillsCli(program: Command) {
     .option("--goal <text>", "Replacement research or improvement goal")
     .option("--evidence <text>", "Replacement evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
-    .action(
-      async (
-        proposalId: string,
-        opts: {
-          proposal?: string;
-          proposalDir?: string;
-          description?: string;
-          goal?: string;
-          evidence?: string;
-          json?: boolean;
-          agent?: string;
-        },
-        command: Command,
-      ) => {
-        try {
-          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
-            command.parent,
-            opts,
-          );
-          const draft = await readSkillProposalInput(opts);
-          const proposal = await reviseSkillProposal({
-            workspaceDir,
-            agentId,
-            eventActor: { type: "system", id: "cli" },
-            config,
-            proposalId,
-            content: draft.content,
-            supportFiles: draft.supportFiles,
-            description: opts.description,
-            goal: opts.goal,
-            evidence: opts.evidence,
-          });
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(proposal);
-            return;
-          }
-          defaultRuntime.writeStdout(
-            `Revised ${proposal.record.id} ${proposal.record.proposedVersion}\n`,
-          );
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      },
+    .action((proposalId: string, opts: SkillProposalDraftCliOptions) =>
+      runWorkshopDraftAction(
+        opts,
+        (input) => reviseSkillProposal({ ...input, proposalId }),
+        (proposal) => `Revised ${proposal.record.id} ${proposal.record.proposedVersion}\n`,
+      ),
     );
 
   workshop
@@ -1187,28 +1122,17 @@ export function registerSkillsCli(program: Command) {
     .option("--correlation-id <id>", "External run or experiment correlation id")
     .option("--json", "Output as JSON", false)
     .action(
-      async (
-        proposalId: string,
-        opts: { correlationId?: string; json?: boolean; agent?: string },
-        command: Command,
-      ) => {
-        try {
-          const resolved = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const evaluated = await runSkillProposalEvaluate(
-            resolved,
-            proposalId,
-            normalizeOptionalString(opts.correlationId),
-          );
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(evaluated);
-            return;
-          }
-          defaultRuntime.writeStdout(formatSkillProposalEvaluation(evaluated));
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      },
+      (proposalId: string, opts: { correlationId?: string; json?: boolean; agent?: string }) =>
+        runWorkshopAction(
+          opts,
+          (resolved) =>
+            runSkillProposalEvaluate(
+              resolved,
+              proposalId,
+              normalizeOptionalString(opts.correlationId),
+            ),
+          formatSkillProposalEvaluation,
+        ),
     );
 
   workshop
@@ -1216,90 +1140,51 @@ export function registerSkillsCli(program: Command) {
     .description("Apply a pending skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
     .option("--json", "Output as JSON", false)
-    .action(
-      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
-        try {
-          const resolved = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await runSkillProposalApply(resolved, proposalId);
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(applied);
-            return;
-          }
-          defaultRuntime.writeStdout(
-            `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
-          );
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      },
+    .action((proposalId: string, opts: { json?: boolean; agent?: string }) =>
+      runWorkshopAction(
+        opts,
+        (resolved) => runSkillProposalApply(resolved, proposalId),
+        (applied) => `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
+      ),
     );
 
-  workshop
-    .command("reject")
-    .description("Reject a pending skill proposal")
-    .argument("<proposal-id>", "Skill proposal id")
-    .option("--reason <text>", "Reason for rejection")
-    .option("--json", "Output as JSON", false)
-    .action(
-      async (
-        proposalId: string,
-        opts: { reason?: string; json?: boolean; agent?: string },
-        command: Command,
-      ) => {
-        try {
-          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const record = await rejectSkillProposal({
-            agentId,
-            eventActor: { type: "system", id: "cli" },
-            workspaceDir,
-            proposalId,
-            reason: opts.reason,
-          });
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(record);
-            return;
-          }
-          defaultRuntime.writeStdout(`Rejected ${record.id}\n`);
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      },
-    );
-
-  workshop
-    .command("quarantine")
-    .description("Quarantine a skill proposal")
-    .argument("<proposal-id>", "Skill proposal id")
-    .option("--reason <text>", "Reason for quarantine")
-    .option("--json", "Output as JSON", false)
-    .action(
-      async (
-        proposalId: string,
-        opts: { reason?: string; json?: boolean; agent?: string },
-        command: Command,
-      ) => {
-        try {
-          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const record = await quarantineSkillProposal({
-            agentId,
-            eventActor: { type: "system", id: "cli" },
-            workspaceDir,
-            proposalId,
-            reason: opts.reason,
-          });
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(record);
-            return;
-          }
-          defaultRuntime.writeStdout(`Quarantined ${record.id}\n`);
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      },
-    );
+  for (const [name, description, reasonDescription, verb, action] of [
+    [
+      "reject",
+      "Reject a pending skill proposal",
+      "Reason for rejection",
+      "Rejected",
+      rejectSkillProposal,
+    ],
+    [
+      "quarantine",
+      "Quarantine a skill proposal",
+      "Reason for quarantine",
+      "Quarantined",
+      quarantineSkillProposal,
+    ],
+  ] as const) {
+    workshop
+      .command(name)
+      .description(description)
+      .argument("<proposal-id>", "Skill proposal id")
+      .option("--reason <text>", reasonDescription)
+      .option("--json", "Output as JSON", false)
+      .action((proposalId: string, opts: { reason?: string; json?: boolean; agent?: string }) =>
+        runWorkshopAction(
+          opts,
+          ({ agentId, workspaceDir }) =>
+            action({
+              agentId,
+              eventActor: { type: "system", id: "cli" },
+              workspaceDir,
+              proposalId,
+              reason: opts.reason,
+            }),
+          (record) => `${verb} ${record.id}\n`,
+        ),
+      );
+  }
 
   applyParentDefaultHelpAction(workshop);
 

@@ -1271,9 +1271,35 @@ describe("plugins cli update", () => {
       expect(updateParams.pluginIds).toEqual(["codex"]);
       expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
       expect(updateParams.updateChannel).toBe(updateChannel);
-      expect(updateParams.officialPluginUpdateChannel).toBeUndefined();
+      expect(updateParams.officialPluginUpdateChannel).toBe(
+        resolveRegistryUpdateChannel({ configChannel: updateChannel, currentVersion: VERSION }),
+      );
     },
   );
+
+  it("passes the inferred core channel to a targeted update without enabling catalog sync", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex",
+      resolvedName: "@openclaw/codex",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand(["plugins", "update", "codex"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
+    expect(updateParams.updateChannel).toBeUndefined();
+    expect(updateParams.officialPluginUpdateChannel).toBe(
+      resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+    );
+  });
 
   it("syncs official catalog specs with beta channel context for update --all", async () => {
     const config = createTrackedPluginConfig({

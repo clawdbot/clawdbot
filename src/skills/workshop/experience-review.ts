@@ -9,7 +9,9 @@ import { autoApplySkillProposal } from "./auto-apply.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   buildSkillExperienceReviewPrompt,
+  countSkillModelIterations,
   formatSkillExperienceReviewTranscript,
+  selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
@@ -132,30 +134,6 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
   return !sessionKey
     .split(":")
     .some((segment) => EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS.has(segment));
-}
-
-function currentTurnMessages(messages: readonly unknown[]): readonly unknown[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (
-      message &&
-      typeof message === "object" &&
-      !Array.isArray(message) &&
-      (message as { role?: unknown }).role === "user"
-    ) {
-      return messages.slice(index);
-    }
-  }
-  return messages;
-}
-
-function countModelIterations(messages: readonly unknown[]): number {
-  return messages.reduce<number>((count, message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return count;
-    }
-    return count + ((message as { role?: unknown }).role === "assistant" ? 1 : 0);
-  }, 0);
 }
 
 export async function prepareSkillExperienceReviewCandidate(
@@ -336,13 +314,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
 
-      const turnMessages = currentTurnMessages(params.event.messages);
+      const turnMessages = selectCurrentSkillTurnMessages(params.event.messages);
       // Native harnesses can report exact provider iterations even when their
       // transcript projection has a different assistant-message cardinality.
       const reportedModelIterations = params.ctx.modelIterations;
       const modelIterations =
         reportedModelIterations === undefined
-          ? countModelIterations(turnMessages)
+          ? countSkillModelIterations(turnMessages)
           : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
             ? reportedModelIterations
             : 0;
@@ -444,6 +422,13 @@ async function runSkillExperienceReviewInner(
   const sessionId = randomUUID();
   const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
+  const { listWritableWorkspaceSkillSummaries } = await import("./service.js");
+  const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
+    config: candidate.config,
+    agentId: candidate.ctx.agentId,
+  }).map((skill) =>
+    skill.description ? { name: skill.name, description: skill.description } : { name: skill.name },
+  );
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({
     sessionId,
@@ -472,7 +457,7 @@ async function runSkillExperienceReviewInner(
     agentHarnessRuntimeOverride: "openclaw",
     workspaceDir,
     ...(candidate.config ? { config: candidate.config } : {}),
-    prompt: buildSkillExperienceReviewPrompt(candidate),
+    prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
     provider: modelProviderId,
     model: modelId,
     modelSelectionLocked: true,
@@ -486,6 +471,7 @@ async function runSkillExperienceReviewInner(
     disableMessageTool: true,
     disableTrajectory: true,
     skillWorkshopProposalOnly: true,
+    skillWorkshopUpdateProposals: true,
     skillWorkshopAutonomousCapture: true,
     skillWorkshopProposalMutationBudget: proposalMutationBudget,
     skillWorkshopOrigin: {
@@ -522,6 +508,15 @@ async function runSkillExperienceReviewInner(
       proposal.record.status !== "pending" ||
       proposal.record.autonomousCapture !== true
     ) {
+      continue;
+    }
+    // The reviewer drafts update bodies from name/description summaries without the live
+    // skill content, so applying one unseen would replace user-authored sections. Update
+    // proposals stay pending for operator review; only create proposals auto-apply.
+    if (proposal.record.kind === "update") {
+      log.info(
+        `skill experience review left update proposal ${proposalId} pending for operator review`,
+      );
       continue;
     }
     await autoApplySkillProposal({

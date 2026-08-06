@@ -17,6 +17,8 @@ import {
   resolveTelegramMessageForumFlagHint,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
+import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
+import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 
 const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
@@ -48,6 +50,7 @@ type TelegramSequentialKeyContext = {
       chat?: { id?: number; type?: string; is_forum?: boolean };
       message_id?: number;
     };
+    poll_answer?: { poll_id?: string };
   };
 };
 
@@ -186,6 +189,18 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
   }
+  const update = ctx.update;
+  const pollId = update?.poll_answer?.poll_id;
+  if (pollId) {
+    const prepared = getPreparedTelegramPollAnswer(update);
+    const entry = prepared?.entry;
+    if (entry) {
+      return getTelegramPollAnswerSequentialKey(entry, ctx.me);
+    }
+    // Missing historical registry entries do no work, but keep duplicate answers
+    // for the same unknown poll together while the handler records the miss.
+    return `telegram:poll:${pollId}`;
+  }
   const msg =
     ctx.message ??
     ctx.channelPost ??
@@ -250,6 +265,25 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
+}
+
+function getTelegramPollAnswerSequentialKey(
+  entry: TelegramPollRegistryEntry,
+  botUser?: UserFromGetMe,
+): string {
+  const isGroup = entry.chat.type === "group" || entry.chat.type === "supergroup";
+  const isForum = entry.chat.type === "supergroup" && entry.chat.is_forum === true;
+  const threadId = isGroup
+    ? resolveTelegramForumThreadId({ isForum, messageThreadId: entry.messageThreadId })
+    : shouldUseTelegramDmThreadSession({
+          dmThreadId: entry.messageThreadId,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(botUser),
+        })
+      ? entry.messageThreadId
+      : undefined;
+  return threadId == null
+    ? `telegram:${entry.chat.id}`
+    : `telegram:${entry.chat.id}:topic:${threadId}`;
 }
 
 export function getTelegramSequentialConstraints(

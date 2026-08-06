@@ -244,7 +244,7 @@ reconciliation so OpenClaw does not override that selection.
 
 ## Remote marketplaces
 
-Codex 0.146.0 can read and install Computer Use plugins from discovered remote
+Codex 0.146.1 can read and install Computer Use plugins from discovered remote
 marketplaces. OpenClaw passes the opaque remote plugin ID returned by Codex to
 `plugin/read` and `plugin/install`; a human-readable plugin name is not a valid
 substitute.

@@ -931,6 +931,7 @@ export function createSubagentRunManager(params: {
       entry !== markParams.expected ||
       receipt?.sessionMarker !== markParams.sessionMarker ||
       receipt.idempotencyKey !== markParams.idempotencyKey ||
+      !isAgentEventLifecycleGenerationCurrent(markParams.lifecycleGeneration) ||
       typeof entry.execution.endedAt === "number" ||
       entry.killReconciliation !== undefined ||
       entry.killIntent !== undefined ||

@@ -2180,6 +2180,22 @@ html.openclaw-native-macos
   right: 35px;
 }
 
+/* Resting semantic state remains visible, so reserve its overlay slot before
+   the title. Action-only rows still get the full resting width. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):where(
+    :has(> .sidebar-recent-session__aside > .session-row-state)
+  )
+  > .sidebar-recent-session__link {
+  padding-right: 68px;
+}
+
+/* Desktop hover/focus swaps resting state for actions, so reserve only the
+   action surface while it is visible. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+  > .sidebar-recent-session__link {
+  padding-right: 52px;
+}
+
 /* While the actions are surfaced, the link content fades out beneath them.
    A mask (not a background scrim) keeps the fade correct over rest, hover,
    active, and selected row backgrounds alike. */
@@ -2191,6 +2207,13 @@ html.openclaw-native-macos
 
 /* Touch keeps the actions permanently visible, so the fade is permanent too. */
 @media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+      > .sidebar-recent-session__aside > .session-row-state
+    )
+    > .sidebar-recent-session__link {
+    padding-right: 112px;
+  }
+
   .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__link {
     mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
   }

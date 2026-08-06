@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements cli behavior.
+// QA Lab plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -47,6 +47,7 @@ import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
@@ -701,6 +702,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );
   let evidencePath: string | undefined;
+  let expectedCells: QaProfileEvidencePlan["expectedCells"] = [];
+  let observedCells: QaProfileEvidencePlan["observedCells"] = [];
   await withTemporaryQaProfileEnv(profile, async () => {
     const suiteResult = await runQaSuiteCommand({
       repoRoot,
@@ -713,6 +716,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       fastMode: opts.fastMode,
       failFast: opts.failFast,
       scenarioIds: scenarios.map((scenario) => scenario.id),
+      explicitScenarioSelection: requestedScenarioIds.length > 0,
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
       channelDriver: profileReport.channelDriver,
@@ -720,14 +724,25 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
+    expectedCells = suiteResult && "expectedCells" in suiteResult ? suiteResult.expectedCells : [];
+    observedCells = suiteResult && "observedCells" in suiteResult ? suiteResult.observedCells : [];
   });
   if (!evidencePath) {
     throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
   }
+  const profilePlan = qaProfileEvidencePlan.build({
+    profile,
+    membershipScenarios: taxonomyScenarios,
+    selectedScenarios: scenarios,
+    excludedScenarios: executionSelection.excludedScenarios,
+    expectedCells,
+    observedCells,
+  });
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
     evidenceMode: opts.evidenceMode,
     profile,
+    profilePlan,
     filters: {
       surface: opts.surface,
       category: opts.category,
@@ -815,7 +830,9 @@ function resolveQaReportOnlyOptionalScenarioNames(params: {
   scenarioIds: readonly string[];
   explicitScenarioSelection?: boolean;
 }): ReadonlySet<string> | undefined {
-  if (params.explicitScenarioSelection || params.scenarioIds.length > 0) {
+  const explicitScenarioSelection =
+    params.explicitScenarioSelection ?? params.scenarioIds.length > 0;
+  if (explicitScenarioSelection) {
     return undefined;
   }
   return resolveQaReportOnlyOptionalScenarioNamesFromCatalog(readQaScenarioPack().scenarios);
@@ -1052,7 +1069,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
-      return result;
+      return {
+        ...result,
+        expectedCells: runtimeResult.expectedCells,
+        observedCells: runtimeResult.observedCells,
+      };
     }
     case "flow": {
       const result = runtimeResult.result;
@@ -1073,7 +1094,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
-      return result;
+      return {
+        ...result,
+        expectedCells: runtimeResult.expectedCells,
+        observedCells: runtimeResult.observedCells,
+      };
     }
   }
   return undefined;

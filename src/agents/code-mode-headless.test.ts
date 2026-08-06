@@ -672,8 +672,12 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([tool]),
         code: `
-          for (let index = 0; index < 129; index += 1) {
-            await tools.call("openclaw:core:budgeted", {});
+          const calls = Array.from({ length: 129 }, () => () =>
+            tools.call("openclaw:core:budgeted", {}),
+          );
+          // Keep each leg within the default 16-call pending cap while proving the cumulative budget.
+          for (let offset = 0; offset < calls.length; offset += 16) {
+            await Promise.all(calls.slice(offset, offset + 16).map((call) => call()));
           }
           return true;
         `,

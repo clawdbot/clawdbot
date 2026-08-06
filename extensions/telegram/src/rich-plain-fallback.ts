@@ -8,6 +8,7 @@ import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js"
 // file, live-verified) is only knowable server-side.
 const RICH_ENTITY_INVALID_RE = /RICH_MESSAGE_[A-Z_]+_INVALID/i;
 const RICH_CONTENT_REQUIRED_RE = /RICH_MESSAGE_CONTENT_REQUIRED/i;
+const EMPTY_TEXT_RE = /message text is empty|text must be non-empty/i;
 // Structural-limit rejections, live-verified against Bot API 10.2 (2026-07-15):
 // >500 top-level blocks, >16 depth, oversized text, >50 media, >20 table cols.
 const RICH_STRUCTURE_INVALID_RE =
@@ -32,6 +33,11 @@ function isTelegramRichEntityInvalidError(err: unknown): boolean {
 
 export function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
+}
+
+export function isTelegramEmptyContentError(err: unknown): boolean {
+  const message = formatErrorMessage(err);
+  return EMPTY_TEXT_RE.test(message) || RICH_CONTENT_REQUIRED_RE.test(message);
 }
 
 function getTelegramPlainFallbackTrigger(err: unknown): TelegramPlainFallbackTrigger | undefined {

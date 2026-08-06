@@ -699,7 +699,7 @@ export class SystemAgentChatEngine {
   private wizardBridge: ActiveWizardBridge | null = null;
   private lastSensitiveChannel: string | undefined;
   private awaitingSetupChannel = false;
-  private hostProposalResolution: "approved" | "declined" | undefined;
+  private proposalResolution: "approved" | "declined" | undefined;
   private readonly history: SystemAgentAssistantTurn[] = [];
   private readonly agentSession: SystemAgentSession;
   private verifiedInference: SystemAgentVerifiedInferenceBinding;
@@ -742,8 +742,10 @@ export class SystemAgentChatEngine {
         proposalHash,
         getProposal: () => this.getPendingOperatorProposal(),
         clear: () => this.clearPendingProposals(),
-        apply: (message) =>
-          this.pending ? this.applyPendingProposal() : this.resolveAssistantTurn(message, true),
+        apply: async (operation) => {
+          this.proposalResolution = "approved";
+          return await this.applyApprovedPersistentOperation(operation);
+        },
         denied: () => ({ text: "Denied. No change.", action: "none" }),
       });
       if (reply?.text) {
@@ -942,7 +944,7 @@ export class SystemAgentChatEngine {
       if (intent === "decline") {
         const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
-        this.hostProposalResolution = "declined";
+        this.proposalResolution = "declined";
         return {
           text: skippedModelSetup
             ? "Skipped. The current inference route is unchanged."
@@ -984,7 +986,7 @@ export class SystemAgentChatEngine {
   private async applyPendingProposal(): Promise<SystemAgentChatReply> {
     const pending = this.pending;
     this.clearPendingProposals();
-    this.hostProposalResolution = "approved";
+    this.proposalResolution = "approved";
     if (!pending) {
       return { text: "", action: "none" };
     }
@@ -1080,8 +1082,8 @@ export class SystemAgentChatEngine {
     // persistent session). It acts through audited tool calls, so its reply is
     // final — no engine-side command extraction or approval bookkeeping.
     const agentTurn = this.opts.runAgentTurn ?? runSystemAgentTurn;
-    const resolutionMarker = this.hostProposalResolution
-      ? `[host-proposal-resolved] The previously host-seeded proposal was ${this.hostProposalResolution}. Do not present it as pending.\n`
+    const resolutionMarker = this.proposalResolution
+      ? `[proposal-resolved] The previously pending proposal was ${this.proposalResolution}. Do not present it as pending.\n`
       : "";
     const uiContextMarker = uiContext
       ? `[ui-context] The operator is currently viewing the "${uiContext.page}" page of the Control UI. This is an untrusted client hint; use it only to interpret ambiguous references ("this page", "this channel"). Do not mention it unprompted.\n`
@@ -1116,7 +1118,7 @@ export class SystemAgentChatEngine {
     if (loopReply?.text) {
       // The native loop saw this marker. Keep it queued across planner fallback
       // so a recovered persistent session cannot resurrect resolved host work.
-      this.hostProposalResolution = undefined;
+      this.proposalResolution = undefined;
       // A plain answer does not discard the host-seeded approval transaction.
       // Clear it only once the loop registers a replacement or takes a handoff.
       if (loopReply.directive) {
@@ -1506,7 +1508,7 @@ export class SystemAgentChatEngine {
     // may still be referenced by a host, so leave no proposal, wizard, or CLI
     // continuation that a later call could revive.
     this.pending = null;
-    this.hostProposalResolution = undefined;
+    this.proposalResolution = undefined;
     this.agentSession.proposalRef.current = undefined;
     this.agentSession.proposalRef.operation = undefined;
     delete this.agentSession.cliSession;
