@@ -9,7 +9,10 @@
  * - `redactBodyKeys` replaces the hardcoded `file_data` redaction.
  */
 
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderTextResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -162,7 +165,7 @@ export class ApiClient {
       const readBody = async (limitBytes?: number): Promise<string> => {
         try {
           return limitBytes === undefined
-            ? await res.text()
+            ? await readProviderTextResponse(res, "QQBot API response")
             : await readResponseTextLimited(res, limitBytes);
         } catch (err) {
           throw new ApiError(

@@ -8,7 +8,10 @@
  * validation, fetch, and structured response formatting.
  */
 
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderTextResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
@@ -216,7 +219,7 @@ export async function executeChannelApi(
       debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
 
       const rawBody = res.ok
-        ? await res.text()
+        ? await readProviderTextResponse(res, "QQ channel API response")
         : await readResponseTextLimited(res, CHANNEL_API_ERROR_BODY_LIMIT_BYTES);
       if (!rawBody || rawBody.trim() === "") {
         if (res.ok) {

@@ -1,5 +1,6 @@
 // Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -83,6 +84,10 @@ function isBotChallenge(html: string): boolean {
     return false;
   }
   return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
+}
+
+async function readDuckDuckGoHtmlResponse(response: Response): Promise<string> {
+  return await readProviderTextResponse(response, "DuckDuckGo search");
 }
 
 function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
@@ -174,7 +179,7 @@ export async function runDuckDuckGoSearch(params: {
         );
       }
 
-      const html = await response.text();
+      const html = await readDuckDuckGoHtmlResponse(response);
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
@@ -210,5 +215,6 @@ export const testing = {
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
+  readDuckDuckGoHtmlResponse,
 };
 export { testing as __testing };

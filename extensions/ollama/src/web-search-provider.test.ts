@@ -1,6 +1,7 @@
 // Ollama tests cover web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
 import {
   testing,
@@ -403,7 +404,32 @@ describe("ollama web search provider", () => {
         config: createOllamaConfig(),
         query: "openclaw",
       }),
-    ).rejects.toThrow("Ollama web search returned malformed JSON");
+    ).rejects.toThrow("Ollama web search: malformed JSON response");
+  });
+
+  it("bounds successful Ollama web search JSON bodies before parsing", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: streamed.response,
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      runOllamaWebSearch({
+        config: createOllamaConfig(),
+        query: "openclaw",
+      }),
+    ).rejects.toThrow("Ollama web search: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 
   it("warns when Ollama is not reachable during setup without cancelling", async () => {

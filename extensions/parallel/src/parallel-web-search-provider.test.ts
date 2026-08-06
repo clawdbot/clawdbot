@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 type EndpointCall = {
   url: string;
@@ -55,40 +56,6 @@ function cancelTrackedResponse(
   });
   return {
     response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
-
-function streamedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-  wasCanceled: () => boolean;
-} {
-  // Multi-chunk fixture: proves the bounded read stops pulling chunks before
-  // the whole (here syntactically broken / unbounded) body is buffered, and
-  // that the stream is cancelled on overflow.
-  let reads = 0;
-  let canceled = false;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
-    getReadCount: () => reads,
     wasCanceled: () => canceled,
   };
 }
@@ -621,7 +588,12 @@ describe("parallel web search provider", () => {
     // 200-chunk x 1 MiB body (~200 MiB) caps at 16 MiB: the bounded reader must
     // stop pulling chunks and cancel the stream well before draining it, then
     // surface a bounded error rather than buffering the whole payload.
-    const streamed = streamedJsonResponse({ chunkCount: 200, chunkSize: 1024 * 1024 });
+    const streamed = createStreamingResponse({
+      chunkCount: 200,
+      chunkSize: 1024 * 1024,
+      text: "a",
+      headers: { "Content-Type": "application/json" },
+    });
     endpointMockState.responses.push(streamed.response);
     const provider = createParallelWebSearchProvider();
     const tool = provider.createTool({

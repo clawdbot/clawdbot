@@ -1,6 +1,7 @@
 // Ollama tests cover embedding provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
@@ -412,8 +413,38 @@ describe("ollama embedding provider", () => {
     });
 
     await expect(provider.embedQuery("hello")).rejects.toThrow(
-      "Ollama embed response returned malformed JSON",
+      "Ollama embed response: malformed JSON response",
     );
+  });
+
+  it("bounds successful embed JSON bodies before parsing", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamed.response),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response: JSON response exceeds 16777216 bytes",
+    );
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 
   it("rejects non-number embedding values instead of zeroing them", async () => {

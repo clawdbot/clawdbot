@@ -1,5 +1,6 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
@@ -41,6 +42,7 @@ const SCRAPE_CACHE = new Map<
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
+const FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const ALLOWED_FIRECRAWL_HOSTS = new Set(["api.firecrawl.dev"]);
 const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
   "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
@@ -65,12 +67,9 @@ type FirecrawlSearchItem = {
 async function readFirecrawlJsonResponse(
   response: Response,
   label: string,
+  opts?: { maxBytes?: number },
 ): Promise<Record<string, unknown>> {
-  try {
-    return (await response.json()) as Record<string, unknown>;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+  return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
 export type FirecrawlSearchParams = {
@@ -220,11 +219,9 @@ async function postFirecrawlJson<T>(
         const readJsonPayload = async (): Promise<Record<string, unknown> | null> => {
           const candidate = response as Response & { clone?: () => Response };
           const jsonResponse = typeof candidate.clone === "function" ? candidate.clone() : response;
-          if (typeof jsonResponse.json !== "function") {
-            return null;
-          }
           try {
-            const payload = await jsonResponse.json();
+            const body = await readResponseText(jsonResponse, { maxBytes: 64_000 });
+            const payload = JSON.parse(body.text) as unknown;
             return payload && typeof payload === "object" && !Array.isArray(payload)
               ? (payload as Record<string, unknown>)
               : null;
@@ -579,7 +576,10 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
-      const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed");
+      const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed", {
+        // Scrape can legitimately return page bodies before maxChars truncates parsed output.
+        maxBytes: FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES,
+      });
       if (payloadLocal.success === false) {
         const detail =
           typeof payloadLocal.error === "string"
@@ -613,6 +613,7 @@ export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
+  readFirecrawlJsonResponse,
   resolveEndpoint,
   validateFirecrawlBaseUrl,
   resolveSearchItems,

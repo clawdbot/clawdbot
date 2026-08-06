@@ -1,5 +1,6 @@
 // Tavily tests cover tavily client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
@@ -59,6 +60,29 @@ describe("tavily client X-Client-Source header", () => {
     await expect(runTavilySearch({ query: "test query" })).rejects.toThrow(
       "Tavily Search: malformed JSON response",
     );
+  });
+
+  it("bounds successful Tavily JSON bodies before parsing", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+
+    postTrustedWebToolsJson.mockImplementationOnce(
+      async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
+        parse(streamed.response),
+    );
+
+    await expect(runTavilySearch({ query: "test query" })).rejects.toThrow(
+      "Tavily Search: JSON response exceeds 16777216 bytes",
+    );
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 
   it("runTavilyExtract sends X-Client-Source: openclaw", async () => {

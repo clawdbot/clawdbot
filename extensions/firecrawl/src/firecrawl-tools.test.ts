@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   DEFAULT_FIRECRAWL_MAX_AGE_MS,
@@ -964,6 +965,27 @@ describe("firecrawl tools", () => {
         query: "openclaw malformed search",
       }),
     ).rejects.toThrow("Firecrawl Search API error: malformed JSON response");
+  });
+
+  it("bounds successful Firecrawl JSON bodies before parsing", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+
+    await expect(
+      firecrawlClientTesting.readFirecrawlJsonResponse(
+        streamed.response,
+        "Firecrawl Search API error",
+      ),
+    ).rejects.toThrow("Firecrawl Search API error: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 
   it("reports malformed Firecrawl scrape JSON with a stable provider error", async () => {

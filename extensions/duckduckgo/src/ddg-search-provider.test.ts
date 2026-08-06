@@ -1,5 +1,6 @@
 // Duckduckgo tests cover ddg search provider plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
 import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
@@ -102,6 +103,24 @@ describe("duckduckgo web search provider", () => {
       "count must be an integer from 1 to 10.",
     );
     expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+  });
+
+  it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "Content-Type": "text/html" },
+    });
+    const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(ddgClientTesting.readDuckDuckGoHtmlResponse(streamed.response)).rejects.toThrow(
+      "DuckDuckGo search: text response exceeds 16777216 bytes",
+    );
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("reads region from plugin config and normalizes empty values away", () => {

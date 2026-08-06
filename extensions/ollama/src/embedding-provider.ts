@@ -6,7 +6,10 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   hasConfiguredSecretInput,
@@ -117,14 +120,9 @@ async function withRemoteHttpResponse<T>(params: {
 }
 
 async function readOllamaEmbeddingJsonResponse(
-  response: Pick<Response, "json">,
+  response: Response,
 ): Promise<{ embeddings?: unknown }> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error("Ollama embed response returned malformed JSON", { cause });
-  }
+  const payload = await readProviderJsonResponse<unknown>(response, "Ollama embed response");
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     throw new Error("Ollama embed response returned a non-object JSON payload");
   }

@@ -1,5 +1,6 @@
 // Qqbot tests cover api-client plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../../../test-support/streaming-error-response.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -87,5 +88,36 @@ describe("ApiClient", () => {
         allowRfc2544BenchmarkRange: true,
       },
     });
+  });
+
+  it("bounds successful response bodies without using response.text()", async () => {
+    const release = vi.fn(async () => {});
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: streamed.response,
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+
+    let error: unknown;
+    try {
+      await client.request("token-1", "GET", "/v2/users/@me");
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(String(error)).toContain("QQBot API response: text response exceeds 16777216 bytes");
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });
