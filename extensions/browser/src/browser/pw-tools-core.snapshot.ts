@@ -191,14 +191,17 @@ async function prepareSnapshotPageViaPlaywright(opts: {
   return page;
 }
 
-/** Captures a raw accessibility tree snapshot and stores matching role refs. */
-export async function snapshotAriaViaPlaywright(opts: {
+type AriaSnapshotViaPlaywrightOptions = {
   cdpUrl: string;
   targetId?: string;
   limit?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<{ nodes: AriaSnapshotNode[] }> {
+};
+
+async function captureAriaSnapshotWithPageViaPlaywright(
+  opts: AriaSnapshotViaPlaywrightOptions,
+): Promise<{ nodes: AriaSnapshotNode[]; page: Page }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
@@ -240,13 +243,29 @@ export async function snapshotAriaViaPlaywright(opts: {
   };
   const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
   const formatted = formatAriaSnapshot(nodes, limit);
+  return { nodes: formatted, page };
+}
+
+/** Captures a raw accessibility tree without publishing interaction refs. */
+export async function captureAriaSnapshotViaPlaywright(
+  opts: AriaSnapshotViaPlaywrightOptions,
+): Promise<{ nodes: AriaSnapshotNode[] }> {
+  const { nodes } = await captureAriaSnapshotWithPageViaPlaywright(opts);
+  return { nodes };
+}
+
+/** Captures a raw accessibility tree snapshot and stores matching role refs. */
+export async function snapshotAriaViaPlaywright(
+  opts: AriaSnapshotViaPlaywrightOptions,
+): Promise<{ nodes: AriaSnapshotNode[] }> {
+  const { nodes, page } = await captureAriaSnapshotWithPageViaPlaywright(opts);
   await storeAriaSnapshotRefsViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
-    nodes: formatted,
+    nodes,
     page,
   });
-  return { nodes: formatted };
+  return { nodes };
 }
 
 /** Captures Playwright's AI aria snapshot with optional URL appendix and truncation. */

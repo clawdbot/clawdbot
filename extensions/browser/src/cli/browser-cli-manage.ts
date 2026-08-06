@@ -3,6 +3,7 @@
  * checks.
  */
 import type { Command } from "commander";
+import type { BrowserDoctorCheck, BrowserDoctorReport } from "../browser-runtime.js";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -31,13 +32,6 @@ import {
 } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
-
-type BrowserDoctorCheck = {
-  name: string;
-  ok: boolean;
-  detail?: string;
-  warning?: boolean;
-};
 
 function sanitizeTableCell(value: string): string {
   // Strip C0/C1 control characters (Unicode Cc) so profile names cannot inject
@@ -132,8 +126,9 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
-  const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
-  return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
+  const prefix = check.status === "fail" ? "FAIL" : check.status === "pass" ? "OK" : "WARN";
+  const name = check.id === "plugin-enabled" ? "plugin" : check.id;
+  return `${prefix} ${name}: ${check.summary}${check.fixHint ? ` Fix: ${check.fixHint}` : ""}`;
 }
 
 function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
@@ -155,133 +150,29 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
 }
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
-  const checks: BrowserDoctorCheck[] = [];
-  let status: BrowserStatus | null;
-
   try {
-    status = await fetchBrowserStatus(parent, profile);
-    checks.push({
-      name: "gateway",
-      ok: true,
-      detail: "browser control endpoint reachable",
-    });
-  } catch (err) {
-    checks.push({
-      name: "gateway",
-      ok: false,
-      detail: formatBrowserDoctorGatewayError(err),
-    });
-    return { ok: false, checks };
-  }
-
-  checks.push({
-    name: "plugin",
-    ok: status.enabled,
-    detail: status.enabled ? "enabled" : "disabled in config",
-  });
-  checks.push({
-    name: "profile",
-    ok: true,
-    detail: `${status.profile ?? "openclaw"} (${usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")})`,
-  });
-  checks.push({
-    name: "browser",
-    ok: status.running,
-    detail: status.running
-      ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
-      : "not running; run `openclaw browser start`",
-  });
-  if (status.graphics) {
-    checks.push({
-      name: "graphics",
-      ok: true,
-      warning: status.graphics.status === "unavailable",
-      detail: formatBrowserGraphicsSummary(status.graphics),
-    });
-  }
-
-  try {
-    const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
+    return await callBrowserRequest<BrowserDoctorReport>(
       parent,
-      { method: "GET", path: "/profiles" },
+      {
+        method: "GET",
+        path: "/doctor",
+        query: resolveProfileQuery(profile, deep ? { deep: true } : undefined),
+      },
       { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
     );
-    checks.push({
-      name: "profiles",
-      ok: true,
-      detail: `${profiles.profiles?.length ?? 0} configured`,
-    });
   } catch (err) {
-    checks.push({
-      name: "profiles",
+    return {
       ok: false,
-      detail: String(err),
-    });
-  }
-
-  if (status.running) {
-    try {
-      const result = await callBrowserRequest<{ running: boolean; tabs: BrowserTab[] }>(
-        parent,
+      checks: [
         {
-          method: "GET",
-          path: "/tabs",
-          query: resolveProfileQuery(profile),
+          id: "gateway",
+          label: "Gateway",
+          status: "fail" as const,
+          summary: formatBrowserDoctorGatewayError(err),
         },
-        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
-      );
-      const tabs = result.tabs ?? [];
-      checks.push({
-        name: "tabs",
-        ok: true,
-        detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use tab reference ${tabs[0].suggestedTargetId}` : ""}`,
-      });
-    } catch (err) {
-      checks.push({
-        name: "tabs",
-        ok: false,
-        detail: String(err),
-      });
-    }
+      ],
+    };
   }
-
-  if (deep && status.running) {
-    try {
-      const result = await callBrowserRequest<
-        | { ok: true; format: "aria"; nodes?: unknown[] }
-        | { ok: true; format: "ai"; snapshot?: string }
-      >(
-        parent,
-        {
-          method: "GET",
-          path: "/snapshot",
-          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
-        },
-        { timeoutMs: 10_000 },
-      );
-      const count =
-        result.format === "aria"
-          ? Array.isArray(result.nodes)
-            ? result.nodes.length
-            : 0
-          : typeof result.snapshot === "string"
-            ? result.snapshot.split("\n").length
-            : 0;
-      checks.push({
-        name: "live-snapshot",
-        ok: count > 0,
-        detail: count > 0 ? `${count} nodes/lines` : "snapshot returned no content",
-      });
-    } catch (err) {
-      checks.push({
-        name: "live-snapshot",
-        ok: false,
-        detail: String(err),
-      });
-    }
-  }
-
-  return { ok: checks.every((check) => check.ok), checks, status };
 }
 
 type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";

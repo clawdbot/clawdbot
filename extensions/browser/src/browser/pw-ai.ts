@@ -51,6 +51,7 @@ import {
 } from "./pw-tools-core.interactions.js";
 import { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
 import {
+  captureAriaSnapshotViaPlaywright,
   closePageViaPlaywright,
   navigateViaPlaywright,
   pdfViaPlaywright,
@@ -103,6 +104,7 @@ export const pwAi = {
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
   batchViaPlaywright,
+  captureAriaSnapshotViaPlaywright,
   clickViaPlaywright,
   closePageViaPlaywright,
   cookiesClearViaPlaywright,

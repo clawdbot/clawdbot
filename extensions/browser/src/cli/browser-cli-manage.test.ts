@@ -491,89 +491,58 @@ describe("browser manage output", () => {
   });
 
   it("prints a readable browser doctor report", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
-      if (req.path === "/") {
-        return {
-          enabled: true,
-          profile: "openclaw",
-          driver: "openclaw",
-          transport: "cdp",
-          running: true,
-          cdpReady: true,
-          cdpHttp: true,
-          pid: 4321,
-          cdpPort: 18792,
-          cdpUrl: "http://127.0.0.1:18792",
-          chosenBrowser: "chrome",
-          userDataDir: null,
-          color: "#00AA00",
-          headless: false,
-          noSandbox: false,
-          executablePath: null,
-          attachOnly: false,
-          graphics: {
-            status: "available",
-            observedAt: 123,
-            acceleration: "software",
-            renderer: "ANGLE (Google, SwiftShader Device)",
-            vendor: "Google Inc.",
-            version: "OpenGL ES 3.0",
-            backend: "(gl=angle,angle=swiftshader)",
-            devices: [],
-            featureStatus: {},
-            disabledFeatures: [],
-            driverBugWorkarounds: [],
-            videoDecoding: [],
-            videoEncoding: [],
-          },
-        };
-      }
-      if (req.path === "/profiles") {
-        return { profiles: [{ name: "openclaw", running: true }] };
-      }
-      if (req.path === "/tabs") {
-        return {
-          running: true,
-          tabs: [
-            {
-              targetId: "abc",
-              tabId: "t1",
-              suggestedTargetId: "t1",
-              title: "Example",
-              url: "https://example.com",
-            },
-          ],
-        };
-      }
-      return {};
+    getBrowserManageCallBrowserRequestMock().mockResolvedValue({
+      ok: true,
+      profile: "openclaw",
+      transport: "cdp",
+      status: { enabled: true, profile: "openclaw", transport: "cdp", running: true },
+      checks: [
+        {
+          id: "plugin-enabled",
+          label: "Browser plugin",
+          status: "pass",
+          summary: "enabled",
+        },
+        { id: "profile", label: "Profile", status: "pass", summary: "openclaw via cdp" },
+        {
+          id: "graphics",
+          label: "Graphics",
+          status: "info",
+          summary: "software (SwiftShader)",
+        },
+      ],
     });
 
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "doctor"], { from: "user" });
 
     const output = lastRuntimeLog();
-    expect(output).toContain("OK gateway: browser control endpoint reachable");
-    expect(output).toContain("OK graphics: software");
-    expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
+    expect(output).toContain("OK plugin: enabled");
+    expect(output).toContain("WARN graphics: software (SwiftShader)");
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ path: "/doctor" }),
+      expect.anything(),
+    );
     expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
   });
 
   it("prints one complete JSON browser doctor failure before setting exit status", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
-      if (req.path === "/") {
-        return {
-          enabled: false,
-          profile: "openclaw",
-          transport: "cdp",
-          running: false,
-        };
-      }
-      if (req.path === "/profiles") {
-        return { profiles: [] };
-      }
-      return {};
+    getBrowserManageCallBrowserRequestMock().mockResolvedValue({
+      ok: false,
+      profile: "openclaw",
+      transport: "cdp",
+      status: { enabled: false, profile: "openclaw", transport: "cdp", running: false },
+      checks: [
+        {
+          id: "plugin-enabled",
+          label: "Browser plugin",
+          status: "fail",
+          summary: "disabled",
+        },
+      ],
     });
 
     const program = createBrowserManageProgram();
@@ -583,8 +552,7 @@ describe("browser manage output", () => {
       expect.objectContaining({
         ok: false,
         checks: expect.arrayContaining([
-          expect.objectContaining({ name: "gateway", ok: true }),
-          expect.objectContaining({ name: "plugin", ok: false }),
+          expect.objectContaining({ id: "plugin-enabled", status: "fail" }),
         ]),
       }),
     );
@@ -595,22 +563,19 @@ describe("browser manage output", () => {
   });
 
   it("prints one JSON browser doctor report and succeeds when every check passes", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
-      if (req.path === "/") {
-        return {
-          enabled: true,
-          profile: "openclaw",
-          transport: "cdp",
-          running: true,
-        };
-      }
-      if (req.path === "/profiles") {
-        return { profiles: [{ name: "openclaw", running: true }] };
-      }
-      if (req.path === "/tabs") {
-        return { running: true, tabs: [] };
-      }
-      return {};
+    getBrowserManageCallBrowserRequestMock().mockResolvedValue({
+      ok: true,
+      profile: "openclaw",
+      transport: "cdp",
+      status: { enabled: true, profile: "openclaw", transport: "cdp", running: true },
+      checks: [
+        {
+          id: "plugin-enabled",
+          label: "Browser plugin",
+          status: "pass",
+          summary: "enabled",
+        },
+      ],
     });
 
     const program = createBrowserManageProgram();
@@ -621,6 +586,44 @@ describe("browser manage output", () => {
     expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("uses canonical deep doctor without a duplicate snapshot request", async () => {
+    getBrowserManageCallBrowserRequestMock().mockResolvedValue({
+      ok: true,
+      profile: "chrome",
+      transport: "extension",
+      status: { enabled: true, profile: "chrome", transport: "extension", running: true },
+      checks: [
+        {
+          id: "live-snapshot",
+          label: "Live snapshot",
+          status: "pass",
+          summary: "CDP accessibility snapshot returned 4 nodes on extension-target-1",
+        },
+      ],
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    expect(lastRuntimeLog()).toContain("OK live-snapshot: CDP accessibility snapshot returned 4");
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledTimes(1);
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        path: "/doctor",
+        query: expect.objectContaining({ profile: "chrome", deep: true }),
+      }),
+      expect.anything(),
+    );
+    expect(
+      getBrowserManageCallBrowserRequestMock().mock.calls.some(
+        ([, req]) => req.path === "/snapshot",
+      ),
+    ).toBe(false);
   });
 
   it("prints a readable browser doctor failure when gateway auth SecretRefs are unavailable", async () => {

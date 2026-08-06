@@ -114,6 +114,29 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
   });
 
+  it("captures aria nodes without publishing refs or DOM markers", async () => {
+    const page = { id: "page-1" };
+    const rawNodes = [{ backendDOMNodeId: 42 }];
+    const formattedNodes = [{ ref: "ax1", role: "button", name: "OK", backendDOMNodeId: 42 }];
+
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockResolvedValue({ nodes: rawNodes });
+    formatAriaSnapshot.mockReturnValue(formattedNodes);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.captureAriaSnapshotViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      limit: 5,
+    });
+
+    expect(result).toEqual({ nodes: formattedNodes });
+    expect(getPageForTargetId).toHaveBeenCalledTimes(1);
+    expect(withPageScopedCdpClient).toHaveBeenCalledTimes(1);
+    expect(markBackendDomRefsOnPage).not.toHaveBeenCalled();
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
   it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
     vi.useFakeTimers();
     try {
