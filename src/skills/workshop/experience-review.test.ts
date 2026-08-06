@@ -24,6 +24,7 @@ function completedRun(
     userText?: string;
     senderId?: string;
     senderName?: string;
+    chatType?: "direct" | "group";
   } = {},
 ): SkillExperienceReviewParams {
   const iterations = options.iterations ?? 10;
@@ -65,6 +66,7 @@ function completedRun(
       compacted: options.compacted,
       ...(options.senderId === undefined ? {} : { senderId: options.senderId }),
       ...(options.senderName === undefined ? {} : { senderName: options.senderName }),
+      ...(options.chatType === undefined ? {} : { chatType: options.chatType }),
       trigger: "user",
     },
     config: {
@@ -198,6 +200,39 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ modelIterations: 6, senderName: "Alice" }));
     scheduler.schedule(completedRun({ modelIterations: 6, senderName: "Bob" }));
     await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
+  it("purges shallow accumulation when a completion reports an error", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ modelIterations: 6 }));
+    scheduler.schedule(completedRun({ success: false, error: "provider failed" }));
+    scheduler.schedule(completedRun({ modelIterations: 6 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
+  it("does not accumulate group turns that carry no sender identity", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ modelIterations: 6, chatType: "group" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, chatType: "group" }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
     expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });

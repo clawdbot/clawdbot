@@ -410,6 +410,15 @@ describe("skill_workshop tool", () => {
     expect(read.details).toMatchObject({ skillKey: "big-skill", truncated: true });
     expect(text.length).toBeLessThanOrEqual(20_000 + 100);
     expect(text).toContain("[truncated: skill exceeds the reviewer read budget]");
+
+    await expect(
+      reviewTool.execute("oversized-patch", {
+        action: "patch",
+        skill_name: "big-skill",
+        old_string: "A detailed operational line.",
+        new_string: "A rewritten operational line.",
+      }),
+    ).rejects.toThrow("cannot be patched autonomously");
   });
 
   it("does not refund the review mutation budget after a failed mutation", async () => {

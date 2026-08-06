@@ -300,6 +300,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           clearTimer(existing.timer);
         }
         pendingBySession.delete(sessionKey);
+        shallowBySession.delete(sessionKey);
         return;
       }
       // Quiet time follows all later foreground work in the session. Candidate
@@ -308,6 +309,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
       if (errored) {
+        // The provider/prompt-error exclusion covers the whole segment: shallow
+        // evidence accumulated before the error must not seed a later review.
+        shallowBySession.delete(sessionKey);
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
@@ -351,15 +355,26 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         // to the resolved provider under the resolved auth identity. A change in
         // either restarts accumulation so no participant's turns are reviewed under
         // another participant's authorization or disclosed to a different provider.
-        const senderScope = [
+        const senderIdentity = [
           params.ctx.senderId ?? "",
           params.ctx.senderUsername ?? "",
           params.ctx.senderName ?? "",
           params.ctx.senderE164 ?? "",
+        ];
+        if (params.ctx.chatType === "group" && senderIdentity.every((field) => !field)) {
+          // Group turns without any sender identity cannot be scoped to one
+          // participant; fail closed instead of blending transcripts.
+          log.debug(
+            `experience review skipped: reason=ambiguous-group-sender session=${sessionKey}`,
+          );
+          return;
+        }
+        const senderScope = JSON.stringify([
+          ...senderIdentity,
           params.ctx.modelProviderId ?? "",
           params.ctx.modelId ?? "",
           params.ctx.authProfileId ?? "",
-        ].join("|");
+        ]);
         let accumulator = shallowBySession.get(sessionKey);
         if (accumulator && accumulator.senderScope !== senderScope) {
           accumulator = undefined;

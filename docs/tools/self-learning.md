@@ -60,7 +60,8 @@ existing skill governing the work, and creating a new skill only when nothing
 covers the class. A patch proposal quotes the exact live text to change (or
 appends a new section) and the tool composes the full body inside the same read
 that hash-binds the proposal, so untouched content survives by construction and
-patches auto-apply in `auto` mode. A full-body update rewrite always stays
+patches auto-apply in `auto` mode. A patch requires a full-skill read receipt:
+skills beyond the bounded read budget cannot be patched autonomously. A full-body update rewrite always stays
 pending for operator review. Its one-mutation budget is shared across retries. Every
 mutation is a pending proposal — it never writes a live skill directly and
 cannot apply, reject, quarantine, message, or use general agent tools. The

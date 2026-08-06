@@ -292,13 +292,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
-        if (options.proposalMutationBudget) {
+        const truncated = skill.content.length > REVIEWER_SKILL_READ_MAX_CHARS;
+        // A truncated read is context, not sight of the whole skill: it earns no
+        // receipt, so oversized skills cannot be patched by a reviewer that never
+        // saw their later content.
+        if (options.proposalMutationBudget && !truncated) {
           const readSkillHashes =
             options.proposalMutationBudget.readSkillHashes ?? new Map<string, string>();
           readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));
           options.proposalMutationBudget.readSkillHashes = readSkillHashes;
         }
-        const truncated = skill.content.length > REVIEWER_SKILL_READ_MAX_CHARS;
         const text = truncated
           ? `${truncateUtf16Safe(skill.content, REVIEWER_SKILL_READ_MAX_CHARS)}\n[truncated: skill exceeds the reviewer read budget]`
           : skill.content;
@@ -450,7 +453,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const readHash = options.proposalMutationBudget?.readSkillHashes?.get(target.skillKey);
         if (!readHash) {
           throw new ToolInputError(
-            `read the live skill first: call action=read with skill_name "${target.skillKey}", then quote its current text in the patch`,
+            target.content.length > REVIEWER_SKILL_READ_MAX_CHARS
+              ? `skill "${target.skillKey}" exceeds the reviewer read budget and cannot be patched autonomously; draft a full-body update instead (it stays pending for the operator)`
+              : `read the live skill first: call action=read with skill_name "${target.skillKey}", then quote its current text in the patch`,
           );
         }
         if (readHash !== sha256Hex(target.content)) {
