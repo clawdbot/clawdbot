@@ -81,11 +81,17 @@ enum GatewayDiscoveryPreferences {
     static func migrateLegacyUnboundDiscoveryRoute(_ currentRoot: [String: Any])
         -> (root: [String: Any], changed: Bool)
     {
-        guard self.preferredStableID() != nil,
+        guard let preferredStableID = self.preferredStableID(),
               self.preferredRouteBinding() == nil,
               ConnectionModeResolver.resolve(root: currentRoot).mode == .remote,
               GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
         else {
+            return (currentRoot, false)
+        }
+        if self.isVerifiedTailscaleServeRoute(
+            stableID: preferredStableID,
+            root: currentRoot)
+        {
             return (currentRoot, false)
         }
 
@@ -98,6 +104,20 @@ enum GatewayDiscoveryPreferences {
         gateway["remote"] = remote
         root["gateway"] = gateway
         return (root, true)
+    }
+
+    private static func isVerifiedTailscaleServeRoute(
+        stableID: String,
+        root: [String: Any]) -> Bool
+    {
+        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
+              url.scheme?.lowercased() == "wss",
+              let host = url.host?.lowercased(),
+              url.port == nil || url.port == 443
+        else {
+            return false
+        }
+        return stableID.lowercased() == "tailscale-serve|\(host)"
     }
 
     @MainActor

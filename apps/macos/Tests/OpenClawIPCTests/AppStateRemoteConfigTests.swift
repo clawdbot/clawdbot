@@ -171,7 +171,8 @@ struct AppStateRemoteConfigTests {
                     ],
                 ],
             ]
-            GatewayDiscoveryPreferences.setPreferredStableID("legacy-gateway")
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "tailscale-serve|verified-gateway.example.ts.net")
 
             let migration = GatewayDiscoveryPreferences.migrateLegacyUnboundDiscoveryRoute(vulnerableRoot)
             #expect(migration.changed)
@@ -188,6 +189,29 @@ struct AppStateRemoteConfigTests {
             #expect(source.remoteTransport == .ssh)
             #expect(source.directRemoteURL == nil)
         }
+    }
+
+    @Test
+    func `legacy verified tailscale serve route remains direct`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://\(tailnetHost)",
+                ],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID("tailscale-serve|\(tailnetHost)")
+
+        let migration = GatewayDiscoveryPreferences.migrateLegacyUnboundDiscoveryRoute(root)
+
+        #expect(!migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "wss://\(tailnetHost)")
     }
 
     @Test
