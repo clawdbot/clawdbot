@@ -118,4 +118,53 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       packageBuild: { bundledDist: false },
     });
   }, 120_000);
+
+  it("repairs a missing installed plugin through the built CLI policy refresh", async () => {
+    const instance = await createOpenClawTestInstance({
+      name: "policy-plugin-index-recovery",
+      env: {
+        OPENCLAW_TEST_FAST: "1",
+      },
+      startTimeoutMs: 90_000,
+    });
+    instances.push(instance);
+
+    const pluginId = "policy-refresh-recovery";
+    writeManagedNpmPlugin({
+      stateDir: instance.stateDir,
+      packageName: "@openclaw/policy-refresh-recovery",
+      pluginId,
+      version: "1.0.0",
+    });
+    const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8")) as OpenClawConfig;
+    const current = loadPluginMetadataSnapshot({
+      config,
+      env: instance.env,
+      stateDir: instance.stateDir,
+    });
+    expect(current.index.plugins.some((plugin) => plugin.pluginId === pluginId)).toBe(true);
+
+    writePersistedInstalledPluginIndexSync(
+      {
+        ...current.index,
+        plugins: current.index.plugins.filter((plugin) => plugin.pluginId !== pluginId),
+      },
+      { env: instance.env },
+    );
+    clearPluginMetadataLifecycleCaches();
+    closeOpenClawStateDatabaseForTest();
+
+    const result = await instance.cli(["plugins", "disable", pluginId], {
+      timeoutMs: 120_000,
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`Disabled plugin "${pluginId}"`);
+
+    clearPluginMetadataLifecycleCaches();
+    closeOpenClawStateDatabaseForTest();
+    const persisted = readPersistedInstalledPluginIndexSync({ env: instance.env });
+    expect(persisted?.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ pluginId, enabled: false })]),
+    );
+  }, 120_000);
 });
