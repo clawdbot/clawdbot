@@ -24,6 +24,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  attachManagedImageRecordToMessage,
   insertManagedImageRecord,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
@@ -231,6 +232,8 @@ async function createFixture(
     filename?: string;
     contentType?: string;
     body?: Buffer;
+    messageId?: string | null;
+    createdAt?: string;
   },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
@@ -245,8 +248,8 @@ async function createFixture(
       attachmentId,
       sessionKey,
       ...(options?.agentId ? { agentId: options.agentId } : {}),
-      messageId: "msg-1",
-      createdAt: new Date().toISOString(),
+      messageId: options?.messageId === undefined ? "msg-1" : options.messageId,
+      createdAt: options?.createdAt ?? new Date().toISOString(),
       alt: "Cat",
       original: {
         mediaRoot: path.join(stateDir, "media"),
@@ -1924,6 +1927,54 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedRecordCount).toBe(1);
     expect(result.deletedFileCount).toBe(1);
     expect(result.retainedCount).toBe(0);
+    await expectPathMissing(fixture.originalPath);
+  });
+
+  it("retains an aged transient record while its session still has an active run", async () => {
+    const fixture = await createFixture(stateDir, {
+      messageId: null,
+      createdAt: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+    });
+
+    const checkedSessionKeys: string[] = [];
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      hasActiveSessionRun: (sessionKey) => {
+        checkedSessionKeys.push(sessionKey);
+        return sessionKey === fixture.sessionKey;
+      },
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(checkedSessionKeys).toEqual([fixture.sessionKey]);
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(
+      attachManagedImageRecordToMessage({
+        attachmentId: fixture.attachmentId,
+        sessionKey: fixture.sessionKey,
+        messageId: "msg-late",
+        updatedAt: new Date().toISOString(),
+        stateDir,
+      }),
+    ).toBe(true);
+    const attached = readManagedImageRecord(fixture.attachmentId, stateDir);
+    expect(attached?.messageId).toBe("msg-late");
+    expect(attached?.retentionClass).toBe("history");
+  });
+
+  it("reaps an aged transient record once its session has no active run", async () => {
+    const fixture = await createFixture(stateDir, {
+      messageId: null,
+      createdAt: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      hasActiveSessionRun: () => false,
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).toBeNull();
     await expectPathMissing(fixture.originalPath);
   });
 

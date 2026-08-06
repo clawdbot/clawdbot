@@ -2176,7 +2176,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
   });
 
-  it("does not resolve opaque approval-shaped plugin callbacks", async () => {
+  it("terminalizes unowned opaque approval-shaped plugin callbacks", async () => {
     mockTelegramConfig({
       dmPolicy: "open",
       allowFrom: ["*"],
@@ -2194,7 +2194,14 @@ describe("createTelegramBot", () => {
     );
 
     expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
-    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 25, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "This action is no longer available.",
+      undefined,
+    );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-plugin-approve");
   });
 

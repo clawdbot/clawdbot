@@ -1051,8 +1051,7 @@ describe("openclaw agent database", () => {
       agentId: "worker-1",
       env: { OPENCLAW_STATE_DIR: stateDir },
     };
-    const databasePath = openOpenClawAgentDatabase(options).path;
-    closeOpenClawAgentDatabasesForTest();
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database.exec("DROP TABLE session_nodes;");
@@ -1725,34 +1724,35 @@ describe("openclaw agent database", () => {
 
   it("generates stable typed memory source identities", () => {
     const stateDir = createTempStateDir();
-    materializeCurrentWorkerAgentDatabase(stateDir);
-    const database = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    const agentDb = getNodeSqliteKysely<AgentDbTestDatabase>(database.db);
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      const agentDb = getNodeSqliteKysely<AgentDbTestDatabase>(database);
+      const inserted = executeSqliteQuerySync(
+        database,
+        agentDb.insertInto("memory_index_sources").values({
+          path: "MEMORY.md",
+          source: "memory",
+          hash: "hash",
+          mtime: 1,
+          size: 2,
+        }),
+      );
 
-    const inserted = executeSqliteQuerySync(
-      database.db,
-      agentDb.insertInto("memory_index_sources").values({
-        path: "MEMORY.md",
-        source: "memory",
-        hash: "hash",
-        mtime: 1,
-        size: 2,
-      }),
-    );
-
-    expect(inserted.insertId).toBe(1n);
-    expect(
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        agentDb
-          .selectFrom("memory_index_sources")
-          .select(["id", "path", "source"])
-          .where("path", "=", "MEMORY.md"),
-      ),
-    ).toEqual({ id: 1, path: "MEMORY.md", source: "memory" });
+      expect(inserted.insertId).toBe(1n);
+      expect(
+        executeSqliteQueryTakeFirstSync(
+          database,
+          agentDb
+            .selectFrom("memory_index_sources")
+            .select(["id", "path", "source"])
+            .where("path", "=", "MEMORY.md"),
+        ),
+      ).toEqual({ id: 1, path: "MEMORY.md", source: "memory" });
+    } finally {
+      database.close();
+    }
   });
 
   it("migrates version 1 memory source identities before registering version 2", () => {
@@ -3997,9 +3997,7 @@ describe("openclaw agent database", () => {
   it("runs full integrity before a pending agent schema migration", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
     createUnsafeIndexDrift(databasePath);
 
     const { DatabaseSync } = requireNodeSqlite();
@@ -4018,9 +4016,7 @@ describe("openclaw agent database", () => {
   it("runs full integrity before mutating a nonempty unversioned agent database", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
     createUnsafeIndexDrift(databasePath);
 
     const { DatabaseSync } = requireNodeSqlite();

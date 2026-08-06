@@ -482,6 +482,37 @@ describe("qa-bus state", () => {
     ).rejects.toThrow("qa-bus wait timeout");
   });
 
+  it("ignores deleted message matches until a visible replacement arrives", async () => {
+    const state = createQaBusState();
+    const deleted = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-VISIBLE-REPLACEMENT",
+    });
+    state.deleteMessage({ messageId: deleted.id });
+
+    await expect(
+      state.waitFor({
+        direction: "outbound",
+        kind: "message-text",
+        textIncludes: "QA-VISIBLE-REPLACEMENT",
+        timeoutMs: 10,
+      }),
+    ).rejects.toThrow("qa-bus wait timeout after 10ms");
+
+    const pending = state.waitFor({
+      direction: "outbound",
+      kind: "message-text",
+      textIncludes: "QA-VISIBLE-REPLACEMENT",
+      timeoutMs: 100,
+    });
+    const replacement = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-VISIBLE-REPLACEMENT",
+    });
+
+    await expect(pending).resolves.toMatchObject({ id: replacement.id, direction: "outbound" });
+  });
+
   it("caps oversized wait timers", async () => {
     vi.useFakeTimers();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");

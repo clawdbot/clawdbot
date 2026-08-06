@@ -24,6 +24,11 @@ type ToolGroup = {
   order: string[];
   results: Map<string, PendingWrite>;
 };
+type PersistenceReceipt = {
+  promise: Promise<void>;
+  reject: (error: Error) => void;
+  resolve: () => void;
+};
 
 type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
 
@@ -65,6 +70,7 @@ export function createAttemptTranscriptJournal(params: {
   abortSession: () => Promise<void>;
   attempt: AttemptParamsLike;
   messages: AgentMessage[];
+  onInitialSdkUserValidated?: () => void;
   sdkSessionId: string;
 }) {
   const hiddenTurn = params.attempt.trigger === "memory";
@@ -113,6 +119,7 @@ export function createAttemptTranscriptJournal(params: {
   let pendingTools: ToolGroup | undefined;
   let queue = Promise.resolve();
   let firstFailure: Error | undefined;
+  const sdkUserPersistenceReceipts = new Map<string, PersistenceReceipt>();
   let abortPromise: Promise<void> | undefined;
   let replayInvalid = false;
   let initialSdkUserObserved = false;
@@ -129,7 +136,21 @@ export function createAttemptTranscriptJournal(params: {
     firstFailure = error instanceof Error ? error : new Error(String(error));
     replayInvalid = true;
     pendingTools = undefined;
+    for (const receipt of sdkUserPersistenceReceipts.values()) {
+      receipt.reject(firstFailure);
+    }
     abortPromise = params.abortSession().catch(() => undefined);
+  };
+  const sdkUserPersistenceReceipt = (eventId: string) => {
+    let receipt = sdkUserPersistenceReceipts.get(eventId);
+    if (!receipt) {
+      receipt = createPersistenceReceipt();
+      sdkUserPersistenceReceipts.set(eventId, receipt);
+      if (firstFailure) {
+        receipt.reject(firstFailure);
+      }
+    }
+    return receipt;
   };
   const claim = (eventId: string) =>
     !firstFailure && !seenEventIds.has(eventId) && Boolean(seenEventIds.add(eventId));
@@ -391,6 +412,7 @@ export function createAttemptTranscriptJournal(params: {
       autopilotContinuation: boolean;
       replayIncomplete?: boolean;
     }) {
+      const persistenceReceipt = sdkUserPersistenceReceipt(input.eventId);
       if (!claim(input.eventId)) {
         return;
       }
@@ -404,7 +426,9 @@ export function createAttemptTranscriptJournal(params: {
           replayInvalid = true;
         } else {
           initialSdkUserValidated = true;
+          params.onInitialSdkUserValidated?.();
         }
+        persistenceReceipt.resolve();
         return;
       }
       initialSdkUserObserved = true;
@@ -417,8 +441,11 @@ export function createAttemptTranscriptJournal(params: {
         const outcome = await append(write);
         if (!outcome) {
           replayInvalid = true;
+          persistenceReceipt.reject(new Error("Copilot steering user write was suppressed"));
+          return;
         }
         await publish(accept(outcome));
+        persistenceReceipt.resolve();
       });
     },
     recordAssistant(input: {
@@ -499,16 +526,32 @@ export function createAttemptTranscriptJournal(params: {
           ownAssistant(group.assistantKey, true);
         }
         pendingTools = undefined;
+        const deferredReceipts: PersistenceReceipt[] = [];
         for (const write of deferredUserWrites.splice(0)) {
           const outcome = await append(write);
           if (!outcome) {
             replayInvalid = true;
+            if (write.eventId) {
+              sdkUserPersistenceReceipt(write.eventId).reject(
+                new Error("Copilot steering user write was suppressed"),
+              );
+            }
+            continue;
           }
           const didAppend = accept(outcome);
           appended ||= didAppend;
+          if (write.eventId) {
+            deferredReceipts.push(sdkUserPersistenceReceipt(write.eventId));
+          }
         }
         await publish(appended);
+        for (const receipt of deferredReceipts) {
+          receipt.resolve();
+        }
       });
+    },
+    waitForSdkUserPersisted(eventId: string) {
+      return sdkUserPersistenceReceipt(eventId).promise;
     },
     barrier,
     hasFailed: () => firstFailure !== undefined,
@@ -519,6 +562,34 @@ export function createAttemptTranscriptJournal(params: {
       messagesSnapshot: [...messagesSnapshot],
       replayInvalid,
     }),
+  };
+}
+
+function createPersistenceReceipt(): PersistenceReceipt {
+  let settled = false;
+  let rejectPromise: ((error: Error) => void) | undefined;
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  // Some SDK user events are not steering receipts. Keep their later journal
+  // failure observable without creating an unhandled rejection.
+  void promise.catch(() => undefined);
+  return {
+    promise,
+    reject(error) {
+      if (!settled) {
+        settled = true;
+        rejectPromise?.(error);
+      }
+    },
+    resolve() {
+      if (!settled) {
+        settled = true;
+        resolvePromise?.();
+      }
+    },
   };
 }
 

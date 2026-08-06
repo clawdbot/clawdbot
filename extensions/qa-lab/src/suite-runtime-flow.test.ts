@@ -13,7 +13,6 @@ const formatTransportTranscript = vi.hoisted(() => vi.fn());
 const fetchJson = vi.hoisted(() => vi.fn());
 const waitForGatewayHealthy = vi.hoisted(() => vi.fn());
 const waitForTransportReady = vi.hoisted(() => vi.fn());
-const waitForQaChannelReady = vi.hoisted(() => vi.fn());
 const patchConfig = vi.hoisted(() => vi.fn());
 const applyConfig = vi.hoisted(() => vi.fn());
 const readConfigSnapshot = vi.hoisted(() => vi.fn());
@@ -83,7 +82,6 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   fetchJson,
   waitForGatewayHealthy,
   waitForTransportReady,
-  waitForQaChannelReady,
   waitForConfigRestartSettle,
   patchConfig,
   applyConfig,
@@ -273,7 +271,7 @@ describe("qa suite runtime flow", () => {
       scenario: typeof scenario;
       deps: {
         runScenario: typeof runScenario;
-        waitForQaChannelReady: typeof waitForQaChannelReady;
+        waitForTransportReady: typeof waitForTransportReady;
         waitForOutboundMessage: typeof waitForOutboundMessage;
         markGatewayLogCursor: () => number;
         assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
@@ -298,7 +296,7 @@ describe("qa suite runtime flow", () => {
     expect(call.env).toBe(env);
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBe(runScenario);
-    expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
+    expect(call.deps.waitForTransportReady).toBe(waitForTransportReady);
     expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
     const outboundPredicate = vi.fn();
     call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);

@@ -1,10 +1,12 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -28,6 +30,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     cfg,
     chatType,
     ctx,
+    deferFinalTtsText,
     deliveryChannel,
     deliberateSilentTerminalReply,
     dispatcher,
@@ -97,6 +100,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
     (ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx);
   const sentFinalPayloadDedupeKeys = new Set<string>();
+  let deferredTtsTextPending = state.progressState.accumulatedBlockTtsText;
   for (const [replyIndex, reply] of replies.entries()) {
     throwIfDispatchOperationAborted();
     // Durable reasoning is a channel-owned lane; generic channels keep the
@@ -129,7 +133,22 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    const finalReply = await state.sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    const shouldAttachDeferredText =
+      deferFinalTtsText &&
+      reply.isReasoning !== true &&
+      reply.isCommentary !== true &&
+      !isReplyPayloadStatusNotice(reply);
+    const finalReply = await state.sendFinalPayload(reply, {
+      deliveryId: String(replyIndex),
+      ...(shouldAttachDeferredText
+        ? {
+            deferredTtsText: deferredTtsTextPending,
+          }
+        : {}),
+    });
+    if (shouldAttachDeferredText) {
+      deferredTtsTextPending = "";
+    }
     if (finalReply.dedupedAgainstBlock) {
       // The delivering block already settled into the turn ledger.
       continue;
@@ -192,20 +211,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       channelId: deliveryChannel,
       accountId: replyRoute.accountId,
     });
-    // Generate TTS-only reply after block streaming completes (when there's no final reply).
-    // This handles the case where block streaming succeeds and drops final payloads,
-    // but we still want TTS audio to be generated from the accumulated block content.
+    // Final payloads in separate lanes must not strand the deferred answer.
     if (
       ttsMode === "final" &&
-      replies.length === 0 &&
       state.progressState.blockCount > 0 &&
-      state.progressState.accumulatedBlockTtsText.trim()
+      deferredTtsTextPending.trim() &&
+      (replies.length === 0 || deferFinalTtsText)
     ) {
       try {
         await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
         throwIfDispatchOperationAborted();
         const ttsSyntheticReply = await state.maybeApplyTtsWithFinalizationLease({
-          payload: { text: state.progressState.accumulatedBlockTtsText },
+          payload: { text: deferredTtsTextPending },
           cfg,
           channel: deliveryChannel,
           kind: "final",
@@ -214,42 +231,25 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           accountId: replyRoute.accountId,
         });
         throwIfDispatchOperationAborted();
-        // Only send if TTS was actually applied (mediaUrl exists)
-        if (ttsSyntheticReply.mediaUrl) {
-          // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
-          // Keep the spoken text only for hooks/archive consumers.
-          const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
-            {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: state.progressState.accumulatedBlockTtsText,
-              trustedLocalMedia: true,
-            },
-            state.progressState.accumulatedBlockTtsText,
-            { visibleTextAlreadyDelivered: true },
-          );
-          const normalizedTtsOnlyPayload = await state.normalizeReplyMediaPayload(ttsOnlyPayload);
-          throwIfDispatchOperationAborted();
-          const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
-            abortSignal: getDispatchAbortSignal(),
-            kind: "final",
-          });
-          if (result) {
-            queuedFinal = result.ok || queuedFinal;
-            if (isRoutedReplyDelivered(result)) {
-              routedFinalCount += 1;
-            }
-            if (!result.ok) {
-              logVerbose(
-                `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
+        if (ttsSyntheticReply.mediaUrl || (deferFinalTtsText && ttsSyntheticReply.text?.trim())) {
+          const ttsOnlyPayload = deferFinalTtsText
+            ? ttsSyntheticReply
+            : markReplyPayloadAsTtsSupplement(
+                {
+                  mediaUrl: ttsSyntheticReply.mediaUrl,
+                  audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                  spokenText: deferredTtsTextPending,
+                  trustedLocalMedia: true,
+                },
+                deferredTtsTextPending,
+                { visibleTextAlreadyDelivered: true },
               );
-            }
-          } else {
-            throwIfDispatchOperationAborted();
-            markInboundDedupeReplayUnsafe();
-            queuedFinal =
-              turnLedger.sendQueued("final", normalizedTtsOnlyPayload).queued || queuedFinal;
-          }
+          const finalReply = await state.sendFinalPayload(ttsOnlyPayload, {
+            abortSignal: getDispatchAbortSignal(),
+            skipTts: true,
+          });
+          queuedFinal = finalReply.queuedFinal || queuedFinal;
+          routedFinalCount += finalReply.routedFinalCount;
         }
       } catch (err) {
         if (isDispatchReplyOperationAbortedError(err)) {
@@ -258,6 +258,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         logVerbose(
           `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
         );
+        const deferredVisibleText = cleanDeferredFinalText(deferredTtsTextPending);
+        if (deferFinalTtsText && deferredVisibleText.trim()) {
+          const finalReply = await state.sendFinalPayload(
+            { text: deferredVisibleText },
+            { abortSignal: getDispatchAbortSignal(), skipTts: true },
+          );
+          queuedFinal = finalReply.queuedFinal || queuedFinal;
+          routedFinalCount += finalReply.routedFinalCount;
+        }
       }
     }
   }

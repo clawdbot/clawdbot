@@ -166,7 +166,7 @@ describe("buildClawUpdatePlan", () => {
       blockers: [],
     });
     expect(current.config).toEqual(beforeConfig);
-    expect(await readFile(databasePath)).toEqual(beforeBytes);
+    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
     expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
   });
 

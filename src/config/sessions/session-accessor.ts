@@ -120,6 +120,7 @@ export type {
 } from "./session-accessor.entry-mutation.js";
 export {
   countSessionEntryRowsReadOnly,
+  ensureSqliteSessionEntrySync as ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,

@@ -46,7 +46,7 @@ import {
   selectSessionTranscriptTreePathNodes,
   type SessionTranscriptTree,
 } from "./transcript-tree.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type MessageCut = {
   editorText?: string;
@@ -475,6 +475,7 @@ function cloneMessageCutSessionEntry(params: {
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
