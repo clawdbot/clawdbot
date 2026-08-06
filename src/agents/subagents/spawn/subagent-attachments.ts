@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { removePathWithinRoot } from "../../../infra/fs-safe-remove.js";
 import {
   ensureAbsoluteDirectory,
+  FsSafeError,
   isPathInside,
   resolveOpenedFileRealPathForHandle,
   root,
@@ -367,16 +368,26 @@ export async function materializeSubagentAttachments(params: {
   let absDir: string | undefined;
 
   try {
-    const ensuredWorkspace = await ensureAbsoluteDirectory(childWorkspaceDir, {
-      scopeLabel: "child workspace",
-      mode: 0o700,
-    });
-    if (!ensuredWorkspace.ok) {
-      throw ensuredWorkspace.error;
+    let workspaceRoot: Awaited<ReturnType<typeof root>>;
+    try {
+      // An existing configured workspace may itself be a symlink. Let fs-safe pin
+      // its canonical target while still rejecting symlink hops beneath that root.
+      workspaceRoot = await root(childWorkspaceDir, { mkdir: true, mode: 0o600 });
+    } catch (error) {
+      if (!(error instanceof FsSafeError) || error.code !== "not-found") {
+        throw error;
+      }
+      const ensuredWorkspace = await ensureAbsoluteDirectory(childWorkspaceDir, {
+        scopeLabel: "child workspace",
+        mode: 0o700,
+      });
+      if (!ensuredWorkspace.ok) {
+        throw ensuredWorkspace.error;
+      }
+      workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o600 });
     }
     // Keep the capability rooted at the workspace. Rooting it at the receipt directory
     // would trust a pre-existing attachments symlink before fs-safe can reject the hop.
-    const workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o600 });
     workspaceRootDir = workspaceRoot.rootReal;
     absDir = path.join(workspaceRootDir, ...relDir.split(path.posix.sep));
     await workspaceRoot.mkdir(relDir);

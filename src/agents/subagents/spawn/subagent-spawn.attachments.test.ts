@@ -221,6 +221,27 @@ describe("spawnSubagentDirect filename validation", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "materializes attachments through a configured workspace symlink",
+    async () => {
+      const workspaceTarget = workspaceDirOverride;
+      const workspaceAlias = `${workspaceTarget}-link`;
+      fs.symlinkSync(workspaceTarget, workspaceAlias, "dir");
+      workspaceDirOverride = workspaceAlias;
+      configOverride = createSubagentSpawnTestConfig(workspaceAlias);
+      try {
+        const result = await spawnWithName("file.txt");
+
+        expect(result.status).toBe("accepted");
+        const attachmentsRoot = path.join(workspaceTarget, ".openclaw", "attachments");
+        expect(fs.readdirSync(attachmentsRoot)).toHaveLength(1);
+      } finally {
+        workspaceDirOverride = workspaceTarget;
+        fs.unlinkSync(workspaceAlias);
+      }
+    },
+  );
+
   it("normalizes explicit cwd before materializing native subagent attachments", async () => {
     const homeDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-home-attachments-${process.pid}-${Date.now()}-`),
