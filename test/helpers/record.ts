@@ -23,37 +23,25 @@ type LabeledRecordRequirementMessage = Exclude<
   FixedRecordRequirementMessage
 >;
 
-function recordRequirementError(
-  message: RecordRequirementMessage,
-  label?: string,
-): string | undefined {
-  switch (message) {
-    case "expected-label":
-      return `expected ${label}`;
-    case "expected-label-object":
-      return `expected ${label} to be an object`;
-    case "expected-label-object-short":
-      return `expected ${label} object`;
-    case "expected-label-record":
-      return `expected ${label} to be a record`;
-    case "expected-label-record-short":
-      return `expected ${label} record`;
-    case "expected-label-capitalized":
-      return `Expected ${label}`;
-    case "expected-label-object-capitalized":
-      return `Expected ${label} to be an object`;
-    case "expected-non-array-record":
-      return "Expected a non-array record";
-    case "expected-object-value":
-      return "Expected object value";
-    case "expected-record":
-      return "expected record";
-    case "label-not-object":
-      return `${label} was not an object`;
-    case "message":
-      return label ?? "expected record";
-  }
-  return undefined;
+// Keyed registry keeps the message union exhaustively checked: adding a
+// variant without a formatter is a compile error, and the return stays string.
+const RECORD_REQUIREMENT_ERRORS = {
+  "expected-label": (label) => `expected ${label}`,
+  "expected-label-object": (label) => `expected ${label} to be an object`,
+  "expected-label-object-short": (label) => `expected ${label} object`,
+  "expected-label-record": (label) => `expected ${label} to be a record`,
+  "expected-label-record-short": (label) => `expected ${label} record`,
+  "expected-label-capitalized": (label) => `Expected ${label}`,
+  "expected-label-object-capitalized": (label) => `Expected ${label} to be an object`,
+  "expected-non-array-record": () => "Expected a non-array record",
+  "expected-object-value": () => "Expected object value",
+  "expected-record": () => "expected record",
+  "label-not-object": (label) => `${label} was not an object`,
+  message: (label) => label ?? "expected record",
+} satisfies Record<RecordRequirementMessage, (label?: string) => string>;
+
+function recordRequirementError(message: RecordRequirementMessage, label?: string): string {
+  return RECORD_REQUIREMENT_ERRORS[message](label);
 }
 
 export function createRequireRecord(
