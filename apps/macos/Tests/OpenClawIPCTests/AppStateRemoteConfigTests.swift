@@ -248,7 +248,7 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
-    func `legacy direct route is retired while gateway mode is inactive`() {
+    func `inactive direct route without discovery provenance remains operator owned`() {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
@@ -264,13 +264,13 @@ struct AppStateRemoteConfigTests {
         ]
         let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
 
-        #expect(migration.changed)
-        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
-        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "ws://127.0.0.1:18789")
+        #expect(!migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "wss://\(tailnetHost)")
     }
 
     @Test
-    func `cold inactive bound direct route is retired before next discovery selection`() async {
+    func `cold inactive direct route is preserved but cannot authorize next discovery selection`() async {
         let configPath = TestIsolation.tempConfigPath()
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
@@ -301,9 +301,9 @@ struct AppStateRemoteConfigTests {
             let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
                 isPreview: false,
                 saver: { OpenClawConfigFile.saveDict($0) })
-            #expect(startup.migrationChanged)
+            #expect(!startup.migrationChanged)
             #expect(startup.migrationPersisted)
-            #expect(startup.remoteTransport == .ssh)
+            #expect(startup.remoteTransport == .direct)
 
             let state = AppState(preview: true)
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
