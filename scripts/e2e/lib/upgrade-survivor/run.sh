@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
+source "${OPENCLAW_UPGRADE_SURVIVOR_GATEWAY_START_HELPER:-scripts/e2e/lib/upgrade-survivor/gateway-start.sh}"
 
 export npm_config_loglevel=error
 export npm_config_fund=false
@@ -1224,7 +1225,19 @@ ensure_gateway_started() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     return 0
   fi
-  start_gateway
+  local port=18789 budget start_epoch ready_epoch
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
+  start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+  upgrade_survivor_start_gateway "$GATEWAY_LOG" 360 "$port" strict \
+    env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD \
+    openclaw gateway --port "$port" --bind loopback --allow-unconfigured
+  ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+  start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
+  if [ "$start_seconds" -gt "$budget" ]; then
+    echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s" >&2
+    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+    return 1
+  fi
 }
 
 check_gateway_probes() {

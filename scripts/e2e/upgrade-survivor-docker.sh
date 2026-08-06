@@ -164,6 +164,8 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     "${PROBE_ENV_ARGS[@]}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
+    -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/gateway-start.sh:/tmp/openclaw-upgrade-survivor-gateway-start.sh:ro" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_GATEWAY_START_HELPER=/tmp/openclaw-upgrade-survivor-gateway-start.sh \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     "${DOCKER_RUN_USER_ARGS[@]}" \
     "$IMAGE_NAME" \
@@ -197,6 +199,7 @@ docker_e2e_run_with_harness \
   "$IMAGE_NAME" \
   timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc 'set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/upgrade-survivor/gateway-start.sh
 
 export npm_config_loglevel=error
 export npm_config_fund=false
@@ -407,9 +410,8 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
 else
   echo "Starting gateway from upgraded state..."
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
-  gateway_pid="$!"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"
+  upgrade_survivor_start_gateway "$GATEWAY_LOG" 360 "$PORT" strict \
+    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$START_BUDGET" ]; then
