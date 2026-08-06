@@ -512,7 +512,16 @@ final class AppState {
             UserDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
-        let configRoot = OpenClawConfigFile.loadDict()
+        let loadedConfigRoot = OpenClawConfigFile.loadDict()
+        let legacyRouteMigration = isPreview
+            ? (root: loadedConfigRoot, changed: false)
+            : Self.migrateLegacyUnboundDiscoveryRoute(loadedConfigRoot)
+        let legacyRouteMigrationPersisted = !legacyRouteMigration.changed ||
+            gatewayConfigSaver(legacyRouteMigration.root)
+        let configRoot = legacyRouteMigration.root
+        if !legacyRouteMigrationPersisted {
+            Self.logger.error("legacy discovery route migration could not be persisted")
+        }
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
@@ -581,13 +590,21 @@ final class AppState {
         }
 
         if !self.isPreview {
-            self.reconcilePreferredGatewayRouteBinding()
+            if !legacyRouteMigrationPersisted {
+                // Failed persistence must keep routing closed instead of letting the watcher
+                // republish the old Direct endpoint from disk.
+                self.gatewayConfigSyncState = .failed
+            } else if legacyRouteMigration.changed {
+                GatewayDiscoveryPreferences.setPreferredStableID(nil)
+            } else {
+                self.reconcilePreferredGatewayRouteBinding()
+            }
         }
         self.isInitializing = false
         if !self.isPreview {
             scheduleExecApprovalModeReadRetry()
         }
-        if !self.isPreview {
+        if !self.isPreview, legacyRouteMigrationPersisted {
             self.startConfigWatcher()
         }
     }
@@ -1263,6 +1280,28 @@ extension AppState {
 }
 
 extension AppState {
+    static func migrateLegacyUnboundDiscoveryRoute(_ currentRoot: [String: Any])
+        -> (root: [String: Any], changed: Bool)
+    {
+        guard GatewayDiscoveryPreferences.preferredStableID() != nil,
+              GatewayDiscoveryPreferences.preferredRouteBinding() == nil,
+              ConnectionModeResolver.resolve(root: currentRoot).mode == .remote,
+              GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
+        else {
+            return (currentRoot, false)
+        }
+
+        var root = currentRoot
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var remote = gateway["remote"] as? [String: Any] ?? [:]
+        remote["transport"] = RemoteTransport.ssh.rawValue
+        remote["url"] = GatewayDiscoverySelectionSupport.sshTunnelGatewayUrl(
+            current: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "")
+        gateway["remote"] = remote
+        root["gateway"] = gateway
+        return (root, true)
+    }
+
     private static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft,

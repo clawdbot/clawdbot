@@ -153,24 +153,41 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
-    func `legacy unbound discovery selection adopts its current route`() {
+    func `legacy unbound direct selection is retired before endpoint publication`() async {
+        let configPath = TestIsolation.tempConfigPath()
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
-        let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .direct
-        state.remoteUrl = "ws://legacy-gateway.local:18789"
-        GatewayDiscoveryPreferences.setPreferredStableID("legacy-gateway")
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            let vulnerableRoot: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "ws://legacy-gateway.local:18789",
+                        "token": "stored-token",
+                    ],
+                ],
+            ]
+            GatewayDiscoveryPreferences.setPreferredStableID("legacy-gateway")
 
-        #expect(!state._testReconcilePreferredGatewayRouteBinding())
-        #expect(GatewayDiscoveryPreferences.preferredStableID() == "legacy-gateway")
-        #expect(GatewayDiscoveryPreferences.preferredRouteBinding() ==
-            GatewayDiscoveryPreferences.routeBinding(
-                connectionMode: state.connectionMode,
-                remoteTransport: state.remoteTransport,
-                remoteURL: state.remoteUrl,
-                remoteTarget: state.remoteTarget))
-        #expect(GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(state: state))
+            let migration = AppState.migrateLegacyUnboundDiscoveryRoute(vulnerableRoot)
+            #expect(migration.changed)
+            #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
+            #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) ==
+                "ws://127.0.0.1:18789")
+            #expect(OpenClawConfigFile.saveDict(migration.root))
+
+            let state = AppState(preview: true)
+            let source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                beforeConfigRead: {})
+            #expect(state.remoteTransport == .ssh)
+            #expect(source.remoteTransport == .ssh)
+            #expect(source.directRemoteURL == nil)
+        }
     }
 
     @Test

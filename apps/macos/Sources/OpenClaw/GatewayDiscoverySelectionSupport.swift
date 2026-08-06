@@ -27,7 +27,7 @@ enum GatewayDiscoverySelectionSupport {
         state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
     }
 
-    private static func sshTunnelGatewayUrl(current: String) -> String {
+    static func sshTunnelGatewayUrl(current: String) -> String {
         let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let url = URL(string: trimmed),
