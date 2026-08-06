@@ -178,12 +178,15 @@ describe("google music generation provider", () => {
 
   it("accepts inline audio encoded with URL-safe base64", async () => {
     mockGoogleAuth();
-    const audio = Buffer.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00]);
+    const audio = Buffer.from([0xfb, 0xff, 0x49, 0x44, 0x33, 0x04, 0x00, 0x00]);
+    const audioBase64url = audio.toString("base64url");
+    expect(audioBase64url).toMatch(/[-_]/);
+    expect(audioBase64url).not.toMatch(/[+/]/);
     generateContentMock.mockResolvedValue({
       candidates: [
         {
           content: {
-            parts: [{ inlineData: { data: audio.toString("base64url"), mimeType: "audio/mpeg" } }],
+            parts: [{ inlineData: { data: audioBase64url, mimeType: "audio/mpeg" } }],
           },
           finishReason: "STOP",
         },

@@ -217,7 +217,10 @@ describe("google video generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    const videoBytes = Buffer.from("mp4-bytes");
+    const videoBytes = Buffer.from([0xfb, 0xff, 0x6d, 0x70, 0x34]);
+    const videoBase64url = videoBytes.toString("base64url");
+    expect(videoBase64url).toMatch(/[-_]/);
+    expect(videoBase64url).not.toMatch(/[+/]/);
     generateVideosMock.mockResolvedValue({
       done: true,
       name: "operations/123",
@@ -225,7 +228,7 @@ describe("google video generation provider", () => {
         generatedVideos: [
           {
             video: {
-              videoBytes: videoBytes.toString("base64url"),
+              videoBytes: videoBase64url,
               mimeType: "video/mp4",
             },
           },

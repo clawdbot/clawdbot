@@ -375,9 +375,12 @@ describe("Google speech provider", () => {
   });
 
   it("accepts Gemini audio with URL-safe base64", async () => {
-    const pcm = Buffer.from([7, 0, 8, 0, 9, 0, 10, 0]);
+    const pcm = Buffer.from([0xfb, 0xff, 8, 0, 9, 0, 10, 0]);
+    const pcmBase64url = pcm.toString("base64url");
+    expect(pcmBase64url).toMatch(/[-_]/);
+    expect(pcmBase64url).not.toMatch(/[+/]/);
     const response = {
-      response: googleTtsResponse(pcm.toString("base64url")),
+      response: googleTtsResponse(pcmBase64url),
       release: vi.fn(async () => {}),
     };
     const requestSequence = vi.fn().mockResolvedValue(response);

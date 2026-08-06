@@ -291,6 +291,10 @@ describe("Google image-generation provider", () => {
 
   it("accepts URL-safe base64 image bytes", async () => {
     mockGoogleApiKeyAuth();
+    const imageBytes = Buffer.from([0xfb, 0xff, 0x50, 0x4e, 0x47]);
+    const imageBase64url = imageBytes.toString("base64url");
+    expect(imageBase64url).toMatch(/[-_]/);
+    expect(imageBase64url).not.toMatch(/[+/]/);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -302,7 +306,7 @@ describe("Google image-generation provider", () => {
                   {
                     inlineData: {
                       mimeType: "image/png",
-                      data: Buffer.from("png-data").toString("base64url"),
+                      data: imageBase64url,
                     },
                   },
                 ],
@@ -320,7 +324,7 @@ describe("Google image-generation provider", () => {
       cfg: {},
     });
 
-    expect(result.images[0]?.buffer).toEqual(Buffer.from("png-data"));
+    expect(result.images[0]?.buffer).toEqual(imageBytes);
   });
 
   it("rejects mixed-alphabet inline image data", async () => {
