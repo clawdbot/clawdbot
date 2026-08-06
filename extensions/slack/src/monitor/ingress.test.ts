@@ -33,6 +33,25 @@ function createSlackEnvelope(eventId: string, ts = "1700000000.000100") {
   };
 }
 
+function createChannelIdChangedEnvelope(
+  eventId: string,
+  oldChannelId: string,
+  newChannelId: string,
+) {
+  return {
+    team_id: "T_TEST",
+    api_app_id: "A_TEST",
+    type: "event_callback",
+    event_id: eventId,
+    event_time: 1_700_000_000,
+    event: {
+      type: "channel_id_changed",
+      old_channel_id: oldChannelId,
+      new_channel_id: newChannelId,
+    },
+  };
+}
+
 function createReceiverHarness() {
   let receive: ((event: ReceiverEvent) => Promise<void>) | undefined;
   const receiver: Receiver = {
@@ -63,6 +82,10 @@ function createReceiverEvent(
     ack,
     ...(options.retryNum === undefined ? {} : { retryNum: options.retryNum }),
   };
+}
+
+function createReceiverEventWithBody(body: Record<string, unknown>): ReceiverEvent {
+  return { body, ack: vi.fn(async () => {}) };
 }
 
 function attachIngress(
@@ -154,6 +177,59 @@ describe("Slack durable ingress", () => {
       await ingress.waitForIdle();
 
       expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
+      await ingress.stop();
+    });
+  });
+
+  it("serializes new-channel messages behind channel-ID migration", async () => {
+    await withQueue(async (queue) => {
+      let markMigrationStarted: () => void = () => {};
+      let releaseMigration: () => void = () => {};
+      const migrationStarted = new Promise<void>((resolve) => {
+        markMigrationStarted = resolve;
+      });
+      const migrationGate = new Promise<void>((resolve) => {
+        releaseMigration = resolve;
+      });
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const event = (receiverEvent.body as { event?: { type?: string } }).event;
+        const type = event?.type ?? "unknown";
+        starts.push(type);
+        if (type === "channel_id_changed") {
+          markMigrationStarted();
+          await migrationGate;
+        }
+        await resolveSlackIngressTurnLifecycle(receiverEvent.customProperties)?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+
+      await receive(
+        createReceiverEventWithBody(
+          createChannelIdChangedEnvelope("Ev-channel-migrate", "C_OLD", "C_NEW"),
+        ),
+      );
+      await receive(
+        createReceiverEventWithBody({
+          ...createSlackEnvelope("Ev-new-channel-message"),
+          event: {
+            type: "message",
+            channel: "C_NEW",
+            user: "U_TEST",
+            ts: "1700000000.000200",
+            text: "after migration",
+          },
+        }),
+      );
+
+      await migrationStarted;
+      await Promise.resolve();
+      expect(starts).toEqual(["channel_id_changed"]);
+
+      releaseMigration();
+      await ingress.waitForIdle();
+      expect(starts).toEqual(["channel_id_changed", "message"]);
       await ingress.stop();
     });
   });
