@@ -76,6 +76,9 @@ const frozenCoreScenarioIds = [
   "thread-memory-isolation",
   "model-switch-tool-continuity",
   "approval-turn-tool-followthrough",
+  // Mirrors the immutable report shape for the fixed candidate SHAs, not the live catalog.
+  "codex-plugin-pinned-new",
+  "codex-plugin-pinned-old",
   "compaction-retry-mutating-tool",
   "runtime-first-hour-20-turn",
   "runtime-tool-apply-patch",
