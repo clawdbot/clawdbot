@@ -72,6 +72,10 @@ async function withStoredSession<T>(params: {
   try {
     return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, params.run);
   } finally {
+    // Listener and send paths leave the shared state database open under the temporary
+    // state dir, so it must be released before removal or Windows keeps the files locked
+    // and the removal fails with EBUSY.
+    resetPluginStateStoreForTests();
     await rm(stateDir, { recursive: true, force: true });
   }
 }
