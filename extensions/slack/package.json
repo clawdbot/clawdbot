@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.6.34",
+  "version": "2026.6.35",
   "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -20,7 +20,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.34"
+    "openclaw": ">=2026.6.35"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -65,13 +65,13 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.6.34"
+      "pluginApi": ">=2026.6.35"
     },
     "startup": {
       "deferConfiguredChannelFullLoadUntilAfterListen": true
     },
     "build": {
-      "openclawVersion": "2026.6.34",
+      "openclawVersion": "2026.6.35",
       "bundledDist": false
     },
     "release": {
