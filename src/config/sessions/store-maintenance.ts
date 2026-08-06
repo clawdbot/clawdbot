@@ -139,6 +139,11 @@ function resolveHighWaterBytes(
   }
   try {
     const parsed = parseByteSize(normalized, { defaultUnit: "b" });
+    // A zero or negative high-water mark is not a usable target; fall back to
+    // the default ratio so disk budget enforcement does not delete every session.
+    if (parsed <= 0) {
+      return computeDefault();
+    }
     return Math.min(parsed, maxDiskBytes);
   } catch {
     return computeDefault();

@@ -987,6 +987,20 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(maintenance.highWaterBytes).toBeNull();
   });
 
+  it("falls back to default high-water ratio when highWaterBytes is 0", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ highWaterBytes: 0 });
+
+    expect(maintenance.maxDiskBytes).toBe(10 * 1024 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(10 * 1024 * 1024 * 1024 * 0.8));
+  });
+
+  it("falls back to default high-water ratio when highWaterBytes is the string '0'", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ highWaterBytes: "0" });
+
+    expect(maintenance.maxDiskBytes).toBe(10 * 1024 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(10 * 1024 * 1024 * 1024 * 0.8));
+  });
+
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
     const defaultMaintenance = resolveMaintenanceConfigFromInput({ maxEntries: 50 });
     expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
