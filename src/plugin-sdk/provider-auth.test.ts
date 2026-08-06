@@ -295,6 +295,7 @@ describe("provider auth profile helpers", () => {
         "Copilot-Integration-Id": "vscode-chat",
       }),
     );
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("rejects malformed Copilot proxy hints", async () => {

@@ -23,14 +23,26 @@ function responseFromReader(params: {
   chunks: string[];
   cancel: () => Promise<void>;
   releaseLock: () => void;
+  readError?: Error;
 }): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = params.chunks.map((chunk) => ({
     done: false,
     value: new TextEncoder().encode(chunk),
   }));
-  chunks.push({ done: true, value: undefined });
+  if (!params.readError) {
+    chunks.push({ done: true, value: undefined });
+  }
   const reader = {
-    read: async () => chunks.shift() ?? { done: true, value: undefined },
+    read: async () => {
+      const chunk = chunks.shift();
+      if (chunk) {
+        return chunk;
+      }
+      if (params.readError) {
+        throw params.readError;
+      }
+      return { done: true, value: undefined };
+    },
     cancel: params.cancel,
     releaseLock: params.releaseLock,
   } as ReadableStreamDefaultReader<Uint8Array>;
@@ -145,5 +157,159 @@ describe("readResponseText", () => {
     });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks bounded response readers truncated after stream errors", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["partial"],
+      cancel,
+      releaseLock,
+      readError: new Error("stream reset"),
+    });
+
+    await expect(readResponseText(response, { maxBytes: 64 })).resolves.toEqual({
+      text: "partial",
+      truncated: true,
+      bytesRead: 7,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mark exact-limit streamed responses as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mark multi-chunk exact-limit streamed responses as truncated", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hel", "lo"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks responses that exceed the limit as truncated after confirming overflow", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello", "!"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: true,
+      bytesRead: 5,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mark exact-limit responses as truncated when followed by zero-byte chunks", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello", ""],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: false,
+      bytesRead: 5,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps exact-limit responses truncated when the confirming read fails", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello"],
+      cancel,
+      releaseLock,
+      readError: new Error("stream failed before EOF"),
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: true,
+      bytesRead: 5,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invoke whole-body fallbacks when maxBytes is set", async () => {
+    const arrayBuffer = vi.fn(async () => new TextEncoder().encode("hello").buffer);
+    const text = vi.fn(async () => "hello");
+    const response = {
+      arrayBuffer,
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response, { maxBytes: 4 })).resolves.toEqual({
+      text: "",
+      truncated: true,
+      bytesRead: 0,
+    });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("treats a native bodyless response as empty when maxBytes is set", async () => {
+    await expect(
+      readResponseText(new Response(null, { status: 204 }), { maxBytes: 4 }),
+    ).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
+
+  it("preserves uncapped text-only fallback byte accounting", async () => {
+    const value = "中文🔥";
+    const text = vi.fn(async () => value);
+    const response = {
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: value,
+      truncated: false,
+      bytesRead: new TextEncoder().encode(value).byteLength,
+    });
+    expect(text).toHaveBeenCalledTimes(1);
   });
 });

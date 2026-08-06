@@ -272,13 +272,13 @@ export async function readResponseText(
         bytesRead += chunk.byteLength;
         parts.push(chunk);
 
-        if (truncated || bytesRead >= maxBytes) {
-          truncated = true;
+        if (truncated) {
           break;
         }
       }
     } catch {
-      // Best-effort: return whatever we read so far.
+      // Stream errors mean the accumulated bytes are only a partial body.
+      truncated = true;
     } finally {
       if (truncated) {
         // Some mocked or non-compliant streams never settle cancel(); do not
@@ -292,6 +292,15 @@ export async function readResponseText(
 
     const bytes = concatBytes(parts, bytesRead);
     return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
+  }
+
+  if (maxBytes && body === undefined) {
+    // A Response-like object without a readable body cannot be bounded safely.
+    // Do not fall through to its whole-body convenience methods.
+    return { text: "", truncated: true, bytesRead: 0 };
+  }
+  if (maxBytes && body === null) {
+    return { text: "", truncated: false, bytesRead: 0 };
   }
 
   const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
@@ -310,7 +319,7 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
-    return { text, truncated: false, bytesRead: text.length };
+    return { text, truncated: false, bytesRead: new TextEncoder().encode(text).byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }

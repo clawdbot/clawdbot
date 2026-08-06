@@ -715,6 +715,8 @@ async function buildUpdateCommandRunner(
       const res = await runCommandWithTimeout(argv, {
         ...options,
         env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+        // Package-manager steps spawn workers; retire the whole tree on timeout.
+        killProcessTree: true,
       });
       return res;
     },

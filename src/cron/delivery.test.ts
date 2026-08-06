@@ -235,6 +235,60 @@ describe("resolveFailureDestination", () => {
     });
   });
 
+  it("resolves a channel-shaped job override without mode to announce despite a global webhook default (#102235)", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          failureDestination: { channel: "slack", to: "#alerts" },
+        },
+      }),
+      { mode: "webhook", to: "https://hook.example/cron" },
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "#alerts",
+      accountId: undefined,
+    });
+  });
+
+  it("clears an inherited global webhook URL when a channel-only override implies announce (#102235)", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          failureDestination: { channel: "slack" },
+        },
+      }),
+      { mode: "webhook", to: "https://hook.example/cron" },
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: undefined,
+      accountId: undefined,
+    });
+  });
+
+  it("keeps inheriting a global webhook mode for a to-only override without channel or mode", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          failureDestination: { to: "https://other.example/hook" },
+        },
+      }),
+      { mode: "webhook", to: "https://hook.example/cron" },
+    );
+    expect(plan).toEqual({
+      mode: "webhook",
+      channel: undefined,
+      to: "https://other.example/hook",
+      accountId: undefined,
+    });
+  });
+
   it("returns null for webhook mode without destination URL", () => {
     const plan = resolveFailureDestination(
       makeCronJob({

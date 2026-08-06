@@ -260,6 +260,9 @@ async function startAndWaitForLocalService(params: {
     await stopManagedProcessForRestart(managed, signal);
   }
 
+  // A final abort check at the spawn boundary prevents an orphaned sidecar
+  // when the only lease disappears while the health probe or restart settles.
+  throwIfAborted(signal);
   log.info(`starting ${provider} local service: ${service.command}`);
   managed.process = spawn(service.command, service.args ?? [], {
     cwd: service.cwd,

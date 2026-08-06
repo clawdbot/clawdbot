@@ -33,12 +33,16 @@ function resolveDefaultIdentityPath(): string {
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+const MAX_BASE64URL_DECODE_INPUT_LENGTH = 4096;
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 
 function base64UrlDecode(input: string): Buffer {
+  if (input.length > MAX_BASE64URL_DECODE_INPUT_LENGTH) {
+    throw new Error("base64url input exceeds the maximum allowed length");
+  }
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   return Buffer.from(padded, "base64");

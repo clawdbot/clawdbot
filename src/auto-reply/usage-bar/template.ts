@@ -1,6 +1,7 @@
 import { type FSWatcher, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import type { UsageBarTemplate } from "./translator.js";
@@ -9,7 +10,7 @@ export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();
-const warnedTemplateOverrides = new Set<string>();
+const warnedTemplateOverrides = createDedupeCache({ maxSize: 256, ttlMs: 0 });
 const usageTemplateLog = createSubsystemLogger("usage-template");
 
 function expandPath(p: string): string {
@@ -85,10 +86,9 @@ function getErrorCode(error: unknown): string | undefined {
 
 function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
   const key = `${source}:${reason}:${path ?? ""}`;
-  if (warnedTemplateOverrides.has(key)) {
+  if (warnedTemplateOverrides.check(key)) {
     return;
   }
-  warnedTemplateOverrides.add(key);
   usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
     source,
     reason,

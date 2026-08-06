@@ -132,6 +132,10 @@ describe("loadEnabledClaudeBundleCommands", () => {
               relativePath: "commands/disabled.md",
               contents: ["---", "disable-model-invocation: true", "---", "Do not load me."],
             },
+            {
+              relativePath: "commands/not-frontmatter.md",
+              contents: ["---not", "name: nope", "---not", "Treat this as Markdown."],
+            },
           ],
         });
 
@@ -145,6 +149,17 @@ describe("loadEnabledClaudeBundleCommands", () => {
         });
 
         expectEnabledClaudeBundleCommands(commands, [
+          {
+            pluginId: "compound-bundle",
+            rawName: "not-frontmatter",
+            description: "---not",
+            promptTemplate: "---not\nname: nope\n---not\nTreat this as Markdown.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "not-frontmatter.md",
+            ),
+          },
           {
             pluginId: "compound-bundle",
             rawName: "office-hours",
