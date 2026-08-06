@@ -194,7 +194,7 @@ describe("transcripts tool account ownership", () => {
     {
       name: "rejects provider redirection away from the trusted account",
       resolve: () => ({ ok: true as const, value: "account-b" }),
-      error: "transcripts provider discord-voice could not use trusted account account-a",
+      error: 'transcripts provider discord-voice could not use trusted account "account-a"',
     },
   ])("$name before persistence", async ({ resolve, error }) => {
     const stateDir = await makeStateDir();
@@ -328,6 +328,7 @@ describe("transcripts tool account ownership", () => {
 
   it("does not treat provider lookup aliases as account binding channels", async () => {
     const stateDir = await makeStateDir();
+    const meetingAccountId = `meeting\n${"x".repeat(200)}`;
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "teams",
@@ -345,7 +346,7 @@ describe("transcripts tool account ownership", () => {
       {
         action: "start",
         providerId: "teams",
-        accountId: "meeting-account",
+        accountId: meetingAccountId,
         meetingUrl: "https://teams.microsoft.com/l/meetup-join/example",
         sessionId: "alias-collision",
       },
@@ -356,11 +357,15 @@ describe("transcripts tool account ownership", () => {
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({
-          source: expect.objectContaining({ accountId: "meeting-account" }),
+          source: expect.objectContaining({ accountId: meetingAccountId }),
         }),
       }),
     );
-    expect(result.details).toMatchObject({ accountId: "meeting-account" });
+    expect(result.details).toMatchObject({ accountId: meetingAccountId });
+    const text = result.content[0]?.text;
+    expect(text?.split("\n")).toHaveLength(2);
+    expect(text).not.toContain("x".repeat(65));
+    expect(text).toContain('Account: "meeting\\n');
   });
 
   it("preserves shipped agent ownership while binding matching legacy channel accounts", async () => {

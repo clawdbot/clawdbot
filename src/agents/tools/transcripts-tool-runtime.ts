@@ -10,6 +10,13 @@ import type {
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
+import { truncateUtf16Safe } from "../../utils.js";
+
+const ACCOUNT_ID_OUTPUT_MAX_CHARS = 64;
+
+function formatAccountIdForToolText(accountId: string): string {
+  return JSON.stringify(truncateUtf16Safe(accountId, ACCOUNT_ID_OUTPUT_MAX_CHARS));
+}
 
 export type TranscriptsLogger = {
   warn: (message: string) => void;
@@ -242,7 +249,7 @@ export async function startTranscripts(params: {
     : sourceForResolution.accountId?.trim();
   if (trustedAccountId && resolvedAccountId !== trustedAccountId) {
     throw new Error(
-      `transcripts provider ${provider.id} could not use trusted account ${trustedAccountId}`,
+      `transcripts provider ${provider.id} could not use trusted account ${formatAccountIdForToolText(trustedAccountId)}`,
     );
   }
   const providerSource = {
@@ -324,7 +331,7 @@ export async function startTranscripts(params: {
     activeSessions.set(session.sessionId, { session, providerId: provider.id });
     const effectiveAccount = session.source.accountId;
     return toolText(
-      `Transcripts started: ${session.sessionId}${effectiveAccount ? `\nAccount: ${effectiveAccount}` : ""}`,
+      `Transcripts started: ${session.sessionId}${effectiveAccount ? `\nAccount: ${formatAccountIdForToolText(effectiveAccount)}` : ""}`,
       {
         sessionId: session.sessionId,
         providerId: provider.id,
