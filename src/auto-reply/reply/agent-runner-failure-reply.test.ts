@@ -4,6 +4,8 @@ import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.
 
 const EMPTY_INTERACTIVE_REPLY_TEXT =
   "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
+const TOOL_FAILURE_EMPTY_INTERACTIVE_REPLY_TEXT =
+  "A tool call failed and the turn ended without a visible final reply. Please retry the request.";
 
 describe("buildEmptyInteractiveReplyPayload", () => {
   const baseParams = {
@@ -33,5 +35,15 @@ describe("buildEmptyInteractiveReplyPayload", () => {
         cfg: { agents: { defaults: { silentReply: { group: "disallow" } } } },
       }),
     ).toMatchObject({ text: EMPTY_INTERACTIVE_REPLY_TEXT, isError: true });
+  });
+
+  it("surfaces a tool-specific fallback when tool failures precede an empty terminal reply", () => {
+    expect(
+      buildEmptyInteractiveReplyPayload({
+        ...baseParams,
+        toolFailureCount: 1,
+        cfg: { agents: { defaults: { silentReply: { group: "disallow" } } } },
+      }),
+    ).toMatchObject({ text: TOOL_FAILURE_EMPTY_INTERACTIVE_REPLY_TEXT, isError: true });
   });
 });

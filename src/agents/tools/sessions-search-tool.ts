@@ -33,6 +33,7 @@ import {
 
 const SESSIONS_SEARCH_DEFAULT_LIMIT = 10;
 const SESSIONS_SEARCH_MAX_LIMIT = 25;
+const SESSIONS_SEARCH_LIMIT_ERROR_MESSAGE = `limit must be a positive integer <= ${SESSIONS_SEARCH_MAX_LIMIT}`;
 const SESSIONS_SEARCH_MAX_SESSION_KEYS = 200;
 // Bounds FTS token expansion on the synchronous gateway path while leaving ample query context.
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
@@ -347,6 +348,7 @@ export function createSessionsSearchTool(opts?: {
       const limit =
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
+          message: SESSIONS_SEARCH_LIMIT_ERROR_MESSAGE,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
       const requestedSessionKey = readStringParam(params, "sessionKey");
       const cfg = opts?.config ?? getRuntimeConfig();

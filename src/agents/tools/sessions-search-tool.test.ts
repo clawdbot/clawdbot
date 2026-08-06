@@ -114,7 +114,7 @@ describe("sessions_search tool", () => {
       "query must not be empty",
     );
     await expect(tool.execute("call-2", { query: "ok", limit: 26 })).rejects.toThrow(
-      "limit must be a positive integer",
+      "limit must be a positive integer <= 25",
     );
     await expect(tool.execute("call-3", { query: "x".repeat(4097) })).rejects.toThrow(
       "query must not exceed 4096 characters",

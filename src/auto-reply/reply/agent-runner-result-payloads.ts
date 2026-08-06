@@ -152,6 +152,7 @@ export async function prepareReplyAgentPayloads(state: {
         hasPendingContinuation: pendingContinuation,
         hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
+        toolFailureCount: runResult.meta?.toolSummary?.failures ?? 0,
         sessionCtx,
         cfg,
       });
