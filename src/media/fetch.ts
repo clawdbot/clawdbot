@@ -21,7 +21,9 @@ import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+import { decodeExtendedRemoteFileName, decodeRemoteFileNameComponent } from "./remote-filename.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
+import { withWikimediaOriginalFallback } from "./wikimedia.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -131,41 +133,6 @@ type GuardedMediaResponse = {
 
 function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
-}
-
-function decodeRemoteFileNameComponent(value: string): string {
-  try {
-    return decodeURIComponent(value).replace(/[\\/]/g, "_");
-  } catch {
-    return value;
-  }
-}
-
-function decodeExtendedRemoteFileName(value: string): string | undefined {
-  const match = /^([^']*)'[^']*'(.*)$/u.exec(value);
-  if (!match) {
-    return undefined;
-  }
-  const charset = match[1]?.toLowerCase();
-  const encoded = match[2] ?? "";
-  try {
-    if (charset === "utf-8") {
-      return decodeURIComponent(encoded).replace(/[\\/]/g, "_");
-    }
-    if (charset === "iso-8859-1") {
-      if (/%(?![\da-f]{2})/iu.test(encoded)) {
-        return undefined;
-      }
-      return encoded
-        .replace(/%([\da-f]{2})/giu, (_match, hex: string) =>
-          String.fromCharCode(Number.parseInt(hex, 16)),
-        )
-        .replace(/[\\/]/g, "_");
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
 }
 
 function* parseContentDispositionParameters(header: string): Generator<{
@@ -673,57 +640,17 @@ export async function saveResponseMedia(
   });
 }
 
-/**
- * Rewrites a Wikimedia thumbnail URL to the original (non-thumbnail) file
- * URL, which Wikimedia always serves regardless of pre-rendered thumbnail
- * width. Returns undefined if the URL isn't a Wikimedia thumbnail URL.
- */
-function resolveWikimediaOriginalUrl(url: string): string | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return undefined;
-  }
-  if (!parsed.hostname.endsWith("wikimedia.org")) {
-    return undefined;
-  }
-  const parts = parsed.pathname.split("/").filter(Boolean);
-  if (parts.length < 5 || parts[0] !== "wikipedia" || parts[2] !== "thumb") {
-    return undefined;
-  }
-  const rest = parts.slice(0, 2).concat(parts.slice(3, -1));
-  return `${parsed.origin}/${rest.join("/")}`;
-}
-
-/**
- * True when a media-fetch error is Wikimedia rejecting a thumbnail width
- * that isn't in its pre-rendered whitelist for that file (HTTP 400 with a
- * "Use thumbnail sizes listed on ..." body) — the one case the
- * original-file fallback can actually fix.
- */
-function isWikimediaThumbSizeError(err: unknown): err is MediaFetchError {
-  if (!(err instanceof MediaFetchError) || err.status !== 400) {
-    return false;
-  }
-  return err.message.toLowerCase().includes("thumbnail sizes");
-}
-
 /** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  try {
-    return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
-  } catch (err) {
-    const fallbackUrl = isWikimediaThumbSizeError(err)
-      ? resolveWikimediaOriginalUrl(options.url)
-      : undefined;
-    if (!fallbackUrl) {
-      throw err;
-    }
-    return await withMediaFetchRetry(options, () =>
-      saveRemoteMediaOnce({ ...options, url: fallbackUrl }),
-    );
-  }
+  // Wikimedia rejects thumbnail widths outside its pre-rendered whitelist with an
+  // HTTP 400; retry the always-available original file. Body-agnostic on purpose, so
+  // it also fires on the managed-media store path that drains non-OK bodies. See
+  // ./wikimedia.js.
+  return await withWikimediaOriginalFallback(
+    options.url,
+    (err) => err instanceof MediaFetchError && err.code === "http_error" && err.status === 400,
+    (url) => withMediaFetchRetry(options, () => saveRemoteMediaOnce({ ...options, url })),
+  );
 }
 
 async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {

@@ -1,0 +1,64 @@
+import { describe, expect, it, vi } from "vitest";
+import { withWikimediaOriginalFallback } from "./wikimedia.js";
+
+const THUMB =
+  "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
+const ORIGINAL =
+  "https://upload.wikimedia.org/wikipedia/commons/e/e7/007_American_Pit_Bull_Terrier.jpg";
+
+describe("withWikimediaOriginalFallback", () => {
+  it("retries the ORIGINAL file (thumb -> original rewrite) when the first run fails", async () => {
+    const run = vi.fn(async (url: string) => {
+      if (url === THUMB) {
+        throw new Error("400");
+      }
+      return url;
+    });
+    await expect(withWikimediaOriginalFallback(THUMB, () => true, run)).resolves.toBe(ORIGINAL);
+    expect(run.mock.calls.map((c) => c[0])).toStrictEqual([THUMB, ORIGINAL]);
+  });
+
+  it("does not retry when shouldRetry is false", async () => {
+    const err = new Error("nope");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(withWikimediaOriginalFallback(THUMB, () => false, run)).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a non-Wikimedia URL even when shouldRetry is true", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback("https://example.com/a.jpg", () => true, run),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rewrite a look-alike host such as evilwikimedia.org (exact-host match)", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://evilwikimedia.org/wikipedia/commons/thumb/e/e7/x.jpg/800px-x.jpg",
+        () => true,
+        run,
+      ),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the ORIGINAL error when the fallback fetch also fails", async () => {
+    const firstErr = new Error("thumbnail 400");
+    const run = vi.fn(async (url: string) => {
+      throw url === THUMB ? firstErr : new Error("original 404");
+    });
+    await expect(withWikimediaOriginalFallback(THUMB, () => true, run)).rejects.toBe(firstErr);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+});
