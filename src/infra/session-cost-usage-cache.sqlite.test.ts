@@ -111,7 +111,9 @@ describe("session cost usage SQLite cache", () => {
         }
         expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
       } finally {
-        if (pidDescriptor) Object.defineProperty(process, "pid", pidDescriptor);
+        if (pidDescriptor) {
+          Object.defineProperty(process, "pid", pidDescriptor);
+        }
       }
     });
   });

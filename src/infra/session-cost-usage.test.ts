@@ -2010,7 +2010,9 @@ describe("session cost usage", () => {
           await lease.release();
         }
       } finally {
-        if (pidDescriptor) Object.defineProperty(process, "pid", pidDescriptor);
+        if (pidDescriptor) {
+          Object.defineProperty(process, "pid", pidDescriptor);
+        }
       }
     });
   });
