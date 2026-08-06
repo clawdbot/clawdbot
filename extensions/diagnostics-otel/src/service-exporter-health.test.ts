@@ -89,7 +89,7 @@ describe("observeOtlpExporterHealth", () => {
 
   it("records and rethrows a synchronous dependency export failure once", () => {
     const events: ExporterEvent[] = [];
-    const exportItems = vi.fn(() => {
+    const exportItems = vi.fn((_items: unknown, _callback: (result: ExportResult) => void) => {
       throw new TypeError("private serialization details");
     });
     const exporter = {

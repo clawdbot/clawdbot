@@ -394,7 +394,7 @@ test("records a final failure after persistent real OTLP 503 responses", async (
 
   try {
     emitExporterHealthSpan("persistent-503");
-    await service.stop?.(ctx).catch(() => {});
+    await Promise.resolve(service.stop?.(ctx)).catch(() => {});
     await waitForDiagnosticEventsDrained();
 
     expect(receiver.requestCount).toBe(6);
@@ -426,7 +426,7 @@ test("records a final failure for a real OTLP connection reset", async () => {
 
   try {
     emitExporterHealthSpan("connection-reset");
-    await service.stop?.(ctx).catch(() => {});
+    await Promise.resolve(service.stop?.(ctx)).catch(() => {});
     await waitForDiagnosticEventsDrained();
 
     expect(receiver.requestCount).toBeGreaterThanOrEqual(1);
@@ -458,7 +458,7 @@ test("records a final failure for a real OTLP request timeout", async () => {
 
   try {
     emitExporterHealthSpan("request-timeout");
-    await service.stop?.(ctx).catch(() => {});
+    await Promise.resolve(service.stop?.(ctx)).catch(() => {});
     await waitForDiagnosticEventsDrained();
 
     expect(receiver.requestCount).toBeGreaterThanOrEqual(1);

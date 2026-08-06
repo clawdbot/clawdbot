@@ -1551,9 +1551,10 @@ describe("diagnostics-otel service", () => {
       process.env.OPENCLAW_OTEL_PRELOADED = "1";
       await service.start(ctx);
       process.env.OPENCLAW_OTEL_PRELOADED = "0";
-      ctx.config.diagnostics!.otel!.protocol = "grpc";
+      delete ctx.config.diagnostics!.otel!.protocol;
+      process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
       await service.start(ctx);
-      ctx.config.diagnostics!.otel!.protocol = "http/protobuf";
+      process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
       await service.start(ctx);
       await waitForDiagnosticEventsDrained();
 
@@ -1623,7 +1624,8 @@ describe("diagnostics-otel service", () => {
     });
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
-    ctx.config.diagnostics!.otel!.protocol = "grpc";
+    delete ctx.config.diagnostics!.otel!.protocol;
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
 
     try {
       await service.start(ctx);
