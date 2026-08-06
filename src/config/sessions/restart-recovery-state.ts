@@ -70,18 +70,24 @@ function normalizePresentStringArray(value: unknown): string[] | undefined {
 function normalizeRestartRecoveryTerminalDeliveryEvidenceResult(
   value: unknown,
 ): RestartRecoveryTerminalDeliveryEvidenceResult | undefined {
-  const normalized = normalizeTerminalDeliveryEvidenceResult(value);
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  const restartUnsafeSideEffectsDetected =
+    record?.restartUnsafeSideEffectsDetected === true ? (true as const) : undefined;
+  const normalized = normalizeTerminalDeliveryEvidenceResult(
+    restartUnsafeSideEffectsDetected
+      ? { ...record, unsafeSideEffectsDetected: true as const }
+      : value,
+  );
   if (!normalized) {
     return undefined;
   }
   const { unsafeSideEffectsDetected, ...legacyEvidence } = normalized;
   return {
     ...legacyEvidence,
-    ...(unsafeSideEffectsDetected ||
-    (value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      (value as Record<string, unknown>).restartUnsafeSideEffectsDetected === true)
+    ...(unsafeSideEffectsDetected || restartUnsafeSideEffectsDetected
       ? { restartUnsafeSideEffectsDetected: true as const }
       : {}),
   };

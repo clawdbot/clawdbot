@@ -141,7 +141,6 @@ it("preserves restart-recovery unsafe-side-effect aliases at the restart adapter
           restartRecoveryTerminalDeliveryEvidence: [
             {
               runId: "run-1",
-              captured: true,
               restartUnsafeSideEffectsDetected: true,
             },
           ],
@@ -154,7 +153,6 @@ it("preserves restart-recovery unsafe-side-effect aliases at the restart adapter
     expect(entry?.restartRecoveryTerminalDeliveryEvidence).toEqual([
       {
         runId: "run-1",
-        captured: true,
         restartUnsafeSideEffectsDetected: true,
       },
     ]);

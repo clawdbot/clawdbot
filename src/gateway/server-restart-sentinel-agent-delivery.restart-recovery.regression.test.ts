@@ -46,6 +46,7 @@ describe("restart-sentinel generated-media terminal evidence regression (#119736
     sessionId: string;
     messageId: string;
     unsafeSideEffectsDetected?: true;
+    legacyAliasOnly?: true;
   }): Promise<string> {
     await ensureSessionsDir(params.agentId);
     const entry = {
@@ -68,7 +69,20 @@ describe("restart-sentinel generated-media terminal evidence regression (#119736
     });
     await replaceSessionEntry(
       { sessionKey: params.sessionKey, storePath: storePath(params.agentId) },
-      { ...entry, ...cleanupPatch },
+      {
+        ...entry,
+        ...cleanupPatch,
+        ...(params.legacyAliasOnly
+          ? {
+              restartRecoveryTerminalDeliveryEvidence: [
+                {
+                  runId: params.messageId,
+                  restartUnsafeSideEffectsDetected: true as const,
+                },
+              ],
+            }
+          : {}),
+      },
     );
 
     return await enqueueSessionDelivery(
@@ -155,6 +169,7 @@ describe("restart-sentinel generated-media terminal evidence regression (#119736
       sessionId: unsafeSessionId,
       messageId: unsafeMessageId,
       unsafeSideEffectsDetected: true,
+      legacyAliasOnly: true,
     });
 
     const rawUnsafeEntry = readRawPersistedEntry(unsafeAgentId, unsafeSessionKey);
@@ -215,9 +230,6 @@ describe("restart-sentinel generated-media terminal evidence regression (#119736
     expect(reopenedUnsafeEntry.restartRecoveryTerminalDeliveryEvidence).toEqual([
       {
         runId: unsafeMessageId,
-        captured: true,
-        payloads: [{ visible: true }],
-        deliveryStatus: { status: "sent" },
         restartUnsafeSideEffectsDetected: true,
       },
     ]);
