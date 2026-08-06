@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runQaSuite } from "./suite-launch.runtime.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
@@ -76,8 +77,18 @@ describe("qa suite provider selection", () => {
       scenarioId: "matrix-room-block-streaming",
       channelDriver: "live" as const,
       channelId: "matrix",
+      adapterFactories: [
+        {
+          id: "matrix",
+          supportsModuleFlows: true,
+          matches: ({ driver, channelId }) => driver === "live" && channelId === "matrix",
+          create: async () => {
+            throw new Error("Matrix adapter creation must remain unreachable");
+          },
+        } satisfies QaTransportAdapterFactory,
+      ],
     },
-    { scenarioId: "goal-context-next-turn" },
+    { scenarioId: "goal-context-next-turn", adapterFactories: undefined },
   ])("adopts the provider requirement for directly selected $scenarioId", async (selection) => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-provider-lane-"));
     const startLab = vi.fn(async () => {
@@ -92,6 +103,7 @@ describe("qa suite provider selection", () => {
           ...("channelDriver" in selection
             ? { channelDriver: selection.channelDriver, channelId: selection.channelId }
             : {}),
+          adapterFactories: selection.adapterFactories,
           startLab,
         }),
       ).rejects.toThrow("selected provider lane reached lab startup");

@@ -89,7 +89,8 @@ function updateHasBotCommandEntityForBot(update: unknown, botUsername?: string):
         if (ent.type !== "bot_command") {
           continue;
         }
-        if (typeof ent.offset !== "number" || typeof ent.length !== "number") {
+        // Telegram command handlers only accept entities at the start of a message.
+        if (ent.offset !== 0 || typeof ent.length !== "number") {
           continue;
         }
         const commandText = body.slice(ent.offset, ent.offset + ent.length);

@@ -126,6 +126,31 @@ paths.
   through the Gateway, or use `openclaw agent --local`, when you need traces
   from a headless run.
 
+## Exporter health
+
+`openclaw doctor` and `openclaw status --all` show a bounded, redacted snapshot
+of the running Gateway's latest trusted exporter state for each signal and
+transport. For `diagnostics-otel`, the snapshot distinguishes:
+
+- OTLP/HTTP protobuf with an endpoint supplied by config or an `OTEL_*`
+  environment fallback.
+- OTLP/HTTP protobuf using the exporter dependency's default endpoint because
+  no endpoint was supplied.
+- Stdout log export.
+- Trace or metric export owned by an externally preloaded OpenTelemetry SDK.
+
+OTLP export failure and recovery transitions are recorded from the exporter's
+final result callback, after dependency-owned retries finish. A retryable
+response that later succeeds is therefore not reported as a failure. Startup,
+log preparation or emit, export, and shutdown failures use fixed reason
+categories rather than raw errors.
+
+The snapshot never includes endpoint values, headers, certificates, payloads,
+or raw error messages. Transport is retained only in this local health
+projection. It is not added to the existing
+`openclaw.telemetry.exporter.events` metric attributes, and existing Prometheus
+label sets are unchanged.
+
 ## Configuration reference
 
 ```json5
@@ -494,9 +519,14 @@ Liveness warnings also emit:
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
+  - Optional host-derived `openclaw.plugin` only for trusted plugin runtime completions
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `gen_ai.usage.*`
+
+Plugin attribution is span-only. It does not add a plugin dimension to shared
+OpenTelemetry metrics or change Prometheus metric labels.
+
 - `openclaw.run`
   - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`
 - `openclaw.model.call`

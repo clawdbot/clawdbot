@@ -39,6 +39,7 @@ import {
   waitForMediaCleanupDrains,
   waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
+import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
@@ -331,7 +332,14 @@ export function startGatewayMaintenanceTimers(params: {
     params.runManagedOutgoingMediaGc ??
     (async () => {
       const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
-      return await cleanupManagedOutgoingMediaRecords();
+      return await cleanupManagedOutgoingMediaRecords({
+        hasActiveSessionRun: (sessionKey, agentId) =>
+          hasRegisteredChatRunForSessionKey({
+            context: { chatAbortControllers: params.chatAbortControllers },
+            sessionKey,
+            agentId,
+          }),
+      });
     });
   const managedOutgoingCleanupLoader = createLazyPromiseLoader(async () => {
     try {

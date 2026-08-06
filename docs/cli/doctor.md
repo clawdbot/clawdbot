@@ -14,6 +14,11 @@ When Gateway status reports degraded SecretRef owners, doctor prints a **Secret 
 
 When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
 
+When the Gateway has exporter health facts, doctor reports the latest trusted
+per-signal state and transport under **Telemetry exporters**. The summary is
+redacted and does not include endpoint values, headers, certificates, payloads,
+or raw errors.
+
 Related:
 
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)

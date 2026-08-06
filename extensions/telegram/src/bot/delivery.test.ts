@@ -200,10 +200,11 @@ function firstSendText(mock: ReturnType<typeof vi.fn>) {
   return text as string;
 }
 
-function createSendMessageHarness(messageId = 4) {
+function createSendMessageHarness(messageId = 4, messageThreadId?: number) {
   const runtime = createRuntime();
   const sendMessage = vi.fn().mockResolvedValue({
     message_id: messageId,
+    ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
     chat: { id: "123" },
   });
   const bot = createBot({ sendMessage });
@@ -917,7 +918,11 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
 
     const runtime = createRuntime(false);
-    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 3,
+      message_thread_id: 42,
+      chat: { id: "123" },
+    });
     const bot = createBot({ sendMessage });
 
     await deliverWith({
@@ -1047,6 +1052,88 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("stops a media follow-up when the provider returns the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 51,
+      message_thread_id: 43,
+      chat: { id: "123", type: "supergroup" },
+    });
+    const sendMessage = vi.fn();
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "x".repeat(1025) }],
+        runtime,
+        bot: createBot({ sendPhoto, sendMessage }),
+        thread: { id: 42, scope: "forum" },
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendPhoto).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(observed.deliveryResult.messageIds).toEqual(["51"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).not.toHaveBeenCalled();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps earlier media ids when a later item lands in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 61,
+        message_thread_id: 42,
+        chat: { id: "123", type: "supergroup" },
+      })
+      .mockResolvedValueOnce({
+        message_id: 62,
+        message_thread_id: 43,
+        chat: { id: "123", type: "supergroup" },
+      });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("one.jpg", "image/jpeg", "one");
+    mockMediaLoad("two.jpg", "image/jpeg", "two");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"] }],
+        runtime,
+        bot: createBot({ sendPhoto }),
+        thread: { id: 42, scope: "forum" },
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(observed.deliveryResult.messageIds).toEqual(["61", "62"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).toHaveBeenCalledOnce();
+    expect(recordSentMessage).toHaveBeenCalledOnce();
+  });
+
   it("does not mirror media follow-up text that Telegram rejects as empty", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
     const invisibleText = "\u200B".repeat(1025);
@@ -1164,6 +1251,7 @@ describe("deliverReplies", () => {
         );
       const sendDocument = vi.fn().mockResolvedValue({
         message_id: 9,
+        message_thread_id: 42,
         chat: { id: "123" },
       });
       const bot = createBot({ sendPhoto, sendDocument });
@@ -1391,7 +1479,7 @@ describe("deliverReplies", () => {
   });
 
   it("includes message_thread_id for DM topics", async () => {
-    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const { runtime, sendMessage, bot } = createSendMessageHarness(4, 42);
 
     await deliverWith({
       replies: [{ text: "Hello" }],
@@ -1440,6 +1528,85 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops streamed text after the first provider topic mismatch", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 31,
+      message_thread_id: 43,
+      chat: { id: "123", type: "supergroup" },
+    });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        thread: { id: 42, scope: "forum" },
+        textLimit: 12,
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(observed.deliveryResult.messageIds).toEqual(["31"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).not.toHaveBeenCalled();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps earlier streamed text ids when a later chunk lands in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 41,
+        message_thread_id: 42,
+        chat: { id: "123", type: "supergroup" },
+      })
+      .mockResolvedValueOnce({
+        message_id: 42,
+        message_thread_id: 43,
+        chat: { id: "123", type: "supergroup" },
+      });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two\n\nchunk-three" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        thread: { id: 42, scope: "forum" },
+        textLimit: 12,
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(observed.deliveryResult.messageIds).toEqual(["41", "42"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).toHaveBeenCalledOnce();
+    expect(recordSentMessage).toHaveBeenCalledOnce();
   });
 
   it("retries final text sends for wrapped Undici connect timeouts", async () => {
@@ -1768,6 +1935,32 @@ describe("deliverReplies", () => {
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     expect(firstMockCallArg(sendMessage, 1)).toBe(text);
     expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+  });
+
+  it("does not plain-fallback after Telegram accepts a rich message in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage });
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 31,
+      message_thread_id: 43,
+      chat: { id: "123", type: "supergroup" },
+    });
+    Object.assign(bot.api.raw, { sendRichMessage });
+
+    let observed: unknown;
+    try {
+      await sendTelegramText(bot, "123", "Rich reply", runtime, {
+        richMessages: true,
+        thread: { id: 42, scope: "forum" },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    expect(sendRichMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("falls back to plain text when a rich message is rejected for empty rich content", async () => {

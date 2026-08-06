@@ -310,6 +310,25 @@ export function installThreadingTestPlugin(params: { defaultAccountId?: string; 
   );
 }
 
+export function installCaptionedVoiceTestPlugin(id: string) {
+  const plugin = createChannelTestPluginBase({
+    id,
+    capabilities: {
+      chatTypes: ["direct"],
+      tts: { voice: { synthesisTarget: "voice-note", captionedFinalText: true } },
+    },
+  });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: id,
+        source: "test",
+        plugin,
+      },
+    ]),
+  );
+}
+
 export function requireToolResultHandler(
   handler: GetReplyOptions["onToolResult"] | undefined,
 ): NonNullable<GetReplyOptions["onToolResult"]> {

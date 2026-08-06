@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
-import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -110,24 +110,6 @@ export function normalizeMessageTimestampMs(value: unknown): number | undefined 
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
-}
-
-export function projectSkillSuggestionForTurn(
-  entry: SessionEntry | undefined,
-  suggestion: PendingSkillSuggestion | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  if (suggestion) {
-    return { ...entry, pendingSkillSuggestion: suggestion };
-  }
-  if (!entry.pendingSkillSuggestion) {
-    return entry;
-  }
-  const projected = { ...entry };
-  delete projected.pendingSkillSuggestion;
-  return projected;
 }
 
 export async function updateRoomEventAmbientTranscriptWatermark(params: {

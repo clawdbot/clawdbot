@@ -34,6 +34,7 @@ function selectQaFlowSuiteScenarios(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }) {
   const requestedScenarioIds =
     params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
@@ -67,6 +68,9 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(
+          params.channel ?? scenario.execution.channel,
+        ),
       });
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
@@ -87,6 +91,9 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(
+          params.channel ?? scenario.execution.channel,
+        ),
       }),
   );
 }

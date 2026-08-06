@@ -104,6 +104,10 @@ vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
 
+vi.mock("./runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+}));
+
 vi.mock("./workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async () => undefined),
 }));

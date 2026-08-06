@@ -58,6 +58,8 @@ const ENDPOINT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
   "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
   "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TIMEOUT",
+  "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_KEY",
@@ -314,6 +316,39 @@ test.each(SHARED_ENDPOINT_ROUTING_CASES)(
   30_000,
 );
 
+test("keeps the required protobuf content type over a colliding custom header", async () => {
+  const receiver = await startOtlpReceiver();
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: true,
+    logs: true,
+    configure: (serviceContext) => {
+      serviceContext.config.diagnostics!.otel!.headers = {
+        "content-type": "text/plain",
+      };
+    },
+  });
+
+  try {
+    await emitRealSdkSignals();
+    await service.stop?.(ctx);
+
+    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
+      new Set(["/v1/traces", "/v1/metrics", "/v1/logs"]),
+    );
+    expect(
+      receiver.requests.every(
+        (request) => request.method === "POST" && request.contentType === "application/x-protobuf",
+      ),
+    ).toBe(true);
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
+
 test("uses real signal-specific exporter endpoints verbatim", async () => {
   const receiver = await startOtlpReceiver();
   releasePreloadedOtelGlobals();
@@ -552,6 +587,42 @@ test("propagates the exported model span across two OTLP services with one roote
     peerRoot.end();
     await service.stop?.(ctx);
     await peerProvider.shutdown();
+    await receiver.close();
+  }
+}, 30_000);
+
+test("preserves explicit zero model-call usage through OTLP protobuf export", async () => {
+  const receiver = startLocalOtlpReceiver();
+  const port = await receiver.listen();
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: `http://127.0.0.1:${port}`,
+    traces: true,
+  });
+
+  try {
+    emit({
+      type: "model.call.completed",
+      runId: "run-zero-usage",
+      callId: "call-zero-usage",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
+    await waitForDiagnosticEventsDrained();
+    await service.stop?.(ctx);
+
+    expect(
+      receiver.capturedSpans.find((span) => span.name === "openclaw.model.call")?.attributes,
+    ).toMatchObject({
+      "openclaw.model_call.usage.input_tokens": 0,
+      "openclaw.model_call.usage.output_tokens": 0,
+      "openclaw.model_call.usage.prompt_tokens": 0,
+      "gen_ai.usage.input_tokens": 0,
+    });
+  } finally {
+    await service.stop?.(ctx);
     await receiver.close();
   }
 }, 30_000);

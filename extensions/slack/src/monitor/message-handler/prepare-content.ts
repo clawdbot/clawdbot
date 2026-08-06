@@ -136,7 +136,20 @@ export async function resolveSlackMessageContent(params: {
     ? effectiveDirectMedia.map((item) => item.placeholder).join(" ")
     : undefined;
 
-  const fallbackFiles = ownFiles ?? [];
+  const fallbackFileIds = new Set<string>();
+  const fallbackFiles = [...(ownFiles ?? []), ...(attachmentContent?.files ?? [])].filter(
+    (file) => {
+      const fileId = normalizeOptionalString(file.id);
+      if (!fileId) {
+        return true;
+      }
+      if (fallbackFileIds.has(fileId)) {
+        return false;
+      }
+      fallbackFileIds.add(fileId);
+      return true;
+    },
+  );
   const fileOnlyFallback =
     !mediaPlaceholder && fallbackFiles.length > 0
       ? fallbackFiles

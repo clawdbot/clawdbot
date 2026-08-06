@@ -114,6 +114,8 @@ minimumReleaseAgeExclude:
   - "clawpdf"
 
 nodeLinker: hoisted
+# GWTs share node_modules; script commands must not reconcile that shared install.
+verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:

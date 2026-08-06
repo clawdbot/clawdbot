@@ -88,6 +88,18 @@ async function waitForCondition(check: () => boolean): Promise<boolean> {
   return check();
 }
 
+async function drainSpawnSampleRootWork(
+  waitForRootWork?: (timeoutMs: number) => Promise<{ drained: boolean; active: number }>,
+): Promise<void> {
+  const wait =
+    waitForRootWork ??
+    (await import("../src/process/gateway-work-admission.js")).waitForActiveGatewayRootWork;
+  const result = await wait(30_000);
+  if (!result.drained || result.active !== 0) {
+    throw new Error(`spawn sample left ${result.active} active gateway root work items`);
+  }
+}
+
 async function resetRuntime(persist: boolean): Promise<void> {
   const [subagents, tasks, stateDb, agentDb] = await Promise.all([
     import("../src/agents/subagent-registry.test-helpers.js"),
@@ -431,6 +443,9 @@ async function runSpawnSample(
         `spawn ${mode} settlement invariant failed: ${JSON.stringify({ fanout, settledRuns, succeededTasks, outstandingWaits: barrier.outstanding })}`,
       );
     }
+    // Terminal rows can settle before detached cleanup and requester-wake roots.
+    // Drain before reset so leaked work stays visible and cannot reach the next sample.
+    await drainSpawnSampleRootWork();
     result = {
       durationMs,
       invariant: {
@@ -448,6 +463,7 @@ async function runSpawnSample(
         postTeardownTaskRows: -1,
         postTeardownDurableSubagentRows: -1,
         postTeardownDurableTaskRows: -1,
+        postTeardownActiveRootWork: 0,
       },
     };
   } catch (error) {
@@ -800,6 +816,8 @@ async function main(): Promise<void> {
   }
   process.stdout.write(`${WORKER_RESULT_SENTINEL}${JSON.stringify(result)}\n`);
 }
+
+export const testing = { drainSpawnSampleRootWork };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
