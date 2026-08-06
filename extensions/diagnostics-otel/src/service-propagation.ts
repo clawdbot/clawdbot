@@ -1,7 +1,6 @@
 import {
   context,
   createContextKey,
-  diag,
   propagation,
   ROOT_CONTEXT,
   type Context,
@@ -63,7 +62,7 @@ function ownsGlobalPropagator(owner: object): boolean {
   return probe.owner === owner;
 }
 
-function createConfiguredPropagator(): TextMapPropagator | null {
+function createConfiguredPropagator(warn: (message: string) => void): TextMapPropagator | null {
   const names = (getStringListFromEnv("OTEL_PROPAGATORS") ?? DEFAULT_PROPAGATORS).map((name) =>
     name.toLowerCase(),
   );
@@ -81,12 +80,12 @@ function createConfiguredPropagator(): TextMapPropagator | null {
       case "b3multi":
         return [new B3Propagator({ injectEncoding: B3InjectEncoding.MULTI_HEADER })];
       case "jaeger":
-        diag.warn(
+        warn(
           'The Jaeger propagator is deprecated and will be removed in a future release. Use the W3C TraceContext propagator ("tracecontext") instead.',
         );
         return [new JaegerPropagator()];
       default:
-        diag.warn(`Propagator "${name}" requested through environment variable is unavailable.`);
+        warn(`Propagator "${name}" requested through environment variable is unavailable.`);
         return [];
     }
   });
@@ -96,14 +95,14 @@ function createConfiguredPropagator(): TextMapPropagator | null {
   return propagators.length === 1 ? propagators[0]! : new CompositePropagator({ propagators });
 }
 
-export function registerDisabledSdkRuntime(): (() => void) | null {
+export function registerDisabledSdkRuntime(warn: (message: string) => void): (() => void) | null {
   const owner = {};
   const contextManager = new OwnedContextManager(owner).enable();
   const ownsContext = context.setGlobalContextManager(contextManager);
   if (!ownsContext) {
     contextManager.disable();
   }
-  const propagator = createConfiguredPropagator();
+  const propagator = createConfiguredPropagator(warn);
   const ownsPropagation = propagator
     ? propagation.setGlobalPropagator(new OwnedPropagator(propagator, owner))
     : false;

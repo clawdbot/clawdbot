@@ -227,7 +227,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       if (!sdkPreloaded && sdkDisabled) {
         // sdk-node returns before installing context or propagation when disabled.
         // Preserve both while admitting no OpenClaw telemetry lifecycle.
-        unregisterDisabledSdkRuntime = registerDisabledSdkRuntime();
+        unregisterDisabledSdkRuntime = registerDisabledSdkRuntime((message) =>
+          ctx.logger.warn(message),
+        );
         return;
       }
       const exporterRoutes = new Map<string, ExporterRouteState>();

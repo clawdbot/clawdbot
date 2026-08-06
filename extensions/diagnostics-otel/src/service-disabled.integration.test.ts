@@ -19,14 +19,20 @@ import {
 
 const ENV_KEYS = ["OPENCLAW_OTEL_PRELOADED", "OTEL_PROPAGATORS", "OTEL_SDK_DISABLED"] as const;
 const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
+const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
+const JAEGER_DEPRECATION_WARNING =
+  'The Jaeger propagator is deprecated and will be removed in a future release. Use the W3C TraceContext propagator ("tracecontext") instead.';
 
 type OtelGlobalRegistrations = {
   context?: Parameters<typeof context.setGlobalContextManager>[0];
+  metrics?: Parameters<typeof metrics.setGlobalMeterProvider>[0];
   propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
+  trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
 };
 
 let originalEnv: Record<(typeof ENV_KEYS)[number], string | undefined>;
 let originalGlobals: OtelGlobalRegistrations;
+let originalLogsProvider: ReturnType<typeof logs.getLoggerProvider> | undefined;
 
 function registeredOtelGlobals(): OtelGlobalRegistrations | undefined {
   return (globalThis as unknown as Record<symbol, OtelGlobalRegistrations | undefined>)[
@@ -51,8 +57,14 @@ beforeEach(() => {
     string | undefined
   >;
   originalGlobals = { ...registeredOtelGlobals() };
+  originalLogsProvider = Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY)
+    ? logs.getLoggerProvider()
+    : undefined;
   context.disable();
+  logs.disable();
+  metrics.disable();
   propagation.disable();
+  trace.disable();
   process.env.OPENCLAW_OTEL_PRELOADED = "0";
   delete process.env.OTEL_PROPAGATORS;
   delete process.env.OTEL_SDK_DISABLED;
@@ -65,6 +77,24 @@ afterEach(async () => {
     propagation.disable();
     if (originalGlobals.propagation) {
       propagation.setGlobalPropagator(originalGlobals.propagation);
+    }
+  }
+  if (currentGlobals?.metrics !== originalGlobals.metrics) {
+    metrics.disable();
+    if (originalGlobals.metrics) {
+      metrics.setGlobalMeterProvider(originalGlobals.metrics);
+    }
+  }
+  if (currentGlobals?.trace !== originalGlobals.trace) {
+    trace.disable();
+    if (originalGlobals.trace) {
+      trace.setGlobalTracerProvider(originalGlobals.trace);
+    }
+  }
+  if (Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY) || originalLogsProvider) {
+    logs.disable();
+    if (originalLogsProvider) {
+      logs.setGlobalLoggerProvider(originalLogsProvider);
     }
   }
   if (currentGlobals?.context !== originalGlobals.context) {
@@ -201,18 +231,81 @@ test("does not remove context and propagation globals installed after startup", 
   });
 });
 
-test("honors OTEL_PROPAGATORS=none while disabled", async () => {
+test.each([
+  {
+    value: "tracecontext,baggage",
+    fields: ["traceparent", "tracestate", "baggage"],
+  },
+  {
+    value: "B3",
+    fields: ["b3"],
+  },
+  {
+    value: "B3MULTI",
+    fields: ["x-b3-traceid", "x-b3-spanid", "x-b3-flags", "x-b3-sampled", "x-b3-parentspanid"],
+  },
+  {
+    value: "JaEgEr",
+    fields: ["uber-trace-id"],
+    warning: JAEGER_DEPRECATION_WARNING,
+  },
+  {
+    value: "NoNe",
+    fields: [],
+  },
+  {
+    value: "unavailable",
+    fields: [],
+    warning: 'Propagator "unavailable" requested through environment variable is unavailable.',
+  },
+] as const)(
+  "configures OTEL_PROPAGATORS=$value and reports dependency warnings visibly",
+  async ({ value, fields, warning }) => {
+    process.env.OTEL_SDK_DISABLED = "true";
+    process.env.OTEL_PROPAGATORS = value;
+    const { service, ctx } = await startOtelService();
+
+    try {
+      expect(propagation.fields()).toEqual(fields);
+      if (warning) {
+        expect(ctx.logger.warn).toHaveBeenCalledWith(warning);
+      } else {
+        expect(ctx.logger.warn).not.toHaveBeenCalled();
+      }
+    } finally {
+      await service.stop?.(ctx);
+    }
+    expect(propagation.fields()).toEqual([]);
+  },
+);
+
+test("cleans disabled globals before starting the enabled NodeSDK", async () => {
+  const receiver = startLocalOtlpReceiver();
+  const port = await receiver.listen();
   process.env.OTEL_SDK_DISABLED = "true";
-  process.env.OTEL_PROPAGATORS = "NoNe";
-  const { service, ctx } = await startOtelService();
+  const { service, ctx } = await startOtelService({
+    endpoint: `http://127.0.0.1:${port}`,
+    traces: true,
+    metrics: true,
+    logs: true,
+    logsExporter: "otlp",
+  });
 
   try {
-    expect(propagation.fields()).toEqual([]);
+    expect(propagation.fields()).toEqual(["traceparent", "tracestate", "baggage"]);
+    process.env.OTEL_SDK_DISABLED = "false";
+    await service.start(ctx);
+    await emitOpenClawSignals();
+    await service.stop?.(ctx);
+
+    expect(new Set(receiver.capturedRequests.map((request) => request.signal))).toEqual(
+      new Set(["traces", "metrics", "logs"]),
+    );
   } finally {
     await service.stop?.(ctx);
+    await receiver.close();
   }
-  expect(propagation.fields()).toEqual([]);
-});
+}, 30_000);
 
 test("warns through the plugin logger for an invalid disabled value", async () => {
   process.env.OTEL_SDK_DISABLED = "invalid";
