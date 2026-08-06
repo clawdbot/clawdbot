@@ -186,6 +186,51 @@ describe("cron edit command", () => {
     },
   );
 
+  it.each(["", "   "])(
+    "rejects blank --session-key %j combined with --clear-session-key",
+    async (sessionKey) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(
+          ["edit", "job-1", "--session-key", sessionKey, "--clear-session-key"],
+          { from: "user" },
+        );
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--session-key must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rejects --session-key combined with --clear-session-key", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--session-key", "agent:main:main", "--clear-session-key"],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Use --session-key or --clear-session-key, not both"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
     const program = createCronProgram();
 
