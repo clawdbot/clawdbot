@@ -106,8 +106,9 @@ redelivery** is enabled for the channel in the LINE Developers Console (Messagin
 API settings). Without it, LINE does not re-send failed webhook deliveries, and an
 event refused with `500` is lost.
 
-Dead-lettered events stay inspectable and recoverable; see
-[Inbound dead letters](/cli/channels#inbound-dead-letters).
+Dead-lettered events stay inspectable and, depending on the failure reason,
+recoverable; see [Inbound dead letters](/cli/channels#inbound-dead-letters) and
+[Troubleshooting](#troubleshooting) below.
 
 ## Configure
 
@@ -295,9 +296,15 @@ Generic media sends without LINE-specific options use the image route.
   default limit.
 - **Bot silently skips messages (events dead-lettered):** `openclaw logs` shows
   `line: spooled update <id> ... dead-lettered` lines with the failure reason.
-  Inspect with `openclaw channels dead-letters list --channel line --account default`;
-  after fixing the cause, re-enqueue one event with
+  Inspect with `openclaw channels dead-letters list --channel line --account default`
+  and check the failure reason before recovering: `resubmit` re-enqueues by event
+  id without checking why the event failed. After fixing the cause of a failure
+  with no committed side effects (for example `retry-limit-exceeded` after a
+  provider outage), re-enqueue one event with
   `openclaw channels dead-letters resubmit <event-id> --channel line --account default`.
+  Never resubmit a `delivery-side-effects-committed` event: that reason means the
+  delivery already adopted an agent turn or consumed its reply token, so
+  re-enqueuing repeats the committed work — for example a second visible reply.
   `openclaw health` reports dead-letter counts and `openclaw doctor` names
   affected accounts.
 - **`handler-timeout` dead letters:** the delivery was claimed but no agent turn
