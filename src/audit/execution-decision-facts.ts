@@ -197,7 +197,7 @@ function pruneDecisionFactsAfterInsert(
 
 /** Record one immutable fact only when its action owner has no native durable record. */
 export function recordExecutionDecisionFact(
-  receipt: DecisionReceiptV1,
+  receipt: unknown,
   options: ExecutionDecisionFactOptions = {},
 ): "inserted" | "existing" {
   if (!validateDecisionReceiptV1(receipt)) {

@@ -320,8 +320,10 @@ boundaries that have no owner-native durable record. It is created lazily on
 first generic fact write, retains facts for 30 days, caps the table at 250,000
 rows, and prunes at most 1,024 rows per write or maintenance tick. Approval
 paths never write this table. Its facts and approval rows are authoritative for
-their recorded decisions; the audit activity writer remains best-effort and
-cannot recreate either source after loss.
+their recorded decisions. Delivery to the generic table uses the bounded audit
+worker and remains best-effort until persisted; approval-owner writes do not
+depend on that queue. The activity ledger cannot recreate either source after
+loss.
 
 ## Querying
 

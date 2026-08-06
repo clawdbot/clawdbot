@@ -262,7 +262,9 @@ The activity ledger remains best-effort. By contrast, a returned approval
 receipt comes from the authoritative first-answer-wins approval row, and a
 returned generic receipt comes from the additive immutable decision-fact
 table. All three surfaces use 30-day retention, but absence from the activity
-ledger cannot prove that an approval or action did not occur.
+ledger cannot prove that an approval or action did not occur. Generic fact
+delivery is also best-effort until its bounded worker write persists the row;
+owner-native approval persistence does not use that queue.
 
 The shipped `audit.list` RPC remains unchanged for older run/tool clients. When
 `audit.activity.list` is unavailable on an older Gateway, the CLI retries

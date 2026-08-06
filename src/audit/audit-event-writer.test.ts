@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -7,6 +8,7 @@ import {
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
+import { listExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
@@ -73,6 +75,32 @@ function input(): AuditEventInput {
   };
 }
 
+function decisionReceipt(): DecisionReceiptV1 {
+  return {
+    schemaVersion: 1,
+    receiptId: "worker-decision",
+    contextId: "worker-context",
+    executionId: "worker-execution",
+    runId: "worker-run",
+    occurredAt: Date.now(),
+    action: { family: "tool", operation: "policy" },
+    decision: { outcome: "denied", reasonCode: "tool_policy_denied" },
+    enforcement: {
+      coverageState: "enforced",
+      policyRefs: ["tool-policy:deny"],
+      grantRefs: [],
+      contextFieldsUsed: ["runId"],
+    },
+    source: {
+      owner: "tool-policy",
+      recordRef: "worker-record",
+      decisionBoundary: "agent-tool.before-call",
+    },
+    missingEvidence: [],
+    remediation: [{ code: "choose_allowed_tool", text: "Choose an allowed tool and retry." }],
+  };
+}
+
 function captureWork(envelope: ExecutionIdentityAdmissionEnvelope) {
   return { kind: "capture" as const, envelope };
 }
@@ -116,6 +144,34 @@ describe("audit event worker", () => {
         .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_decision_facts"),
+    ).toBeUndefined();
+  });
+
+  it("persists a generic decision through the bounded worker queue", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+
+    await writer.ready;
+    const receipt = decisionReceipt();
+    expect(writer.recordExecutionDecision(receipt)).toBe(true);
+    await writer.stop();
+
+    expect(errors).toEqual([]);
+    expect(
+      listExecutionDecisionFactsForContext({
+        contextId: receipt.contextId,
+        offset: 0,
+        limit: 10,
+        now: receipt.occurredAt,
+        database,
+      }),
+    ).toEqual([receipt]);
   });
 
   it("keeps the shared queue nonblocking under a held write lock and flushes before stop", async () => {
