@@ -217,6 +217,64 @@ advertised node command.
 | `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+| `api.registerReadinessCriterion(criterion)`     | Bounded advisory readiness observation                                 |
+
+#### Readiness criteria
+
+Readiness criteria let a plugin report whether a dependency it owns is usable:
+
+```ts
+api.registerReadinessCriterion({
+  id: "backend",
+  description: "Reports whether the plugin backend can accept work.",
+  async check({ pluginConfig, signal, subjects }) {
+    const accountId =
+      typeof pluginConfig?.accountId === "string" ? pluginConfig.accountId : "default";
+    const generation =
+      typeof pluginConfig?.generation === "string" ? pluginConfig.generation : undefined;
+    const backend = subjects.declare({
+      kind: "backend",
+      key: "primary",
+      identity: { id: accountId, generation },
+    });
+    const reachable = await probeBackend(pluginConfig, { signal });
+    return reachable
+      ? {
+          subjectRef: backend,
+          observedAtMs: Date.now(),
+          status: "True",
+          reason: "BackendReady",
+          message: "Backend is reachable.",
+        }
+      : {
+          subjectRef: backend,
+          observedAtMs: Date.now(),
+          status: "False",
+          reason: "BackendUnavailable",
+          message: "Backend is unreachable.",
+        };
+  },
+});
+```
+
+Core publishes this example as `plugin.<plugin-id>.backend`, evaluates it with a
+bounded timeout, and caches the result briefly. Plugin criteria are
+advisory when registered. Only an operator can promote one to required through
+`gateway.readiness`; plugins cannot make their own checks block readiness.
+`subjects.declare(...)` returns a reference in the plugin's namespace. Local
+criterion IDs, subject kinds, and keys are limited to 64 characters. Subject
+declarations may be parented in any order; core validates the completed graph.
+Identity inputs must not be credentials or connection material. OpenClaw emits
+one-way fingerprints for plugin-supplied IDs and generations, bounds and
+reconciles the graph, and retains only subjects referenced by the final result.
+
+One criterion invocation emits one condition. Use its primary subject for the
+resource accountable for that condition and `relatedSubjectRefs` for bounded
+dependencies. Register separate criteria when individual resources need
+independent status and reasons; use an aggregate subject when the collection is
+not bounded. A timed-out callback is aborted and quarantined until its original
+promise settles, including across config reload, so an abort-ignoring plugin
+cannot create overlapping probe work.
 
 #### Post-ack webhook work
 

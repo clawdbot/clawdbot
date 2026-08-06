@@ -46,6 +46,7 @@ type GatewayRequestContextParams = {
   readChatMetadata: GatewayRequestContext["readChatMetadata"];
   readChatStartupProjection?: GatewayRequestContext["readChatStartupProjection"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
+  getReadiness?: GatewayRequestContext["getReadiness"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
   logGateway: GatewayRequestContext["logGateway"];
@@ -195,6 +196,7 @@ export function createGatewayRequestContext(
       ? { readChatStartupProjection: params.readChatStartupProjection }
       : {}),
     getHealthCache: params.getHealthCache,
+    getReadiness: params.getReadiness,
     refreshHealthSnapshot: params.refreshHealthSnapshot,
     logHealth: params.logHealth,
     logGateway: params.logGateway,

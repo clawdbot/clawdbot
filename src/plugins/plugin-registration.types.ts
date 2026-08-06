@@ -301,6 +301,45 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
+export type OpenClawPluginReadinessResult = {
+  /** Primary subject returned by ctx.subjects.declare; defaults to this criterion. */
+  subjectRef?: string;
+  /** Other declared or documented core subjects involved in this observation. */
+  relatedSubjectRefs?: string[];
+  /** Owner-captured observation time in Unix epoch milliseconds. */
+  observedAtMs?: number;
+  status: "True" | "False" | "Unknown";
+  reason: string;
+  message: string;
+};
+
+export type OpenClawPluginReadinessSubjectInput = {
+  kind: string;
+  key: string;
+  identity?: {
+    id?: string;
+    generation?: string;
+  };
+  parentRef?: string;
+};
+
+export type OpenClawPluginReadinessSubjectCollector = {
+  declare: (input: OpenClawPluginReadinessSubjectInput) => string;
+};
+
+export type OpenClawPluginReadinessCriterion = {
+  /** Stable identifier local to this plugin. Core publishes it as plugin.<plugin-id>.<id>. */
+  id: string;
+  /** Human-readable purpose shown when enumerating the active provider catalog. */
+  description: string;
+  check: (ctx: {
+    config: OpenClawConfig;
+    pluginConfig?: Record<string, unknown>;
+    signal: AbortSignal;
+    subjects: OpenClawPluginReadinessSubjectCollector;
+  }) => OpenClawPluginReadinessResult | Promise<OpenClawPluginReadinessResult>;
+};
+
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };

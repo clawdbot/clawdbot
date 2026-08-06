@@ -79,6 +79,37 @@ describe("status-json-payload", () => {
         memoryPlugin: { enabled: true },
         agents: [{ id: "main" }],
         secretDiagnostics: ["diag"],
+        readiness: {
+          contractVersion: 1,
+          evaluatedAtMs: 1,
+          identity: {
+            producerRef: "openclaw/gateway/current",
+            subjects: [
+              {
+                ref: "openclaw/gateway/current",
+                kind: "openclaw.gateway",
+                id: "gateway-test",
+              },
+              {
+                ref: "openclaw/plugins/active",
+                kind: "openclaw.plugins",
+              },
+            ],
+          },
+          ready: true,
+          conditions: [
+            {
+              type: "PluginsLoaded",
+              subjectRef: "openclaw/plugins/active",
+              status: "False",
+              requirement: "advisory",
+              reason: "PluginLoadFailures",
+              message: "One selected plugin failed to load.",
+            },
+          ],
+          failures: [],
+          advisories: ["PluginLoadFailures"],
+        },
         securityAudit: { summary: { critical: 1 } },
         health: { ok: true },
         usage: { providers: [] },
@@ -95,6 +126,15 @@ describe("status-json-payload", () => {
     ).toEqual({
       ok: true,
       os: { platform: "linux" },
+      readiness: {
+        contractVersion: 1,
+        evaluatedAtMs: 1,
+        identity: expect.any(Object),
+        ready: true,
+        failures: [],
+        advisories: ["PluginLoadFailures"],
+        conditions: expect.any(Array),
+      },
       update: {
         root: "/tmp/openclaw",
         installKind: "package",
@@ -139,34 +179,107 @@ describe("status-json-payload", () => {
   });
 
   it("omits optional sections when they are absent", () => {
-    expect(
-      buildStatusJsonPayload({
-        summary: { ok: true },
-        surface: {
-          cfg: { gateway: {} },
-          update: {
-            root: "/tmp/openclaw",
-            installKind: "package",
-            packageManager: "npm",
-          } as never,
-          tailscaleMode: "off",
-          gatewayMode: "local",
-          remoteUrlMissing: false,
-          gatewayConnection: { url: "ws://127.0.0.1:18789" },
-          gatewayReachable: false,
-          gatewayProbe: null,
-          gatewayProbeAuth: null,
-          gatewaySelf: null,
-          gatewayProbeAuthWarning: null,
-          gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
-          nodeService: { label: "node", installed: false, loadedText: "not installed" },
+    const payload = buildStatusJsonPayload({
+      summary: { ok: true },
+      surface: {
+        cfg: { gateway: {} },
+        update: {
+          root: "/tmp/openclaw",
+          installKind: "package",
+          packageManager: "npm",
+        } as never,
+        tailscaleMode: "off",
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+        gatewayConnection: { url: "ws://127.0.0.1:18789" },
+        gatewayReachable: false,
+        gatewayProbe: null,
+        gatewayProbeAuth: null,
+        gatewaySelf: null,
+        gatewayProbeAuthWarning: null,
+        gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
+        nodeService: { label: "node", installed: false, loadedText: "not installed" },
+      },
+      osSummary: { platform: "linux" },
+      memory: null,
+      memoryPlugin: null,
+      agents: [],
+      secretDiagnostics: [],
+    });
+    expect(payload).not.toHaveProperty("securityAudit");
+    expect(payload.readiness).toMatchObject({
+      ready: false,
+      failures: [
+        "GatewayStartupNotChecked",
+        "GatewayAdmissionNotChecked",
+        "ChannelRuntimeNotChecked",
+        "GatewayUnavailable",
+      ],
+      advisories: ["EventLoopStatusUnavailable", "PluginStatusUnavailable"],
+    });
+  });
+  it("preserves canonical condition order when applying scan reachability", () => {
+    const payload = buildStatusJsonPayload({
+      summary: {
+        readiness: {
+          ready: true,
+          failures: [],
+          advisories: [],
+          conditions: [
+            {
+              type: "ConfigLoaded",
+              status: "True",
+              requirement: "required",
+              reason: "ConfigLoaded",
+              message: "Runtime configuration loaded.",
+            },
+            {
+              type: "GatewayResponding",
+              status: "Unknown",
+              requirement: "required",
+              reason: "GatewayNotChecked",
+              message: "Gateway was not checked.",
+            },
+            {
+              type: "PluginsLoaded",
+              status: "True",
+              requirement: "advisory",
+              reason: "PluginsLoaded",
+              message: "Plugins loaded.",
+            },
+          ],
         },
-        osSummary: { platform: "linux" },
-        memory: null,
-        memoryPlugin: null,
-        agents: [],
-        secretDiagnostics: [],
-      }),
-    ).not.toHaveProperty("securityAudit");
+      },
+      surface: {
+        cfg: { gateway: {} },
+        update: { root: "/tmp/openclaw", installKind: "package" } as never,
+        tailscaleMode: "off",
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+        gatewayConnection: { url: "ws://127.0.0.1:18789" },
+        gatewayReachable: false,
+        gatewayProbe: null,
+        gatewayProbeAuth: null,
+        gatewaySelf: null,
+        gatewayProbeAuthWarning: null,
+        gatewayService: { label: "gateway", installed: false, loadedText: "not installed" },
+        nodeService: { label: "node", installed: false, loadedText: "not installed" },
+      },
+      osSummary: { platform: "linux" },
+      memory: null,
+      memoryPlugin: null,
+      agents: [],
+      secretDiagnostics: [],
+    });
+
+    expect(payload.readiness.conditions.map((condition) => condition.type)).toEqual([
+      "ConfigLoaded",
+      "GatewayResponding",
+      "PluginsLoaded",
+    ]);
+    expect(payload.readiness.conditions[1]).toMatchObject({
+      status: "False",
+      reason: "GatewayUnavailable",
+    });
   });
 });

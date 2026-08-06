@@ -527,6 +527,13 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayReadinessConfig = {
+  /** Registered criteria that must report True before the Gateway is ready. */
+  requiredCriteria?: string[];
+  /** Registered criteria reported as diagnostics without blocking readiness. */
+  advisoryCriteria?: string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -571,4 +578,6 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** Additional readiness criteria selected by the operator. */
+  readiness?: GatewayReadinessConfig;
 };

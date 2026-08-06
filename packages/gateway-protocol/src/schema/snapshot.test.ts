@@ -60,4 +60,60 @@ describe("SnapshotSchema", () => {
 
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
   });
+
+  it("accepts canonical readiness subjects and condition references", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      health: {
+        readiness: {
+          contractVersion: 1,
+          evaluatedAtMs: 1_000,
+          identity: {
+            producerRef: "openclaw/gateway/current",
+            subjects: [
+              {
+                ref: "openclaw/gateway/current",
+                kind: "openclaw.gateway",
+                id: "gateway-1",
+              },
+            ],
+          },
+          ready: true,
+          conditions: [
+            {
+              type: "GatewayResponding",
+              subjectRef: "openclaw/gateway/current",
+              observedAtMs: 1_000,
+              status: "True",
+              requirement: "required",
+              reason: "GatewayResponding",
+              message: "Gateway accepted the readiness request.",
+            },
+          ],
+          failures: [],
+          advisories: [],
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+  });
+
+  it("rejects a partial unversioned canonical readiness package", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      health: {
+        readiness: {
+          evaluatedAtMs: 1_000,
+          identity: { producerRef: "openclaw/gateway/current", subjects: [] },
+          ready: true,
+          conditions: [],
+          failures: [],
+          advisories: [],
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(false);
+  });
 });
