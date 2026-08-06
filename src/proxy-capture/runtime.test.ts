@@ -1,5 +1,5 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DebugProxySettings } from "./env.js";
 import {
   captureHttpExchange,
@@ -50,7 +50,7 @@ const deps: DebugProxyCaptureRuntimeDeps = {
     payload: { data?: Buffer | string | null; contentType?: string },
   ) => ({
     contentType: payload.contentType,
-    ...(typeof payload.data === "string" ? { dataText: payload.data } : {}),
+    ...(payload.data != null ? { dataText: Buffer.from(payload.data).toString("utf8") } : {}),
   }),
   safeJsonString: (value: unknown) => (value == null ? undefined : JSON.stringify(value)),
 };
