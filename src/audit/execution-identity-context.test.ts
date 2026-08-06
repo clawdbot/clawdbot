@@ -129,6 +129,7 @@ function recordDeniedApprovalForRun(
   runId: string,
   database: ReturnType<typeof databaseOptions>,
   id = "denied-approval",
+  reusableSessionRun = false,
 ): void {
   insertOperatorApproval({
     approval: {
@@ -139,7 +140,12 @@ function recordDeniedApprovalForRun(
         commandText: "details withheld",
         allowedDecisions: ["allow-once", "deny"],
       },
-      source: { runId, toolCallId: "private-tool-call", toolName: "exec" },
+      source: {
+        runId,
+        ...(reusableSessionRun ? { sessionId: runId } : {}),
+        toolCallId: "private-tool-call",
+        toolName: "exec",
+      },
       runtimeEpoch: "runtime-1",
       createdAtMs: 100,
       expiresAtMs: 1_000,
@@ -1048,7 +1054,7 @@ describe("execution identity context storage", () => {
       executionId: "execution-old",
       runtimeInstanceId: "runtime-1",
     });
-    recordDeniedApprovalForRun("reused-session-run", database, "old-approval");
+    recordDeniedApprovalForRun("reused-session-run", database, "old-approval", true);
     expect(pruneExpiredExecutionIdentityContexts({ database, now: RETENTION_MS + 1 })).toBe(1);
     prepareExecutionIdentityContextAtAdmission(facts("reused-session-run"), {
       ...database,

@@ -179,6 +179,20 @@ type OperatorApprovalReceiptContext = {
 };
 type OperatorApprovalReceiptLinkState = "unambiguous" | "ambiguous";
 
+function isOperatorApprovalLinkAmbiguous(params: {
+  record: OperatorApprovalRecord;
+  context: OperatorApprovalReceiptContext;
+  linkState: OperatorApprovalReceiptLinkState;
+}): boolean {
+  return (
+    params.linkState === "ambiguous" ||
+    params.record.createdAtMs < params.context.createdAt ||
+    // Session-derived run correlations can name later executions after retention pruning.
+    (params.record.source.runId !== null &&
+      params.record.source.runId === params.record.source.sessionId)
+  );
+}
+
 const OPERATOR_APPROVAL_DECISIONS = new Set<OperatorApprovalDecision>([
   "allow-once",
   "allow-always",
@@ -807,7 +821,15 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
       const hasCorruptRecord = records.some((record) => record === null);
       const hasAmbiguousLink =
         params.linkState === "ambiguous" ||
-        records.some((record) => record !== null && record.createdAtMs < params.context.createdAt);
+        records.some((record) =>
+          record
+            ? isOperatorApprovalLinkAmbiguous({
+                record,
+                context: params.context,
+                linkState: params.linkState,
+              })
+            : false,
+        );
       return {
         count: rows.length,
         coverageState: hasCorruptRecord || hasAmbiguousLink ? "unknown" : "enforced",
@@ -846,7 +868,11 @@ export function listOperatorApprovalReceiptsForRun(params: {
       return rows.map((row) => {
         const record = decodeOperatorApprovalRow(row);
         return record
-          ? params.linkState === "ambiguous" || record.createdAtMs < params.context.createdAt
+          ? isOperatorApprovalLinkAmbiguous({
+              record,
+              context: params.context,
+              linkState: params.linkState,
+            })
             ? projectAmbiguousOperatorApprovalReceipt(record, params.context)
             : projectOperatorApprovalReceipt(record, params.context)
           : projectCorruptOperatorApprovalReceipt(row, params.context);
