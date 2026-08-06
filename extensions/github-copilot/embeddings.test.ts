@@ -362,6 +362,11 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
         new Error("github-copilot.model-discovery: malformed JSON response"),
       ),
     ).toBe(true);
+    expect(
+      shouldContinueAutoSelection(
+        new Error("Copilot token exchange failed: timed out after 30000ms"),
+      ),
+    ).toBe(true);
     expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);
   });
 });
