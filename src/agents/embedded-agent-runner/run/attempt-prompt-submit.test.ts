@@ -386,8 +386,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
       return undefined as never;
     }) as unknown as StreamFn);
 
+    const trajectoryRecorder = { recordEvent: vi.fn() };
     await submitEmbeddedAttemptPrompt({
       ...input,
+      trajectoryRecorder: trajectoryRecorder as never,
       activeSession,
       promptActiveSession: async () => {
         await activeSession.agent.streamFn(
@@ -399,6 +401,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
     });
 
     expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(true);
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "provider.prompt.admitted",
+      expect.objectContaining({ providerMessageCount: expect.any(Number) }),
+    );
   });
 
   it("does not record the prompt as sent when request setup fails after the payload is accepted", async () => {
@@ -423,8 +429,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
       throw new Error("connection refused");
     }) as unknown as StreamFn);
 
+    const trajectoryRecorder = { recordEvent: vi.fn() };
     await submitEmbeddedAttemptPrompt({
       ...input,
+      trajectoryRecorder: trajectoryRecorder as never,
       activeSession,
       promptActiveSession: async () => {
         await expect(
@@ -440,6 +448,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
     });
 
     expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(false);
+    expect(trajectoryRecorder.recordEvent).not.toHaveBeenCalledWith(
+      "provider.prompt.admitted",
+      expect.anything(),
+    );
   });
 
   it("does not record an unsent prompt as sent when a payload hook fails before dispatch", async () => {

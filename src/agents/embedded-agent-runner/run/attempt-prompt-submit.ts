@@ -136,6 +136,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
           ) {
             recorder.markSentToProvider?.();
           }
+          input.trajectoryRecorder?.recordEvent("provider.prompt.admitted", {
+            providerMessageCount: providerMessages.length,
+          });
         };
         return admission.context;
       },
