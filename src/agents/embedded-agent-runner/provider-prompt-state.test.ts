@@ -469,10 +469,12 @@ describe("provider prompt state", () => {
       await options?.onResponse?.({ status: 200, headers: {} }, model);
       return createResultStream("stop");
     });
+    const recordEvent = vi.fn();
     const wrapped = wrapStreamFnWithProviderPromptState({
       streamFn: transport,
       state,
       effectiveContextTokenBudget: 128_000,
+      recordEvent,
     });
     const removeHooks = installProviderPromptContextAdmission(
       state,
@@ -483,6 +485,10 @@ describe("provider prompt state", () => {
     const first = await wrapped(model, context);
     await first.result();
     expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(recordEvent).toHaveBeenCalledWith(
+      "provider.prompt.admitted",
+      expect.objectContaining({ byteWeight: expect.any(Number) }),
+    );
 
     await expect(
       wrapped(model, context, {
@@ -492,6 +498,7 @@ describe("provider prompt state", () => {
       }),
     ).rejects.toThrow("payload hook failed");
     expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(recordEvent).toHaveBeenCalledTimes(1);
 
     removeHooks();
     clearProviderPromptState(runId);
@@ -506,10 +513,12 @@ describe("provider prompt state", () => {
       await options?.onPayload?.({ input: "raw", model: model.id }, model);
       throw new Error("connection refused");
     });
+    const recordEvent = vi.fn();
     const wrapped = wrapStreamFnWithProviderPromptState({
       streamFn: transport,
       state,
       effectiveContextTokenBudget: 128_000,
+      recordEvent,
     });
     const removeHooks = installProviderPromptContextAdmission(
       state,
@@ -519,6 +528,7 @@ describe("provider prompt state", () => {
 
     await expect(wrapped(model, context)).rejects.toThrow("connection refused");
     expect(dispatch).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith("provider.prompt.admitted", expect.anything());
 
     removeHooks();
     clearProviderPromptState(runId);

@@ -205,6 +205,9 @@ export function wrapStreamFnWithProviderPromptState(params: {
         // The provider answered, so the request provably left the process. Admitted
         // candidates may only be adopted from this point on.
         params.state.promptDispatch?.();
+        params.recordEvent?.("provider.prompt.admitted", {
+          byteWeight: params.state.lastAttempt?.byteWeight,
+        });
       },
     });
     if (params.recordEvent) {
