@@ -172,7 +172,6 @@ describe("projectTerminalDeliveryEvidence", () => {
       messagingToolSentTargetsTruncated: true,
       messagingToolAggregateEvidenceUnaccounted: true,
       unsafeSideEffectsDetected: true,
-      restartUnsafeSideEffectsDetected: true,
       rawRunnerMetadata: { toolCalls: 5 },
     } as never);
 
@@ -201,5 +200,13 @@ describe("projectTerminalDeliveryEvidence", () => {
     });
     expect(JSON.stringify(normalized)).not.toContain("leak me");
     expect(JSON.stringify(normalized)).not.toContain("rawRunnerMetadata");
+  });
+
+  it("does not inherit restart-recovery persistence aliases", () => {
+    expect(
+      normalizeTerminalDeliveryEvidenceResult({
+        restartUnsafeSideEffectsDetected: true,
+      } as never),
+    ).toBeUndefined();
   });
 });

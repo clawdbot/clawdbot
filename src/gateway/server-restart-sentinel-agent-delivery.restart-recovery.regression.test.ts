@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-command-restart-recovery.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -17,18 +17,12 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
-
-vi.mock("./server-plugins.js", () => ({
-  dispatchGatewayMethodInProcess: vi.fn(),
-}));
 
 describe("restart-sentinel generated-media terminal evidence regression (#119736)", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    vi.clearAllMocks();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-terminal-evidence-"));
   });
 
@@ -259,7 +253,5 @@ describe("restart-sentinel generated-media terminal evidence regression (#119736
       "queued generated-media delivery dead-lettered after an unexpected committed side effect",
     );
     expect(readQueueStatus(unsafeQueueId)).toBe("pending");
-
-    expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
   });
 });

@@ -128,3 +128,35 @@ it("normalizes compatibility writes before persistence", async () => {
     expect(persisted["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
   });
 });
+
+it("preserves restart-recovery unsafe-side-effect aliases at the restart adapter", async () => {
+  await withTempDir({ prefix: "openclaw-legacy-restart-evidence-" }, async (root) => {
+    const storePath = path.join(root, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: 1,
+          restartRecoveryTerminalDeliveryEvidence: [
+            {
+              runId: "run-1",
+              captured: true,
+              restartUnsafeSideEffectsDetected: true,
+            },
+          ],
+        },
+      }),
+    );
+
+    const entry = loadLegacySessionStore(storePath)["agent:main:main"];
+
+    expect(entry?.restartRecoveryTerminalDeliveryEvidence).toEqual([
+      {
+        runId: "run-1",
+        captured: true,
+        restartUnsafeSideEffectsDetected: true,
+      },
+    ]);
+  });
+});

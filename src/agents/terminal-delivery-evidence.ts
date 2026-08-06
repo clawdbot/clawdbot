@@ -371,9 +371,7 @@ export function normalizeTerminalDeliveryEvidenceResult(
   const messagingToolAggregateEvidenceUnaccounted =
     record.messagingToolAggregateEvidenceUnaccounted === true ? (true as const) : undefined;
   const unsafeSideEffectsDetected =
-    record.unsafeSideEffectsDetected === true || record.restartUnsafeSideEffectsDetected === true
-      ? (true as const)
-      : undefined;
+    record.unsafeSideEffectsDetected === true ? (true as const) : undefined;
   if (
     !captured &&
     !payloads?.length &&
