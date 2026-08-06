@@ -207,6 +207,7 @@ describe("workboard tools", () => {
     expect(claimed.card).toMatchObject({
       status: "running",
       metadata: { claim: { ownerId: "main", token: "[redacted]" } },
+      proofPage: { total: 0, hasMore: false },
     });
     const token = (claimed.token as string | undefined) ?? "";
 
@@ -217,6 +218,7 @@ describe("workboard tools", () => {
     );
     expect(heartbeat).toMatchObject({
       metadata: { comments: [expect.objectContaining({ body: "alive" })] },
+      proofPage: { total: 0, hasMore: false },
     });
 
     const read = readPayload(
@@ -230,7 +232,10 @@ describe("workboard tools", () => {
         .get("workboard_release")
         ?.execute("call-4", { id: "card-1", token, status: "review" }),
     );
-    expect(released).toMatchObject({ status: "review" });
+    expect(released).toMatchObject({
+      status: "review",
+      proofPage: { total: 0, hasMore: false },
+    });
     expect((released.metadata as { claim?: unknown } | undefined)?.claim).toBeUndefined();
 
     const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
@@ -243,7 +248,7 @@ describe("workboard tools", () => {
     );
   });
 
-  it("defaults model reads to a hard-bounded proof window while mutations stay canonical", async () => {
+  it("hard-bounds proof in model card results while persistence stays canonical", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proof = Array.from({ length: 100 }, (_, index) => ({
       id: `proof-${index}`,
@@ -299,8 +304,12 @@ describe("workboard tools", () => {
         body: "Keep proof canonical.",
       }),
     );
-    expect(commented).not.toHaveProperty("proofPage");
-    expect((commented.metadata as { proof?: unknown[] }).proof).toHaveLength(100);
+    const commentedProof = (commented.metadata as { proof?: unknown[] }).proof ?? [];
+    expect(commented).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+    expect(commentedProof.length).toBeLessThan(40);
+    expect(Buffer.byteLength(JSON.stringify(commentedProof), "utf8")).toBeLessThanOrEqual(
+      EMBEDDED_PROOF_BYTES,
+    );
 
     const added = readPayload(
       await tools.get("workboard_proof")?.execute("proof", {
@@ -310,10 +319,16 @@ describe("workboard tools", () => {
       }),
     );
     expect(added.proofId).toEqual(expect.any(String));
-    expect(added.card).not.toHaveProperty("proofPage");
-    expect(
-      ((added.card as { metadata?: { proof?: unknown[] } }).metadata?.proof ?? []).length,
-    ).toBe(101);
+    const addedCard = added.card as {
+      metadata?: { proof?: unknown[] };
+      proofPage: { total: number; hasMore: boolean };
+    };
+    const addedProof = addedCard.metadata?.proof ?? [];
+    expect(addedCard.proofPage).toMatchObject({ total: 101, hasMore: true });
+    expect(addedProof.length).toBeLessThan(40);
+    expect(Buffer.byteLength(JSON.stringify(addedProof), "utf8")).toBeLessThanOrEqual(
+      EMBEDDED_PROOF_BYTES,
+    );
 
     const older = readPayload(
       await tools.get("workboard_proof_list")?.execute("proof-list-older", {
@@ -685,10 +700,19 @@ describe("workboard tools", () => {
         children: [{ title: "Child A" }, { title: "Child B" }],
       }),
     );
-    expect(decomposed.parent).toMatchObject({ status: "done" });
+    expect(decomposed.parent).toMatchObject({
+      status: "done",
+      proofPage: { total: 0, hasMore: false },
+    });
     expect(decomposed.children).toEqual([
-      expect.objectContaining({ title: "Child A" }),
-      expect.objectContaining({ title: "Child B" }),
+      expect.objectContaining({
+        title: "Child A",
+        proofPage: { total: 0, hasMore: false },
+      }),
+      expect.objectContaining({
+        title: "Child B",
+        proofPage: { total: 0, hasMore: false },
+      }),
     ]);
 
     const runs = readPayload(
@@ -765,7 +789,10 @@ describe("workboard tools", () => {
         status: "ready",
       }),
     );
-    expect(unclaimed.card).toMatchObject({ status: "ready" });
+    expect(unclaimed.card).toMatchObject({
+      status: "ready",
+      proofPage: { total: 0, hasMore: false },
+    });
 
     await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
     await expect(

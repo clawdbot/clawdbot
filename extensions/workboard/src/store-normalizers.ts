@@ -1025,7 +1025,6 @@ export function normalizeMetadata(
   options: {
     allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
-    preserveProofId?: string;
   } = {},
 ): WorkboardMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

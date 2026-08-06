@@ -132,11 +132,12 @@ Passing `{ "proofView": "bounded" }` opts into bounded card views without
 changing the existing response contract. Agent tool `workboard_read` always
 returns a bounded card view whether `proofView` is omitted or explicitly set to
 `"bounded"`; its separate worker context remains bounded. Use
-`workboard_proof_list` to page through older proof. Other existing Gateway and
-agent-tool card responses, Gateway `workboard.cards.export`, and local CLI JSON
-keep complete proof history and omit `proofPage`. `workboard_list` remains a
-compact summary without proof history. Claim tokens remain redacted on every
-card response.
+`workboard_proof_list` to page through older proof. All model-facing agent-tool
+card responses use the same bounded projection, so a later mutation cannot
+reintroduce complete proof history into model context. Existing Gateway card
+responses, Gateway `workboard.cards.export`, and local CLI JSON keep complete
+proof history and omit `proofPage`. `workboard_list` remains a compact summary
+without proof history. Claim tokens remain redacted on every card response.
 
 The open dashboard updates from `plugin.workboard.changed` invalidations. Each
 event contains only a store epoch and revision; the UI then rereads
