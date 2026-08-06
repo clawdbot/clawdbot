@@ -575,10 +575,15 @@ function sweepRow(child: number, generation: number, now: number): SubagentRunRe
 }
 
 async function runSweepSample(childCount: number): Promise<Sample> {
-  const { createSubagentRegistrySweeper } =
-    await import("../src/agents/subagent-registry-sweeper.js");
+  const [
+    { getSubagentRunsForChildSession, subagentRuns: runs },
+    { createSubagentRegistrySweeper },
+  ] = await Promise.all([
+    import("../src/agents/subagent-registry-memory.js"),
+    import("../src/agents/subagent-registry-sweeper.js"),
+  ]);
   const now = Date.now();
-  const runs = new Map<string, SubagentRunRecord>();
+  runs.clear();
   for (let child = 0; child < childCount; child += 1) {
     for (const generation of [3, 2, 1]) {
       const entry = sweepRow(child, generation, now);
@@ -632,8 +637,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       sessionEffects += 1;
     },
     retireSupersededRun: async () => {},
-    getRunsForChildSession: (childSessionKey) =>
-      [...runs.values()].filter((entry) => entry.childSessionKey === childSessionKey),
+    getRunsForChildSession: getSubagentRunsForChildSession,
     getRunsForCollectorGroup: () => [],
     warn: () => {},
   });
@@ -668,6 +672,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     };
   } finally {
     sweeper.reset();
+    runs.clear();
   }
 }
 
