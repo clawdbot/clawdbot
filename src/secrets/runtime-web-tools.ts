@@ -1017,11 +1017,12 @@ export async function resolveRuntimeWebTools(params: {
       searchSurface.providers,
     );
     const missingSearchStandaloneOwners =
-      searchSurface.enabled && missingSearchStandalonePluginIds.size > 0
+      missingSearchStandalonePluginIds.size > 0
         ? await resolveMissingStandaloneProviderCredentials({
             selection: searchSelectionParams,
             configuredProvider: searchSurface.configuredProvider,
             missingStandalonePluginIds: missingSearchStandalonePluginIds,
+            mappedProviderIds: new Set(standaloneWebSearchProviderOwners.keys()),
             resolveProviders: async (pluginId) =>
               resolveBundledWebSearchProviders({
                 sourceConfig: params.sourceConfig,
@@ -1193,11 +1194,12 @@ export async function resolveRuntimeWebTools(params: {
       fetchSurface.providers,
     );
     const missingFetchStandaloneOwners =
-      fetchSurface.enabled && missingFetchStandalonePluginIds.size > 0
+      missingFetchStandalonePluginIds.size > 0
         ? await resolveMissingStandaloneProviderCredentials({
             selection: fetchSelectionParams,
             configuredProvider: fetchSurface.configuredProvider,
             missingStandalonePluginIds: missingFetchStandalonePluginIds,
+            mappedProviderIds: new Set(standaloneWebFetchProviderOwners.keys()),
             resolveProviders: async (pluginId) =>
               resolveBundledWebFetchProviders({
                 sourceConfig: params.sourceConfig,

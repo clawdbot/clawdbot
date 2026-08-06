@@ -138,6 +138,10 @@ export async function resolveStandaloneProviderCredentials<
  * not loaded into the primary selection surface (e.g., because the surface was
  * narrowed to the configured provider). Each missing plugin's providers are
  * loaded on demand and resolved using the same credential hooks.
+ *
+ * Only provider IDs present in {@link params.mappedProviderIds} are eligible
+ * for standalone credential resolution, preserving the manifest-level
+ * authorization contract.
  */
 export async function resolveMissingStandaloneProviderCredentials<
   TProvider extends ProviderBase,
@@ -148,6 +152,8 @@ export async function resolveMissingStandaloneProviderCredentials<
   selection: RuntimeWebProviderSelectionParams<TProvider, TToolConfig, TSource, TMetadata>;
   configuredProvider?: string;
   missingStandalonePluginIds: ReadonlySet<string>;
+  /** Provider IDs from the manifest contract that are authorized as standalone credential owners. */
+  mappedProviderIds?: ReadonlySet<string>;
   resolveProviders: (pluginId: string) => Promise<TProvider[]>;
   unavailableProviders: RuntimeWebUnavailableProvider[];
 }): Promise<RuntimeWebSecretOwner[]> {
@@ -155,6 +161,7 @@ export async function resolveMissingStandaloneProviderCredentials<
     selection,
     configuredProvider,
     missingStandalonePluginIds,
+    mappedProviderIds,
     resolveProviders,
     unavailableProviders,
   } = params;
@@ -167,7 +174,9 @@ export async function resolveMissingStandaloneProviderCredentials<
     if (providers.length === 0) {
       continue;
     }
-    const standaloneToolProviderIds = new Set(providers.map((provider) => provider.id));
+    const standaloneToolProviderIds = mappedProviderIds
+      ? new Set(providers.filter((p) => mappedProviderIds.has(p.id)).map((p) => p.id))
+      : new Set(providers.map((provider) => provider.id));
     const pluginOwners = await resolveStandaloneProviderCredentials({
       selection: { ...selection, providers, standaloneToolProviderIds },
       selectedProvider: configuredProvider,

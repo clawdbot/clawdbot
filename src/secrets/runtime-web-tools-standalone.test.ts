@@ -455,4 +455,194 @@ describe("runtime-web-tools-standalone", () => {
     expect(resolveProviders).toHaveBeenCalledTimes(1);
     expect(resolveProviders).toHaveBeenCalledWith("perplexity");
   });
+
+  it("resolveMissingStandaloneProviderCredentials only resolves providers in mappedProviderIds", async () => {
+    // A plugin that declares two providers, but only one is mapped in
+    // standaloneWebSearchProviderOwners. The unmapped sibling must not
+    // receive standalone credential resolution.
+    const mappedProvider: TestProvider = {
+      id: "tavily",
+      pluginId: "tavily",
+      credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+      envVar: "TAVILY_API_KEY",
+    };
+    const unmappedSibling: TestProvider = {
+      id: "tavily-extract",
+      pluginId: "tavily",
+      credentialPath: "plugins.entries.tavily.config.webSearch.extractKey",
+      envVar: "TAVILY_EXTRACT_KEY",
+    };
+    const resolvedConfig = asConfig({});
+    const sourceConfig = asConfig({
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
+                extractKey: { source: "env", provider: "default", id: "TAVILY_EXTRACT_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolveProviders = async (_pluginId: string): Promise<TestProvider[]> => [
+      mappedProvider,
+      unmappedSibling,
+    ];
+
+    const selection = buildSelection({
+      providers: [],
+      resolvedConfig,
+      sourceConfig,
+    });
+
+    await resolveMissingStandaloneProviderCredentials({
+      selection,
+      missingStandalonePluginIds: new Set(["tavily"]),
+      mappedProviderIds: new Set(["tavily"]),
+      resolveProviders,
+      unavailableProviders: [],
+    });
+
+    // Only the mapped provider's credential is resolved.
+    expect(
+      (
+        resolvedConfig as {
+          plugins?: {
+            entries?: { tavily?: { config?: { webSearch?: { apiKey?: unknown } } } };
+          };
+        }
+      ).plugins?.entries?.tavily?.config?.webSearch?.apiKey,
+    ).toBe("tavily-resolved");
+    // The unmapped sibling stays untouched.
+    expect(
+      (
+        resolvedConfig as {
+          plugins?: {
+            entries?: {
+              tavily?: { config?: { webSearch?: { extractKey?: unknown } } };
+            };
+          };
+        }
+      ).plugins?.entries?.tavily?.config?.webSearch?.extractKey,
+    ).toBeUndefined();
+  });
+
+  it("resolveStandaloneProviderCredentials resolves credentials when surface enabled is false", async () => {
+    // Standalone-tool credential resolution must not depend on the generic
+    // search/fetch surface enablement. When tools.web.search.enabled is false,
+    // standalone tools (e.g., tavily_search) still register and need their
+    // mapped credentials.
+    const provider: TestProvider = {
+      id: "tavily",
+      pluginId: "tavily",
+      credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+      envVar: "TAVILY_API_KEY",
+    };
+    const resolvedConfig = asConfig({});
+    const sourceConfig = asConfig({
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const baseSelection = buildSelection({
+      providers: [provider],
+      configuredProvider: "brave",
+      standaloneToolProviderIds: new Set(["tavily"]),
+      resolvedConfig,
+      sourceConfig,
+    });
+    // Simulate a disabled generic search surface.
+    const selection = { ...baseSelection, enabled: false };
+
+    const owners = await resolveStandaloneProviderCredentials({
+      selection,
+      selectedProvider: "brave",
+      unavailableProviders: [],
+    });
+
+    // Credential is resolved despite the surface being disabled.
+    expect(
+      (
+        resolvedConfig as {
+          plugins?: {
+            entries?: { tavily?: { config?: { webSearch?: { apiKey?: unknown } } } };
+          };
+        }
+      ).plugins?.entries?.tavily?.config?.webSearch?.apiKey,
+    ).toBe("tavily-resolved");
+    expect(owners).toHaveLength(1);
+    expect(owners[0]).toMatchObject({
+      providerId: "tavily",
+      resolvedValue: "tavily-resolved",
+    });
+  });
+
+  it("resolveMissingStandaloneProviderCredentials resolves credentials when surface enabled is false", async () => {
+    const provider: TestProvider = {
+      id: "tavily",
+      pluginId: "tavily",
+      credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+      envVar: "TAVILY_API_KEY",
+    };
+    const resolvedConfig = asConfig({});
+    const sourceConfig = asConfig({
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolveProviders = async (_pluginId: string): Promise<TestProvider[]> => [provider];
+
+    const baseSelection = buildSelection({
+      providers: [],
+      resolvedConfig,
+      sourceConfig,
+    });
+    // Simulate a disabled generic search surface.
+    const selection = { ...baseSelection, enabled: false };
+
+    const owners = await resolveMissingStandaloneProviderCredentials({
+      selection,
+      missingStandalonePluginIds: new Set(["tavily"]),
+      mappedProviderIds: new Set(["tavily"]),
+      resolveProviders,
+      unavailableProviders: [],
+    });
+
+    expect(
+      (
+        resolvedConfig as {
+          plugins?: {
+            entries?: { tavily?: { config?: { webSearch?: { apiKey?: unknown } } } };
+          };
+        }
+      ).plugins?.entries?.tavily?.config?.webSearch?.apiKey,
+    ).toBe("tavily-resolved");
+    expect(owners).toHaveLength(1);
+    expect(owners[0]).toMatchObject({
+      providerId: "tavily",
+      resolvedValue: "tavily-resolved",
+    });
+  });
 });
