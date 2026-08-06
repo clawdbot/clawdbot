@@ -6,8 +6,12 @@ import {
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
+  CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
+import { retainCodexAppServerLiveThread } from "./client-runtime.js";
+import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -79,6 +83,39 @@ export async function cleanupCodexAttempt(
   }
   const retainLiveIncognitoThread =
     terminalState.turnSucceeded && isIncognitoSessionKey(params.sessionKey);
+  // Native-preserved and supervision threads have separate ownership and can
+  // never enter the ordinary persistent warm-thread cache.
+  const retainedPersistentThread =
+    terminalState.turnSucceeded &&
+    !isIncognitoSessionKey(params.sessionKey) &&
+    params.cleanupBundleMcpOnRunEnd !== true &&
+    !connection.activeContextEngine &&
+    resourceState.thread.liveThreadConfigFingerprint !== undefined &&
+    resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client) &&
+    resourceState.thread.preserveNativeModel !== true &&
+    resourceState.thread.connectionScope !== "supervision" &&
+    !resourceState.thread.ringZeroConfigFingerprint &&
+    !resourceState.thread.contextEngine
+      ? await retainCodexAppServerLiveThread(
+          resourceState.client,
+          resourceState.thread.threadId,
+          async (previousThreadId) => {
+            const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
+              threadId: previousThreadId,
+              timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+            });
+            if (!released) {
+              await closeCodexStartupClientBestEffort(resourceState.client);
+              throw new CodexAppServerUnsafeSubscriptionError(
+                `Codex retained thread subscription could not be released: ${previousThreadId}`,
+              );
+            }
+          },
+          resourceState.thread.liveThreadConfigFingerprint,
+        )
+      : undefined;
+  // Replacement waits for the prior unsubscribe before publishing a new slot.
+  const retainLiveThread = retainLiveIncognitoThread || retainedPersistentThread !== undefined;
   const bindingReleased =
     isIncognitoSessionKey(params.sessionKey) && !retainLiveIncognitoThread
       ? await bindingStore.mutate(bindingIdentity, {
@@ -86,14 +123,18 @@ export async function cleanupCodexAttempt(
           threadId: resourceState.thread.threadId,
         })
       : true;
-  // Successful incognito turns retain the live subscription for cross-turn continuity.
-  if (!state.timedOut && !retainLiveIncognitoThread) {
+  // Only explicitly retained live threads may skip the next thread/resume.
+  if (!state.timedOut && !retainLiveThread) {
     // Clear first: if a newer owner won the binding, its live subscription must remain intact.
     if (bindingReleased) {
-      await unsubscribeCodexThreadBestEffort(resourceState.client, {
+      const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
         threadId: resourceState.thread.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       });
+      if (!released) {
+        // Never reuse a client whose previous thread may still publish notifications.
+        await closeCodexStartupClientBestEffort(resourceState.client);
+      }
     }
   }
   userInputBridgeRef.current?.cancelPending();

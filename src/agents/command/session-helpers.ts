@@ -35,20 +35,10 @@ export async function persistSessionEntry(
   return await persistSessionEntryBase(params);
 }
 
-export function clearPendingFinalDeliveryFields(
-  entry: SessionEntry,
-  updatedAt: number,
-): SessionEntry {
+export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {
   return {
     ...entry,
     pendingFinalDelivery: undefined,
-    pendingFinalDeliveryText: undefined,
-    pendingFinalDeliveryCreatedAt: undefined,
-    pendingFinalDeliveryLastAttemptAt: undefined,
-    pendingFinalDeliveryAttemptCount: undefined,
-    pendingFinalDeliveryLastError: undefined,
-    pendingFinalDeliveryContext: undefined,
-    pendingFinalDeliveryIntentId: undefined,
     restartRecoveryForceSafeTools: undefined,
     restartRecoveryDeliveryMediaUrls: undefined,
     restartRecoveryDisableMessageTool: undefined,

@@ -9,11 +9,13 @@ import type {
 } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.ts";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
   newAgentIntent: boolean;
+  store: CustodianSessionStore;
   updateComplete: Promise<boolean>;
 };
 
@@ -59,8 +61,19 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   const context = {
     gateway,
     agents: {
-      state: { agentsList: { mainKey: "main" } },
+      state: {
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "global",
+          agents: [
+            { id: "main", model: { primary: "openai/gpt-5.5" } },
+            { id: "researcher", model: { primary: "openai/gpt-5.5" } },
+          ],
+        },
+      },
       refreshList,
+      subscribe: () => () => undefined,
     },
     agentSelection: { state: { selectedId: "main" }, set: setAgent },
     basePath: "",
@@ -72,6 +85,7 @@ function createContext(request: ReturnType<typeof vi.fn>) {
 async function mountPage(context: ApplicationContext): Promise<TestCustodianPage> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.store = new CustodianSessionStore();
   page.onboarding = false;
   page.newAgentIntent = true;
   provider.append(page);
@@ -101,6 +115,20 @@ describe("custodian new-agent flow", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
+  });
+
+  it("does not start new-agent chat with read-only operator access", async () => {
+    const request = vi.fn();
+    const { context } = createContext(request);
+    context.gateway.snapshot.hello = {
+      ...context.gateway.snapshot.hello!,
+      auth: { role: "operator", scopes: ["operator.read"] },
+    };
+
+    await mountPage(context);
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {

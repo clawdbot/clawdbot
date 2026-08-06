@@ -40,7 +40,14 @@ function isSameStoredTranscript(
   if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
     return true;
   }
-  return false;
+  const anchorSessionFile = (anchor as { sessionFile?: unknown }).sessionFile;
+  const candidateSessionFile = (candidate as { sessionFile?: unknown }).sessionFile;
+  return (
+    typeof anchorSessionFile === "string" &&
+    anchorSessionFile.trim().length > 0 &&
+    typeof candidateSessionFile === "string" &&
+    candidateSessionFile.trim() === anchorSessionFile.trim()
+  );
 }
 
 function isPrivateConversation(params: {
@@ -157,6 +164,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   sandboxed: boolean;
   hits: MemorySearchResult[];
   conversationRecall?: ConversationRecallContext;
+  /** Trusted control-plane calls may authorize only hits already scoped to this agent. */
+  trustedAgentScope?: boolean;
 }): Promise<MemorySearchResult[]> {
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: params.cfg,
@@ -185,6 +194,9 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   );
 
   const conversationRecall = params.conversationRecall;
+  const trustedAgentScope = Boolean(
+    params.trustedAgentScope && scopedAgentId && !params.requesterSessionKey && !conversationRecall,
+  );
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
   const recallAgentId = anchorSessionKey
     ? resolveSessionAgentId({ sessionKey: anchorSessionKey, config: params.cfg })
@@ -228,7 +240,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
           ? `agent:${scopedAgentId}:global`
           : key;
-      return guard?.check(visibilityKey).allowed === true;
+      return trustedAgentScope || guard?.check(visibilityKey).allowed === true;
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the
@@ -250,9 +262,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
 
   const expandRecallAliasKeys = (keys: string[]): string[] => {
-    // Alias resolution by session id can miss a group/channel alias that shares
-    // the same transcript file under a different session id. Recall must judge
-    // every alias, so expand candidates by stored transcript identity.
+    // Recall must judge every store key for the canonical transcript identity,
+    // including group/channel aliases that were not in the initial key set.
     const expanded = new Set(keys);
     for (const key of keys) {
       const entry = combinedSessionStore[key];
@@ -284,7 +295,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       }
       continue;
     }
-    if (!params.requesterSessionKey || (!guard && !conversationRecall)) {
+    if (!trustedAgentScope && (!params.requesterSessionKey || (!guard && !conversationRecall))) {
       continue;
     }
     const artifactIdentity = readQmdSessionArtifactIdentity(hit);

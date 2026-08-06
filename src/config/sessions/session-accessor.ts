@@ -7,7 +7,6 @@
 export * from "./session-history.js";
 export type {
   BranchSessionFromCompactionCheckpointParams,
-  CanonicalizeSessionEntryAliasesResult,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
   DeletedAgentSessionEntryPurgeParams,
@@ -120,9 +119,18 @@ export type {
   UpdateSessionLastRouteParams,
 } from "./session-accessor.entry-mutation.js";
 export {
+  countSessionEntryRowsReadOnly,
+  ensureSqliteSessionEntrySync as ensureSessionEntrySync,
+  copySessionOwnedStateForCanonicalRepair,
+  hasSessionEntriesByStatusReadOnly,
+  listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
+  listSessionChildEntriesReadOnly,
   listSessionEntries,
   listSessionEntriesReadOnly,
+  listSessionEntriesForCanonicalRepair,
+  rehomeSessionDeliveryReferencesForCanonicalRepair,
+  rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
   loadExactSessionEntryReadOnly,
@@ -142,7 +150,6 @@ export {
   upsertSessionEntry,
 } from "./session-accessor.entry.js";
 export {
-  canonicalizeSessionEntryAliases,
   createSessionEntryWithTranscript,
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
@@ -201,6 +208,7 @@ export {
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  rewriteTranscriptEventRowsExact,
   resolveTranscriptSessionKeyBySessionId,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
@@ -226,6 +234,10 @@ export {
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
+export {
+  readSessionTranscriptTitleProbeBatch,
+  type SessionTranscriptTitleProbe,
+} from "./session-accessor.sqlite-title-probes.js";
 export type {
   SessionTranscriptBoundedMessageTailPage,
   SessionTranscriptMessageAnchorPage,
@@ -234,6 +246,7 @@ export type {
 } from "./session-accessor.sqlite-active-events.js";
 export {
   readSessionTranscriptWatermark,
+  readSessionTranscriptWatermarkBatch,
   type SessionTranscriptWatermark,
 } from "./session-accessor.sqlite-transcript-watermark.js";
 export {

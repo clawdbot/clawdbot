@@ -4,9 +4,12 @@ import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { boardProviderForSession } from "../../lib/board/provider.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
+import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { renderBoardFaceToggle, renderBoardSessionSurface } from "./board-session-surface.ts";
 
 const containers: HTMLElement[] = [];
+
+installBrowserHistoryIsolation();
 
 function createContainer() {
   const container = document.createElement("div");

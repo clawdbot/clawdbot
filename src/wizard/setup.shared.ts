@@ -2,6 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
@@ -90,12 +91,15 @@ export async function writeWizardConfigFile(
     baseSnapshot?: ConfigFileSnapshot;
     migrationBaseConfig?: OpenClawConfig;
     onPendingPluginInstallMigration?: () => void;
+    /** Runtime follow-up intent for the Gateway config watcher. */
+    afterWrite?: ConfigWriteAfterWrite;
   } = {},
 ): Promise<OpenClawConfig> {
   let config = configInput;
   let baseHash = opts.baseHash;
   let baseSnapshot = opts.baseSnapshot;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
+  const afterWrite = opts.afterWrite ?? { mode: "auto" };
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
     // Explicit undefined means this writer already migrated its baseline; an omitted
     // key cannot distinguish fresh pending records from stale authored metadata.
@@ -116,7 +120,7 @@ export async function writeWizardConfigFile(
             ...(baseSnapshot ? { snapshot: baseSnapshot } : {}),
             ...(baseHash !== undefined ? { baseHash } : {}),
             ...(writeOptions ? { writeOptions } : {}),
-            afterWrite: { mode: "auto" },
+            afterWrite,
           });
         },
       });
@@ -138,7 +142,7 @@ export async function writeWizardConfigFile(
         ...(baseSnapshot ? { snapshot: baseSnapshot } : {}),
         ...(baseHash !== undefined ? { baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
-        afterWrite: { mode: "auto" },
+        afterWrite,
       });
     },
   });

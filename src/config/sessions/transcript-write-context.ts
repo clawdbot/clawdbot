@@ -102,6 +102,11 @@ export async function withOwnedSessionTranscriptWrites<T>(
   return await ownedTranscriptWriteContext.run(context, run);
 }
 
+/** Runs detached work without retaining an attempt-owned transcript lock. */
+export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
+  return ownedTranscriptWriteContext.exit(run);
+}
+
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(
   context: OwnedSessionTranscriptWriteContext,
   run: (...args: TArgs) => TResult,

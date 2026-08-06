@@ -502,6 +502,12 @@
       - any-glob-to-any-file:
           - "extensions/inworld/**"
           - "docs/providers/inworld.md"
+"extensions: fish-audio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fish-audio/**"
+          - "docs/providers/fish-audio.md"
+          - "docs/tools/tts.md"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:

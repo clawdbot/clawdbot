@@ -2703,6 +2703,35 @@ describe("config io write", () => {
     },
   );
 
+  itWithHome(
+    "keeps snapshot-injected materialization defaults out of the persisted config",
+    async (home) => {
+      const { configPath } = await writeConfigFixture(home, {
+        gateway: { mode: "local", port: 18789 },
+        agents: { defaults: { compaction: {} } },
+      });
+      const io = createFastConfigIO(home);
+      const prepared = await io.readConfigFileSnapshotForWrite();
+
+      // Snapshot materialization injects load-parity defaults into the runtime shape,
+      // while mutation flows round-trip the raw sourceConfig; injected defaults must
+      // never reach the user's file through a write.
+      expect(prepared.snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(prepared.snapshot.sourceConfig.agents?.defaults?.compaction?.mode).toBeUndefined();
+
+      const next = structuredClone(prepared.snapshot.sourceConfig);
+      next.gateway = { ...next.gateway, mode: "local", port: 19001 };
+      await io.writeConfigFile(next, {
+        baseSnapshot: prepared.snapshot,
+        ...prepared.writeOptions,
+      });
+
+      const persisted = await readPersistedConfig(configPath);
+      expect(persisted.gateway?.port).toBe(19001);
+      expect(persisted.agents?.defaults?.compaction).toStrictEqual({});
+    },
+  );
+
   it("persists explicit default-valued paths through the exported write wrapper", async () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],

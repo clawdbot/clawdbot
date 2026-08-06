@@ -119,6 +119,47 @@ describe("WorkboardPage lifecycle", () => {
     });
   });
 
+  it("ignores snapshot and invalidation callbacks retained by a retired Gateway", async () => {
+    const firstWorkboard = createWorkboardCapability();
+    const secondWorkboard = createWorkboardCapability();
+    const firstContext = contextWithWorkboard(firstWorkboard);
+    const secondContext = contextWithWorkboard(secondWorkboard);
+    let retiredSnapshot: Parameters<typeof firstContext.gateway.subscribe>[0] | undefined;
+    let retiredEvent: Parameters<typeof firstContext.gateway.subscribeEvents>[0] | undefined;
+    firstContext.gateway.subscribe = (listener) => {
+      retiredSnapshot = listener;
+      return () => undefined;
+    };
+    firstContext.gateway.subscribeEvents = (listener) => {
+      retiredEvent = listener;
+      return () => undefined;
+    };
+    firstContext.gateway.snapshot.phase = "connected";
+    firstContext.gateway.snapshot.client = { request: vi.fn() } as never;
+    secondContext.gateway.snapshot.phase = "connected";
+    secondContext.gateway.snapshot.client = { request: vi.fn() } as never;
+    const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+    page.context = firstContext;
+    document.body.append(page);
+    await page.updateComplete;
+
+    page.context = secondContext;
+    (page as unknown as { requestUpdate: () => void }).requestUpdate();
+    await page.updateComplete;
+    vi.clearAllMocks();
+
+    retiredSnapshot?.({ ...firstContext.gateway.snapshot, phase: "stopped", client: null });
+    retiredEvent?.({
+      type: "event",
+      event: "plugin.workboard.changed",
+      payload: { epoch: "retired", revision: 1 },
+    });
+
+    expect(stopLiveRefresh).not.toHaveBeenCalledWith(secondWorkboard);
+    expect(stopLifecycleRefresh).not.toHaveBeenCalledWith(secondWorkboard);
+    expect(handleChanged).not.toHaveBeenCalled();
+  });
+
   it("forces one canonical reload when the live client is newly installed", async () => {
     const workboard = createWorkboardCapability();
     const context = contextWithWorkboard(workboard);

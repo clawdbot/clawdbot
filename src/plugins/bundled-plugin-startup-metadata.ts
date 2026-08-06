@@ -8,7 +8,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 const DOCTOR_CONTRACT_BASENAMES = ["doctor-contract-api", "contract-api"] as const;
 const MODULE_EXTENSIONS = ["js", "cjs", "mjs", "ts", "cts", "mts"] as const;
 
-type BundledPluginStartupMetadata = {
+type PluginStartupMetadata = {
   hasDoctorContract: boolean;
 };
 
@@ -22,19 +22,29 @@ function hasDoctorContractArtifact(pluginRoot: string): boolean {
   );
 }
 
+/** Inspects one manifest-owned plugin root without loading its runtime or doctor contract. */
+export function inspectPluginStartupMetadata(params: {
+  pluginId: string;
+  rootDir: string;
+}): PluginStartupMetadata | undefined {
+  const manifest = tryReadJsonSync(path.join(params.rootDir, "openclaw.plugin.json"));
+  if (!isRecord(manifest) || manifest.id !== params.pluginId) {
+    return undefined;
+  }
+  return { hasDoctorContract: hasDoctorContractArtifact(params.rootDir) };
+}
+
 /** Resolves one exact bundled id without scanning or materializing the full plugin catalog. */
 export function inspectBundledPluginStartupMetadata(params: {
   pluginId: string;
   env: NodeJS.ProcessEnv;
-}): BundledPluginStartupMetadata | undefined {
+}): PluginStartupMetadata | undefined {
   const bundledPluginsDir = resolveBundledPluginsDir(params.env);
   if (!bundledPluginsDir) {
     return undefined;
   }
-  const pluginRoot = path.join(bundledPluginsDir, params.pluginId);
-  const manifest = tryReadJsonSync(path.join(pluginRoot, "openclaw.plugin.json"));
-  if (!isRecord(manifest) || manifest.id !== params.pluginId) {
-    return undefined;
-  }
-  return { hasDoctorContract: hasDoctorContractArtifact(pluginRoot) };
+  return inspectPluginStartupMetadata({
+    pluginId: params.pluginId,
+    rootDir: path.join(bundledPluginsDir, params.pluginId),
+  });
 }

@@ -8,12 +8,26 @@ readonly runtime_root_file="/etc/openclaw-mantis-sut-runtime-root"
 readonly docker_bin="/usr/bin/docker"
 readonly flock_bin="/usr/bin/flock"
 readonly iptables_bin="/usr/sbin/iptables"
+readonly timeout_bin="/usr/bin/timeout"
 readonly network_lock_file="/run/lock/openclaw-mantis-sut-network.lock"
 readonly network_state_root="/run/openclaw-mantis-sut-networks"
 
 die() {
   echo "mantis SUT container: $*" >&2
   exit 64
+}
+
+run_cleanup_with_deadline() {
+  local action="$1"
+  shift
+  # timeout owns a separate process group, so escalation reaches Docker and
+  # network-cleanup descendants instead of killing only the caller's sudo.
+  exec "$timeout_bin" --signal=TERM --kill-after=5s 30s /bin/bash "$0" "__${action}" "$@"
+}
+
+require_cleanup_timeout_parent() {
+  [[ "$(readlink -f "/proc/$PPID/exe")" == "$timeout_bin" ]] \
+    || die "internal cleanup action requires the timeout supervisor"
 }
 
 require_container_name() {
@@ -810,6 +824,10 @@ case "$command" in
     exit "$run_result"
     ;;
   stop)
+    run_cleanup_with_deadline stop "$@"
+    ;;
+  __stop)
+    require_cleanup_timeout_parent
     [[ $# -eq 2 ]] || die "stop expects a container name and runtime root"
     require_container_name "$1"
     runtime_source="$2"
@@ -823,6 +841,10 @@ case "$command" in
     exit "$stop_result"
     ;;
   destroy)
+    run_cleanup_with_deadline destroy "$@"
+    ;;
+  __destroy)
+    require_cleanup_timeout_parent
     [[ $# -eq 2 ]] || die "destroy expects a container name and runtime root"
     require_container_name "$1"
     runtime_source="$2"

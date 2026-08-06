@@ -160,7 +160,10 @@ review_artifacts_init() {
   local meta_number head_sha
   meta_number=$(jq -r '.number' .local/pr-meta.json)
   head_sha=$(jq -r '.headRefOid' .local/pr-meta.json)
-  if [ "$meta_number" != "$pr" ] || ! printf '%s' "$head_sha" | rg -q '^[0-9a-f]{40}$'; then
+  # Bash regex, not rg: this guard runs inside fork-PR CI test harnesses on
+  # GitHub-hosted runners without ripgrep, where a missing rg (exit 127) would
+  # misreport a valid head SHA as an identity mismatch.
+  if [ "$meta_number" != "$pr" ] || ! [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Review artifacts init failed: .local/pr-meta.json describes PR #$meta_number at '$head_sha', not PR #$pr. Re-run: scripts/pr review-init $pr"
     exit 1
   fi

@@ -215,8 +215,20 @@ export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
 export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const json = Boolean(opts.json);
   const service = resolveNodeService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
+  let loaded: boolean;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (error) {
+    const message = `Node service check failed: ${String(error)}`;
+    if (json) {
+      defaultRuntime.writeJson({ error: message });
+    } else {
+      defaultRuntime.error(message);
+    }
+    defaultRuntime.exit(1);
+    return;
+  }
+  const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)

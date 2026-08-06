@@ -200,6 +200,7 @@ export async function rankShortTermPromotionCandidates(
       maxScore: clampScore(entry.maxScore),
       uniqueQueries,
       ...(entry.claimHash ? { claimHash: entry.claimHash } : {}),
+      ...(entry.projectKey ? { projectKey: entry.projectKey } : {}),
       promotedAt: entry.promotedAt,
       firstRecalledAt: entry.firstRecalledAt,
       lastRecalledAt: entry.lastRecalledAt,
@@ -215,6 +216,7 @@ export async function rankShortTermPromotionCandidates(
         consolidation,
         conceptual,
       },
+      provenance: entry.provenance,
     });
   }
 

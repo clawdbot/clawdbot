@@ -484,7 +484,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         replyKind: kind,
         runId: params.runId,
       });
-      if (!result.ok) {
+      if (!result.delivered && !result.suppressed) {
         if (tracksVisibleText) {
           state.failedVisibleTextDelivery = true;
         }
@@ -501,6 +501,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           state.deliveredVisibleText = true;
         }
         return true;
+      }
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-acp: route-reply (acp/${kind}) partially failed after delivery: ${
+            result.error ?? "unknown error"
+          }`,
+        );
       }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {

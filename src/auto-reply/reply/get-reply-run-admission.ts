@@ -4,6 +4,7 @@ import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePath,
@@ -23,7 +24,6 @@ import {
 } from "../thinking.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
-  hasResolvedThinkingCatalogEntry,
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
@@ -184,6 +184,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
+          skillOverrides: opts?.skillOverrides,
         });
       });
   sessionEntry = skillResult.sessionEntry;
@@ -562,6 +563,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkingCatalog,
     sessionEntry,
     skillsSnapshot,
     prefixedCommandBody,

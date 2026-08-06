@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -23,6 +24,7 @@ import {
   upsertSessionEntry,
 } from "./session-accessor.js";
 import { listSqliteSessionBranches } from "./session-accessor.sqlite.js";
+import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const agentId = "main";
@@ -36,13 +38,13 @@ afterEach(() => {
 
 function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
   const database = openOpenClawAgentDatabase({ agentId, env });
-  const prepare = vi.spyOn(database.db, "prepare");
-  return () =>
-    prepare.mock.calls.filter(
-      ([sql]) =>
-        sql.includes('select "event_json" from "transcript_events"') &&
-        sql.includes('order by "seq" asc'),
-    ).length;
+  const { counts } = trackSqliteStatementExecutions(database.db, ["loads"], (sqlText) =>
+    sqlText.includes('select "event_json" from "transcript_events"') &&
+    sqlText.includes('order by "seq" asc')
+      ? "loads"
+      : null,
+  );
+  return () => counts.loads;
 }
 
 async function createSiblingSession(params: {
@@ -73,7 +75,7 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const sessionId = "message-cut-source";
   const scope = { agentId, env, sessionId, sessionKey };
-  await upsertSessionEntry(scope, {
+  const entry: InternalSessionEntry = {
     agentHarnessId: "embedded",
     claudeCliSessionId: "claude-conversation",
     cliSessionBindings: { "claude-cli": { sessionId: "claude-conversation" } },
@@ -88,12 +90,14 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     }),
     forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
     lifecycleRevision: "source-lifecycle-revision",
+    lifecycleRunId: "source-run",
     modelOverride: "gpt-5",
     modelOverrideSource: "user",
     providerOverride: "openai",
     sessionId,
     updatedAt: Date.now(),
-  });
+  };
+  await upsertSessionEntry(scope, entry);
   for (const event of [
     { type: "session", id: sessionId, version: 3, timestamp: "2026-07-18T00:00:00.000Z" },
     {
@@ -494,6 +498,7 @@ describe("SQLite session message cuts", () => {
     ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
+    expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     expect(result.entry.cliSessionBindings).toBeUndefined();
     expect(deliveryContextFromSession(result.entry)).toBeUndefined();
     expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);

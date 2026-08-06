@@ -125,6 +125,24 @@ describe("loadSettings default gateway URL derivation", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps IPv6 dev-page default gateway hosts dialable", () => {
+    setTestLocation({ protocol: "http:", host: "[::1]:5173", pathname: "/" });
+    // A vite client script marks the page as dev, which reroutes the default
+    // gateway to port 18789 via formatHostWithPort.
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector.includes("@vite/client") ? {} : null),
+      documentElement: { getAttribute: () => null },
+    } as unknown as Document);
+
+    try {
+      expect(loadSettings().gatewayUrl).toBe("ws://[::1]:18789");
+    } finally {
+      // The document stub is unique to this test; drop it before the shared
+      // afterEach persistence pass instead of leaving it to unstubAllGlobals.
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses configured base path and normalizes trailing slash", () => {
     setTestLocation({
       protocol: "https:",
@@ -350,7 +368,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
-      textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
           sessionKey: "main",
@@ -742,6 +759,41 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(persisted.theme).toBe("dash");
     expect(persisted.themeMode).toBe("light");
     expect(persisted.navWidth).toBe(320);
+  });
+
+  it("omits the inherited text scale and removes an authored override on reset", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    const defaults = loadSettings();
+    const scopedKey = `openclaw.control.settings.v1:${defaults.gatewayUrl}`;
+    expect(defaults.textScale).toBeUndefined();
+
+    saveSettings({ ...defaults, textScale: 125 });
+    expect(
+      JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>,
+    ).toMatchObject({ textScale: 125 });
+
+    saveSettings({ ...loadSettings(), textScale: undefined });
+    const reset = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
+    expect(Object.hasOwn(reset, "textScale")).toBe(false);
+  });
+
+  it("treats the legacy always-persisted default text scale as inherited", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    const gatewayUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gatewayUrl}`;
+    localStorage.setItem(scopedKey, JSON.stringify({ gatewayUrl, textScale: 100 }));
+
+    expect(loadSettings().textScale).toBeUndefined();
+    saveSettings(loadSettings());
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty("textScale");
   });
 
   it("persists and parses a chat split layout", () => {

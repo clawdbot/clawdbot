@@ -86,6 +86,13 @@ vi.mock("./model-catalog.js", () => ({
     state.loadManifestModelCatalogMock(params),
 }));
 
+vi.mock("./model-catalog.runtime.js", () => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
+}));
+
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: {
     provider: string;
@@ -373,12 +380,40 @@ describe("agentCommand compaction transcript rotation", () => {
       providerOverride: "tui-pty-mock",
       modelOverride: "gpt-5.5",
       pluginsEnabled: false,
+      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: true } } },
     });
     expect(state.normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ provider: "tui-pty-mock" }),
     );
     expect(state.loadManifestModelCatalogMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [true, "external_user", true],
+    [true, "inter_session", false],
+    [true, "internal_system", false],
+    [false, "external_user", false],
+  ] as const)(
+    "preserves human transcript ownership for %s/%s",
+    async (senderIsOwner, kind, owner) => {
+      const inputProvenance = { kind, sourceTool: "test" };
+      state.runAgentAttemptMock.mockResolvedValueOnce(
+        makeResult({ sessionId: "owned", text: "ok" }),
+      );
+      await agentCommand({
+        message: "remember",
+        sessionId: "owned",
+        senderIsOwner,
+        inputProvenance,
+      });
+      expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+        opts: { senderIsOwner, inputProvenance },
+        userTurnTranscriptRecorder: {
+          message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
+        },
+      });
+    },
+  );
 
   it("keeps SQLite session state on the rotated successor", async () => {
     const storePath = requireStorePath();
@@ -447,17 +482,18 @@ describe("agentCommand compaction transcript rotation", () => {
       });
 
       expect(compactionSessionEntry).toMatchObject({
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: text,
-        pendingFinalDeliveryContext: {
-          channel: "discord",
-          to: "discord:dm:123",
-          accountId: "main",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text,
+          context: {
+            channel: "discord",
+            to: "discord:dm:123",
+            accountId: "main",
+          },
         },
       });
       expect(storedEntryBeforeCompaction).toMatchObject({
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: text,
+        pendingFinalDelivery: { kind: "replayable", text },
       });
       expect(result).toMatchObject({ deliverySucceeded: true });
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
@@ -468,7 +504,6 @@ describe("agentCommand compaction transcript rotation", () => {
       expect(readLifecyclePhases()).not.toContain("error");
       const storedEntryAfterDelivery = findStoredSessionEntry(sessionKey);
       expect(storedEntryAfterDelivery?.pendingFinalDelivery).toBeUndefined();
-      expect(storedEntryAfterDelivery?.pendingFinalDeliveryText).toBeUndefined();
     },
   );
 
@@ -486,7 +521,10 @@ describe("agentCommand compaction transcript rotation", () => {
       }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      pendingTextSeenByCompaction = params.sessionEntry?.pendingFinalDeliveryText ?? undefined;
+      pendingTextSeenByCompaction =
+        params.sessionEntry?.pendingFinalDelivery?.kind === "replayable"
+          ? params.sessionEntry.pendingFinalDelivery.text
+          : undefined;
       throw new Error(COMPACTION_ERROR);
     });
 
@@ -507,7 +545,6 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     const storedEntry = findStoredSessionEntry(sessionKey);
     expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("preserves media directives in the pending final persisted before compaction", async () => {
@@ -517,7 +554,10 @@ describe("agentCommand compaction transcript rotation", () => {
     let pendingTextSeenByCompaction: string | undefined;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      pendingTextSeenByCompaction = params.sessionEntry?.pendingFinalDeliveryText ?? undefined;
+      pendingTextSeenByCompaction =
+        params.sessionEntry?.pendingFinalDelivery?.kind === "replayable"
+          ? params.sessionEntry.pendingFinalDelivery.text
+          : undefined;
       throw new Error(COMPACTION_ERROR);
     });
 
@@ -539,7 +579,6 @@ describe("agentCommand compaction transcript rotation", () => {
     );
     const storedEntry = findStoredSessionEntry(sessionKey);
     expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("adopts a successful compaction successor for delivery and marker cleanup", async () => {
@@ -582,21 +621,18 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(compactionSetupError).toBeUndefined();
     expect(successorBeforeCleanup).toMatchObject({
       sessionId: successorSessionId,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: text,
+      pendingFinalDelivery: { kind: "replayable", text },
     });
     expect(result).toMatchObject({ deliverySucceeded: true });
     expect(state.deliveryFreshEntries.at(-1)).toMatchObject({
       sessionId: successorSessionId,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: text,
+      pendingFinalDelivery: { kind: "replayable", text },
     });
     const storedSuccessor = findStoredSessionEntry(sessionKey);
     expect(storedSuccessor).toMatchObject({
       sessionId: successorSessionId,
     });
     expect(storedSuccessor?.pendingFinalDelivery).toBeUndefined();
-    expect(storedSuccessor?.pendingFinalDeliveryText).toBeUndefined();
     expect(storedSuccessor?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(storedSuccessor?.restartRecoveryDeliveryRunId).toBeUndefined();
   });
@@ -623,12 +659,14 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(result).toMatchObject({ deliverySucceeded: false });
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: text,
-      pendingFinalDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text,
+        context: {
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+        },
       },
     });
   });
@@ -641,8 +679,7 @@ describe("agentCommand compaction transcript rotation", () => {
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
       expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: text,
+        pendingFinalDelivery: { kind: "replayable", text },
       });
       abortController.abort(createAgentRunRestartAbortError());
       throw new Error(COMPACTION_ERROR);
@@ -664,8 +701,7 @@ describe("agentCommand compaction transcript rotation", () => {
 
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: text,
+      pendingFinalDelivery: { kind: "replayable", text },
     });
   });
 
@@ -677,8 +713,7 @@ describe("agentCommand compaction transcript rotation", () => {
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
       expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: text,
+        pendingFinalDelivery: { kind: "replayable", text },
       });
       abortController.abort(createAgentRunRestartAbortError());
       return params.sessionEntry;
@@ -700,8 +735,7 @@ describe("agentCommand compaction transcript rotation", () => {
 
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: text,
+      pendingFinalDelivery: { kind: "replayable", text },
     });
   });
 
@@ -712,8 +746,7 @@ describe("agentCommand compaction transcript rotation", () => {
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
       expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: text,
+        pendingFinalDelivery: { kind: "replayable", text },
       });
       rotateAgentEventLifecycleGeneration();
       throw new Error(COMPACTION_ERROR);
@@ -734,8 +767,7 @@ describe("agentCommand compaction transcript rotation", () => {
 
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: text,
+      pendingFinalDelivery: { kind: "replayable", text },
     });
   });
 
@@ -787,7 +819,6 @@ describe("agentCommand compaction transcript rotation", () => {
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
       const storedEntry = findStoredSessionEntry(sessionKey);
       expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
-      expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
       expect(readLifecyclePhases()).toContain("error");
     },
   );
@@ -817,7 +848,6 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(result).toMatchObject({ deliverySucceeded: true });
     const storedEntry = findStoredSessionEntry(sessionKey);
     expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("skips post-turn compaction when a recoverable final cannot persist a pending marker", async () => {
@@ -845,7 +875,6 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(result).toMatchObject({ deliverySucceeded: true });
     const storedEntry = findStoredSessionEntry(sessionKey);
     expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("keeps post-turn compaction for no-delivery runs with unrecoverable sendable finals", async () => {

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./one-shot-exit.js";
@@ -256,5 +257,125 @@ describe("one-shot CLI exit", () => {
       setImmediate(resolve);
     });
     expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("drains large piped stdout before a requested nonzero exit", () => {
+    const env = { ...process.env };
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
+    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
+    const payloadBytes = 1024 * 1024;
+    const script = `
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
+      import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
+      await runCliWithExitFinalization({
+        run: async () => {
+          process.stdout.write("x".repeat(${payloadBytes}));
+          requestExitAfterOneShotOutput(defaultRuntime, 7);
+        },
+        onError: (error) => { throw error; },
+      });
+    `;
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        encoding: "utf8",
+        env,
+        maxBuffer: 2 * payloadBytes,
+        timeout: 30_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(7);
+    expect(result.signal).toBeNull();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toHaveLength(payloadBytes);
+  });
+
+  it.each([
+    { name: "deferred hooks success", exitCode: 0, explicitRequest: true },
+    { name: "deferred hooks failure", exitCode: 1, explicitRequest: true },
+    { name: "automatic macOS system-CA success", exitCode: 0, explicitRequest: false },
+  ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest }) => {
+    const env = { ...process.env };
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
+    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
+    const loggingStateUrl = new URL("../logging/state.ts", import.meta.url).href;
+    const script = `
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
+      import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
+      import { loggingState } from ${JSON.stringify(loggingStateUrl)};
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+      loggingState.forceConsoleToStderr = true;
+      await runCliWithExitFinalization({
+        run: async () => {
+          defaultRuntime.writeStdout(JSON.stringify({ ok: ${exitCode === 0} }));
+          ${explicitRequest ? `requestExitAfterOneShotOutput(defaultRuntime, ${exitCode});` : ""}
+        },
+        onError: (error) => { throw error; },
+        ${explicitRequest ? "" : 'env: { NODE_USE_SYSTEM_CA: "1" }, execArgv: [], platform: "darwin", markers: {},'}
+      });
+    `;
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      { encoding: "utf8", env, timeout: 30_000 },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(exitCode);
+    expect(result.signal).toBeNull();
+    expect(JSON.parse(result.stdout)).toEqual({ ok: exitCode === 0 });
+    expect(result.stderr).toContain("\x1b[?25h");
+  });
+
+  it.each([
+    { name: "fatal unhandled rejection", errorCode: "ERR_OUT_OF_MEMORY", exitCode: 1 },
+    { name: "invalid configuration rejection", errorCode: "INVALID_CONFIG", exitCode: 78 },
+  ])("keeps real dual-TTY JSON clean after $name", ({ errorCode, exitCode }) => {
+    const env = { ...process.env };
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
+    const loggingStateUrl = new URL("../logging/state.ts", import.meta.url).href;
+    const unhandledRejectionsUrl = new URL("../infra/unhandled-rejections.ts", import.meta.url)
+      .href;
+    const script = `
+      import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
+      import { loggingState } from ${JSON.stringify(loggingStateUrl)};
+      import { installUnhandledRejectionHandler } from ${JSON.stringify(unhandledRejectionsUrl)};
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+      loggingState.forceConsoleToStderr = true;
+      installUnhandledRejectionHandler();
+      defaultRuntime.writeJson({ ok: false });
+      const error = Object.assign(new Error("expected fatal test"), {
+        code: ${JSON.stringify(errorCode)},
+      });
+      process.emit("unhandledRejection", error, Promise.resolve());
+    `;
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      { encoding: "utf8", env, timeout: 30_000 },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(exitCode);
+    expect(result.signal).toBeNull();
+    expect(JSON.parse(result.stdout)).toEqual({ ok: false });
+    expect(result.stderr).toContain("\x1b[?25h");
   });
 });

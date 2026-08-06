@@ -1,11 +1,14 @@
 import { SpanStatusCode } from "@opentelemetry/api";
+import {
+  normalizeDiagnosticValue,
+  normalizeDiagnosticLane,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "../api.js";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
 } from "../api.js";
-import { lowCardinalityAttr, lowCardinalityQueueLaneAttr } from "./service-attributes.js";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
@@ -50,7 +53,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   const recordLaneEnqueue = (
     evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>,
   ) => {
-    const attrs = { "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane) };
+    const attrs = { "openclaw.lane": normalizeDiagnosticLane(evt.lane) };
     laneEnqueueCounter.add(1, attrs);
     queueDepthHistogram.record(evt.queueSize, attrs);
   };
@@ -58,7 +61,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   const recordLaneDequeue = (
     evt: Extract<DiagnosticEventPayload, { type: "queue.lane.dequeue" }>,
   ) => {
-    const attrs = { "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane) };
+    const attrs = { "openclaw.lane": normalizeDiagnosticLane(evt.lane) };
     laneDequeueCounter.add(1, attrs);
     queueDepthHistogram.record(evt.queueSize, attrs);
     if (typeof evt.waitMs === "number") {
@@ -78,8 +81,8 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     evt: Extract<DiagnosticEventPayload, { type: "session.turn.created" }>,
   ) => {
     sessionTurnCreatedCounter.add(1, {
-      "openclaw.agent": lowCardinalityAttr(evt.agentId, "unknown"),
-      "openclaw.channel": lowCardinalityAttr(evt.channel, "unknown"),
+      "openclaw.agent": normalizeDiagnosticValue(evt.agentId, "unknown"),
+      "openclaw.channel": normalizeDiagnosticValue(evt.channel, "unknown"),
       "openclaw.trigger": evt.trigger,
     });
   };
@@ -126,7 +129,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   ) => {
     const attrs = sessionRecoveryAttrs(evt);
     attrs["openclaw.status"] = evt.status;
-    attrs["openclaw.action"] = lowCardinalityAttr(evt.action, "unknown");
+    attrs["openclaw.action"] = normalizeDiagnosticValue(evt.action, "unknown");
     if (evt.outcomeReason) {
       attrs["openclaw.reason"] = redactSensitiveText(evt.outcomeReason);
     }
@@ -135,11 +138,11 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   const talkEventAttrs = (evt: TalkDiagnosticEvent): Record<string, string> => ({
-    "openclaw.talk.brain": lowCardinalityAttr(evt.brain),
-    "openclaw.talk.event_type": lowCardinalityAttr(evt.talkEventType),
-    "openclaw.talk.mode": lowCardinalityAttr(evt.mode),
-    "openclaw.talk.provider": lowCardinalityAttr(evt.provider),
-    "openclaw.talk.transport": lowCardinalityAttr(evt.transport),
+    "openclaw.talk.brain": normalizeDiagnosticValue(evt.brain),
+    "openclaw.talk.event_type": normalizeDiagnosticValue(evt.talkEventType),
+    "openclaw.talk.mode": normalizeDiagnosticValue(evt.mode),
+    "openclaw.talk.provider": normalizeDiagnosticValue(evt.provider),
+    "openclaw.talk.transport": normalizeDiagnosticValue(evt.transport),
   });
 
   const recordTalkEvent = (evt: TalkDiagnosticEvent, metadata: DiagnosticEventMetadata) => {
@@ -163,13 +166,13 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   const toolLoopAttrs = (
     evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>,
   ): Record<string, string | number> => ({
-    "openclaw.toolName": lowCardinalityAttr(evt.toolName, "tool"),
+    "openclaw.toolName": normalizeDiagnosticValue(evt.toolName, "tool"),
     "openclaw.loop.level": evt.level,
     "openclaw.loop.action": evt.action,
     "openclaw.loop.detector": evt.detector,
     "openclaw.loop.count": evt.count,
     ...(evt.pairedToolName
-      ? { "openclaw.loop.paired_tool": lowCardinalityAttr(evt.pairedToolName, "tool") }
+      ? { "openclaw.loop.paired_tool": normalizeDiagnosticValue(evt.pairedToolName, "tool") }
       : {}),
   });
 
@@ -285,7 +288,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       attrs["openclaw.channel"] = evt.channel;
     }
     if (evt.blockedBy) {
-      attrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
+      attrs["openclaw.blocked_by"] = normalizeDiagnosticValue(evt.blockedBy, "unknown");
     }
     durationHistogram.record(evt.durationMs, attrs);
     if (!tracesEnabled) {
@@ -296,10 +299,10 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     };
     addRunAttrs(spanAttrs, evt);
     if (evt.blockedBy) {
-      spanAttrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
+      spanAttrs["openclaw.blocked_by"] = normalizeDiagnosticValue(evt.blockedBy, "unknown");
     }
     if (evt.errorCategory) {
-      spanAttrs["openclaw.errorCategory"] = lowCardinalityAttr(evt.errorCategory, "other");
+      spanAttrs["openclaw.errorCategory"] = normalizeDiagnosticValue(evt.errorCategory, "other");
     }
     // Redacted message goes on the span only, never the low-cardinality metric attrs.
     const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);
@@ -326,7 +329,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
     }
     if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace.spanId, trackedSpan, evt.ts);
+      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
       return;
     }
     span.end(evt.ts);

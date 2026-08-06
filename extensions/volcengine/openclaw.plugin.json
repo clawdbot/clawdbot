@@ -278,6 +278,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -294,6 +297,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -310,6 +316,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           }
         ]

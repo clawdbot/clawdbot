@@ -180,11 +180,18 @@ export async function completeEmbeddedAttemptAfterTurn(
     !state.beforeAgentFinalizeRevisionReason
   ) {
     const lifecycleForAgentEnd = input.readLifecycleState();
+    // Abort outranks failure in terminal-outcome precedence: teardown races can
+    // stamp an AbortError into promptError, and surfacing it as `error` would
+    // make agent_end consumers treat a user abort as an errored completion.
+    const agentEndError =
+      state.promptError && !lifecycleForAgentEnd.aborted
+        ? formatErrorMessage(state.promptError)
+        : undefined;
     runAgentEndSideEffects({
       event: {
         messages: state.messagesSnapshot,
         success: !lifecycleForAgentEnd.aborted && !state.promptError,
-        error: state.promptError ? formatErrorMessage(state.promptError) : undefined,
+        error: agentEndError,
         durationMs: Date.now() - runtime.promptStartedAt,
       },
       ctx: buildEmbeddedAgentEndContext({

@@ -78,7 +78,7 @@ describe("Telegram QA transport adapter", () => {
           getMeCalls += 1;
           return getMeCalls === 1
             ? { id: 1, is_bot: true, first_name: "driver", username: "driver_bot" }
-            : { id: 2, is_bot: true, first_name: "sut", username: "sut_bot" };
+            : { id: 2, is_bot: true, first_name: "sut", username: "openclaw_qa_bot" };
         }
         if (method === "sendMessage") {
           sendMessageCalls += 1;
@@ -96,9 +96,28 @@ describe("Telegram QA transport adapter", () => {
     const addOutboundMessage = vi.fn().mockResolvedValue({ id: "out-1" });
     const editMessage = vi.fn().mockResolvedValue({ id: "out-1" });
     const adapter = await createTelegramQaTransportAdapter({
-      adapterOptions: { sutAccountId: "sut" },
+      adapterOptions: {
+        sutAccountId: "sut",
+        transportPolicy: { requireGroupMention: true },
+      },
       messages: { addInboundMessage, addOutboundMessage, editMessage },
     } as never);
+
+    expect(adapter.createGatewayConfig?.({ baseUrl: "http://127.0.0.1:1234" })).toMatchObject({
+      channels: {
+        telegram: {
+          accounts: {
+            sut: {
+              groups: {
+                "-100123": {
+                  requireMention: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
 
     await vi.waitFor(() => expect(pollResolvers).toHaveLength(1));
     await adapter.sendInbound?.({
@@ -111,7 +130,21 @@ describe("Telegram QA transport adapter", () => {
       "sendMessage",
       expect.objectContaining({
         chat_id: "-100123",
-        text: "@sut_bot reply exactly: QA-MARKER",
+        text: "@openclaw_qa_bot reply exactly: QA-MARKER",
+      }),
+    );
+    await adapter.sendInbound?.({
+      conversation: { id: "logical-room", kind: "group" },
+      senderId: "driver",
+      text: "/status",
+      nativeCommand: { name: "status" },
+    });
+    expect(mocks.callTelegramApi).toHaveBeenCalledWith(
+      "placeholder",
+      "sendMessage",
+      expect.objectContaining({
+        chat_id: "-100123",
+        text: "/status@openclaw_qa_bot",
       }),
     );
 
@@ -122,7 +155,7 @@ describe("Telegram QA transport adapter", () => {
           message_id: 11,
           date: 100,
           chat: { id: -100123 },
-          from: { id: 2, is_bot: true, username: "sut_bot" },
+          from: { id: 2, is_bot: true, username: "openclaw_qa_bot" },
           text: "preview",
           reply_to_message: { message_id: 10 },
         },
@@ -161,7 +194,7 @@ describe("Telegram QA transport adapter", () => {
           message_id: 11,
           date: 101,
           chat: { id: -100123 },
-          from: { id: 2, is_bot: true, username: "sut_bot" },
+          from: { id: 2, is_bot: true, username: "openclaw_qa_bot" },
           text: "final",
         },
       },
@@ -171,10 +204,38 @@ describe("Telegram QA transport adapter", () => {
       expect.objectContaining({ messageId: "out-1", text: "final", timestamp: 101_000 }),
     );
 
+    await adapter.resetTransport?.();
     await vi.waitFor(() => expect(pollResolvers).toHaveLength(3));
+    await adapter.sendInbound?.({
+      conversation: { id: "next-room", kind: "group" },
+      senderId: "driver",
+      text: "next",
+    });
+    pollResolvers[2]?.([
+      {
+        update_id: 3,
+        edited_message: {
+          message_id: 13,
+          date: 102,
+          chat: { id: -100123 },
+          from: { id: 2, is_bot: true, username: "openclaw_qa_bot" },
+          text: "orphan final",
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(addOutboundMessage).toHaveBeenCalledTimes(2));
+    expect(addOutboundMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        to: "group:next-room",
+        text: "orphan final",
+        timestamp: 102_000,
+      }),
+    );
+
+    await vi.waitFor(() => expect(pollResolvers).toHaveLength(4));
     mocks.heartbeatStop.mockRejectedValueOnce(new Error("heartbeat stop failed"));
     const cleanup = adapter.cleanup?.();
-    pollResolvers[2]?.([]);
+    pollResolvers[3]?.([]);
     await cleanup;
     expect(mocks.shouldRetainQaGatewayCredentialLease).not.toHaveBeenCalled();
     await expect(adapter.cleanupAfterGatewayStop?.()).rejects.toThrow("heartbeat stop failed");

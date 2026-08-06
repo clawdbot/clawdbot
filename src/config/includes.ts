@@ -86,6 +86,7 @@ export type ConfigIncludeOwnership = {
   kind: "single" | "multiple";
   hasSiblingOverrides: boolean;
   targetPath?: string;
+  targetPaths?: readonly string[];
 };
 
 export type ConfigIncludeResolutionEvent = ConfigIncludeOwnership & { value: unknown };
@@ -223,6 +224,7 @@ class IncludeProcessor {
       kind: Array.isArray(includeValue) ? "multiple" : "single",
       hasSiblingOverrides: otherKeys.length > 0,
       ...(resolved.targetPath ? { targetPath: resolved.targetPath } : {}),
+      ...(resolved.targetPaths ? { targetPaths: resolved.targetPaths } : {}),
     });
 
     if (otherKeys.length === 0) {
@@ -247,22 +249,29 @@ class IncludeProcessor {
   private resolveInclude(
     value: unknown,
     logicalPath: readonly string[],
-  ): { value: unknown; targetPath?: string } {
+  ): { value: unknown; targetPath?: string; targetPaths?: string[] } {
     if (typeof value === "string") {
       return this.loadFile(value, logicalPath);
     }
 
     if (Array.isArray(value)) {
-      const merged = value.reduce<unknown>((current, item) => {
+      const resolvedEntries = value.map((item) => {
         if (typeof item !== "string") {
           throw new ConfigIncludeError(
             `Invalid $include array item: expected string, got ${typeof item}`,
             String(item),
           );
         }
-        return deepMerge(current, this.loadFile(item, logicalPath).value);
-      }, {});
-      return { value: merged };
+        return this.loadFile(item, logicalPath);
+      });
+      const merged = resolvedEntries.reduce<unknown>(
+        (current, entry) => deepMerge(current, entry.value),
+        {},
+      );
+      return {
+        value: merged,
+        targetPaths: resolvedEntries.map((entry) => entry.targetPath),
+      };
     }
 
     throw new ConfigIncludeError(
@@ -495,6 +504,10 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
     rootRealPath: params.rootRealDir,
     boundaryLabel: "config directory",
     skipLexicalRootCheck: true,
+    // Operator-authored config may symlink include files; fs-safe 0.5.2
+    // rejects symlinks by default, but the include resolution session owns
+    // the root policy and the pinned open keeps type/hardlink/byte checks.
+    rejectSymlinks: false,
     maxBytes,
     ioFs,
   });

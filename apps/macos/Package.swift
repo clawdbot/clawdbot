@@ -37,6 +37,7 @@ let package = Package(
             name: "OpenClawDiscovery",
             dependencies: [
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
+                .product(name: "Subprocess", package: "swift-subprocess"),
             ],
             path: "Sources/OpenClawDiscovery",
             swiftSettings: [

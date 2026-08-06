@@ -61,12 +61,13 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     );
   }
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
   return {
+    defaultAgentId,
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
       config: params.config,

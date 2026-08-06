@@ -49,9 +49,17 @@ const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
-const IS_MAIN = process.argv[1]
-  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-  : false;
+const IS_MAIN = (() => {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    // Node resolves ESM URLs through symlinks, but argv keeps the invoked path.
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 
 function dockerAllUsage() {
   return [
@@ -1530,6 +1538,7 @@ async function main() {
       upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
       upgradeSurvivorTargetRoot: process.env.OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT,
       allowFrozenTargetScenarioOmissions,
+      candidatePackageRoot: ROOT_DIR,
     });
   if (omittedUnsupportedLaneNames.length > 0 && !allowFrozenTargetScenarioOmissions) {
     throw new Error(
@@ -1608,6 +1617,8 @@ async function main() {
     return;
   }
 
+  // Planning can report unsupported scenarios, but execution cannot pass when
+  // frozen-target omissions leave no selected lane to run.
   if (scheduledLanes.length === 0) {
     await writeSummary({
       chunk: releaseChunk || undefined,
@@ -1618,9 +1629,11 @@ async function main() {
       profile,
       selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
       startedAt: runStartedAt,
-      status: "passed",
+      status: "failed",
     });
-    return;
+    throw new Error(
+      `resolved zero runnable Docker lanes; frozen target does not support: ${omittedUnsupportedLanes.join(", ")}`,
+    );
   }
 
   await runPhase(

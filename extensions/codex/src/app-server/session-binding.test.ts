@@ -389,16 +389,19 @@ describe("Codex app-server binding store", () => {
     const rawUserMcpServersFingerprint = JSON.stringify({
       mcp_servers: { legacy: { command: "node" } },
     });
+    const nativeSkillIsolationFingerprint = `sha256:${"b".repeat(64)}`;
     const imported = createStoredCodexAppServerBinding({
       schemaVersion: 2,
       threadId: "thread-legacy-fingerprints",
       cwd: "/repo",
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: rawDynamicToolsFingerprint,
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint: rawUserMcpServersFingerprint,
     });
     expect(imported?.binding).toMatchObject({
       dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
     });
 

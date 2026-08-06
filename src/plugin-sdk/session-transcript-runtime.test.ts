@@ -739,6 +739,8 @@ describe("session transcript runtime SDK", () => {
 
     const target = await withSessionTranscriptWriteLock(scope, async (locked) => {
       expect(await locked.readEvents()).toEqual([]);
+      expect(locked).not.toHaveProperty("appendMessageWithMessageSequence");
+      expect(locked).not.toHaveProperty("readMessageFacts");
       await locked.appendMessage({
         message: {
           role: "assistant",

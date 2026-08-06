@@ -15,9 +15,12 @@ import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind } from "./config-reload-plan.js";
-import { shouldRefreshContextWindowCache } from "./config-reload-recovery.js";
+import {
+  shouldRefreshContextWindowCache,
+  shouldRewarmProviderAuthState,
+} from "./config-reload-recovery.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
@@ -99,9 +102,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetPreparedModelRuntimeStateForHotReload();
 
+    let hooksReloadResolved = false;
     if (plan.reloadHooks) {
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
+        hooksReloadResolved = true;
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
         throw err;
@@ -176,6 +181,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
         // the final synchronous commit edge, alongside the accepted state.
+        if (hooksReloadResolved) {
+          commitHooksConfigReload();
+        }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
@@ -486,7 +494,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      await refreshPreparedModelRuntimeSnapshots(nextConfig, { catalogMode: "static" });
+      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return;
@@ -573,13 +584,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         scheduleRecoveryRestart("context window cache reload", err);
       }
     }
-    void warmCurrentProviderAuthStateOffMainThread(nextConfig, {
-      isCancelled: () => !isTransactionCurrent(),
-    }).catch((err: unknown) => {
-      if (isTransactionCurrent()) {
-        params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
-      }
-    });
+    if (shouldRewarmProviderAuthState(plan)) {
+      void warmCurrentProviderAuthStateOffMainThread(nextConfig, {
+        isCancelled: () => !isTransactionCurrent(),
+      }).catch((err: unknown) => {
+        if (isTransactionCurrent()) {
+          params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+        }
+      });
+    }
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {

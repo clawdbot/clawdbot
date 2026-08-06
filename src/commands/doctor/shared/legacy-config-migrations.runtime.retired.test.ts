@@ -44,41 +44,90 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
-  it("uses a dedicated, actionable migration for the retired device-auth bypass", () => {
-    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
-      (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
+  it.each([
+    [
+      "strips the retired compaction gate while keeping an enabled byte threshold",
+      { truncateAfterCompaction: true, maxActiveTranscriptBytes: "20mb" },
+      { maxActiveTranscriptBytes: "20mb" },
+      ["Removed retired agents.defaults.compaction.truncateAfterCompaction."],
+      true,
+    ],
+    [
+      "preserves an explicit retired compaction opt-out",
+      { truncateAfterCompaction: false, maxActiveTranscriptBytes: "20mb" },
+      {},
+      [
+        "Removed maxActiveTranscriptBytes to preserve truncateAfterCompaction: false.",
+        "Removed retired agents.defaults.compaction.truncateAfterCompaction.",
+      ],
+      false,
+    ],
+    [
+      "strips the retired compaction gate without adding a byte threshold",
+      { truncateAfterCompaction: true },
+      {},
+      ["Removed retired agents.defaults.compaction.truncateAfterCompaction."],
+      false,
+    ],
+    [
+      "leaves compaction config without the retired gate untouched",
+      { maxActiveTranscriptBytes: "20mb" },
+      { maxActiveTranscriptBytes: "20mb" },
+      [],
+      false,
+    ],
+  ] as const)("%s", (_name, compaction, expected, expectedChanges, checkRule) => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-config-keys",
     );
     expect(migration).toBeDefined();
-    const raw = {
-      gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } },
-    };
+    const raw = { agents: { defaults: { compaction: structuredClone(compaction) } } };
     const changes: string[] = [];
+
     migration?.apply(raw, changes);
 
-    expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
-    expect(changes).toEqual([
-      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
-    ]);
-    expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
+    expect(raw.agents.defaults.compaction).toEqual(expected);
+    expect(changes).toEqual(expectedChanges);
+    if (checkRule) {
+      const retiredRule = migration?.legacyRules?.find(
+        (candidate) =>
+          candidate.path.join(".") === "agents.defaults.compaction.truncateAfterCompaction",
+      );
+      expect(retiredRule?.message).toBe(
+        'agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone. Run "openclaw doctor --fix".',
+      );
+    }
   });
 
-  it("removes a disabled retired device-auth bypass without requiring pairing", () => {
+  it.each([
+    [
+      "uses a dedicated, actionable migration for the retired device-auth bypass",
+      true,
+      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
+    ],
+    [
+      "removes a disabled retired device-auth bypass without requiring pairing",
+      false,
+      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+    ],
+  ] as const)("%s", (_name, bypassEnabled, expectedChange) => {
     const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
       (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
     );
     expect(migration).toBeDefined();
-    const raw = {
-      gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } },
-    };
+    const raw = { gateway: { controlUi: { dangerouslyDisableDeviceAuth: bypassEnabled } } };
     const changes: string[] = [];
 
-    expect(migration?.legacyRules?.[0]?.match?.(false, raw)).toBe(true);
+    if (!bypassEnabled) {
+      expect(migration?.legacyRules?.[0]?.match?.(false, raw)).toBe(true);
+    }
     migration?.apply(raw, changes);
 
     expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
-    expect(changes).toEqual([
-      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
-    ]);
+    expect(changes).toEqual([expectedChange]);
+    if (bypassEnabled) {
+      expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
+    }
   });
 
   it("consolidates modality model lists with capability tags and exact deduplication", () => {

@@ -93,6 +93,9 @@ export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;
 }): Promise<BrowserFormField[]> {
+  if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
+    throw new Error("Specify only one of --fields or --fields-file");
+  }
   const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
   if (!payload.trim()) {
     throw new Error("fields are required");
@@ -152,6 +155,9 @@ export async function readActionsPayload(opts: {
   actions?: string;
   actionsFile?: string;
 }): Promise<string> {
+  if (opts.actions !== undefined && opts.actionsFile !== undefined) {
+    throw new Error("Specify only one of --actions or --actions-file");
+  }
   if (opts.actionsFile) {
     return opts.actionsFile === "-" ? await readStdinText() : await readFile(opts.actionsFile);
   }

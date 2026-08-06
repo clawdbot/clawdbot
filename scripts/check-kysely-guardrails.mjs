@@ -4,10 +4,10 @@
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   getPropertyNameText,
-  resolveRepoRoot,
   runAsScript,
   toLine,
   unwrapExpression,
@@ -77,6 +77,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
   ],
+  "cold-process read-only relay lookup avoids the shared state writer lifecycle": [
+    "src/agents/harness/native-hook-relay-client-store.ts",
+  ],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
@@ -89,6 +92,7 @@ const rawSqliteAllowPathGroups = {
     "src/commands/status.scan.shared.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
+    "src/commands/doctor-agent-memory-schema.ts",
     "src/commands/doctor/cron/legacy-run-log-migration.ts",
     "src/commands/doctor/cron/migration-ledger.ts",
     "src/commands/doctor-sqlite-compact.ts",
@@ -489,7 +493,7 @@ async function collectKyselyGuardrails() {
 /**
  * Runs the Kysely guardrail check.
  */
-export async function main() {
+async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {
     console.log("Kysely guardrails OK");

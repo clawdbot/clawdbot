@@ -47,6 +47,7 @@ export type ConfigIoContext = {
   createValidationPluginMetadataSnapshotLoader: (params: {
     effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
+    allowCurrentPluginMetadata?: boolean;
   }) => ValidationPluginMetadataSnapshotLoader;
   resolveRuntimePreflightSourceConfig: (candidate: OpenClawConfig) => OpenClawConfig;
   resolveSuspiciousRecoveryBackupCandidate: (parsed: unknown) => OpenClawConfig | null;
@@ -97,6 +98,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
   function createValidationPluginMetadataSnapshotLoader(params: {
     effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
+    allowCurrentPluginMetadata?: boolean;
   }): ValidationPluginMetadataSnapshotLoader {
     let snapshot: PluginMetadataSnapshot | undefined;
     return {
@@ -110,6 +112,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           config: metadataConfig,
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId, params.env),
           env: params.env,
+          allowCurrent: params.allowCurrentPluginMetadata,
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: createConfigValidationMetadataPluginIdScope({
             config: metadataConfig,

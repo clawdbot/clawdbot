@@ -1,5 +1,8 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { installClawPackages } from "./packages.js";
+import { installClawPackages, preflightClawPackage } from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
@@ -115,6 +118,134 @@ const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
       integrity,
     },
   };
+});
+
+describe("preflightClawPackage plugin setup requirements", () => {
+  const setup = {
+    providers: [
+      {
+        id: "evidence",
+        authMethods: ["api-key"],
+        envVars: ["EVIDENCE_API_KEY", "EVIDENCE_TOKEN"],
+      },
+    ],
+  };
+  const preflightPlugin = vi.fn().mockResolvedValue({ ok: true, action: "install" });
+  const probePluginSetup = vi.fn().mockResolvedValue({
+    ok: true,
+    pluginId: "evidence",
+    setup,
+    clawhub: { integrity },
+  });
+
+  it("reports plugin setup when no declared environment credential is present", async () => {
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: {},
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        requirements: [
+          {
+            kind: "plugin-setup",
+            plugin: "evidence",
+            provider: "evidence",
+            envVars: ["EVIDENCE_API_KEY", "EVIDENCE_TOKEN"],
+            authMethods: ["api-key"],
+          },
+        ],
+      }),
+    );
+  });
+
+  it("accepts any declared environment credential", async () => {
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: { EVIDENCE_TOKEN: "configured" },
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
+      }),
+    ).resolves.not.toHaveProperty("requirements");
+  });
+
+  it("accepts credentials for any declared provider", async () => {
+    probePluginSetup.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "evidence",
+      setup: {
+        providers: [
+          { id: "first", envVars: ["FIRST_API_KEY"] },
+          { id: "second", envVars: ["SECOND_API_KEY"] },
+        ],
+      },
+      clawhub: { integrity },
+    });
+
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: { SECOND_API_KEY: "configured" },
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
+      }),
+    ).resolves.not.toHaveProperty("requirements");
+  });
+
+  it("does not gate readiness on an auth-method-only provider", async () => {
+    probePluginSetup.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "evidence",
+      setup: {
+        providers: [{ id: "oauth-only", authMethods: ["oauth"] }],
+      },
+      clawhub: { integrity },
+    });
+
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: {},
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
+      }),
+    ).resolves.not.toHaveProperty("requirements");
+  });
+
+  it("accepts declared local auth evidence", async () => {
+    const credentialsDir = await mkdtemp(join(tmpdir(), "claw-auth-evidence-"));
+    const credentialsPath = join(credentialsDir, "credentials.json");
+    await writeFile(credentialsPath, "{}", "utf8");
+    probePluginSetup.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "evidence",
+      setup: {
+        providers: [
+          {
+            ...setup.providers[0],
+            authEvidence: [
+              {
+                type: "local-file-with-env",
+                fileEnvVar: "EVIDENCE_CREDENTIALS",
+                requiresAllEnv: ["EVIDENCE_PROJECT"],
+                credentialMarker: "evidence-local-credentials",
+              },
+            ],
+          },
+        ],
+      },
+      clawhub: { integrity },
+    });
+
+    try {
+      await expect(
+        preflightClawPackage(pluginPackage, "/tmp/workspace", {
+          env: {
+            EVIDENCE_CREDENTIALS: credentialsPath,
+            EVIDENCE_PROJECT: "project",
+          },
+          deps: { preflightPlugin, probePlugin: probePluginSetup },
+        }),
+      ).resolves.not.toHaveProperty("requirements");
+    } finally {
+      await rm(credentialsDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("installClawPackages", () => {

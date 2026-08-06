@@ -38,6 +38,7 @@ function createFakeSession(): FakeSession {
     on: vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
       listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
     }) as FakeSession["on"],
+    send: vi.fn(async () => "sdk-user"),
     sendAndWait: vi.fn(async () => undefined),
     sessionId: "sdk-session",
   };
@@ -59,7 +60,10 @@ function event(
   } as SessionEvent;
 }
 
-async function createFixture(trigger?: string) {
+async function createFixture(
+  trigger?: string,
+  resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-journal-"));
   tempDirs.push(tempDir);
   const target: SessionTranscriptTargetParams = {
@@ -124,6 +128,7 @@ async function createFixture(trigger?: string) {
       journal,
       modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
       now: () => 2,
+      ...(resultContentSourceByToolName ? { resultContentSourceByToolName } : {}),
     },
   });
   return { attempt, bridge, journal, recorder, session, target, tempDir };
@@ -511,7 +516,10 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("commits a hidden tool turn to SQLite in assistant request order", async () => {
-    const { bridge, journal, recorder, session, target, tempDir } = await createFixture("memory");
+    const { bridge, journal, recorder, session, target, tempDir } = await createFixture(
+      "memory",
+      new Map<string, "network">([["read", "network"]]),
+    );
     await journal.persistInitialUser();
     expect(recorder.markRuntimePersisted).toHaveBeenCalledOnce();
 
@@ -622,7 +630,9 @@ describe("Copilot attempt transcript journal", () => {
       isError: true,
       toolCallId: "call-a",
       content: [{ type: "text", text: "A failed" }],
+      __openclaw: { resultContentSource: "network" },
     });
+    expect(rows[5]?.message).toMatchObject({ __openclaw: { turnTainted: true } });
     expect(journal.snapshot()).toMatchObject({
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: "copilot-sdk:sdk-session:assistant-final",

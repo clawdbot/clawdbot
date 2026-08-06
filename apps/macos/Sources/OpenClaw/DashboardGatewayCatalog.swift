@@ -53,12 +53,15 @@ enum DashboardGatewayCatalog {
     static func entries(
         mode: AppState.ConnectionMode,
         primaryRemoteURL: URL?,
+        resolvedRemoteURL: URL?,
         resolvedRemoteHostLabel: String?,
         profiles: [MacGatewayCatalogProfile],
         primaryHealth: DashboardGatewayHealth) -> [DashboardGatewayEntry]
     {
         let canonicalPrimaryURL = mode == .remote
-            ? primaryRemoteURL.flatMap { try? MacGatewayProfileStore.canonicalURL($0) }
+            ? (resolvedRemoteURL ?? primaryRemoteURL).flatMap {
+                try? MacGatewayProfileStore.canonicalURL($0)
+            }
             : nil
         let duplicate = canonicalPrimaryURL.flatMap { primaryURL in
             profiles.first { (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL }
@@ -78,7 +81,7 @@ enum DashboardGatewayCatalog {
             canPromote: false,
             health: primaryHealth)
         let saved = profiles.compactMap { item -> DashboardGatewayEntry? in
-            // A saved identity for the active direct route is represented by the
+            // A saved identity for the active route is represented by the
             // primary row so one physical Gateway never appears twice.
             if item.profile.id == duplicate?.profile.id { return nil }
             return DashboardGatewayEntry(
@@ -94,22 +97,31 @@ enum DashboardGatewayCatalog {
 
     @MainActor
     static func primaryHealth(for state: ControlChannel.ConnectionState) -> DashboardGatewayHealth {
-        // ControlChannel currently has no failed state. Keep every representable
-        // non-connected state neutral instead of painting a speculative error.
-        if case .connected = state { return .ok }
-        return .unknown
+        switch state {
+        case .connected: .ok
+        case .degraded: .error
+        case .connecting, .disconnected: .unknown
+        }
     }
 
     @MainActor
     static func loadEntries() async throws -> [DashboardGatewayEntry] {
         let state = AppStateStore.shared
         let root = OpenClawConfigFile.loadDict()
-        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
+        let connectivity = GatewayConnectivityCoordinator.shared
+        let resolvedRemoteURL: URL? = if case let .ready(mode, url, _, _, _) = connectivity.endpointState,
+                                         mode == .remote
+        {
+            url
+        } else {
+            nil
+        }
         return self.entries(
             mode: state.connectionMode,
-            primaryRemoteURL: resolution.transport == .direct ? resolution.directURL : nil,
-            resolvedRemoteHostLabel: GatewayConnectivityCoordinator.shared.resolvedHostLabel,
+            primaryRemoteURL: GatewayRemoteConfig.resolveGatewayUrl(root: root),
+            resolvedRemoteURL: resolvedRemoteURL,
+            resolvedRemoteHostLabel: connectivity.resolvedHostLabel,
             profiles: profiles,
             primaryHealth: self.primaryHealth(for: ControlChannel.shared.state))
     }

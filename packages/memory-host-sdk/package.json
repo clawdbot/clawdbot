@@ -6,7 +6,7 @@
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
     "@openclaw/retry": "workspace:*",
-    "p-map": "7.0.5"
+    "p-map": "7.0.6"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

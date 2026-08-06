@@ -2,6 +2,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
@@ -68,7 +69,11 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
@@ -526,7 +531,6 @@ function resolveOfficialCatalogIconUrl(
   return resolveCatalogEntryIcon(entry);
 }
 
-type PluginMetadataSnapshot = ReturnType<typeof loadPluginMetadataSnapshot>;
 type PluginIndexRecord = PluginMetadataSnapshot["index"]["plugins"][number];
 
 function resolveInstalledHostedOfficialEntry(params: {
@@ -635,6 +639,14 @@ function resolvePluginIconUrlFromCatalogFacts(params: {
   return resolveCatalogEntryIcon(officialEntry) ?? localIcon;
 }
 
+function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return {
+    config,
+    env,
+    workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env),
+  };
+}
+
 /** Resolve the current manifest/catalog icon URL without accepting a caller-provided URL. */
 export async function resolveManagedPluginIconUrl(params: {
   config: OpenClawConfig;
@@ -643,7 +655,9 @@ export async function resolveManagedPluginIconUrl(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
-  const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
+  const metadata = resolvePluginMetadataSnapshot(
+    resolveManagedPluginMetadataParams(params.config, env),
+  );
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   return resolvePluginIconUrlFromCatalogFacts({
     metadata,
@@ -700,7 +714,9 @@ export async function listManagedPlugins(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<ManagedPluginCatalog> {
   const env = params.env ?? process.env;
-  const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
+  const metadata = resolvePluginMetadataSnapshot(
+    resolveManagedPluginMetadataParams(params.config, env),
+  );
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
@@ -980,6 +996,7 @@ function installRecordOwnsTarget(
 }
 
 async function cleanupFailedManagedPluginInstall(params: {
+  env: NodeJS.ProcessEnv;
   pluginId: string;
   install: PluginInstallRecord;
   targetDir: string;
@@ -987,7 +1004,7 @@ async function cleanupFailedManagedPluginInstall(params: {
 }): Promise<string[]> {
   let installRecords: Record<string, PluginInstallRecord>;
   try {
-    installRecords = await loadInstalledPluginIndexInstallRecords();
+    installRecords = await loadInstalledPluginIndexInstallRecords({ env: params.env });
   } catch (error) {
     return [
       `Could not verify whether the failed plugin install was committed; retained ${params.targetDir}: ${formatErrorMessage(error)}`,
@@ -1052,6 +1069,7 @@ function throwPersistenceFailureWithCleanupWarnings(error: unknown, warnings: st
 }
 
 async function persistManagedSourceInstall(params: {
+  env: NodeJS.ProcessEnv;
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: PluginInstallRecord;
@@ -1096,7 +1114,8 @@ export async function installManagedPluginSource(params: {
   cleanupOnPersistenceFailure?: boolean;
 }): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
-  const extensionsDir = resolveDefaultPluginExtensionsDir(params.env ?? process.env);
+  const env = params.env ?? process.env;
+  const extensionsDir = resolveDefaultPluginExtensionsDir(env);
   if (request.source === "bundled") {
     const result = await installBundledPluginSource({
       snapshot: params.snapshot,
@@ -1146,6 +1165,7 @@ export async function installManagedPluginSource(params: {
     const targetDir = completed.targetDir ?? installed.targetDir;
     const config = await persistManagedSourceInstall({
       ...params,
+      env,
       snapshot: completed.snapshot ?? params.snapshot,
       pluginId: installed.pluginId,
       install: completed.install(installed),
@@ -1428,7 +1448,9 @@ export async function setManagedPluginEnabled(params: {
   const env = params.env ?? process.env;
   return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
-    const metadata = loadPluginMetadataSnapshot({ config: snapshot.config, env });
+    const metadata = loadPluginMetadataSnapshot(
+      resolveManagedPluginMetadataParams(snapshot.config, env),
+    );
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
     if (!metadata.index.plugins.some((plugin) => plugin.pluginId === pluginId)) {
       throw new ManagedPluginLifecycleError(`plugin not installed: ${params.pluginId}`);
@@ -1467,9 +1489,11 @@ export async function setManagedPluginEnabled(params: {
     });
     await refreshPluginRegistryAfterConfigMutation({
       config: next,
+      env,
       reason: "policy-changed",
       invalidateRuntimeCache: false,
       policyPluginIds: [policyPluginId],
+      logger: { warn: (message) => warnings.push(message) },
     });
     const catalog = await listManagedPlugins({ config: next, env });
     const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
@@ -1494,11 +1518,13 @@ export async function uninstallManagedPlugin(params: {
   const env = params.env ?? process.env;
   return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
-    const installRecords = await loadInstalledPluginIndexInstallRecords();
+    const installRecords = await loadInstalledPluginIndexInstallRecords({ env });
     // Mirror the CLI uninstall flow: plan against config carrying install records
     // so managed npm/git directories resolve, then persist the stripped config.
     const configWithRecords = withPluginInstallRecords(snapshot.config, installRecords);
-    const metadata = loadPluginMetadataSnapshot({ config: configWithRecords, env });
+    const metadata = loadPluginMetadataSnapshot(
+      resolveManagedPluginMetadataParams(configWithRecords, env),
+    );
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
     const record = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
     if (record?.origin === "bundled") {
@@ -1506,10 +1532,8 @@ export async function uninstallManagedPlugin(params: {
         `bundled plugin cannot be uninstalled: ${pluginId}; disable it instead`,
       );
     }
-    const manifest = metadata.byPluginId.get(pluginId);
-    // Mirror the CLI cold path: pass channel ownership only when declared so
-    // planPluginUninstall keeps its plugin-id fallback for channel config keys.
-    const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
+    // Preserve manifest ownership exactly; only missing metadata uses the plugin-id fallback.
+    const channelIds = metadata.byPluginId.get(pluginId)?.channels;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
     const initialPlan = planPluginUninstall({
       config: configWithRecords,
@@ -1580,6 +1604,7 @@ export async function uninstallManagedPlugin(params: {
     ];
     await refreshPluginRegistryAfterConfigMutation({
       config: nextConfig,
+      env,
       reason: "source-changed",
       installRecords: nextInstallRecords,
       invalidateRuntimeCache: false,

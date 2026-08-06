@@ -94,26 +94,12 @@ const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
   () => import("../trajectory/cleanup.js"),
 );
 
-function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeOptionalAttemptCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeOptionalStringOrNull(value: unknown): string | null | undefined {
-  return value === null || typeof value === "string" ? value : undefined;
-}
-
 function normalizeRecordKey(value: string): string | undefined {
   const key = value.trim();
   return key.length > 0 ? key : undefined;
 }
 
-function normalizeOptionalDeliveryContext(
-  value: unknown,
-): SessionEntry["pendingFinalDeliveryContext"] {
+function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -130,8 +116,8 @@ function normalizeOptionalDeliveryContext(
 }
 
 function sameDeliveryContext(
-  left: SessionEntry["pendingFinalDeliveryContext"],
-  right: SessionEntry["pendingFinalDeliveryContext"],
+  left: DeliveryContext | undefined,
+  right: DeliveryContext | undefined,
 ): boolean {
   return (
     (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
@@ -141,7 +127,7 @@ function sameDeliveryContext(
   );
 }
 
-function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry {
+function normalizeRestartRecoveryFields(entry: SessionEntry): SessionEntry {
   let next = entry;
   const assign = <K extends keyof SessionEntry>(key: K, value: SessionEntry[K] | undefined) => {
     if (entry[key] === value) {
@@ -157,32 +143,6 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
     }
   };
 
-  assign("pendingFinalDelivery", entry.pendingFinalDelivery === true ? true : undefined);
-  assign("pendingFinalDeliveryText", normalizeOptionalStringOrNull(entry.pendingFinalDeliveryText));
-  assign(
-    "pendingFinalDeliveryCreatedAt",
-    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryCreatedAt),
-  );
-  assign(
-    "pendingFinalDeliveryLastAttemptAt",
-    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryLastAttemptAt),
-  );
-  assign(
-    "pendingFinalDeliveryAttemptCount",
-    normalizeOptionalAttemptCount(entry.pendingFinalDeliveryAttemptCount),
-  );
-  assign(
-    "pendingFinalDeliveryLastError",
-    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryLastError),
-  );
-  const pendingContext = normalizeOptionalDeliveryContext(entry.pendingFinalDeliveryContext);
-  if (!sameDeliveryContext(entry.pendingFinalDeliveryContext, pendingContext)) {
-    assign("pendingFinalDeliveryContext", pendingContext);
-  }
-  assign(
-    "pendingFinalDeliveryIntentId",
-    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
-  );
   const restartContext = normalizeOptionalDeliveryContext(entry.restartRecoveryDeliveryContext);
   if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartContext)) {
     assign("restartRecoveryDeliveryContext", restartContext);
@@ -191,18 +151,23 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   return next;
 }
 
-function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
-  if (entry.pluginExtensions === undefined) {
+function normalizeLegacyPluginState(
+  entry: SessionEntry,
+  key: "pluginExtensions" | "pluginExtensionSlotKeys",
+  normalizeValue: (value: unknown) => PluginJsonValue | undefined,
+): SessionEntry {
+  const state = entry[key];
+  if (state === undefined) {
     return entry;
   }
-  if (!isRecord(entry.pluginExtensions)) {
+  if (!isRecord(state)) {
     const next = { ...entry };
-    delete next.pluginExtensions;
+    delete next[key];
     return next;
   }
   let changed = false;
-  const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
-  for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
+  const normalizedState: Record<string, Record<string, PluginJsonValue>> = {};
+  for (const [rawPluginId, rawPluginState] of Object.entries(state)) {
     const pluginId = normalizeRecordKey(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
       changed = true;
@@ -212,76 +177,43 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
     const normalizedPluginState: Record<string, PluginJsonValue> = {};
     for (const [rawNamespace, rawValue] of Object.entries(rawPluginState)) {
       const namespace = normalizeRecordKey(rawNamespace);
-      if (!namespace || !isPluginJsonValue(rawValue)) {
+      const value = normalizeValue(rawValue);
+      if (!namespace || value === undefined) {
         changed = true;
         continue;
       }
-      changed ||= namespace !== rawNamespace;
-      normalizedPluginState[namespace] = rawValue;
+      changed ||= namespace !== rawNamespace || value !== rawValue;
+      normalizedPluginState[namespace] = value;
     }
     if (Object.keys(normalizedPluginState).length === 0) {
       changed = true;
       continue;
     }
-    normalizedExtensions[pluginId] = normalizedPluginState;
+    normalizedState[pluginId] = normalizedPluginState;
   }
   if (!changed) {
     return entry;
   }
   const next = { ...entry };
-  if (Object.keys(normalizedExtensions).length > 0) {
-    next.pluginExtensions = normalizedExtensions;
+  if (Object.keys(normalizedState).length > 0) {
+    Object.assign(next, { [key]: normalizedState });
   } else {
-    delete next.pluginExtensions;
+    delete next[key];
   }
   return next;
 }
 
+function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
+  return normalizeLegacyPluginState(entry, "pluginExtensions", (value) =>
+    isPluginJsonValue(value) ? value : undefined,
+  );
+}
+
 function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
-  if (entry.pluginExtensionSlotKeys === undefined) {
-    return entry;
-  }
-  if (!isRecord(entry.pluginExtensionSlotKeys)) {
-    const next = { ...entry };
-    delete next.pluginExtensionSlotKeys;
-    return next;
-  }
-  let changed = false;
-  const normalizedSlotKeys: Record<string, Record<string, string>> = {};
-  for (const [rawPluginId, rawPluginSlots] of Object.entries(entry.pluginExtensionSlotKeys)) {
-    const pluginId = normalizeRecordKey(rawPluginId);
-    if (!pluginId || !isRecord(rawPluginSlots)) {
-      changed = true;
-      continue;
-    }
-    changed ||= pluginId !== rawPluginId;
-    const normalizedPluginSlots: Record<string, string> = {};
-    for (const [rawNamespace, rawSlotKey] of Object.entries(rawPluginSlots)) {
-      const namespace = normalizeRecordKey(rawNamespace);
-      const slotKey = normalizeSessionEntrySlotKey(rawSlotKey);
-      if (!namespace || !slotKey.ok) {
-        changed = true;
-        continue;
-      }
-      changed ||= namespace !== rawNamespace || slotKey.key !== rawSlotKey;
-      normalizedPluginSlots[namespace] = slotKey.key;
-    }
-    if (Object.keys(normalizedPluginSlots).length === 0) {
-      changed = true;
-      continue;
-    }
-    normalizedSlotKeys[pluginId] = normalizedPluginSlots;
-  }
-  if (!changed) {
-    return entry;
-  }
-  const next = { ...entry };
-  if (Object.keys(normalizedSlotKeys).length > 0) {
-    next.pluginExtensionSlotKeys = normalizedSlotKeys;
-  } else {
-    delete next.pluginExtensionSlotKeys;
-  }
-  return next;
+  return normalizeLegacyPluginState(entry, "pluginExtensionSlotKeys", (value) => {
+    const slotKey = normalizeSessionEntrySlotKey(value);
+    return slotKey.ok ? slotKey.key : undefined;
+  });
 }
 
 function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
@@ -312,7 +244,7 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     store[key] = stripPersistedSkillsCache(
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
-          normalizePendingFinalDeliveryFields(
+          normalizeRestartRecoveryFields(
             normalizeLegacySessionEntryDelivery(modelSelectionLocked ? shaped : runtimeFields),
           ),
         ),

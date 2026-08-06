@@ -68,6 +68,7 @@ export type ToolTranscriptResultInput = {
   text?: string;
   isError: boolean;
   details?: unknown;
+  resultContentSource?: "network";
 };
 
 type ToolProgressRawSignature = { length: number; prefix: string };

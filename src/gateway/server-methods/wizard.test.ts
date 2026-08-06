@@ -1,8 +1,43 @@
 // Wizard server-method tests cover stable lifecycle errors for process-local sessions.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime.js";
+import { createDeferred } from "../../shared/deferred.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
+import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-import { wizardHandlers } from "./wizard.js";
+import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
+
+function createWizardContext(
+  wizardRunner: NonNullable<GatewayRequestHandlerOptions["context"]>["wizardRunner"],
+) {
+  const wizardSessions = new Map();
+  return {
+    wizardSessions,
+    wizardRunner,
+    findRunningWizard: () => undefined,
+    purgeWizardSession: (sessionId: string) => wizardSessions.delete(sessionId),
+  };
+}
+
+function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  expect(respond).toHaveBeenCalledOnce();
+  const [ok, result] = respond.mock.calls[0] ?? [];
+  expect(ok).toBe(true);
+  expect(result).toBeDefined();
+  return result as Record<string, unknown>;
+}
+
+async function invokeWizard(
+  method: "wizard.start" | "wizard.next",
+  params: Record<string, unknown>,
+  context: ReturnType<typeof createWizardContext>,
+): Promise<Record<string, unknown>> {
+  const respond = vi.fn();
+  const handler = expectDefined(wizardHandlers[method], `wizardHandlers[${method}] test invariant`);
+  await handler({ params, respond, context } as never);
+  return readSuccessfulResponse(respond);
+}
 
 describe("wizard session lookup", () => {
   it.each([
@@ -31,5 +66,229 @@ describe("wizard session lookup", () => {
       message: "wizard not found",
       details: { code: "WIZARD_NOT_FOUND" },
     });
+  });
+});
+
+describe("hosted wizard runtime isolation", () => {
+  it.each([
+    { flow: "setup", exitCode: 0, status: "done" },
+    { flow: "setup", exitCode: 23, status: "error" },
+    { flow: "channels", exitCode: 0, status: "done" },
+    { flow: "channels", exitCode: 23, status: "error" },
+  ] as const)(
+    "contains a $flow wizard exit $exitCode without exiting the Gateway",
+    async ({ flow, exitCode, status }) => {
+      const processExit = vi.spyOn(process, "exit").mockImplementation((code) => {
+        throw new Error(`Gateway process exit ${code}`);
+      });
+      const tracker = createWizardSessionTracker();
+      const runner = async (runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        await prompter.outro("wizard complete");
+        runtime.exit(exitCode);
+      };
+      const context = {
+        ...tracker,
+        wizardRunner: async (_opts: unknown, runtime: RuntimeEnv, prompter: WizardPrompter) =>
+          runner(runtime, prompter),
+        channelWizardRunner: async (
+          _opts: unknown,
+          runtime: RuntimeEnv,
+          prompter: WizardPrompter,
+        ) => runner(runtime, prompter),
+      };
+
+      try {
+        const startRespond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.start"],
+          "wizard.start test invariant",
+        )({
+          params: flow === "channels" ? { flow } : { mode: "local" },
+          respond: startRespond,
+          context,
+        } as never);
+        expect(startRespond).toHaveBeenCalledOnce();
+        const [, start] = startRespond.mock.calls[0] ?? [];
+        expect(start).toMatchObject({ done: false, status: "running" });
+
+        const nextRespond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.next"],
+          "wizard.next test invariant",
+        )({
+          params: {
+            sessionId: start.sessionId,
+            answer: { stepId: start.step.id, value: null },
+          },
+          respond: nextRespond,
+          context,
+        } as never);
+        expect(nextRespond).toHaveBeenCalledOnce();
+        const [, result] = nextRespond.mock.calls[0] ?? [];
+        expect(result).toMatchObject({ done: true, status });
+        if (exitCode !== 0) {
+          expect(result.error).toContain(String(exitCode));
+        }
+        expect(processExit).not.toHaveBeenCalled();
+      } finally {
+        processExit.mockRestore();
+      }
+    },
+  );
+});
+
+describe("wizard setup ownership", () => {
+  it("blocks a replacement wizard until the cancelled runner settles", async () => {
+    const runnerSettled = createDeferred();
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        prompter.progress("working");
+        await runnerSettled.promise;
+      },
+    };
+
+    const startRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local" },
+      respond: startRespond,
+      context,
+    } as never);
+    const [, start] = startRespond.mock.calls[0] ?? [];
+    expect(start).toMatchObject({ status: "running" });
+
+    const cancelRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.cancel"],
+      "wizard.cancel test invariant",
+    )({
+      params: { sessionId: start.sessionId },
+      respond: cancelRespond,
+      context,
+    } as never);
+    expect(cancelRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "cancelled" }),
+      undefined,
+    );
+
+    const blockedRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local" },
+      respond: blockedRespond,
+      context,
+    } as never);
+    expect(blockedRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+
+    runnerSettled.resolve();
+    await vi.waitFor(() => {
+      expect(tracker.wizardSessions.has(start.sessionId)).toBe(false);
+    });
+
+    const replacementRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local" },
+      respond: replacementRespond,
+      context,
+    } as never);
+    expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+
+    for (const session of tracker.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+
+  it.each([
+    { label: "false", params: { installDaemon: false }, expected: false },
+    { label: "true", params: { installDaemon: true }, expected: true },
+    { label: "omitted", params: {}, expected: undefined },
+  ])("projects installDaemon when $label", async ({ params, expected }) => {
+    let receivedInstallDaemon: boolean | undefined;
+    const tracker = createWizardSessionTracker();
+    const wizardRunner: SetupWizardRunner = async (opts, _runtime, prompter) => {
+      receivedInstallDaemon = opts.installDaemon;
+      await prompter.note("ready");
+    };
+    const respond = vi.fn();
+
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local", ...params },
+      respond,
+      context: { ...tracker, wizardRunner },
+    } as never);
+
+    expect(receivedInstallDaemon).toBe(expected);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ done: false, status: "running" });
+
+    for (const session of tracker.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+});
+
+describe("wizard step serialization", () => {
+  it("strips a sensitive initial value from wizard.start", async () => {
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.text({
+        message: "Bot token",
+        sensitive: true,
+        initialValue: "123456:REAL-SECRET",
+      });
+    });
+    const result = await invokeWizard("wizard.start", {}, context);
+    expect(result.step).toMatchObject({ sensitive: true });
+    expect(result.step).not.toHaveProperty("initialValue");
+    for (const session of context.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+
+  it("keeps a plain default but strips the next sensitive one from wizard.next", async () => {
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.text({
+        message: "Display name",
+        initialValue: "OpenClaw",
+      });
+      await prompter.text({
+        message: "Bot token",
+        sensitive: true,
+        initialValue: "123456:REAL-SECRET",
+      });
+    });
+    const startResult = await invokeWizard("wizard.start", {}, context);
+    expect(startResult.step).toMatchObject({ initialValue: "OpenClaw" });
+    const sessionId = startResult.sessionId;
+    expect(typeof sessionId).toBe("string");
+
+    const params = {
+      sessionId,
+      answer: {
+        stepId: (startResult.step as { id: string }).id,
+        value: "Renamed",
+      },
+    };
+    const nextResult = await invokeWizard("wizard.next", params, context);
+    expect(nextResult.step).toMatchObject({ sensitive: true });
+    expect(nextResult.step).not.toHaveProperty("initialValue");
+    for (const session of context.wizardSessions.values()) {
+      session.cancel();
+    }
   });
 });

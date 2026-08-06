@@ -1,10 +1,18 @@
 /** Read-only diagnostic readers used by the session SQLite doctor mode. */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLoadedFileEntry, type FileEntry } from "../agents/sessions/session-manager.js";
+import {
+  migrateSessionFileEntryToCurrentVersion,
+  normalizeLoadedFileEntry,
+  partitionSessionFileEntries,
+  type SessionFileEntryMigrationState,
+} from "../agents/sessions/session-manager-codec.js";
+import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
+import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -48,6 +56,7 @@ type TranscriptEventCountResult =
   | { status: "malformed"; message: string };
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
+const MAX_LEGACY_COMPACTION_TARGETS = 100_000;
 
 export function countTranscriptEventsForPath(
   transcriptPath: string | undefined,
@@ -74,34 +83,206 @@ export function countTranscriptEventsForPath(
 
 export function createTranscriptEventReader(
   transcriptPath: string,
+  sessionId: string,
 ): (append: (event: TranscriptEvent) => void) => void {
   return (append) => {
-    for (const line of iterateJsonlLinesSync(transcriptPath)) {
-      const parsed = parseJsonlLine(line);
-      if (parsed) {
-        // Import is the migration boundary: repair legacy JSONL message shapes
-        // here because the SQLite runtime read path assumes canonical rows.
-        append(normalizeLoadedFileEntry(parsed as FileEntry) as TranscriptEvent);
-      }
+    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, false)) {
+      append(event as TranscriptEvent);
     }
   };
 }
 
 export function createTranscriptEventPrefixReader(
   transcriptPath: string,
+  sessionId: string,
 ): (append: (event: TranscriptEvent) => void) => void {
   return (append) => {
-    try {
-      for (const line of iterateJsonlLinesSync(transcriptPath)) {
-        const parsed = parseJsonlLine(line);
-        if (parsed) {
-          append(normalizeLoadedFileEntry(parsed as FileEntry) as TranscriptEvent);
-        }
-      }
-    } catch {
-      // The caller records the malformed transcript issue; keep the readable prefix.
+    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, true)) {
+      append(event as TranscriptEvent);
     }
   };
+}
+
+function readTranscriptEventsForImport(
+  transcriptPath: string,
+  sessionId: string,
+  allowMalformedPrefix: boolean,
+): Iterable<FileEntry> {
+  // Production import owns the process-wide Gateway/SQLite-maintenance lock
+  // through commit and archive. Fingerprints catch non-cooperating external edits.
+  const sourceFingerprint = readTranscriptFileFingerprint(transcriptPath);
+  const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
+  assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+  const classificationHeader = {
+    id: sessionId,
+    type: "session",
+    version: plan.sourceVersion,
+  } as unknown as FileEntry;
+  // V1 compactions refer to original row indexes. Stable index-derived IDs let
+  // the second pass resolve those links without retaining the transcript.
+  const idPrefix = createHash("sha256")
+    .update(transcriptPath)
+    .update("\0")
+    .update(sessionId)
+    .digest("hex")
+    .slice(0, 16);
+
+  return {
+    *[Symbol.iterator]() {
+      assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+      const migratedTargetIds = new Map<number, string>();
+      const migrationState: SessionFileEntryMigrationState = {
+        createEntryId: (originalIndex) => `${idPrefix}-${originalIndex.toString(36)}`,
+        previousId: null,
+        resolveOriginalEntryId: (originalIndex) => migratedTargetIds.get(originalIndex),
+        sourceVersion: plan.sourceVersion,
+      };
+      for (const { event: loadedEvent, originalIndex } of iterateTranscriptEvents(
+        transcriptPath,
+        allowMalformedPrefix,
+      )) {
+        let event = loadedEvent;
+        let recognizedEvent: FileEntry | undefined;
+        if (originalIndex === plan.headerIndex) {
+          const legacyHeader = event as unknown as Record<string, unknown>;
+          const canonicalHeader: Record<string, unknown> = {
+            ...legacyHeader,
+            id: sessionId,
+            type: "session",
+          };
+          delete canonicalHeader.sessionId;
+          event = canonicalHeader as unknown as FileEntry;
+          recognizedEvent = event;
+        } else {
+          // Reuse the runtime partition contract one row at a time. The
+          // synthetic header carries the source version without being emitted.
+          recognizedEvent = partitionSessionFileEntries([classificationHeader, event])
+            .fileEntriesByOriginalIndex[1];
+        }
+
+        if (recognizedEvent) {
+          migrateSessionFileEntryToCurrentVersion(recognizedEvent, originalIndex, migrationState);
+          if (
+            recognizedEvent.type !== "session" &&
+            plan.compactionTargetIndexes.has(originalIndex)
+          ) {
+            migratedTargetIds.set(originalIndex, recognizedEvent.id);
+          }
+          event = recognizedEvent;
+        }
+        yield event;
+      }
+      assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+    },
+  };
+}
+
+type TranscriptImportPlan = {
+  compactionTargetIndexes: Set<number>;
+  headerIndex: number;
+  sourceVersion: number;
+};
+
+class TranscriptImportLimitError extends Error {}
+
+type TranscriptFileFingerprint = {
+  ctimeNs: bigint;
+  dev: bigint;
+  ino: bigint;
+  mtimeNs: bigint;
+  size: bigint;
+};
+
+function readTranscriptFileFingerprint(transcriptPath: string): TranscriptFileFingerprint {
+  const stat = fs.statSync(transcriptPath, { bigint: true });
+  return {
+    ctimeNs: stat.ctimeNs,
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeNs: stat.mtimeNs,
+    size: stat.size,
+  };
+}
+
+function assertTranscriptFileUnchanged(
+  transcriptPath: string,
+  expected: TranscriptFileFingerprint,
+): void {
+  const current = readTranscriptFileFingerprint(transcriptPath);
+  if (
+    current.ctimeNs !== expected.ctimeNs ||
+    current.dev !== expected.dev ||
+    current.ino !== expected.ino ||
+    current.mtimeNs !== expected.mtimeNs ||
+    current.size !== expected.size
+  ) {
+    throw new Error(
+      "Legacy transcript changed during import; stop active session writers and rerun `openclaw doctor --fix`.",
+    );
+  }
+}
+
+function planTranscriptImport(
+  transcriptPath: string,
+  allowMalformedPrefix: boolean,
+): TranscriptImportPlan {
+  const plan: TranscriptImportPlan = {
+    compactionTargetIndexes: new Set(),
+    headerIndex: -1,
+    sourceVersion: 1,
+  };
+  for (const { event, originalIndex } of iterateTranscriptEvents(
+    transcriptPath,
+    allowMalformedPrefix,
+  )) {
+    if (plan.headerIndex < 0 && isRecord(event) && event.type === "session") {
+      plan.headerIndex = originalIndex;
+      plan.sourceVersion = typeof event.version === "number" ? event.version : 1;
+    }
+    if (
+      isRecord(event) &&
+      event.type === "compaction" &&
+      Number.isInteger(event.firstKeptEntryIndex) &&
+      Number(event.firstKeptEntryIndex) >= 0
+    ) {
+      const targetIndex = Number(event.firstKeptEntryIndex);
+      if (
+        !plan.compactionTargetIndexes.has(targetIndex) &&
+        plan.compactionTargetIndexes.size >= MAX_LEGACY_COMPACTION_TARGETS
+      ) {
+        throw new TranscriptImportLimitError(
+          `Transcript has more than ${MAX_LEGACY_COMPACTION_TARGETS} legacy compaction targets`,
+        );
+      }
+      plan.compactionTargetIndexes.add(targetIndex);
+    }
+  }
+  return plan;
+}
+
+function* iterateTranscriptEvents(
+  transcriptPath: string,
+  allowMalformedPrefix: boolean,
+): Generator<{ event: FileEntry; originalIndex: number }> {
+  let originalIndex = 0;
+  try {
+    for (const line of iterateJsonlLinesSync(transcriptPath)) {
+      const parsed = parseJsonlLine(line);
+      if (!parsed) {
+        continue;
+      }
+      yield {
+        event: normalizeLoadedFileEntry(parsed as FileEntry),
+        originalIndex,
+      };
+      originalIndex += 1;
+    }
+  } catch (error) {
+    if (!allowMalformedPrefix || error instanceof TranscriptImportLimitError) {
+      throw error;
+    }
+    // The caller records the malformed transcript issue; keep the readable prefix.
+  }
 }
 
 export function readSqliteEntryCount(target: SessionStoreTarget): number {
@@ -425,6 +606,63 @@ export function readOnlySqliteTranscriptSnapshot(
     return {
       ok: true,
       rows: validRows.map((row) => ({ eventJson: row.event_json, seq: row.seq })),
+    };
+  } catch (error) {
+    return { ok: false, error };
+  } finally {
+    database?.close();
+  }
+}
+
+/** Reads exact row metadata for a guarded transcript replacement without opening a writer. */
+export function readOnlySqliteTranscriptStorageSnapshot(
+  sqlitePath: string,
+  sessionId: string,
+):
+  | { ok: true; rows: SqliteTranscriptStorageRow[]; sessionKey?: string }
+  | { ok: false; error: unknown } {
+  if (!fs.existsSync(sqlitePath)) {
+    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
+  }
+  let database: DatabaseSync | undefined;
+  try {
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    const rows = database
+      .prepare(
+        "SELECT created_at, event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
+      )
+      .all(sessionId) as Array<{
+      created_at?: unknown;
+      event_json?: unknown;
+      seq?: unknown;
+    }>;
+    const sessionKeyRow = database
+      .prepare("SELECT session_key FROM session_windows WHERE session_id = ? LIMIT 1")
+      .get(sessionId) as { session_key?: unknown } | undefined;
+    const storageRows: SqliteTranscriptStorageRow[] = [];
+    for (const row of rows) {
+      if (
+        typeof row.created_at !== "number" ||
+        typeof row.event_json !== "string" ||
+        typeof row.seq !== "number"
+      ) {
+        return {
+          ok: false,
+          error: new Error(`Invalid transcript row metadata for session ${sessionId}`),
+        };
+      }
+      storageRows.push({
+        createdAt: row.created_at,
+        eventJson: row.event_json,
+        seq: row.seq,
+      });
+    }
+    return {
+      ok: true,
+      rows: storageRows,
+      ...(typeof sessionKeyRow?.session_key === "string"
+        ? { sessionKey: sessionKeyRow.session_key }
+        : {}),
     };
   } catch (error) {
     return { ok: false, error };

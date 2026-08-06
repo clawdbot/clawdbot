@@ -381,6 +381,7 @@ describe("createPinnedDispatcher", () => {
       },
       clientFactory: expect.any(Function),
       allowH2: false,
+      proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -408,6 +409,7 @@ describe("createPinnedDispatcher", () => {
       factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
+      proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -445,6 +447,7 @@ describe("createPinnedDispatcher", () => {
       factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
+      proxyTunnel: true,
       requestTls: {
         autoSelectFamily: false,
         lookup,

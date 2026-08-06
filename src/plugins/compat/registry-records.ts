@@ -12,6 +12,21 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
+    code: "context-engine-legacy-host-param-default",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-07-29",
+    deprecated: "2026-07-29",
+    warningStarts: "2026-07-29",
+    removeAfter: "2026-08-12",
+    replacement:
+      "declare `ContextEngineInfo.acceptedHostParams`; full host params after the window",
+    docsPath: "/concepts/context-engine#the-contextengine-interface",
+    surfaces: ["ContextEngineInfo.acceptedHostParams and undeclared-engine default projection"],
+    diagnostics: ["plugin compatibility registry and dated runtime removal marker"],
+    tests: ["src/context-engine/host-param-projection.test.ts"],
+  },
+  {
     code: "removed-global-api-provider-publication",
     status: "removed",
     owner: "sdk",
@@ -440,14 +455,12 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "agent-harness-sdk-alias",
-    status: "removal-pending",
+    status: "deprecated",
     owner: "agent-runtime",
     introduced: "2026-04-24",
     deprecated: "2026-04-25",
     warningStarts: "2026-04-25",
-    removeAfter: "2026-07-25",
-    replacement:
-      "`openclaw/plugin-sdk/agent-runtime`; retain the public aliases until the shipped SDK contract has a replacement window backed by external-usage proof",
+    replacement: "none yet; retain until a harness subpath ships and external migration is proven",
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["openclaw/plugin-sdk/agent-harness", "openclaw/plugin-sdk/agent-harness-runtime"],
     diagnostics: ["plugin SDK compatibility warning"],

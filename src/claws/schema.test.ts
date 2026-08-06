@@ -780,6 +780,46 @@ describe("buildClawAddPlan", () => {
     );
   });
 
+  it("includes package setup requirements in plan readiness", async () => {
+    const { source, workspace } = await createPlanSource();
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: {
+        workspace,
+        packagePreflight: async (pkg) => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          ...(pkg.kind === "plugin"
+            ? {
+                installId: "github",
+                requirements: [
+                  {
+                    kind: "plugin-setup" as const,
+                    plugin: "github",
+                    provider: "github",
+                    envVars: ["GITHUB_TOKEN"],
+                    authMethods: ["token"],
+                  },
+                ],
+              }
+            : {}),
+        }),
+      },
+    });
+
+    expect(plan.readiness.ready).toBe(false);
+    expect(plan.readiness.requirements).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "plugin-setup", plugin: "github" })]),
+    );
+    expect(plan.actions.find((action) => action.id === "plugin:@acme/github")?.details).toEqual(
+      expect.objectContaining({
+        prerequisites: expect.arrayContaining([expect.objectContaining({ kind: "plugin-setup" })]),
+      }),
+    );
+  });
+
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {
     const { source, workspace } = await createPlanSource();
     const canonicalWorkspace = join(await realpath(source.packageRoot), "new-workspace");

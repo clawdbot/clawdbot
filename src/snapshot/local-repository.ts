@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -9,7 +8,9 @@ import { z } from "zod";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   ensureDurableDirectory,
+  getPublishFileExclusiveFailureDetails,
   pinDirectory,
+  publishFileNoClobber,
   requireDirectorySync,
   syncDirectory,
   syncDirectoryIfSupported,
@@ -902,110 +903,49 @@ function assertDirectoryIdentitySync(directoryPath: string, expectedIdentity: St
   }
 }
 
-function isSnapshotEntryLinkFallbackError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EPERM" ||
-    code === "EXDEV" ||
-    code === "ENOTSUP" ||
-    code === "EOPNOTSUPP" ||
-    code === "ENOSYS"
-  );
-}
-
 async function publishSnapshotEntryNoOverwrite(
   sourcePath: string,
   targetPath: string,
   entryName: string,
   publishedEntries: Map<string, Stats>,
 ): Promise<void> {
-  let linked = false;
-  let linkedSourceIdentity: Stats | undefined;
+  let publication: Awaited<ReturnType<typeof publishFileNoClobber>>;
   try {
-    linkedSourceIdentity = await fs.lstat(sourcePath);
-    await fs.link(sourcePath, targetPath);
-    publishedEntries.set(entryName, linkedSourceIdentity);
-    linked = true;
+    publication = await publishFileNoClobber(sourcePath, targetPath, {
+      strategy: "link-or-copy",
+      moveSource: true,
+      durability: "fail-closed",
+    });
   } catch (error) {
-    if (!isSnapshotEntryLinkFallbackError(error)) {
-      throw error;
+    const details = getPublishFileExclusiveFailureDetails(error);
+    if (details?.targetCreated && details.cleanup !== "removed") {
+      const [currentSource, currentTarget] = await Promise.all([
+        fs.lstat(sourcePath).catch(() => undefined),
+        fs.lstat(targetPath).catch(() => undefined),
+      ]);
+      const matchesReceipt =
+        details.targetIdentity &&
+        currentTarget &&
+        sameFileIdentity(details.targetIdentity, currentTarget);
+      const matchesSource =
+        currentSource && currentTarget && sameFileIdentity(currentSource, currentTarget);
+      if (currentTarget && (matchesReceipt || matchesSource)) {
+        publishedEntries.set(entryName, currentTarget);
+      }
     }
-    const copiedIdentity = await copySnapshotEntryExclusive(sourcePath, targetPath);
-    publishedEntries.set(entryName, copiedIdentity);
+    throw error;
   }
-  const expectedTargetIdentity = publishedEntries.get(entryName);
+  const expectedTargetIdentity = publication.identity;
+  publishedEntries.set(entryName, expectedTargetIdentity);
   const initialTargetIdentity = await fs.lstat(targetPath);
-  if (!expectedTargetIdentity || !sameFileIdentity(expectedTargetIdentity, initialTargetIdentity)) {
+  if (!sameFileIdentity(expectedTargetIdentity, initialTargetIdentity)) {
     throw new Error(`SQLite snapshot entry changed during publication: ${targetPath}`);
   }
-  if (linked) {
-    if (!linkedSourceIdentity || !sameFileIdentity(linkedSourceIdentity, initialTargetIdentity)) {
-      throw new Error(`SQLite snapshot entry changed during publication: ${targetPath}`);
-    }
-    const sourceIdentity = await fs.lstat(sourcePath);
-    if (!sameFileIdentity(sourceIdentity, initialTargetIdentity)) {
-      throw new Error(`SQLite snapshot entry changed during publication: ${targetPath}`);
-    }
-  }
-  await fs.unlink(sourcePath);
   const finalTargetIdentity = await fs.lstat(targetPath);
   if (!sameFileIdentity(initialTargetIdentity, finalTargetIdentity)) {
     throw new Error(`SQLite snapshot entry changed after publication: ${targetPath}`);
   }
   publishedEntries.set(entryName, finalTargetIdentity);
-}
-
-async function copySnapshotEntryExclusive(sourcePath: string, targetPath: string): Promise<Stats> {
-  const source = await fs.open(sourcePath, "r");
-  let target: FileHandle | undefined;
-  let targetIdentity: Stats | undefined;
-  try {
-    target = await fs.open(targetPath, "wx+", SNAPSHOT_FILE_MODE);
-    targetIdentity = await target.stat();
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let offset = 0;
-    while (true) {
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      let bytesWritten = 0;
-      while (bytesWritten < bytesRead) {
-        const result = await target.write(
-          buffer,
-          bytesWritten,
-          bytesRead - bytesWritten,
-          offset + bytesWritten,
-        );
-        if (result.bytesWritten === 0) {
-          throw new Error(`SQLite snapshot entry copy made no progress: ${targetPath}`);
-        }
-        bytesWritten += result.bytesWritten;
-      }
-      offset += bytesRead;
-    }
-    await target.sync();
-    const finalIdentity = await target.stat();
-    const currentIdentity = await fs.lstat(targetPath);
-    if (
-      !sameFileIdentity(targetIdentity, finalIdentity) ||
-      !sameFileIdentity(targetIdentity, currentIdentity)
-    ) {
-      throw new Error(`SQLite snapshot entry changed during copy: ${targetPath}`);
-    }
-    return finalIdentity;
-  } catch (error) {
-    if (targetIdentity) {
-      const currentIdentity = await fs.lstat(targetPath).catch(() => undefined);
-      if (currentIdentity && sameFileIdentity(currentIdentity, targetIdentity)) {
-        await fs.unlink(targetPath).catch(() => undefined);
-      }
-    }
-    throw error;
-  } finally {
-    await target?.close().catch(() => undefined);
-    await source.close().catch(() => undefined);
-  }
 }
 
 async function assertExactSnapshotContents(snapshotDir: string): Promise<void> {

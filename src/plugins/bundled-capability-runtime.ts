@@ -1,36 +1,16 @@
-/** Loads capability providers from bundled plugin public runtime artifacts. */
-import fs from "node:fs";
+/** Loads capability providers through the canonical scoped plugin loader. */
 import { fileURLToPath } from "node:url";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
-import { createCapturedPluginRegistration } from "./captured-registration.js";
-import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
+import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { unwrapDefaultModuleExport } from "./module-export.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginRecord, PluginRegistry } from "./registry.js";
-import {
-  buildPluginLoaderAliasMap,
-  shouldPreferNativeModuleLoad,
-  type PluginSdkResolutionPreference,
-} from "./sdk-alias.js";
-import {
-  findUndeclaredPluginToolNames,
-  normalizePluginToolContractNames,
-} from "./tool-contracts.js";
-import type { OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -65,475 +45,102 @@ function buildVitestCapabilityShimAliasMap(): Record<string, string> {
   );
 }
 
-function applyVitestCapabilityAliasOverrides(params: {
-  aliasMap: Record<string, string>;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-  env?: PluginLoadOptions["env"];
-}): Record<string, string> {
-  if (!params.env?.VITEST || params.pluginSdkResolution !== "dist") {
-    return params.aliasMap;
-  }
-
-  return {
-    ...params.aliasMap,
-    // Capability contract loads only need a narrow SDK slice. Keep those
-    // helpers on a tiny source graph so Vitest does not pull the dist chunk
-    // bundle that also drags Matrix/WhatsApp code into these tests.
-    ...buildVitestCapabilityShimAliasMap(),
-  };
-}
-
-function shouldApplyVitestCapabilityAliasOverrides(params: {
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-  env?: PluginLoadOptions["env"];
-}): boolean {
-  return Boolean(params.env?.VITEST && params.pluginSdkResolution === "dist");
-}
-
 function buildBundledCapabilityRuntimeConfig(
   pluginIds: readonly string[],
   env?: PluginLoadOptions["env"],
-): PluginLoadOptions["config"] {
+  config?: PluginLoadOptions["config"],
+): NonNullable<PluginLoadOptions["config"]> {
+  // Only the speech owner may opt into legacy global-disable compatibility before capture.
+  if (config?.plugins?.enabled === false) {
+    return config;
+  }
   const enablementCompat = withBundledPluginEnablementCompat({
-    config: undefined,
+    config,
     pluginIds,
   });
-  return withBundledPluginVitestCompat({
-    config: enablementCompat,
-    pluginIds,
-    env,
-  });
+  return (
+    withBundledPluginVitestCompat({
+      config: enablementCompat,
+      pluginIds,
+      env,
+    }) ?? {}
+  );
 }
 
-function resolvePluginModuleExport(moduleExport: unknown): {
-  definition?: OpenClawPluginDefinition;
-  register?: OpenClawPluginDefinition["register"];
-} {
-  const resolved = unwrapDefaultModuleExport(moduleExport);
-  if (typeof resolved === "function") {
-    return {
-      register: resolved as OpenClawPluginDefinition["register"],
-    };
-  }
-  if (resolved && typeof resolved === "object") {
-    const definition = resolved as OpenClawPluginDefinition;
-    return {
-      definition,
-      register: definition.register,
-    };
-  }
-  return {};
-}
-
-function createCapabilityPluginRecord(params: {
-  id: string;
-  name?: string;
-  description?: string;
-  version?: string;
-  source: string;
-  rootDir?: string;
-  workspaceDir?: string;
-}): PluginRecord {
+function createCapabilityRegistrationRuntime(
+  config: NonNullable<PluginLoadOptions["config"]>,
+): Pick<PluginRuntime, "config"> {
   return {
-    id: params.id,
-    name: params.name ?? params.id,
-    version: params.version,
-    description: params.description,
-    source: params.source,
-    rootDir: params.rootDir,
-    origin: "bundled",
-    workspaceDir: params.workspaceDir,
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: true,
+    config: {
+      current: () => config,
+      mutateConfigFile: async () => {
+        throw new Error("Capability discovery cannot mutate plugin configuration.");
+      },
+      replaceConfigFile: async () => {
+        throw new Error("Capability discovery cannot replace plugin configuration.");
+      },
+    },
   };
-}
-
-function recordCapabilityLoadError(
-  registry: PluginRegistry,
-  record: PluginRecord,
-  message: string,
-): void {
-  record.status = "error";
-  record.error = message;
-  registry.plugins.push(record);
-  registry.diagnostics.push({
-    level: "error",
-    pluginId: record.id,
-    source: record.source,
-    message: `failed to load plugin: ${message}`,
-  });
-  log.error(`[plugins] ${record.id} failed to load from ${record.source}: ${message}`);
 }
 
 export function loadBundledCapabilityRuntimeRegistry(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
+  config?: PluginLoadOptions["config"];
   pluginSdkResolution?: PluginSdkResolutionPreference;
   discovery?: PluginDiscoveryResult;
 }) {
   const env = params.env ?? process.env;
-  const devSourceRoot = resolveOpenClawDevSourceRoot(env);
-  const pluginIds = new Set(params.pluginIds);
-  const registry = createEmptyPluginRegistry();
-  const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-
-  const getModuleLoader = (modulePath: string) => {
-    const tryNative =
-      shouldPreferNativeModuleLoad(modulePath) &&
-      !(env?.VITEST && params.pluginSdkResolution === "dist");
-    const aliasMap = shouldApplyVitestCapabilityAliasOverrides({
-      pluginSdkResolution: params.pluginSdkResolution,
-      env,
-    })
-      ? applyVitestCapabilityAliasOverrides({
-          aliasMap: buildPluginLoaderAliasMap(
-            modulePath,
-            process.argv[1],
-            import.meta.url,
-            params.pluginSdkResolution,
-            devSourceRoot,
-          ),
-          pluginSdkResolution: params.pluginSdkResolution,
-          env,
-        })
-      : undefined;
-    return getCachedPluginModuleLoader({
-      cache: moduleLoaders,
-      modulePath,
-      importerUrl: import.meta.url,
-      devSourceRoot,
-      loaderFilename: import.meta.url,
-      ...(aliasMap ? { aliasMap } : {}),
-      pluginSdkResolution: params.pluginSdkResolution,
-      tryNative,
-    });
-  };
-
+  const config = buildBundledCapabilityRuntimeConfig(params.pluginIds, env, params.config);
   const discovery = params.discovery ?? discoverOpenClawPlugins({ env });
+  const pluginIds = new Set(params.pluginIds);
   const manifestRegistry = loadPluginManifestRegistry({
-    config: buildBundledCapabilityRuntimeConfig(params.pluginIds, env),
+    config,
     env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
   });
-  registry.diagnostics.push(...manifestRegistry.diagnostics);
+  const scopedManifestRegistry = {
+    plugins: manifestRegistry.plugins.filter(
+      (plugin) => plugin.origin === "bundled" && pluginIds.has(plugin.id),
+    ),
+    diagnostics: manifestRegistry.diagnostics,
+  };
+  const useVitestShims = Boolean(env.VITEST && params.pluginSdkResolution === "dist");
 
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
+  return loadOpenClawPluginsWithInternalOverrides(
+    {
+      config,
+      env,
+      onlyPluginIds: [...params.pluginIds],
+      pluginSdkResolution: params.pluginSdkResolution,
+      cache: false,
+      activate: false,
+      // Channel setup entries cannot register providers; keep their runtime entry in discovery mode.
+      channelPluginLoadIntent: "full",
+      preferBuiltPluginArtifacts: useVitestShims,
+      manifestRegistry: scopedManifestRegistry,
+      logger: {
+        info: (message) => log.info(message),
+        warn: (message) => log.warn(message),
+        error: (message) => log.error(message),
+        debug: (message) => log.debug(message),
+      },
+    },
+    {
+      // Discovery needs the current config, but not the full host runtime graph. The registry
+      // still supplies its scoped lazy methods around this narrow base runtime.
+      runtime: createCapabilityRegistrationRuntime(config),
+      moduleLoader: {
+        installNativeSdkResolver: false,
+        loaderFilename: import.meta.url,
+        ...(useVitestShims
+          ? {
+              aliasOverrides: buildVitestCapabilityShimAliasMap(),
+              tryNative: false,
+            }
+          : {}),
+      },
+    },
   );
-  const seenPluginIds = new Set<string>();
-  const repoRoot = process.cwd();
-
-  for (const candidate of discovery.candidates) {
-    const manifest = manifestByRoot.get(candidate.rootDir);
-    if (!manifest || manifest.origin !== "bundled" || !pluginIds.has(manifest.id)) {
-      continue;
-    }
-    if (seenPluginIds.has(manifest.id)) {
-      continue;
-    }
-    seenPluginIds.add(manifest.id);
-
-    const record = createCapabilityPluginRecord({
-      id: manifest.id,
-      name: manifest.name,
-      description: manifest.description,
-      version: manifest.version,
-      source:
-        env?.VITEST && params.pluginSdkResolution === "dist"
-          ? (resolveBundledPluginRepoEntryPath({
-              rootDir: repoRoot,
-              pluginId: manifest.id,
-              preferBuilt: true,
-            }) ?? candidate.source)
-          : candidate.source,
-      rootDir: candidate.rootDir,
-      workspaceDir: candidate.workspaceDir,
-    });
-
-    const opened = openRootFileSync({
-      absolutePath: record.source,
-      rootPath: record.source === candidate.source ? candidate.rootDir : repoRoot,
-      boundaryLabel: record.source === candidate.source ? "plugin root" : "repo root",
-      rejectHardlinks: false,
-      skipLexicalRootCheck: true,
-    });
-    if (!opened.ok) {
-      recordCapabilityLoadError(
-        registry,
-        record,
-        "plugin entry path escapes plugin root or fails alias checks",
-      );
-      continue;
-    }
-
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
-
-    let mod: OpenClawPluginModule | null;
-    try {
-      mod = getModuleLoader(safeSource)(safeSource) as OpenClawPluginModule;
-    } catch (error) {
-      recordCapabilityLoadError(registry, record, String(error));
-      continue;
-    }
-
-    const resolved = resolvePluginModuleExport(mod);
-    const register = resolved.register;
-    if (typeof register !== "function") {
-      record.status = "disabled";
-      record.error = "plugin export missing register(api)";
-      registry.plugins.push(record);
-      continue;
-    }
-
-    try {
-      const captured = createCapturedPluginRegistration();
-      register(captured.api);
-      record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
-      record.providerIds.push(...captured.providers.map((entry) => entry.id));
-      record.embeddingProviderIds.push(...captured.embeddingProviders.map((entry) => entry.id));
-      record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));
-      record.realtimeTranscriptionProviderIds.push(
-        ...captured.realtimeTranscriptionProviders.map((entry) => entry.id),
-      );
-      record.realtimeVoiceProviderIds.push(
-        ...captured.realtimeVoiceProviders.map((entry) => entry.id),
-      );
-      record.mediaUnderstandingProviderIds.push(
-        ...captured.mediaUnderstandingProviders.map((entry) => entry.id),
-      );
-      record.transcriptSourceProviderIds.push(
-        ...captured.transcriptSourceProviders.map((entry) => entry.id),
-      );
-      record.imageGenerationProviderIds.push(
-        ...captured.imageGenerationProviders.map((entry) => entry.id),
-      );
-      record.videoGenerationProviderIds.push(
-        ...captured.videoGenerationProviders.map((entry) => entry.id),
-      );
-      record.musicGenerationProviderIds.push(
-        ...captured.musicGenerationProviders.map((entry) => entry.id),
-      );
-      record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
-      record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
-      record.migrationProviderIds.push(...captured.migrationProviders.map((entry) => entry.id));
-      record.memoryEmbeddingProviderIds.push(
-        ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
-      );
-      record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
-      record.toolNames.push(...captured.tools.map((entry) => entry.name));
-
-      registry.cliBackends.push(
-        ...captured.cliBackends.map((backend) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          backend,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.textTransforms.push(
-        ...captured.textTransforms.map((transforms) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          transforms,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.providers.push(
-        ...captured.providers.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.embeddingProviders.push(
-        ...captured.embeddingProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.speechProviders.push(
-        ...captured.speechProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.realtimeTranscriptionProviders.push(
-        ...captured.realtimeTranscriptionProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.realtimeVoiceProviders.push(
-        ...captured.realtimeVoiceProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.mediaUnderstandingProviders.push(
-        ...captured.mediaUnderstandingProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.transcriptSourceProviders.push(
-        ...captured.transcriptSourceProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.imageGenerationProviders.push(
-        ...captured.imageGenerationProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.videoGenerationProviders.push(
-        ...captured.videoGenerationProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.musicGenerationProviders.push(
-        ...captured.musicGenerationProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.webFetchProviders.push(
-        ...captured.webFetchProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.webSearchProviders.push(
-        ...captured.webSearchProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.migrationProviders.push(
-        ...captured.migrationProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.memoryEmbeddingProviders.push(
-        ...captured.memoryEmbeddingProviders.map((provider) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          provider,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      registry.agentHarnesses.push(
-        ...captured.agentHarnesses.map((harness) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          harness,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
-      const declaredToolNames = normalizePluginToolContractNames(record.contracts);
-      for (const tool of captured.tools) {
-        const undeclared = findUndeclaredPluginToolNames({
-          declaredNames: declaredToolNames,
-          toolNames: [tool.name],
-        });
-        if (undeclared.length > 0) {
-          registry.diagnostics.push({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
-          });
-          continue;
-        }
-        registry.tools.push({
-          pluginId: record.id,
-          pluginName: record.name,
-          factory: () => tool,
-          names: [tool.name],
-          declaredNames: declaredToolNames,
-          optional: false,
-          source: record.source,
-          rootDir: record.rootDir,
-        });
-      }
-      registry.plugins.push(record);
-    } catch (error) {
-      recordCapabilityLoadError(registry, record, String(error));
-    }
-  }
-
-  return registry;
 }

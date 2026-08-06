@@ -533,6 +533,41 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it("delegates Mattermost cross-channel policy to its bundled provider gate", async () => {
+    setReadPlugin({ channel: "mattermost", origin: "bundled" });
+
+    await dispatchChannelMessageAction({
+      channel: "mattermost",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { channelId: "configured" },
+      conversationReadOrigin: "delegated",
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Mattermost reactions behind the host exact-current gate", async () => {
+    setReadPlugin({ channel: "mattermost", origin: "bundled" });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "mattermost",
+        action: "react",
+        cfg: {} as OpenClawConfig,
+        params: { channelId: "other", messageId: "post-1", emoji: "eyes" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "mattermost",
+          currentChannelId: "channel:current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
   it("keeps unaudited bundled adapters on the exact-current host limit", async () => {
     setReadPlugin({ channel: "telegram", origin: "bundled" });
 

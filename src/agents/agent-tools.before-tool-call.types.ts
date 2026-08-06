@@ -13,12 +13,14 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
+import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 export type ToolOutcomeObservation = {
   toolName: string;
   argsHash: string;
   resultHash: string;
+  resultContentSource?: AgentTool["resultContentSource"];
   /** Monotonic model-call order within the owning embedded run. */
   toolCallOrdinal?: number;
   terminalPresentation?: string;
@@ -38,6 +40,8 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** What initiated this run, used to reject approvals on unattended surfaces. */
+  trigger?: string;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
@@ -93,6 +97,7 @@ export type HookBlockedReason =
   | "client-voice-confirmation"
   | "plugin-before-tool-call"
   | "plugin-approval"
+  | "plugin-approval-unavailable"
   | "tool-loop";
 
 type HookBlockedOutcome = {

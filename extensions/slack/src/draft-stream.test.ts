@@ -126,6 +126,21 @@ describe("createSlackDraftStream", () => {
     expect((editCall?.[3] as { blocks?: unknown } | undefined)?.blocks).toEqual([...blocks]);
   });
 
+  it("edits changed blocks even when fallback text is unchanged", async () => {
+    const { stream, edit } = createDraftStreamHarness();
+    const firstBlocks = [{ type: "divider" }] as const;
+    const latestBlocks = [{ type: "section", text: { type: "mrkdwn", text: "latest" } }] as const;
+
+    stream.update({ text: "same fallback", blocks: [...firstBlocks] });
+    await stream.flush();
+    stream.update({ text: "same fallback", blocks: [...latestBlocks] });
+    await stream.flush();
+
+    const editCall = mockCalls<Parameters<DraftEditFn>>(edit)[0];
+    expect(editCall?.[2]).toBe("same fallback");
+    expect((editCall?.[3] as { blocks?: unknown } | undefined)?.blocks).toEqual([...latestBlocks]);
+  });
+
   it("forwards identity to the initial send call", async () => {
     const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
     const send = vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));

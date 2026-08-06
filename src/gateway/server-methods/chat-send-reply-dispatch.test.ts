@@ -137,4 +137,55 @@ describe("createChatSendReplyDispatch", () => {
     expect(markBlocked).not.toHaveBeenCalled();
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 1, block: 1, final: 1 });
   });
+
+  it("finalizes media inside the admission without masking dispatch errors", async () => {
+    const dispatchError = new Error("dispatch failed");
+    const warn = vi.fn();
+    let insideAdmission = false;
+    let finalizedInsideAdmission = false;
+    const dispatch = createChatSendReplyDispatch({
+      accountId: undefined,
+      isAgentRunStarted: () => {
+        finalizedInsideAdmission = insideAdmission;
+        throw new Error("finalizer failed");
+      },
+      logGateway: { warn } as never,
+      session: {
+        agentId: "main",
+        backingSessionId: undefined,
+        cfg: {},
+        clientRunId: "run-finalize",
+        sessionKey: "agent:main:main",
+        sessionLoadOptions: undefined,
+      },
+      userTurnRecorder: { markBlocked: vi.fn() },
+    });
+    const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+    dispatcher.sendFinalReply({ mediaUrl: "https://example.test/final.png" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    await expect(
+      dispatch.runAgentMediaTranscript(
+        {
+          run: async (operation) => {
+            insideAdmission = true;
+            try {
+              return await operation();
+            } finally {
+              insideAdmission = false;
+            }
+          },
+        },
+        async () => {
+          throw dispatchError;
+        },
+      ),
+    ).rejects.toBe(dispatchError);
+
+    expect(finalizedInsideAdmission).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("webchat media finalization failed: Error: finalizer failed"),
+    );
+  });
 });

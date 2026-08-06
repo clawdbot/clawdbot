@@ -1,9 +1,11 @@
 // Gateway client bootstrap resolver.
 // Collects URL, auth, and handshake settings before constructing a GatewayClient.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayConnectionAuth } from "./connection-auth.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import type { ExplicitGatewayAuth } from "./credentials.js";
+import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 
 /**
  * Maps connection-detail source labels to the override kinds that affect auth fallback.
@@ -30,6 +32,7 @@ export async function resolveGatewayClientBootstrap(params: {
   url: string;
   urlSource: string;
   preauthHandshakeTimeoutMs?: number;
+  tlsFingerprint?: string;
   auth: {
     token?: string;
     password?: string;
@@ -40,9 +43,15 @@ export async function resolveGatewayClientBootstrap(params: {
     url: params.gatewayUrl,
   });
   const urlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
+  const tlsFingerprint = await resolveGatewayConnectionTlsFingerprint({
+    config: params.config,
+    url: connection.url,
+    urlSource: connection.urlSource,
+    loadGatewayTlsRuntime,
+  });
   // Only direct CLI/env URL overrides should constrain token/password fallback. Config-derived
   // remote URLs are canonical config, not a caller override.
-  const auth = await resolveGatewayConnectionAuth({
+  const auth = await resolveGatewayCredentialsWithSecretInputs({
     config: params.config,
     explicitAuth: params.explicitAuth,
     env: params.env ?? process.env,
@@ -52,6 +61,7 @@ export async function resolveGatewayClientBootstrap(params: {
   return {
     url: connection.url,
     urlSource: connection.urlSource,
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
     auth,
   };
 }

@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   looksLikeSecretSentinel,
@@ -18,6 +18,7 @@ const parseSessionEntriesMock = vi.fn();
 const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
+const loadPreparedModelRuntimeSnapshotMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const getModelRegistryRuntimeMock = vi.fn();
@@ -95,7 +96,9 @@ vi.mock("./prepared-model-runtime.js", () => ({
     config: unknown;
     inheritedAuthDir?: string;
     workspaceDir?: string;
+    allowGatewaySubagentBinding?: boolean;
   }) => {
+    loadPreparedModelRuntimeSnapshotMock(params);
     const workspaceOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : {};
     await ensureOpenClawModelsJsonMock(params.config, params.agentDir, workspaceOptions);
     const authStorage = discoverAuthStorageMock(params.agentDir, {
@@ -112,6 +115,8 @@ vi.mock("./prepared-model-runtime.js", () => ({
       agentDir: params.agentDir,
       config: params.config,
       workspaceDir: params.workspaceDir,
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
       createStores: () => ({ authStorage, modelRegistry }),
     };
   },
@@ -566,6 +571,10 @@ function mockOpenAIPlatformProfile(): void {
 }
 
 describe("runBtwSideQuestion", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     streamSimpleMock.mockReset();
     readFileMock.mockReset();
@@ -573,6 +582,7 @@ describe("runBtwSideQuestion", () => {
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
     ensureOpenClawModelsJsonMock.mockReset();
+    loadPreparedModelRuntimeSnapshotMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     getModelRegistryRuntimeMock.mockReset();
@@ -750,6 +760,35 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
+  it("resolves the prepared runtime the way gateway-published owners are keyed", async () => {
+    // Gateway startup publishes configured owners with allowGatewaySubagentBinding
+    // (server-startup-post-attach.ts), and that flag is part of the owner key
+    // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
+    // it matches no owner, and standalone activation is refused while the gateway
+    // lifecycle is active, so the side question fails with "owner was not published".
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion({ allowGatewaySubagentBinding: true });
+
+    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
+      agentDir: DEFAULT_AGENT_DIR,
+      allowGatewaySubagentBinding: true,
+    });
+  });
+
+  it("keeps gateway subagent binding off for local callers such as the embedded TUI", async () => {
+    // The embedded TUI calls runBtwSideQuestion directly and must not borrow the
+    // active registry's subagent and node capabilities, so the flag stays unset
+    // unless a gateway-hosted caller opts in.
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion();
+
+    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).not.toHaveProperty(
+      "allowGatewaySubagentBinding",
+    );
+  });
+
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
     const supports = vi.fn(supportsPreparedOpenAIAuth);
     const codexSideQuestionMock = registerCodexSideQuestionHarness({
@@ -837,7 +876,13 @@ describe("runBtwSideQuestion", () => {
       "gpt-5.5",
       DEFAULT_AGENT_DIR,
       expect.any(Object),
-      expect.objectContaining({ authProfileMode: "token" }),
+      expect.objectContaining({
+        authProfileMode: "token",
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+        }),
+      }),
     );
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
@@ -960,6 +1005,7 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("lets native Codex bootstrap auth without a host profile", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) => {
       if (ctx.modelProvider?.preparedAuth?.source !== "harness") {
         return supportsPreparedOpenAIAuth(ctx);
@@ -1762,6 +1808,10 @@ describe("runBtwSideQuestion", () => {
         modelRegistry,
         authProfileId: "anthropic:backup",
         authProfileMode: "api_key",
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+        }),
         skipAgentDiscovery: true,
       }),
     );

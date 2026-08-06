@@ -82,7 +82,13 @@ Since 2026.7.2, `openclaw update` refuses to install a release that cannot open 
 
 ### The Gateway refuses to start with a newer schema version error
 
-A newer OpenClaw build wrote your databases, and the running build is older. The error and the Gateway startup log name the build that owns the database (`app_version`). Install that version or newer, or use one of the options above. Do not edit the database to silence the error.
+A newer OpenClaw build wrote your databases, and the running build is older. The error names the refusing install — release version, commit, and install root — plus the schema it supports and the schema it found.
+
+Act on the install root, not the version. One release version string spans many `main` commits and several schema levels, so two installs can both call themselves `2026.7.2` and support different schemas. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
+
+A linked source checkout is the case where the commit misleads: `openclaw --version` reports the checkout's git HEAD, but the code actually executing is whatever `dist/` was last built. If the install root is a checkout, rebuild it (`pnpm build`) before concluding the version is wrong.
+
+Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
 
 ### A database is quarantined after integrity verification failed
 

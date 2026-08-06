@@ -39,7 +39,10 @@ export function expectedChildDispatches(
   trustedRef: string;
   workflow: string;
 }[];
-export function requiredChildKeysForRerunGroup(rerunGroup: unknown): Set<string>;
+export function requiredChildKeysForRerunGroup(
+  rerunGroup: unknown,
+  validationInputs?: Record<string, unknown>,
+): Set<string>;
 export function expectedSelectedChildDispatches(
   parentRunId: unknown,
   parentRunAttempt: unknown,
@@ -251,6 +254,13 @@ export function parseReleaseCiSummaryArgs(argv: string[]): {
   watch: boolean;
 };
 export function releaseCiWatchFingerprint(parent: unknown): string;
+export function terminalParentJobFailures(parent: {
+  jobs?: Array<{
+    conclusion?: string | null;
+    name?: string | null;
+    status?: string | null;
+  }>;
+}): string[];
 export function watchReleaseCiRun(
   options: unknown,
   overrides?: Record<string, unknown>,

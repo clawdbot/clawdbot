@@ -12,6 +12,7 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.ty
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
+import { isPreparedModelCatalogFull } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -23,6 +24,7 @@ import {
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
+import { prepareScopedReadOnlyModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
 
 export type LoadPreparedModelCatalogParams = {
   agentId?: string;
@@ -31,9 +33,29 @@ export type LoadPreparedModelCatalogParams = {
   readOnly?: boolean;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerDiscoveryProviderIds?: readonly string[];
+  allowGatewaySubagentBinding?: boolean;
 };
 
+export type GetPublishedPreparedModelCatalogOwnerParams = Omit<
+  LoadPreparedModelCatalogParams,
+  "readOnly"
+>;
+
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
+
+async function materializeRequestedModelCatalog(
+  snapshot: PreparedModelRuntimeSnapshot,
+  readOnly: boolean | undefined,
+): Promise<PreparedModelRuntimeSnapshot> {
+  if (readOnly === true || !snapshot.loadFullModelCatalog) {
+    return snapshot;
+  }
+  const modelCatalog = await snapshot.loadFullModelCatalog();
+  return modelCatalog === snapshot.modelCatalog
+    ? snapshot
+    : Object.freeze({ ...snapshot, modelCatalog });
+}
 
 function acceptsPreparedSnapshotConfig(
   snapshot: PreparedModelRuntimeSnapshot,
@@ -80,6 +102,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     ...(params.env ? { env: params.env } : {}),
     inheritedAuthDir: resolveDefaultAgentDir(config, params.env),
     ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
+    ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   };
   const exact = params.readOnly ? { ...full, readOnly: true } : full;
   const activationFull = activationWorkspaceDir
@@ -93,19 +116,19 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   };
 }
 
-/** Returns the current published catalog without waiting or starting discovery. */
-export function getPreparedModelCatalogSnapshot(
+/** Returns the configured lifecycle owner for the current generation without starting discovery. */
+export function getPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
-): ModelCatalogSnapshot | undefined {
+): PreparedModelRuntimeSnapshot | undefined {
   const { activationExact, activationFull, exact, full } = resolveInputs(params);
   const publishedFull = getPreparedModelRuntimeSnapshot(full);
   if (publishedFull && preparedModelRuntimeConfigsMatch(publishedFull.config, full.config)) {
-    return publishedFull.modelCatalog;
+    return publishedFull;
   }
   if (activationFull && activationFull.workspaceDir !== full.workspaceDir) {
     const activatedFull = getPreparedModelRuntimeSnapshot(activationFull);
     if (activatedFull && preparedModelRuntimeConfigsMatch(activatedFull.config, full.config)) {
-      return activatedFull.modelCatalog;
+      return activatedFull;
     }
   }
   if (exact === full) {
@@ -113,18 +136,43 @@ export function getPreparedModelCatalogSnapshot(
   }
   const publishedExact = getPreparedModelRuntimeSnapshot(exact);
   if (publishedExact && preparedModelRuntimeConfigsMatch(publishedExact.config, exact.config)) {
-    return publishedExact.modelCatalog;
+    return publishedExact;
   }
   if (!activationExact || activationExact.workspaceDir === exact.workspaceDir) {
     return undefined;
   }
   const activatedExact = getPreparedModelRuntimeSnapshot(activationExact);
   return activatedExact && preparedModelRuntimeConfigsMatch(activatedExact.config, exact.config)
-    ? activatedExact.modelCatalog
+    ? activatedExact
     : undefined;
 }
 
-async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
+/**
+ * Returns the currently published lifecycle owner and its configured/static turn facts without
+ * config hashing, fallback construction, or full control-plane catalog materialization.
+ */
+export function getPublishedPreparedModelCatalogOwnerSnapshot(
+  params: GetPublishedPreparedModelCatalogOwnerParams = {},
+): PreparedModelRuntimeSnapshot | undefined {
+  const { activationFull, full } = resolveInputs(params);
+  const published = getPreparedModelRuntimeSnapshot(full);
+  if (published) {
+    return published;
+  }
+  if (activationFull.workspaceDir === full.workspaceDir) {
+    return undefined;
+  }
+  return getPreparedModelRuntimeSnapshot(activationFull);
+}
+
+/** Returns the configured catalog for the current generation without starting discovery. */
+export function getPreparedModelCatalogSnapshot(
+  params: LoadPreparedModelCatalogParams = {},
+): ModelCatalogSnapshot | undefined {
+  return getPreparedModelCatalogOwnerSnapshot(params)?.modelCatalog;
+}
+
+async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
 ): Promise<PreparedModelRuntimeSnapshot> {
@@ -208,6 +256,43 @@ async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
   }
 }
 
+async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
+  params: LoadPreparedModelCatalogParams,
+  configPolicy: PreparedModelCatalogConfigPolicy,
+): Promise<PreparedModelRuntimeSnapshot> {
+  return await materializeRequestedModelCatalog(
+    await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy),
+    params.readOnly,
+  );
+}
+
+async function loadScopedReadOnlyModelCatalog(
+  params: LoadPreparedModelCatalogParams,
+): Promise<ModelCatalogSnapshot> {
+  const { activationExact, activationFull, full } = resolveInputs(params);
+  const fullCandidates =
+    activationFull.workspaceDir === full.workspaceDir ? [full] : [full, activationFull];
+  for (const candidate of fullCandidates) {
+    try {
+      const prepared = await prepareModelRuntimeSnapshot(candidate);
+      if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
+        throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
+      }
+      if (isPreparedModelCatalogFull(prepared.modelCatalog)) {
+        return prepared.modelCatalog;
+      }
+    } catch (error) {
+      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+        throw error;
+      }
+    }
+  }
+  return prepareScopedReadOnlyModelCatalog(
+    activationExact,
+    params.providerDiscoveryProviderIds ?? [],
+  );
+}
+
 /** Resolves the lifecycle owner for an exact caller-supplied config. */
 export async function loadPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
@@ -235,6 +320,9 @@ export async function loadResolvedPublishedModelCatalogOwner(
 export async function loadPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogSnapshot> {
+  if (params.readOnly && params.providerDiscoveryProviderIds) {
+    return loadScopedReadOnlyModelCatalog(params);
+  }
   return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
 }
 

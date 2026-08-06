@@ -3,11 +3,14 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
+  reasoning?: string;
+  reasoning_text?: string;
 };
 type OpenAICompatibleChoice = Omit<
   DeepPartial<ChatCompletionChunk["choices"][number]>,
@@ -1429,6 +1432,40 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(visibleText).toBe("");
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
+
+  it.each(["reasoning_content", "reasoning", "reasoning_text"] as const)(
+    "reports hidden %s chunks as request activity",
+    async (reasoningField) => {
+      mockChunksRef.chunks = [
+        {
+          id: "chatcmpl-test",
+          choices: [{ index: 0, delta: { [reasoningField]: "private reasoning" } }],
+        },
+        {
+          id: "chatcmpl-test",
+          choices: [{ index: 0, delta: { [reasoningField]: "still private" } }],
+        },
+        makeTextChunk("visible answer"),
+        makeFinishChunk("stop"),
+      ];
+      const abortController = new AbortController();
+      const onActivity = vi.fn();
+      const unsubscribe = onLlmRequestActivity(abortController.signal, onActivity);
+
+      try {
+        const result = await streamOpenAICompletions(model, context, {
+          apiKey: "sk-test",
+          signal: abortController.signal,
+        }).result();
+
+        expect(onActivity).toHaveBeenCalledTimes(mockChunksRef.chunks.length);
+        expect(result.content).toContainEqual({ type: "text", text: "visible answer" });
+        expect(result.content.some((block) => block.type === "thinking")).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("seals the native reasoning block before the answer text begins", async () => {
     // deepseek streams reasoning_content, then switches to content with no

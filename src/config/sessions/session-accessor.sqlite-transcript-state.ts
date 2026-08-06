@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -7,7 +8,18 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  assertCanonicalSessionKeyWriteMatchesDatabase,
+  canonicalSessionKeyMigrationRequiredError,
+} from "./session-canonical-key.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import {
+  foldedSessionKeyAliasCandidates,
+  normalizeStoreSessionKey,
+  resolveDeliveryProvenCanonicalSessionKey,
+} from "./store-entry.js";
 
 function createTranscriptGeneration(): string {
   return randomUUID().replaceAll("-", "");
@@ -68,7 +80,73 @@ export function ensureTranscriptSessionRoot(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   updatedAt: number,
+  options: { allowStoredAlias?: boolean } = {},
 ): void {
+  if (!options.allowStoredAlias) {
+    assertCanonicalSqliteSessionKeysCurrent(database);
+    assertCanonicalSessionKeyWriteMatchesDatabase(database, scope.sessionKey);
+    const db = getSessionKysely(database.db);
+    const lookupKeys = uniqueStrings([
+      scope.sessionKey,
+      ...foldedSessionKeyAliasCandidates(normalizeStoreSessionKey(scope.sessionKey)),
+    ]);
+    const candidates = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_nodes")
+        .select(["current_session_id", "entry_json", "entry_valid", "session_key", "updated_at"])
+        .where("session_key", "in", lookupKeys),
+    ).rows;
+    for (const candidate of candidates) {
+      const entry = parseSqliteSessionEntryJson(candidate);
+      if (!entry) {
+        const retainedWindow =
+          candidate.entry_json === "{}"
+            ? executeSqliteQueryTakeFirstSync(
+                database.db,
+                db
+                  .selectFrom("session_windows")
+                  .select("session_id")
+                  .where("session_id", "=", candidate.current_session_id)
+                  .where("session_key", "=", candidate.session_key),
+              )
+            : undefined;
+        if (!retainedWindow) {
+          throw canonicalSessionKeyMigrationRequiredError(
+            `invalid persisted session row requires repair for ${candidate.session_key}`,
+          );
+        }
+        continue;
+      }
+      if (
+        resolveDeliveryProvenCanonicalSessionKey(candidate.session_key, entry) !==
+        candidate.session_key
+      ) {
+        throw canonicalSessionKeyMigrationRequiredError(
+          `non-canonical persisted row resolves to session key ${candidate.session_key}`,
+        );
+      }
+    }
+    const existing = candidates.find((candidate) => candidate.session_key === scope.sessionKey);
+    if (existing && existing.entry_valid !== 1) {
+      const retainedWindow =
+        existing.entry_json === "{}"
+          ? executeSqliteQueryTakeFirstSync(
+              database.db,
+              db
+                .selectFrom("session_windows")
+                .select("session_id")
+                .where("session_id", "=", existing.current_session_id)
+                .where("session_key", "=", scope.sessionKey),
+            )
+          : undefined;
+      if (!retainedWindow) {
+        throw canonicalSessionKeyMigrationRequiredError(
+          `invalid persisted session row requires repair for ${scope.sessionKey}`,
+        );
+      }
+    }
+  }
   const db = getSessionKysely(database.db);
   const insertedNode = executeSqliteQuerySync(
     database.db,
@@ -78,11 +156,19 @@ export function ensureTranscriptSessionRoot(
         session_key: scope.sessionKey,
         current_session_id: scope.sessionId,
         entry_json: "{}",
+        entry_valid: -1,
         updated_at: updatedAt,
       })
       .onConflict((conflict) => conflict.column("session_key").doNothing()),
   );
   if ((insertedNode.numAffectedRows ?? 0n) > 0n) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_nodes")
+        .set({ entry_valid: -1 })
+        .where("session_key", "=", scope.sessionKey),
+    );
     publishSqliteSessionEntryCacheInvalidation(database);
   }
   executeSqliteQuerySync(

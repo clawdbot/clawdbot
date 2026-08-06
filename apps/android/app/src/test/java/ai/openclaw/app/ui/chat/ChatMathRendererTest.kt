@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ChatMathRendererTest {
@@ -121,6 +122,33 @@ class ChatMathRendererTest {
     assertEquals(emptyList<ChatMathRenderResult<String>>(), retryResults)
     harness.backend.complete(ChatMathRenderResult.Success("fresh"))
     assertEquals(listOf(ChatMathRenderResult.Success("fresh")), retryResults)
+  }
+
+  @Test
+  fun parsesStructuredRenderCompletionMessages() {
+    assertEquals(
+      ChatMathRenderMessage(
+        id = "7",
+        widthCssPx = 12.5,
+        heightCssPx = 8.0,
+        success = true,
+      ),
+      parseChatMathRenderMessage(
+        """{"id":"7","widthCssPx":12.5,"heightCssPx":8,"success":true}""",
+      ),
+    )
+    assertNull(parseChatMathRenderMessage("""{"id":"7"}"""))
+  }
+
+  @Test
+  fun bitmapDimensionsRejectNonFiniteNonPositiveAndOversizedValues() {
+    assertEquals(25, bitmapDimension(cssPixels = 12.5, density = 2f))
+    assertNull(bitmapDimension(cssPixels = Double.NaN, density = 1f))
+    assertNull(bitmapDimension(cssPixels = Double.POSITIVE_INFINITY, density = 1f))
+    assertNull(bitmapDimension(cssPixels = 0.0, density = 1f))
+    assertNull(bitmapDimension(cssPixels = 1.0, density = Float.NaN))
+    assertNull(bitmapDimension(cssPixels = 8193.0, density = 1f))
+    assertNull(bitmapDimension(cssPixels = 4097.0, density = 2f))
   }
 
   private class RenderHarness {

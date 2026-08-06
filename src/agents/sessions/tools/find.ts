@@ -123,8 +123,8 @@ function buildFindResult(params: {
   content: Array<{ type: "text"; text: string }>;
   details: FindToolDetails | undefined;
 } {
-  const resultLimitReached = params.relativized.length >= params.effectiveLimit;
-  const rawOutput = params.relativized.join("\n");
+  const resultLimitReached = params.relativized.length > params.effectiveLimit;
+  const rawOutput = params.relativized.slice(0, params.effectiveLimit).join("\n");
   const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
   let resultOutput = truncation.content;
   const details: FindToolDetails = {};
@@ -198,6 +198,8 @@ export function createFindToolDefinition(
             }
             const searchPath = resolveToCwd(searchDir || ".", cwd);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
+            // One extra candidate distinguishes an exact-size result from a truncated one.
+            const observationLimit = effectiveLimit + 1;
             const ops = customOps ?? defaultFindOperations;
 
             // If custom operations provide glob(), use that instead of fd.
@@ -212,7 +214,7 @@ export function createFindToolDefinition(
               }
               const results = await ops.glob(pattern, searchPath, {
                 ignore: ["**/node_modules/**", "**/.git/**"],
-                limit: effectiveLimit,
+                limit: observationLimit,
               });
               if (signal?.aborted) {
                 settle(() => reject(new Error("Operation aborted")));
@@ -229,7 +231,7 @@ export function createFindToolDefinition(
               }
 
               // Relativize paths against the search root for stable output.
-              const relativized = results.map((p) => {
+              const relativized = results.slice(0, observationLimit).map((p) => {
                 if (p.startsWith(searchPath)) {
                   return toPosixPath(p.slice(searchPath.length + 1));
                 }
@@ -264,7 +266,7 @@ export function createFindToolDefinition(
             if (!isInsideGitRepository(searchPath)) {
               args.push("--no-require-git");
             }
-            args.push("--max-results", String(effectiveLimit));
+            args.push("--max-results", String(observationLimit));
 
             // fd --glob matches against the basename unless --full-path is set; in --full-path
             // mode it matches against the absolute candidate path, so a path-containing

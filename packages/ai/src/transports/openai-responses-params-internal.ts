@@ -5,6 +5,7 @@ import type {
   ResponseFormatTextConfig,
   ResponseInput,
 } from "openai/resources/responses/responses.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
@@ -39,7 +40,6 @@ import {
   usesNativeOpenAICodexResponsesBackend,
 } from "./openai-transport-params.js";
 import {
-  resolveCacheRetention,
   resolvePromptCacheKey,
   sortTransportToolsByName,
   type OpenAIModeModel,

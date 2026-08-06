@@ -5,6 +5,7 @@ import {
   resolveSessionPreferredFace,
   resolveSessionPreferredFaceForKey,
   SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "./route-navigation.ts";
 
@@ -107,7 +108,10 @@ describe("sessionNavigationTarget", () => {
     });
 
     expect(target.href).toBe("/chat/main/release-notes-12345678");
-    expect(target.options).toEqual({ pathname: "/chat/main/release-notes-12345678" });
+    expect(target.options).toEqual({
+      pathname: "/chat/main/release-notes-12345678",
+      search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(row.key)}`,
+    });
   });
 
   it("treats another agent's cached global row as uncached", () => {

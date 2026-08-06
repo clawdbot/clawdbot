@@ -92,6 +92,61 @@ describe("dispatchReplyFromConfig", () => {
     expect(activeDuringOffRun).toBe(false);
   });
 
+  it("keeps block-owned commentary out of the standalone durable progress lane", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+    });
+    const onItemEvent = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onItemEvent?.({
+        itemId: "commentary-1",
+        kind: "preamble",
+        progressText: "Inspecting the dispatch path.",
+        suppressDurableProgress: true,
+      });
+      await opts?.onBlockReply?.({ text: "Inspecting the dispatch path." });
+      return { text: "Done." } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        suppressDefaultToolProgressMessages: true,
+        commentaryProgressEnabled: true,
+        progressPreambleEnabled: true,
+        commentaryPayloadsEnabled: true,
+        onItemEvent,
+      },
+    });
+
+    expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
+      itemId: "commentary-1",
+      kind: "preamble",
+      progressText: "Inspecting the dispatch path.",
+      suppressDurableProgress: true,
+    });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledExactlyOnceWith({
+      text: "Inspecting the dispatch path.",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
+  });
+
   it("forwards channel-owned group progress callbacks while source delivery is suppressed", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -372,6 +427,39 @@ describe("dispatchReplyFromConfig", () => {
     expect(commentaryEnabled).toBe(true);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps CLI preamble classification when quiet channel progress is hidden", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    const dispatcher = createDispatcher();
+    const onItemEvent = vi.fn();
+    let itemEventHandlerPresent = false;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      itemEventHandlerPresent = Boolean(opts?.onItemEvent);
+      await opts?.onItemEvent?.({ kind: "preamble", progressText: "Checking first" });
+      return { text: "Final answer" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onItemEvent, progressPreambleEnabled: true },
+    });
+
+    expect(itemEventHandlerPresent).toBe(true);
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer" });
   });
 
   it("suppresses direct native progress callbacks when send policy denies delivery", async () => {

@@ -36,6 +36,26 @@ function makeClient(
   };
 }
 
+describe("skills event scope guards", () => {
+  it("delivers skill invalidations only to read-capable operators", () => {
+    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+    const node = makeClient("node", "node", ["operator.read"]);
+    const read = makeClient("read", "operator", ["operator.read"]);
+    const write = makeClient("write", "operator", ["operator.write"]);
+    const admin = makeClient("admin", "operator", ["operator.admin"]);
+    const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("skills.changed", { reason: "remote-node" });
+
+    expect(pairing.socket.events).toEqual([]);
+    expect(node.socket.events).toEqual([]);
+    expect(read.socket.events).toEqual(["skills.changed"]);
+    expect(write.socket.events).toEqual(["skills.changed"]);
+    expect(admin.socket.events).toEqual(["skills.changed"]);
+  });
+});
+
 describe("board event scope guards", () => {
   it("delivers board events only to read-capable operators", () => {
     const pairing = makeClient("pairing", "operator", ["operator.pairing"]);

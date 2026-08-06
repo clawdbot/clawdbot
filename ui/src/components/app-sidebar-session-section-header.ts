@@ -4,14 +4,18 @@ import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
   content: TemplateResult;
+  disabledReason?: string;
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
   onContextMenu?: (event: MouseEvent) => void;
 }) {
   return html`
     <div
-      class="sidebar-recent-sessions__head sidebar-recent-sessions__head--draggable"
-      draggable="true"
+      class="sidebar-recent-sessions__head ${params.disabledReason
+        ? ""
+        : "sidebar-recent-sessions__head--draggable"}"
+      draggable=${params.disabledReason ? "false" : "true"}
+      title=${params.disabledReason ?? nothing}
       @mousedown=${(event: MouseEvent) => {
         const header = event.currentTarget as HTMLElement;
         header.toggleAttribute(
@@ -23,6 +27,10 @@ export function renderSidebarSessionSectionHeader(params: {
         (event.currentTarget as HTMLElement).removeAttribute("data-section-drag-blocked");
       }}
       @dragstart=${(event: DragEvent) => {
+        if (params.disabledReason) {
+          event.preventDefault();
+          return;
+        }
         const header = event.currentTarget as HTMLElement;
         const startedFromButton =
           Boolean((event.target as HTMLElement).closest("button")) ||

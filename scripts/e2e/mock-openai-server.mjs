@@ -145,6 +145,108 @@ function buildMockFunctionCall(name, args) {
   };
 }
 
+// Progress-draft proof: assistant text emitted BEFORE a tool call is tagged as
+// commentary, which channels render as the draft's status headline. Streaming
+// text and then a call in one response is the only way to exercise
+// headline-plus-tool-line composition without a live model.
+// The Responses API carries that tag as `phase` on the message item, and the
+// transport reads it straight off the item, so an untagged item produces no
+// preamble at all and the scenario silently proves nothing.
+function preambleThenToolCallEvents(preamble, name, args) {
+  const messageItemId = "msg_e2e_preamble";
+  const call = buildMockFunctionCall(name, args);
+  return [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: messageItemId,
+        role: "assistant",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    ...splitResponseText(preamble).map((delta) => ({
+      type: "response.output_text.delta",
+      item_id: messageItemId,
+      output_index: 0,
+      content_index: 0,
+      delta,
+    })),
+    {
+      type: "response.output_text.done",
+      item_id: messageItemId,
+      output_index: 0,
+      content_index: 0,
+      text: preamble,
+    },
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id: messageItemId,
+        role: "assistant",
+        status: "completed",
+        phase: "commentary",
+        content: [{ type: "output_text", text: preamble, annotations: [] }],
+      },
+    },
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "function_call",
+        id: call.itemId,
+        call_id: call.item.call_id,
+        name,
+        arguments: "",
+      },
+    },
+    { type: "response.function_call_arguments.delta", delta: call.serialized },
+    { type: "response.output_item.done", item: call.item },
+    {
+      type: "response.completed",
+      response: {
+        id: call.responseId,
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            id: messageItemId,
+            role: "assistant",
+            status: "completed",
+            phase: "commentary",
+            content: [{ type: "output_text", text: preamble, annotations: [] }],
+          },
+          call.item,
+        ],
+        usage: {
+          input_tokens: 64,
+          output_tokens: 24,
+          total_tokens: 88,
+          input_tokens_details: { cached_tokens: 0 },
+        },
+      },
+    },
+  ];
+}
+
+/** Two-turn draft scenario: preamble + shell call, then a final answer. */
+function progressDraftEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!allText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+    return null;
+  }
+  if (!collectFunctionCallOutputText(body)) {
+    if (!hasDeclaredTool(bodyText, "exec")) {
+      return null;
+    }
+    return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
+      command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"],
+    });
+  }
+  return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
+}
+
 function toolCallEvents(name, args) {
   const call = buildMockFunctionCall(name, args);
   return [
@@ -218,6 +320,64 @@ function writeChatCompletion(res, stream, text = successMarker) {
     choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
   });
+}
+
+/** Streams assistant content, then a tool call, in one chat-completions turn. */
+function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) {
+  const serialized = JSON.stringify(args);
+  const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
+  if (!stream) {
+    writeJson(res, 200, {
+      id: "chatcmpl_e2e",
+      object: "chat.completion",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: preamble,
+            tool_calls: [
+              { id: callId, type: "function", function: { name, arguments: serialized } },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 24, completion_tokens: 18, total_tokens: 42 },
+    });
+    return;
+  }
+  writeSse(res, [
+    {
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { role: "assistant", content: "" } }],
+    },
+    ...splitResponseText(preamble).map((delta) => ({
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { content: delta } }],
+    })),
+    {
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    },
+  ]);
 }
 
 function writeImageGeneration(res) {
@@ -400,6 +560,11 @@ const server = http.createServer((req, res) => {
         writeResponsesEvents(res, body.stream, codeModeEvents);
         return;
       }
+      const draftEvents = progressDraftEvents(body, bodyText);
+      if (draftEvents) {
+        writeResponsesEvents(res, body.stream, draftEvents);
+        return;
+      }
       const responseText = resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {
@@ -424,6 +589,29 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
+      // Progress-draft proof needs assistant content followed by a tool call in
+      // one streamed turn: the completions transport tags that leading text as
+      // commentary, which channels render as the draft status headline.
+      if (bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+        const messages = Array.isArray(body.messages) ? body.messages : [];
+        const toolTurnDone = messages.some((message) => message?.role === "tool");
+        if (!toolTurnDone) {
+          writeChatCompletionPreambleToolCall(
+            res,
+            body.stream !== false,
+            "Checking the workspace before answering.",
+            "exec",
+            { command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"] },
+          );
+          return;
+        }
+        // Hold the final answer so the turn outlives the progress-draft start
+        // gate. Without this the whole turn finishes in well under a second and
+        // no draft is created, which is correct behavior but proves nothing.
+        await delay(readPositiveIntEnv("MOCK_DRAFTPROOF_FINAL_DELAY_MS", 6000));
+        writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
+        return;
+      }
       const responseText = resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;

@@ -54,6 +54,7 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
 /** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
+  pluginRegistry?: PluginRegistry,
 ): GatewayMethodRegistry {
   const descriptors = inputs.map(normalizeDescriptor);
   const byName = new Map<string, GatewayMethodDescriptor>();
@@ -66,6 +67,7 @@ export function createGatewayMethodRegistry(
     byName.set(descriptor.name, descriptor);
   }
   return {
+    ...(pluginRegistry ? { pluginRegistry } : {}),
     getHandler: (name) => byName.get(name)?.handler,
     listMethods: () => descriptors.map((descriptor) => descriptor.name),
     listAdvertisedMethods: () =>

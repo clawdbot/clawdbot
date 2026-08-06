@@ -144,6 +144,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
+    toolOverrides: params.toolOverrides,
   });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);

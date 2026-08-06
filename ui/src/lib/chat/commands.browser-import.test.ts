@@ -32,6 +32,7 @@ describe("slash command browser import", () => {
       executeLocal: true,
       argOptions: undefined,
       tier: "essential",
+      source: "native",
     });
   });
 

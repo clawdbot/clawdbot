@@ -1,5 +1,5 @@
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
-import { registerAgentRunContext } from "../../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { log } from "../logger.js";

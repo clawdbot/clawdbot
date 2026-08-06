@@ -41,6 +41,28 @@ describe("bundled plugin public surface runtime", () => {
     ]);
   });
 
+  it.each(["my-ngc:nvidia", "../outside", "..\\outside", ".", ".."])(
+    "continues rejecting %s as an actual bundled plugin directory",
+    (dirName) => {
+      const rootDir = createTempDir();
+
+      expect(() =>
+        resolveBundledPluginSourcePublicSurfacePath({
+          sourceRoot: rootDir,
+          dirName,
+          artifactBasename: "provider-policy-api.js",
+        }),
+      ).toThrow(/must be a single directory/);
+      expect(() =>
+        resolveBundledPluginPublicSurfacePath({
+          rootDir,
+          dirName,
+          artifactBasename: "provider-policy-api.js",
+        }),
+      ).toThrow(/must be a single directory/);
+    },
+  );
+
   it("resolves source public surfaces from the shared extension list", () => {
     const sourceRoot = createTempDir();
     const modulePath = path.join(sourceRoot, "demo", "api.mts");

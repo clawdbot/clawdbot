@@ -199,7 +199,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     });
     listDescendantRunsForRequesterMock.mockReturnValue([
       {
-        startedAt: Date.now() + 60_000,
+        execution: { status: "running", startedAt: Date.now() + 60_000 },
       },
     ]);
     countActiveDescendantRunsMock.mockReturnValue(0);

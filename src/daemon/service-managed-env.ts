@@ -11,8 +11,17 @@ type ServiceEnvCommand = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 } | null;
 
-function normalizeServiceEnvKey(key: string): string | null {
+export function normalizeServiceEnvKey(key: string): string | null {
   return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
+}
+
+export function normalizeServiceEnvKeys(keys: Iterable<string>): Set<string> {
+  return new Set(
+    [...keys].flatMap((key) => {
+      const normalized = normalizeServiceEnvKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
 }
 
 export function hasInlineEnvironmentSource(
@@ -34,34 +43,17 @@ export function hasEnvironmentFileSource(
 }
 
 function parseManagedServiceEnvKeys(value: string | undefined): Set<string> {
-  const keys = new Set<string>();
-  for (const entry of value?.split(",") ?? []) {
-    const key = normalizeServiceEnvKey(entry.trim());
-    if (key) {
-      keys.add(key);
-    }
-  }
-  return keys;
+  return normalizeServiceEnvKeys(value?.split(",") ?? []);
 }
 
 export function formatManagedServiceEnvKeys(
   managedEnvironment: Record<string, string | undefined>,
   options?: { omitKeys?: Iterable<string> },
 ): string | undefined {
-  const omitKeys = new Set(
-    [...(options?.omitKeys ?? [])].flatMap((key) => {
-      const normalized = normalizeServiceEnvKey(key);
-      return normalized ? [normalized] : [];
-    }),
-  );
+  const omitKeys = normalizeServiceEnvKeys(options?.omitKeys ?? []);
   const keys = Object.keys(managedEnvironment)
-    .flatMap((key) => {
-      const normalized = normalizeServiceEnvKey(key);
-      if (!normalized || omitKeys.has(normalized)) {
-        return [];
-      }
-      return [normalized];
-    })
+    .map(normalizeServiceEnvKey)
+    .filter((key): key is string => Boolean(key && !omitKeys.has(key)))
     .toSorted();
   return keys.length > 0 ? keys.join(",") : undefined;
 }
@@ -84,12 +76,7 @@ function deleteManagedServiceEnvKeys(
   environment: Record<string, string | undefined>,
   keys: Iterable<string>,
 ): void {
-  const normalizedKeys = new Set(
-    [...keys].flatMap((key) => {
-      const normalized = normalizeServiceEnvKey(key);
-      return normalized ? [normalized] : [];
-    }),
-  );
+  const normalizedKeys = normalizeServiceEnvKeys(keys);
   if (normalizedKeys.size === 0) {
     return;
   }
@@ -140,13 +127,21 @@ export function collectInlineManagedServiceEnvKeys(
     return [];
   }
   const managedKeys = parseManagedServiceEnvKeys(command.environment[MANAGED_SERVICE_ENV_KEYS_VAR]);
-  for (const key of expectedManagedKeys ?? []) {
-    const normalized = normalizeServiceEnvKey(key);
-    if (normalized) {
-      managedKeys.add(normalized);
-    }
+  for (const key of normalizeServiceEnvKeys(expectedManagedKeys ?? [])) {
+    managedKeys.add(key);
   }
-  if (managedKeys.size === 0) {
+  return collectInlineServiceEnvKeys(command, managedKeys);
+}
+
+export function collectInlineServiceEnvKeys(
+  command: ServiceEnvCommand,
+  expectedKeys: Iterable<string>,
+): string[] {
+  if (!command?.environment) {
+    return [];
+  }
+  const normalizedKeys = normalizeServiceEnvKeys(expectedKeys);
+  if (normalizedKeys.size === 0) {
     return [];
   }
   const inlineKeys: string[] = [];
@@ -155,7 +150,7 @@ export function collectInlineManagedServiceEnvKeys(
       continue;
     }
     const normalized = normalizeServiceEnvKey(rawKey);
-    if (!normalized || !managedKeys.has(normalized)) {
+    if (!normalized || !normalizedKeys.has(normalized)) {
       continue;
     }
     if (normalized === MANAGED_SERVICE_ENV_KEYS_VAR) {

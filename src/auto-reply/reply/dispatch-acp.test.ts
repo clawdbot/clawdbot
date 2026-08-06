@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -9,6 +10,7 @@ import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
+import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
   resolveAgentTurnAttachments,
@@ -50,8 +52,13 @@ const policyMocks = vi.hoisted(() => ({
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn<
-    (_params: unknown) => Promise<{ ok: true; messageId: string } | { ok: false; error: string }>
-  >(async () => ({ ok: true, messageId: "mock" })),
+    (
+      _params: unknown,
+    ) => Promise<
+      | { ok: true; delivered: boolean; messageId?: string }
+      | { ok: false; delivered: boolean; error: string }
+    >
+  >(async () => ({ ok: true, delivered: true, messageId: "mock" })),
 }));
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -96,6 +103,13 @@ const mediaUnderstandingMocks = vi.hoisted(() => ({
 }));
 
 const acpAttachmentBuffers = vi.hoisted(() => new Map<string, Buffer>());
+const ACP_PNG_IMAGE_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+  "base64",
+);
+const ACP_JPEG_IMAGE_BYTES = Buffer.from("ffd8ffe000104a46494600010100000100010000ffd9", "hex");
+const ACP_PDF_BYTES = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n");
+const ACP_ZIP_BYTES = Buffer.from("504b0506000000000000000000000000000000000000", "hex");
 
 const diagnosticMocks = vi.hoisted(() => ({
   markDiagnosticSessionProgress: vi.fn(),
@@ -171,48 +185,51 @@ vi.mock("../../tts/status-config.js", () => ({
   }),
 }));
 
-vi.mock("./dispatch-acp-media.runtime.js", () => ({
-  applyMediaUnderstanding: (params: unknown) =>
-    mediaUnderstandingMocks.applyMediaUnderstanding(params),
-  isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
-    error instanceof Error && error.name === "MediaUnderstandingSkipError",
-  normalizeAttachments: (ctx: { media?: Array<{ path?: string; contentType?: string }> }) =>
-    ctx.media?.[0]?.path
-      ? [
-          {
-            path: ctx.media[0].path,
-            mime: ctx.media[0].contentType,
-            index: 0,
-          },
-        ]
-      : [],
-  resolveMediaAttachmentLocalRoots: (params: {
-    cfg: { channels?: Record<string, { attachmentRoots?: string[] } | undefined> };
-    ctx: { Provider?: string; Surface?: string };
-  }) => {
-    const channel = params.ctx.Provider ?? params.ctx.Surface ?? "";
-    return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
-  },
-  MediaAttachmentCache: class {
-    constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
-    async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
-      const attachment = this.attachments.find((item) => item.index === attachmentIndex);
-      const pathLocal = attachment?.path;
-      const buffer = pathLocal ? acpAttachmentBuffers.get(pathLocal) : undefined;
-      if (buffer) {
-        return {
-          buffer,
-          mime: "image/png",
-          fileName: pathLocal,
-          size: buffer.length,
-        };
+vi.mock("./dispatch-acp-media.runtime.js", async () => {
+  const attachmentNormalization = await vi.importActual<
+    typeof import("../../media-understanding/attachments.normalize.js")
+  >("../../media-understanding/attachments.normalize.js");
+  return {
+    applyMediaUnderstanding: (params: unknown) =>
+      mediaUnderstandingMocks.applyMediaUnderstanding(params),
+    isImageAttachment: attachmentNormalization.isImageAttachment,
+    isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
+      error instanceof Error && error.name === "MediaUnderstandingSkipError",
+    normalizeAttachments: attachmentNormalization.normalizeAttachments,
+    resolveMediaAttachmentLocalRoots: (params: {
+      cfg: { channels?: Record<string, { attachmentRoots?: string[] } | undefined> };
+      ctx: { Provider?: string; Surface?: string };
+    }) => {
+      const channel = params.ctx.Provider ?? params.ctx.Surface ?? "";
+      return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
+    },
+    MediaAttachmentCache: class {
+      constructor(
+        private readonly attachments: Array<{ path?: string; mime?: string; index: number }>,
+      ) {}
+      async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
+        const attachment = this.attachments.find((item) => item.index === attachmentIndex);
+        const pathLocal = attachment?.path;
+        const buffer = pathLocal ? acpAttachmentBuffers.get(pathLocal) : undefined;
+        if (buffer) {
+          return {
+            buffer,
+            mime: await detectMime({
+              buffer,
+              filePath: pathLocal,
+              headerMime: attachment?.mime,
+            }),
+            fileName: pathLocal,
+            size: buffer.length,
+          };
+        }
+        const error = new Error("outside allowed roots");
+        error.name = "MediaUnderstandingSkipError";
+        throw error;
       }
-      const error = new Error("outside allowed roots");
-      error.name = "MediaUnderstandingSkipError";
-      throw error;
-    }
-  },
-}));
+    },
+  };
+});
 
 vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
@@ -485,7 +502,11 @@ describe("tryDispatchAcpReply", () => {
     policyMocks.resolveAcpAgentPolicyError.mockReset();
     policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
     routeMocks.routeReply.mockReset();
-    routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    routeMocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "mock",
+    });
     channelPluginMocks.getChannelPlugin.mockClear();
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
@@ -601,7 +622,11 @@ describe("tryDispatchAcpReply", () => {
   it("persists ACP transcript when routed delivery fails", async () => {
     setReadyAcpResolution();
     mockRoutedTextTurn("hello");
-    routeMocks.routeReply.mockResolvedValue({ ok: false, error: "missing channel adapter" });
+    routeMocks.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "missing channel adapter",
+    });
 
     await runDispatch({
       bodyForAgent: "reply",
@@ -733,7 +758,11 @@ describe("tryDispatchAcpReply", () => {
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");
-    routeMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "tool-msg-1" });
+    routeMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      delivered: true,
+      messageId: "tool-msg-1",
+    });
 
     const { dispatcher } = createDispatcher();
     await runDispatch({
@@ -754,8 +783,12 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-2");
     routeMocks.routeReply
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2" })
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2-fallback" });
+      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "tool-msg-2" })
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: true,
+        messageId: "tool-msg-2-fallback",
+      });
     messageActionMocks.runMessageAction.mockRejectedValueOnce(new Error("edit unsupported"));
 
     const { dispatcher } = createDispatcher();
@@ -1190,33 +1223,163 @@ describe("tryDispatchAcpReply", () => {
       ],
     });
 
-    expect(resolveRecentInboundHistoryImages({ ctx })).toEqual([
+    expect(resolveRecentInboundHistoryImages({ ctx, isImageAttachment })).toEqual([
       {
         path: "/tmp/recent-2.png",
         contentType: "image/png",
+        kind: "image",
         sender: "Recent 2",
+        sentAtMs: 1_699_999_997_000,
+        messagePosition: 6,
+        messageCount: 9,
         messageId: "recent-2",
       },
       {
         path: "/tmp/recent-3.png",
         contentType: "image/png",
+        kind: "image",
         sender: "Recent 3",
+        sentAtMs: 1_699_999_998_000,
+        messagePosition: 7,
+        messageCount: 9,
         messageId: "recent-3",
       },
       {
         path: "/tmp/recent-4.png",
         contentType: "image/png",
+        kind: "image",
         sender: "Recent 4",
+        sentAtMs: 1_699_999_999_000,
+        messagePosition: 8,
+        messageCount: 9,
         messageId: "recent-4",
       },
       {
         path: "C:\\Users\\Alice\\Pictures\\recent.png",
         contentType: "image/png",
+        kind: "image",
         sender: "Windows",
+        sentAtMs: 1_699_999_999_500,
+        messagePosition: 9,
+        messageCount: 9,
         messageId: "windows",
       },
     ]);
   });
+
+  it("preserves authoritative history image kinds, order, and per-message deduplication", () => {
+    const now = 1_700_000_000_000;
+    const imagePath = "/tmp/openclaw-history-upload.bin";
+    const stickerPath = "/tmp/openclaw-history-sticker";
+    const ctx = buildTestCtx({
+      Timestamp: now,
+      InboundHistory: [
+        {
+          sender: "@alice",
+          body: "<media:image>",
+          timestamp: now - 2_000,
+          messageId: "image-message",
+          media: [
+            { path: imagePath, contentType: "application/octet-stream", kind: "image" },
+            { path: imagePath, contentType: "application/octet-stream", kind: "image" },
+          ],
+        },
+        {
+          sender: "@bob",
+          body: "<media:sticker>",
+          timestamp: now - 1_000,
+          messageId: "sticker-message",
+          media: [{ path: stickerPath, kind: "sticker" }],
+        },
+        {
+          sender: "@eve",
+          body: "<media:document>",
+          timestamp: now,
+          messageId: "document-message",
+          media: [{ path: "/tmp/openclaw-history-document.bin", kind: "document" }],
+        },
+      ],
+    });
+
+    expect(resolveRecentInboundHistoryImages({ ctx, isImageAttachment })).toEqual([
+      {
+        path: imagePath,
+        contentType: "application/octet-stream",
+        kind: "image",
+        sender: "@alice",
+        sentAtMs: now - 2_000,
+        messagePosition: 1,
+        messageCount: 3,
+        messageId: "image-message",
+      },
+      {
+        path: stickerPath,
+        kind: "sticker",
+        sender: "@bob",
+        sentAtMs: now - 1_000,
+        messagePosition: 2,
+        messageCount: 3,
+        messageId: "sticker-message",
+      },
+    ]);
+  });
+
+  it.each([undefined, "application/pdf", "image/png"] as const)(
+    "never reuses a historical document with an image-looking path and MIME %s",
+    (contentType) => {
+      const now = 1_700_000_000_000;
+      const ctx = buildTestCtx({
+        Timestamp: now,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:document>",
+            timestamp: now,
+            media: [{ path: "/tmp/openclaw-history-document.png", contentType, kind: "document" }],
+          },
+        ],
+      });
+
+      expect(resolveRecentInboundHistoryImages({ ctx, isImageAttachment })).toEqual([]);
+    },
+  );
+
+  it("never reuses filename-only SVG history as a raster image", () => {
+    const now = 1_700_000_000_000;
+    const ctx = buildTestCtx({
+      Timestamp: now,
+      InboundHistory: [
+        {
+          sender: "@alice",
+          body: "<media:document>",
+          timestamp: now,
+          media: [{ path: "/tmp/openclaw-history-diagram.svg" }],
+        },
+      ],
+    });
+
+    expect(resolveRecentInboundHistoryImages({ ctx, isImageAttachment })).toEqual([]);
+  });
+
+  it.each(["application/pdf", "application/zip", "text/plain"] as const)(
+    "never reuses unknown-kind image-looking history with concrete MIME %s",
+    (contentType) => {
+      const now = 1_700_000_000_000;
+      const ctx = buildTestCtx({
+        Timestamp: now,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:document>",
+            timestamp: now,
+            media: [{ path: "/tmp/openclaw-history-report.png", contentType, kind: "unknown" }],
+          },
+        ],
+      });
+
+      expect(resolveRecentInboundHistoryImages({ ctx, isImageAttachment })).toEqual([]);
+    },
+  );
 
   it("adds recent history image context without exposing paths", () => {
     const text = appendRecentHistoryImageContext({
@@ -1226,6 +1389,9 @@ describe("tryDispatchAcpReply", () => {
           path: "/tmp/secret.png",
           contentType: "image/png",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 2,
+          messageCount: 5,
           messageId: "msg-1",
         },
       ],
@@ -1233,6 +1399,8 @@ describe("tryDispatchAcpReply", () => {
 
     expect(text).toContain("what is this?");
     expect(text).toContain("Recent image 1 from @alice, message msg-1");
+    expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
+    expect(text).toContain("message 2 of 5 in available history");
     expect(text).not.toContain("/tmp/secret.png");
   });
 
@@ -1272,6 +1440,7 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
+          isImageAttachment,
           normalizeAttachments: () => [],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
@@ -1287,7 +1456,11 @@ describe("tryDispatchAcpReply", () => {
         {
           path: imagePath,
           contentType: "image/png",
+          kind: "image",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
           messageId: "msg-1",
         },
       ]);
@@ -1314,6 +1487,7 @@ describe("tryDispatchAcpReply", () => {
         } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
         isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
           false,
+        isImageAttachment,
         normalizeAttachments,
         resolveMediaAttachmentLocalRoots: () => [],
       },
@@ -1359,6 +1533,7 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
+          isImageAttachment,
           normalizeAttachments: (ctx) => [
             { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
           ],
@@ -1414,6 +1589,7 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
+          isImageAttachment,
           normalizeAttachments: (ctx) => [
             { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 1 },
           ],
@@ -1467,6 +1643,7 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
+          isImageAttachment,
           normalizeAttachments: (ctx) => [
             { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
           ],
@@ -1518,6 +1695,7 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
+          isImageAttachment,
           normalizeAttachments: (ctx) => [
             { url: ctx.media?.[0]?.url, mime: ctx.media?.[0]?.contentType, index: 0 },
           ],
@@ -1535,7 +1713,11 @@ describe("tryDispatchAcpReply", () => {
         {
           path: historyPath,
           contentType: "image/png",
+          kind: "image",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
           messageId: "msg-history",
         },
       ]);
@@ -1568,6 +1750,370 @@ describe("tryDispatchAcpReply", () => {
       {
         mediaType: "image/png",
         data: image.data,
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "generic Telegram image bytes under a .bin path",
+      imagePath: "/tmp/openclaw-acp-image-upload.bin",
+      contentType: "application/octet-stream",
+      kind: "image" as const,
+      imageBytes: ACP_PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
+    {
+      name: "an extensionless image without transport MIME",
+      imagePath: "/tmp/openclaw-acp-image-upload",
+      contentType: undefined,
+      kind: "image" as const,
+      imageBytes: ACP_JPEG_IMAGE_BYTES,
+      expectedMime: "image/jpeg",
+    },
+    {
+      name: "a sticker with generic transport MIME",
+      imagePath: "/tmp/openclaw-acp-sticker.bin",
+      contentType: "application/octet-stream",
+      kind: "sticker" as const,
+      imageBytes: ACP_PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
+  ])("forwards $name into the ACP runtime using the verified byte MIME", async (testCase) => {
+    setReadyAcpResolution();
+    acpAttachmentBuffers.set(testCase.imagePath, testCase.imageBytes);
+
+    await runDispatch({
+      bodyForAgent: "describe image",
+      ctxOverrides: {
+        media: [
+          {
+            path: testCase.imagePath,
+            contentType: testCase.contentType,
+            kind: testCase.kind,
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: testCase.expectedMime,
+        data: testCase.imageBytes.toString("base64"),
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "valid PNG bytes without MIME", contentType: undefined, bytes: ACP_PNG_IMAGE_BYTES },
+    {
+      name: "valid PNG bytes with PDF MIME",
+      contentType: "application/pdf",
+      bytes: ACP_PNG_IMAGE_BYTES,
+    },
+    {
+      name: "valid PNG bytes with contradictory image MIME",
+      contentType: "image/png",
+      bytes: ACP_PNG_IMAGE_BYTES,
+    },
+    {
+      name: "PDF bytes with an image-looking filename",
+      contentType: undefined,
+      bytes: ACP_PDF_BYTES,
+    },
+    {
+      name: "ZIP bytes with an image-looking filename",
+      contentType: "application/pdf",
+      bytes: ACP_ZIP_BYTES,
+    },
+  ])("never forwards $name or substitutes unrelated history for a document", async (testCase) => {
+    setReadyAcpResolution();
+    const documentPath = "/tmp/openclaw-acp-authoritative-document.png";
+    const historyPath = "/tmp/openclaw-acp-unrelated-history.png";
+    acpAttachmentBuffers.set(documentPath, testCase.bytes);
+    acpAttachmentBuffers.set(historyPath, ACP_PNG_IMAGE_BYTES);
+
+    await runDispatch({
+      bodyForAgent: "summarize this document",
+      ctxOverrides: {
+        Timestamp: 1_700_000_000_000,
+        media: [{ path: documentPath, contentType: testCase.contentType, kind: "document" }],
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toBeUndefined();
+    expect(runTurnCall().text).not.toContain("Recent image");
+  });
+
+  it.each(["application/pdf", "application/zip", "text/plain"] as const)(
+    "never forwards unknown-kind PNG bytes with MIME %s or substitutes history",
+    async (contentType) => {
+      setReadyAcpResolution();
+      const documentPath = "/tmp/openclaw-acp-unknown-document.png";
+      const historyPath = "/tmp/openclaw-acp-unrelated-history.png";
+      acpAttachmentBuffers.set(documentPath, ACP_PNG_IMAGE_BYTES);
+      acpAttachmentBuffers.set(historyPath, ACP_PNG_IMAGE_BYTES);
+
+      await runDispatch({
+        bodyForAgent: "summarize this upload",
+        ctxOverrides: {
+          Timestamp: 1_700_000_000_000,
+          media: [{ path: documentPath, contentType, kind: "unknown" }],
+          InboundHistory: [
+            {
+              sender: "@alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        },
+      });
+
+      expect(runTurnCall().attachments).toBeUndefined();
+      expect(runTurnCall().text).not.toContain("Recent image");
+    },
+  );
+
+  it("never forwards filename-only SVG history into an ACP runtime turn", async () => {
+    setReadyAcpResolution();
+    const svgPath = "/tmp/openclaw-acp-history-diagram.svg";
+    acpAttachmentBuffers.set(svgPath, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+
+    await runDispatch({
+      bodyForAgent: "describe the recent attachment",
+      ctxOverrides: {
+        Timestamp: 1_700_000_000_000,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:document>",
+            timestamp: 1_700_000_000_000,
+            media: [{ path: svgPath }],
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toBeUndefined();
+    expect(runTurnCall().text).not.toContain("Recent image");
+  });
+
+  it.each([
+    { name: "PDF", bytes: ACP_PDF_BYTES },
+    { name: "ZIP", bytes: ACP_ZIP_BYTES },
+  ])(
+    "never forwards $name bytes with a spoofed image kind, MIME, and filename",
+    async (testCase) => {
+      setReadyAcpResolution();
+      const imagePath = `/tmp/openclaw-acp-spoofed-${testCase.name.toLowerCase()}.png`;
+      acpAttachmentBuffers.set(imagePath, testCase.bytes);
+
+      await runDispatch({
+        bodyForAgent: "describe attachment",
+        ctxOverrides: {
+          media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
+        },
+      });
+
+      expect(runTurnCall().attachments).toBeUndefined();
+    },
+  );
+
+  it("falls back to history when an authoritative current image contains document bytes", async () => {
+    setReadyAcpResolution();
+    const currentPath = "/tmp/openclaw-acp-current-spoofed.bin";
+    const historyPath = "/tmp/openclaw-acp-history-valid.bin";
+    acpAttachmentBuffers.set(currentPath, ACP_PDF_BYTES);
+    acpAttachmentBuffers.set(historyPath, ACP_PNG_IMAGE_BYTES);
+
+    await runDispatch({
+      bodyForAgent: "describe the recent image",
+      ctxOverrides: {
+        Timestamp: 1_700_000_000_000,
+        media: [{ path: currentPath, contentType: "image/png", kind: "image" }],
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: ACP_PNG_IMAGE_BYTES.toString("base64"),
+      },
+    ]);
+  });
+
+  it("does not substitute history for an authoritative current document", async () => {
+    setReadyAcpResolution();
+    const documentPath = "/tmp/openclaw-acp-current-document.bin";
+    const historyPath = "/tmp/openclaw-acp-history-image.png";
+    acpAttachmentBuffers.set(documentPath, ACP_PDF_BYTES);
+    acpAttachmentBuffers.set(historyPath, ACP_PNG_IMAGE_BYTES);
+
+    await runDispatch({
+      bodyForAgent: "describe this document",
+      ctxOverrides: {
+        Timestamp: 1_700_000_000_000,
+        media: [{ path: documentPath, contentType: "application/pdf", kind: "document" }],
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "a historical Telegram .bin image with generic MIME",
+      imagePath: "/tmp/openclaw-acp-history-upload.bin",
+      contentType: "application/octet-stream",
+      kind: "image" as const,
+      imageBytes: ACP_PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
+    {
+      name: "an extensionless historical image without MIME",
+      imagePath: "/tmp/openclaw-acp-history-upload",
+      contentType: undefined,
+      kind: "image" as const,
+      imageBytes: ACP_JPEG_IMAGE_BYTES,
+      expectedMime: "image/jpeg",
+    },
+    {
+      name: "a historical sticker with generic MIME",
+      imagePath: "/tmp/openclaw-acp-history-sticker.bin",
+      contentType: "application/octet-stream",
+      kind: "sticker" as const,
+      imageBytes: ACP_PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
+  ])("forwards $name into the ACP runtime using the verified byte MIME", async (testCase) => {
+    setReadyAcpResolution();
+    acpAttachmentBuffers.set(testCase.imagePath, testCase.imageBytes);
+
+    await runDispatch({
+      bodyForAgent: "describe the recent attachment",
+      ctxOverrides: {
+        Timestamp: 1_700_000_000_000,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            messageId: "history-message",
+            media: [
+              {
+                path: testCase.imagePath,
+                contentType: testCase.contentType,
+                kind: testCase.kind,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: testCase.expectedMime,
+        data: testCase.imageBytes.toString("base64"),
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "PDF", bytes: ACP_PDF_BYTES },
+    { name: "ZIP", bytes: ACP_ZIP_BYTES },
+  ])("does not forward historical $name bytes disguised as image media", async (testCase) => {
+    setReadyAcpResolution();
+    const imagePath = `/tmp/openclaw-acp-history-spoofed-${testCase.name.toLowerCase()}.png`;
+    acpAttachmentBuffers.set(imagePath, testCase.bytes);
+
+    await runDispatch({
+      bodyForAgent: "describe the recent attachment",
+      ctxOverrides: {
+        Timestamp: 1_700_000_000_000,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toBeUndefined();
+  });
+
+  it("annotates recent history images with sent time and available history position", async () => {
+    setReadyAcpResolution();
+    const historyPath = "/tmp/openclaw-history-metadata.png";
+    const historyImage = Buffer.from("history-image");
+    acpAttachmentBuffers.set(historyPath, historyImage);
+
+    await runDispatch({
+      bodyForAgent: "describe current state",
+      ctxOverrides: {
+        Timestamp: 1_700_000_060_000,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "bug report",
+            timestamp: 1_699_999_980_000,
+            messageId: "msg-before",
+          },
+          {
+            sender: "@bob",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            messageId: "msg-history",
+            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+          },
+          {
+            sender: "@alice",
+            body: "fixed after refresh",
+            timestamp: 1_700_000_060_000,
+            messageId: "msg-after",
+          },
+        ],
+      },
+    });
+
+    const text = String(runTurnCall().text);
+    expect(text).toContain("describe current state");
+    expect(text).toContain("Recent image 1 from @bob, message msg-history");
+    expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
+    expect(text).toContain("message 2 of 3 in available history");
+    expect(text).not.toContain(historyPath);
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: historyImage.toString("base64"),
       },
     ]);
   });

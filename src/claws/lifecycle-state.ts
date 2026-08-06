@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers, unsetConfiguredMcpServer } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

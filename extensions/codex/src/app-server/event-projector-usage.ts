@@ -1,5 +1,5 @@
 import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readNonNegativeInteger, readNumber } from "./event-projector-values.js";
+import { readNonNegativeInteger, readNumber, readString } from "./event-projector-values.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
 function readTokenCount(record: JsonObject, key: string): number | undefined {
@@ -109,4 +109,29 @@ export function normalizeCodexResponseTokenUsage(
       totalTokens,
     },
   };
+}
+
+export class CodexResponseCompletionProjection {
+  // Replayed notifications keep one upstream response equal to one model iteration.
+  private readonly responseIds = new Set<string>();
+  usage: ReturnType<typeof normalizeUsage>;
+
+  get modelIterations(): number {
+    return this.responseIds.size;
+  }
+
+  clear(): void {
+    this.usage = undefined;
+  }
+
+  record(params: JsonObject): void {
+    const responseId = readString(params, "responseId");
+    if (responseId) {
+      this.responseIds.add(responseId);
+    }
+    const usage = isJsonObject(params.usage) ? params.usage : undefined;
+    // Every provider completion replaces the prior response snapshot. A final
+    // response with missing or malformed usage must leave freshness unknown.
+    this.usage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
+  }
 }

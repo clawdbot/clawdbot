@@ -62,21 +62,6 @@ scenario through qa-channel, decodes the emitted protobuf spans, and verifies
 the exported trace names and privacy contract. It does not require Opik,
 Langfuse, or external collector credentials.
 
-## Matrix live profiles
-
-`pnpm openclaw qa matrix` defaults to the full `all` profile. Use explicit
-profiles for faster CI/release proof:
-
-```bash
-pnpm openclaw qa matrix --profile release
-```
-
-- `fast` and `release`: focused release-critical scenarios.
-- `transport`: transport and routing coverage.
-- `all`: the full Matrix profile.
-- `QA-Lab - All Lanes` fans manual `all` runs across the transport, media, and
-  E2EE profiles. Release checks use the focused reusable Matrix job.
-
 ## QA credentials and 1Password
 
 - Use `op` only inside `tmux` for QA secret lookup in this repo.

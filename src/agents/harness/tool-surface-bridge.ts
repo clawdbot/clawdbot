@@ -1,14 +1,10 @@
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
-import { getActiveAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
-  applyCodeModeCatalog,
   createCodeModeTools,
-  isCodeModeEngagedForModel,
-  resolveCodeModeConfig,
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
@@ -17,13 +13,9 @@ import {
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
-import { resolveAgentToolSearchRuntimeConfig } from "../tool-search-runtime-config.js";
 import {
-  applyToolSchemaDirectoryCatalog,
-  applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
-  resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -31,6 +23,7 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../tool-search.js";
+import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
 const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
@@ -78,27 +71,27 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   sessionKey?: string;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
+  skillWorkshopProposalOnly?: boolean;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
   const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
-  const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
-  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+  const {
+    codeModeControlsEnabled,
+    toolSearchControlsEnabled,
+    toolSearchConfig,
+    toolSearchRuntimeConfig,
+  } = resolveAgentToolSurfacePlan({
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     forceDirectMessageTool,
+    model: params.model,
+    toolsEnabled: params.modelToolsEnabled,
+    disableTools: params.disableTools,
+    isRawModelRun: params.isRawModelRun === true,
+    skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+    toolsAllow: params.toolsAllow,
   });
-  const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
-  const toolsAvailable =
-    params.modelToolsEnabled &&
-    params.disableTools !== true &&
-    params.isRawModelRun !== true &&
-    params.toolsAllow?.length !== 0;
-  const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
-  const codeModeControlsEnabled =
-    toolsAvailable && !ringZeroToolRun && isCodeModeEngagedForModel(codeModeConfig, params.model);
-  const toolSearchControlsEnabled =
-    toolsAvailable && !ringZeroToolRun && !codeModeControlsEnabled && toolSearchConfig.enabled;
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
   const runtimeToolAllowlist =
@@ -159,44 +152,22 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           executeTool: params.executeTool,
         })
       : [];
-    // When the message tool is the only reply path it must stay directly visible
-    // in every search mode; a hidden delivery tool can leave the run mute.
-    const requiredDirectToolNames = forceDirectMessageTool ? ["message"] : [];
-    const compacted = codeModeControlsEnabled
-      ? applyCodeModeCatalog({
-          tools: [...codeModeTools, ...effectiveTools],
-          config: params.config,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          runId: params.runId,
-          catalogRef: toolSearchCatalogRef,
-          toolHookContext: options.hookContext,
-          directToolNames: requiredDirectToolNames,
-        })
-      : toolSearchConfig.mode === "directory"
-        ? applyToolSchemaDirectoryCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: options.hookContext,
-            directToolNames: requiredDirectToolNames,
-          })
-        : applyToolSearchCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: options.hookContext,
-            directToolNames: requiredDirectToolNames,
-          });
+    const compacted = applyAgentToolSurfaceCatalog({
+      // `codeModeTools` is empty unless code-mode controls are on, so this stays
+      // exactly `effectiveTools` for the tool-search branches.
+      tools: [...codeModeTools, ...effectiveTools],
+      config: params.config,
+      toolSearchRuntimeConfig,
+      codeModeControlsEnabled,
+      toolSearchConfig,
+      forceDirectMessageTool,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      runId: params.runId,
+      catalogRef: toolSearchCatalogRef,
+      toolHookContext: options.hookContext,
+    });
     const projectedCompactedTools = options.localModelLeanApplied
       ? compacted.tools
       : filterLocalModelLeanTools({

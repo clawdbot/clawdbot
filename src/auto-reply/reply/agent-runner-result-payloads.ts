@@ -29,7 +29,7 @@ import {
 } from "./agent-runner-core.js";
 import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
 import { signalTypingIfNeeded } from "./agent-runner-helpers.js";
-import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { buildReplyPayloads, loadReplyPayloadsDedupeRuntime } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
   hasSessionRelatedCronJobs,
@@ -97,6 +97,15 @@ export async function prepareReplyAgentPayloads(state: {
     verboseEnabled,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
+  const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
+  if (deliberateSilentTerminalReply) {
+    opts?.onDeliberateSilentTerminalReply?.();
+  }
+  const pendingContinuation =
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  if (pendingContinuation) {
+    opts?.onPendingContinuation?.();
+  }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
     blockReplyPipeline,
@@ -140,9 +149,8 @@ export async function prepareReplyAgentPayloads(state: {
         isMessageToolOnly:
           (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
           "message_tool_only",
-        hasPendingContinuation:
-          runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+        hasPendingContinuation: pendingContinuation,
+        hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
         sessionCtx,
         cfg,
@@ -175,8 +183,28 @@ export async function prepareReplyAgentPayloads(state: {
     });
     return recovery.kind === "diagnostic" ? recovery.payload : undefined;
   };
-  if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
-    await opts.onObservedReplyDelivery?.();
+  // Structured source-reply delivery evidence is the canonical owner for current
+  // runtimes. The route matcher remains only for legacy results that recorded
+  // successful target/text/media aggregates before structured receipts existed.
+  // It still keeps unrelated-target tool sends from counting as the source reply.
+  const sourceRoutedMessagingToolDelivery =
+    completedSourceReplyDelivery ||
+    ((runResult.messagingToolSentTargets?.length ?? 0) > 0 &&
+      (await loadReplyPayloadsDedupeRuntime()).hasSourceRoutedMessagingToolDelivery({
+        config: cfg,
+        messageProvider: followupRun.run.messageProvider,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        originatingTo: resolveOriginMessageTo({
+          originatingTo: sessionCtx.OriginatingTo,
+          to: sessionCtx.To,
+        }),
+        originatingThreadId: replyRouteThreadId,
+        accountId: sessionCtx.AccountId,
+      }));
+  if (sourceRoutedMessagingToolDelivery) {
+    await opts?.onObservedReplyDelivery?.();
   }
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   // A terminal fallback is built separately after normal payload filtering.

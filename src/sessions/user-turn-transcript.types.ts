@@ -12,7 +12,17 @@ type UserTurnSessionEntry = SessionEntry;
 
 export type PersistedUserTurnMediaInput = Pick<
   MediaFactInput,
-  "contentType" | "hydrationSuppressed" | "messageId" | "path" | "transcribed" | "url"
+  | "contentType"
+  | "durationMs"
+  | "fileName"
+  | "height"
+  | "hydrationSuppressed"
+  | "messageId"
+  | "path"
+  | "sizeBytes"
+  | "transcribed"
+  | "url"
+  | "width"
 > & {
   kind?: string | null;
   workspaceDir?: string | null;
@@ -134,6 +144,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  /** Replaces generated current-turn text before runtime persistence/provider submission. */
+  replaceTextBeforePersistence?: (text: string) => void;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;

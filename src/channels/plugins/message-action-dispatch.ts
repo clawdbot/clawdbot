@@ -29,7 +29,10 @@ const BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES: ReadonlySet<string> = new Set([
 const BUNDLED_PROVIDER_READ_GATE_ACTIONS: ReadonlyMap<
   string,
   ReadonlySet<ChannelMessageActionName>
-> = new Map([["telegram", new Set<ChannelMessageActionName>(["react", "edit", "delete"])]]);
+> = new Map([
+  ["mattermost", new Set<ChannelMessageActionName>(["read"])],
+  ["telegram", new Set<ChannelMessageActionName>(["react", "edit", "delete"])],
+]);
 
 declare const serverOwnedConversationReadOrigin: unique symbol;
 

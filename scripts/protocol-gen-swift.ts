@@ -25,6 +25,7 @@ type JsonSchema = {
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
+const check = process.argv.includes("--check");
 const outPaths = [
   path.join(
     repoRoot,
@@ -36,6 +37,20 @@ const outPaths = [
     "GatewayModels.swift",
   ),
 ];
+const { writeGeneratedOutput } = (await import(
+  new URL("./lib/generated-output-utils.mjs", import.meta.url).href
+)) as {
+  writeGeneratedOutput: (params: {
+    repoRoot: string;
+    outputPath: string;
+    next: string;
+    check?: boolean;
+  }) => {
+    changed: boolean;
+    wrote: boolean;
+    outputPath: string;
+  };
+};
 
 const STRICT_LITERAL_STRUCTS = new Set([
   "PluginsSessionActionSuccessResult",
@@ -99,6 +114,9 @@ function safeName(name: string) {
 // Canonical initializer labels must match stored properties; compatibility initializers
 // declare legacy labels separately.
 function swiftStoredPropertyName(structName: string, key: string): string {
+  if (structName === "WizardStartParams" && key === "installDaemon") {
+    return "installDaemon";
+  }
   if (structName === "ChatSendParams" && key === "fastMode") {
     return "fastmodevalue";
   }
@@ -827,8 +845,25 @@ async function generate() {
   const content = parts.join("\n");
   for (const outPath of outPaths) {
     await fs.mkdir(path.dirname(outPath), { recursive: true });
-    await fs.writeFile(outPath, content);
-    console.log(`wrote ${outPath}`);
+    const result = writeGeneratedOutput({
+      repoRoot,
+      outputPath: path.relative(repoRoot, outPath),
+      next: content,
+      check,
+    });
+    const displayPath = path.relative(repoRoot, result.outputPath);
+    if (check && result.changed) {
+      console.error(
+        `[protocol-gen-swift] stale generated output at ${displayPath}; run "pnpm protocol:gen:swift" and commit the result`,
+      );
+      process.exitCode = 1;
+    } else if (!check) {
+      console.log(
+        result.wrote
+          ? `[protocol-gen-swift] wrote ${displayPath}`
+          : `[protocol-gen-swift] unchanged ${displayPath}`,
+      );
+    }
   }
 }
 

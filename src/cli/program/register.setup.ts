@@ -20,6 +20,7 @@ import {
   registerOnboardAuthOptions,
   resolveInstallDaemonFlag,
   resolveTailscaleResetOnExitFlag,
+  validateOnboardAuthOptionValues,
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
@@ -80,10 +81,19 @@ async function isConfiguredInstance(): Promise<boolean> {
   if (!snapshot.exists) {
     return false;
   }
-  if (!snapshot.valid) {
+  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
     return true;
   }
-  return !isUnconfiguredConfigSource(snapshot.sourceConfig);
+  if (isUnconfiguredConfigSource(snapshot.sourceConfig)) {
+    return false;
+  }
+  // Inference commits before installation finishes; pending local setup must
+  // resume onboarding instead of opening a chat against an unfinished Gateway.
+  const { readLocalOnboardingStateForConfig } =
+    await import("../../state/local-onboarding-state.js");
+  return (
+    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status !== "pending"
+  );
 }
 
 async function runSystemAgentEntry(
@@ -115,7 +125,13 @@ async function runOnboardingEntry(
       return;
     }
     const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand({ workspace: optionalString(options.workspace) }, runtime);
+    await setupCommand(
+      { workspace: optionalString(options.workspace), json: Boolean(options.json) },
+      runtime,
+    );
+    return;
+  }
+  if (!validateOnboardAuthOptionValues(options, runtime)) {
     return;
   }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);

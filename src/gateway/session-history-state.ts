@@ -37,6 +37,7 @@ type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
   turnBoundaryPending: boolean;
+  streamErrorFallbackPending: boolean;
 };
 
 type InlineSessionHistoryAppend = {
@@ -186,6 +187,7 @@ export function buildSessionHistorySnapshot(params: {
       resolveMessageSeq(rawHistoryMessages.at(-1)) ??
       rawHistoryMessages.length,
     turnBoundaryPending: projected.turnBoundaryPending,
+    streamErrorFallbackPending: projected.streamErrorFallbackPending,
   };
 }
 
@@ -198,6 +200,7 @@ export class SessionHistorySseState {
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
+  private streamErrorFallbackPending: boolean;
   private transcriptPath: string | undefined;
 
   static fromRawSnapshot(params: {
@@ -248,11 +251,27 @@ export class SessionHistorySseState {
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
+    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(params.transcriptPath);
   }
 
   snapshot(): PaginatedSessionHistory {
     return this.sentHistory;
+  }
+
+  retainRecentMessages(maxMessages: number): PaginatedSessionHistory {
+    if (this.sentHistory.messages.length <= maxMessages) {
+      return this.snapshot();
+    }
+
+    const messages = this.sentHistory.messages.slice(-maxMessages);
+    const firstSeq = resolveMessageSeq(messages[0]);
+    this.sentHistory = buildPaginatedSessionHistory({
+      messages,
+      hasMore: true,
+      ...(firstSeq !== undefined ? { nextCursor: String(firstSeq) } : {}),
+    });
+    return this.snapshot();
   }
 
   appendInlineMessage(update: {
@@ -282,8 +301,16 @@ export class SessionHistorySseState {
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
+      streamErrorFallbackPending: this.streamErrorFallbackPending,
     });
     this.turnBoundaryPending = nextProjection.turnBoundaryPending;
+    this.streamErrorFallbackPending = nextProjection.streamErrorFallbackPending;
+    if (nextProjection.streamErrorFallbackRepaired) {
+      // Keep only the pending bit here: retaining raw transcript context would
+      // undo the bounded SSE memory contract. The caller rereads canonical
+      // history so full projection can remove the already-emitted placeholder.
+      return { shouldRefresh: true };
+    }
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
     // emitting a misleading single SSE item.
@@ -368,6 +395,7 @@ export class SessionHistorySseState {
     const snapshot = this.buildSnapshot(rawSnapshot);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
+    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;

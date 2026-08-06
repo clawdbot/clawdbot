@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -59,6 +60,32 @@ describe("doctor-contract-registry module loader", () => {
     } = await import("./doctor-contract-registry.test-fixtures.js"));
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
+  });
+
+  it("preserves source artifact precedence across root and dist candidates", () => {
+    const pluginRoot = makeTempDir();
+    const distRoot = path.join(pluginRoot, "dist");
+    fs.mkdirSync(distRoot);
+    const rootDoctorTypeScript = path.join(pluginRoot, "doctor-contract-api.ts");
+    const distDoctorTypeScript = path.join(distRoot, "doctor-contract-api.ts");
+    const rootDoctorJavaScript = path.join(pluginRoot, "doctor-contract-api.js");
+    const rootContractTypeScript = path.join(pluginRoot, "contract-api.ts");
+    for (const filePath of [
+      rootDoctorTypeScript,
+      distDoctorTypeScript,
+      rootDoctorJavaScript,
+      rootContractTypeScript,
+    ]) {
+      fs.writeFileSync(filePath, "export {};\n", "utf-8");
+    }
+
+    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorTypeScript);
+    fs.rmSync(rootDoctorTypeScript);
+    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(distDoctorTypeScript);
+    fs.rmSync(distDoctorTypeScript);
+    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorJavaScript);
+    fs.rmSync(rootDoctorJavaScript);
+    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootContractTypeScript);
   });
 
   it("uses native require on Windows for compatible JavaScript contract-api modules", () => {

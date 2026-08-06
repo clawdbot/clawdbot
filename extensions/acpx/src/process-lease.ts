@@ -7,12 +7,33 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { splitCommandParts } from "./command-line.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./state.js";
 
 /** CLI argument carrying the ACPX process lease id. */
 export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
 /** CLI argument carrying the owning gateway instance id. */
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
+
+export type AcpxProcessLeaseIdentity = {
+  leaseId: string;
+  gatewayInstanceId: string;
+};
+
+/** Read OpenClaw lease identity from a generated wrapper command. */
+export function readAcpxProcessLeaseIdentity(
+  command: string | undefined,
+): AcpxProcessLeaseIdentity | undefined {
+  const parts = splitCommandParts(command?.trim() ?? "");
+  const leaseIndex = parts.lastIndexOf(OPENCLAW_ACPX_LEASE_ID_ARG);
+  const gatewayIndex = parts.lastIndexOf(OPENCLAW_GATEWAY_INSTANCE_ID_ARG);
+  const leaseId = leaseIndex >= 0 ? parts[leaseIndex + 1]?.trim() : "";
+  const gatewayInstanceId = gatewayIndex >= 0 ? parts[gatewayIndex + 1]?.trim() : "";
+  if (!leaseId || !gatewayInstanceId) {
+    return undefined;
+  }
+  return { leaseId, gatewayInstanceId };
+}
 
 /** Lifecycle state for a tracked ACPX wrapper process. */
 type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";

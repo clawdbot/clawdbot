@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "google-auth-library": "10.9.0",
+    "google-auth-library": "10.9.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -55,7 +55,7 @@
       "systemImage": "message.badge",
       "markdownCapable": true,
       "doctorCapabilities": {
-        "dmAllowFromMode": "nestedOnly",
+        "dmAllowFromMode": "topOnly",
         "groupModel": "route",
         "groupAllowFromFallbackToAllowFrom": false,
         "warnOnEmptyGroupSenderAllowlist": false

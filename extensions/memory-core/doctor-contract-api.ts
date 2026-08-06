@@ -5,10 +5,12 @@ import {
   memorySidecarStateMigration,
   qmdLocksStateMigration,
 } from "./src/migration/doctor-memory-sidecar.js";
+import { vectorIndexProviderDiagnostic } from "./src/migration/doctor-vector-index-provider.js";
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
   hostEventsStateMigration,
   dreamingStateMigration,
   memorySidecarStateMigration,
   qmdLocksStateMigration,
+  vectorIndexProviderDiagnostic,
 ];

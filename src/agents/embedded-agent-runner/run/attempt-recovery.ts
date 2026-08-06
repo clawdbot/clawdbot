@@ -6,6 +6,7 @@ import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
+import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
@@ -52,7 +53,6 @@ export async function recoverEmbeddedRunAttempt(input: {
   armPostCompactionGuard: () => void;
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  lastTurnTotal: number | undefined;
   runtimeAuthRetry: boolean;
   codexAppServerRecoveryRetryAvailable: boolean;
   codexAppServerRecoveryRetries: number;
@@ -176,6 +176,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     contextTokenBudget: runtime.contextTokenBudget,
     genericCompactionRecoveryAllowed: preparedRuntime.genericCompactionRecoveryAllowed,
     attempt,
+    toolResultPromptProjectionState: getEmbeddedSessionPromptState(params.sessionId).toolResults,
     runtimeAuthPlan: runtimePlan.auth,
     resolvedSessionKey: runInput.resolvedSessionKey,
     sessionAgentId: input.sessionAgentId,
@@ -243,7 +244,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
         attempt,
         replayInvalid,
@@ -271,7 +271,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
         attempt,
         replayInvalid,
@@ -343,7 +342,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
       startedAtMs: runInput.startedAtMs,
       fallbackConfigured: runInput.fallbackConfigured,

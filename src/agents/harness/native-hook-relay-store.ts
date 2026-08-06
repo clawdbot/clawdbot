@@ -9,15 +9,12 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  readNativeHookRelayBridgeRecordRow,
+  type NativeHookRelayBridgeRecord,
+} from "./native-hook-relay-bridge-record.js";
 
-export type NativeHookRelayBridgeRecord = {
-  relayId: string;
-  pid: number;
-  hostname: "127.0.0.1";
-  port: number;
-  token: string;
-  expiresAtMs: number;
-};
+export type { NativeHookRelayBridgeRecord } from "./native-hook-relay-bridge-record.js";
 
 type NativeHookRelayBridgePruneResult = {
   relayId: string;
@@ -46,32 +43,12 @@ type NativeHookRelayBridgeStoreOptions = {
 function readNativeHookRelayBridgeSnapshot(
   row: NativeHookRelayBridgeRow | undefined,
 ): NativeHookRelayBridgeSnapshot | undefined {
-  if (
-    !row ||
-    typeof row.relay_id !== "string" ||
-    row.relay_id.length === 0 ||
-    !Number.isSafeInteger(row.pid) ||
-    row.hostname !== "127.0.0.1" ||
-    !Number.isSafeInteger(row.port) ||
-    row.port <= 0 ||
-    row.port > 65_535 ||
-    typeof row.token !== "string" ||
-    row.token.length === 0 ||
-    !Number.isSafeInteger(row.expires_at_ms) ||
-    !Number.isSafeInteger(row.updated_at_ms)
-  ) {
+  const record = readNativeHookRelayBridgeRecordRow(row);
+  if (!record || !row || !Number.isSafeInteger(row.updated_at_ms)) {
     return undefined;
   }
-  const { token } = row;
   return {
-    record: {
-      relayId: row.relay_id,
-      pid: row.pid,
-      hostname: row.hostname,
-      port: row.port,
-      token,
-      expiresAtMs: row.expires_at_ms,
-    },
+    record,
     updatedAtMs: row.updated_at_ms,
   };
 }

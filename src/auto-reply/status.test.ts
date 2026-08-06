@@ -3,10 +3,7 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import {
-  MODEL_CONTEXT_TOKEN_CACHE,
-  providerContextTokenCacheKey,
-} from "../agents/context-cache.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
@@ -57,7 +54,7 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   listPluginCommands.mockReset();
   listPluginCommands.mockImplementation(() => []);
-  MODEL_CONTEXT_TOKEN_CACHE.clear();
+  getContextWindowCaches().discoveredTokenCache.clear();
 });
 
 function registerAnthropicCliBackendForTest(): void {
@@ -1075,9 +1072,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 1_048_576,
@@ -1109,9 +1109,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "claude-opus-4-7",
         modelProvider: "claude-cli",
         model: "claude-opus-4-7",
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
         inputTokens: 29,
         outputTokens: 19_000,
         cacheRead: 3_000_000,
@@ -1162,9 +1165,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "claude-opus-4-7",
         modelProvider: "claude-cli",
         model: "claude-opus-4-7",
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
         inputTokens: 29,
         outputTokens: 19_000,
       },
@@ -1208,9 +1214,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 1_048_576,
@@ -1253,9 +1262,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 123_456,
@@ -1300,9 +1312,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -1346,9 +1361,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -1391,9 +1409,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -1433,9 +1454,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "custom-runtime",
         model: "unknown-fallback-model",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "custom-runtime/unknown-fallback-model",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 128_000,
@@ -1636,9 +1660,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "gpt-4.1-mini",
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
-        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
-        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
-        fallbackNoticeReason: "rate limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "openai/gpt-4.1-mini",
+          activeModel: "anthropic/claude-haiku-4-5",
+          reason: "rate limit",
+        },
         contextTokens: 32_000,
       },
       sessionKey: "agent:main:main",
@@ -1668,9 +1695,12 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
-        fallbackNoticeSelectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-        fallbackNoticeReason: "rate limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          reason: "rate limit",
+        },
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -1696,7 +1726,6 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         modelProvider: "openai",
         model: "gpt-4.1-mini",
-        fallbackNoticeReason: "unknown",
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2320,7 +2349,7 @@ describe("buildStatusMessage", () => {
   it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
     await withTempHome(
       async (dir) => {
-        MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+        getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
 
         const sessionId = "sess-openrouter-google";
         writeTranscriptUsageLog({
@@ -2371,7 +2400,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps runtime slash model ids on model-only context lookup when modelProvider is missing", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+    getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
 
     const text = buildStatusMessage({
       config: {
@@ -2405,7 +2434,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    getContextWindowCaches().discoveredTokenCache.clear();
 
     const text = buildStatusMessage({
       config: {
@@ -2429,9 +2458,12 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         model: "fake-minimax/FakeMiniMax-M2.5",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "fake-minimax/FakeMiniMax-M2.5",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "fake-minimax/FakeMiniMax-M2.5",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -2449,7 +2481,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    getContextWindowCaches().discoveredTokenCache.clear();
 
     const text = buildStatusMessage({
       config: {
@@ -2486,8 +2518,8 @@ describe("buildStatusMessage", () => {
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
     await withTempHome(
       async (dir) => {
-        MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
-        MODEL_CONTEXT_TOKEN_CACHE.set(
+        getContextWindowCaches().discoveredTokenCache.set("gemini-2.5-pro", 128_000);
+        getContextWindowCaches().discoveredTokenCache.set(
           providerContextTokenCacheKey("google-gemini-cli", "gemini-2.5-pro"),
           1_000_000,
         );
@@ -2532,8 +2564,8 @@ describe("buildStatusMessage", () => {
   });
 
   it("prefers provider-qualified context windows for fresh bare model ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set(
+    getContextWindowCaches().discoveredTokenCache.set("claude-opus-4-6", 200_000);
+    getContextWindowCaches().discoveredTokenCache.set(
       providerContextTokenCacheKey("anthropic", "claude-opus-4-6"),
       1_000_000,
     );
@@ -2560,7 +2592,10 @@ describe("buildStatusMessage", () => {
   });
 
   it("does not let agent contextTokens inflate status above the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey("openai", "gpt-5.5"),
+      272_000,
+    );
 
     const text = buildStatusMessage({
       agent: {
@@ -2630,9 +2665,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "custom-runtime",
         model: "unknown-fallback-model",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "custom-runtime/unknown-fallback-model",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 128_000,

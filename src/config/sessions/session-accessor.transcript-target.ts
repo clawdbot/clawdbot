@@ -77,22 +77,25 @@ export function resolveSessionTranscriptReadTarget(
     sessionKey,
     storePath: configuredStorePath,
   });
-  const resolved = sessionKey
-    ? resolveSessionEntrySelection(
-        {
-          agentId,
-          ...(scope.env ? { env: scope.env } : {}),
-          sessionKey,
-          storePath,
-        },
-        { readOnly: true },
-      )
-    : undefined;
+  const hasMatchingSessionEntry = scope.sessionEntry?.sessionId === scope.sessionId;
+  const resolved =
+    sessionKey && !hasMatchingSessionEntry
+      ? resolveSessionEntrySelection(
+          {
+            agentId,
+            ...(scope.env ? { env: scope.env } : {}),
+            sessionKey,
+            storePath,
+          },
+          { readOnly: true },
+        )
+      : undefined;
+  const resolvedSessionKey = hasMatchingSessionEntry ? sessionKey : resolved?.normalizedKey;
   return {
     agentId,
     sessionId: scope.sessionId,
     storePath,
-    ...(resolved?.normalizedKey ? { sessionKey: resolved.normalizedKey } : {}),
+    ...(resolvedSessionKey ? { sessionKey: resolvedSessionKey } : {}),
   };
 }
 

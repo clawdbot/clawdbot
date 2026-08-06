@@ -5,11 +5,31 @@ import { expect } from "vitest";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
-  installMockGateway,
+  installMockGateway as installControlUiMockGateway,
+  type ControlUiMockGatewayScenario,
+  type MockGatewayControls,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export { controlUiSessionPath, controlUiSessionUrl, installMockGateway };
+export { controlUiSessionPath, controlUiSessionUrl };
+
+const NEW_SESSION_FEATURE_METHODS = [
+  "chat.metadata",
+  "chat.startup",
+  "sessions.create",
+  "sessions.dispatch",
+] as const;
+
+export function installMockGateway(
+  page: Page,
+  scenario: ControlUiMockGatewayScenario = {},
+): Promise<MockGatewayControls> {
+  return installControlUiMockGateway(page, {
+    ...scenario,
+    featureMethods: scenario.featureMethods ?? [...NEW_SESSION_FEATURE_METHODS],
+  });
+}
 
 export const WORKSPACE = "/home/peter/openclaw";
 export const PICKED = "/home/peter/openclaw/packages";
@@ -146,32 +166,7 @@ export async function navigateInApp(page: Page, routeId: string, search = "") {
  * the successful active match and browser location to agree before leaving.
  */
 export async function waitForCommittedChatRoute(page: Page) {
-  await page.waitForURL((url) => url.pathname.startsWith("/chat/"));
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            router: {
-              getState: () => {
-                status: string;
-                resolvedLocation: { pathname: string } | null;
-                matches: { routeId: string }[];
-                pendingMatches: unknown[];
-              };
-            };
-          };
-        };
-        const state = app.runtime?.router.getState();
-        return (
-          state?.status === "success" &&
-          state.matches[0]?.routeId === "chat" &&
-          state.resolvedLocation?.pathname === window.location.pathname &&
-          state.pendingMatches.length === 0
-        );
-      }),
-    )
-    .toBe(true);
+  await waitForControlUiRoute(page, { pathnamePrefix: "/chat/", routeId: "chat" });
 }
 
 export async function choosePackagesFolder(page: Page) {

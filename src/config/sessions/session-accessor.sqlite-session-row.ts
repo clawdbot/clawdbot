@@ -49,19 +49,28 @@ export function bindSqliteSessionRoot(params: {
   return {
     session_id: params.entry.sessionId,
     session_key: params.sessionKey,
-    previous_session_id: normalizeSqliteText(params.entry.previousSessionId),
     reason: null,
-    session_scope: resolveSqliteSessionScope(params.entry, params.sessionKey),
     created_at: resolveSqliteSessionCreatedAt(params.entry, updatedAt),
     updated_at: updatedAt,
     ...bindSessionEntryProvenance(params.entry),
+    ...bindSqliteSessionWindowEntryProjection(params),
+    primary_conversation_id: null,
+  };
+}
+
+export function bindSqliteSessionWindowEntryProjection(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+}) {
+  return {
+    previous_session_id: normalizeSqliteText(params.entry.previousSessionId),
+    session_scope: resolveSqliteSessionScope(params.entry, params.sessionKey),
     started_at: finiteSqliteNumber(params.entry.startedAt),
     ended_at: finiteSqliteNumber(params.entry.endedAt),
     status: normalizeSqliteStatus(params.entry.status),
     chat_type: normalizeSqliteChatType(params.entry.chatType),
     channel: resolveSqliteSessionChannel(params.entry),
     account_id: resolveSqliteSessionAccountId(params.entry),
-    primary_conversation_id: null,
     model_provider: normalizeSqliteText(params.entry.modelProvider),
     model: normalizeSqliteText(params.entry.model),
     agent_harness_id: normalizeSqliteText(params.entry.agentHarnessId),
@@ -88,6 +97,7 @@ export function bindSqliteSessionNode(params: {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
     entry_json: JSON.stringify(canonicalEntry),
+    entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeSqliteStatus(params.entry.status),
     created_at: finiteSqliteNumber(params.entry.createdAt),

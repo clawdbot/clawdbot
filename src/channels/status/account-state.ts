@@ -100,33 +100,20 @@ function projectChannelAccountState(state: ChannelAccountState): {
         lastError: state.failure,
       };
     case "unconfigured":
-      return {
-        configured: false,
-        running: false,
-        stateReason: state.reason,
-        lastError: state.failure,
-      };
     case "unlinked":
       return {
-        configured: true,
-        linked: false,
+        configured: state.kind === "unlinked",
+        ...(state.kind === "unlinked" ? { linked: false } : {}),
         running: false,
         stateReason: state.reason,
         lastError: state.failure,
       };
     case "running":
-      return {
-        configured: true,
-        ...(state.linked ? { linked: true } : {}),
-        running: true,
-        ...(typeof state.connected === "boolean" ? { connected: state.connected } : {}),
-        lastError: state.failure,
-      };
     case "stopped":
       return {
         configured: true,
         ...(state.linked ? { linked: true } : {}),
-        running: false,
+        running: state.kind === "running",
         ...(typeof state.connected === "boolean" ? { connected: state.connected } : {}),
         lastError: state.failure,
       };

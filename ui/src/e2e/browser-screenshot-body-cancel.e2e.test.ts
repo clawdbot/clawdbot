@@ -141,7 +141,9 @@ describeControlUiE2e("Control UI browser screenshot failed-body E2E", () => {
       await panel.waitFor();
       const alert = panel.getByRole("alert");
       await alert.waitFor();
-      expect(await alert.textContent()).toContain("screenshot fetch failed (404)");
+      expect(await alert.textContent()).toBe(
+        "Browser request failed: Screenshot fetch failed (404).",
+      );
       await expect
         .poll(() =>
           page.evaluate(

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { stableStringify } from "../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
@@ -56,6 +56,7 @@ export type ClawAddPlanContext = {
     integrity?: string;
     installId?: string;
     warning?: string;
+    requirements?: ClawLocalPrerequisite[];
     installedVersion?: string;
     code?: string;
     message?: string;
@@ -206,7 +207,8 @@ export async function buildClawAddPlan(params: {
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
   );
-  const source = { ...params.source, packageRoot };
+  const manifestPath = resolvePathViaExistingAncestorSync(resolve(params.source.manifestPath));
+  const source = { ...params.source, packageRoot, manifestPath };
   const sourceRoot = await fsSafeRoot(packageRoot);
   const blockers: ClawDiagnostic[] = [];
   const actions: ClawAddPlanAction[] = [];
@@ -459,6 +461,9 @@ export async function buildClawAddPlan(params: {
     if (diagnostic) {
       blockers.push(diagnostic);
     }
+    if (preflight.ok && preflight.requirements) {
+      readinessRequirements.push(...preflight.requirements);
+    }
     actions.push({
       kind: "package",
       id: `${pkg.kind}:${pkg.ref}`,
@@ -470,6 +475,7 @@ export async function buildClawAddPlan(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+        ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         expectedState: !preflight.ok
           ? "unresolved"
           : preflight.action === "reuse"
@@ -538,7 +544,7 @@ export async function buildClawAddPlan(params: {
         ...server,
         expectedState: exactExisting ? "present-exact" : "absent",
         prerequisites: readinessRequirements.filter(
-          (requirement) => requirement.mcpServer === name,
+          (requirement) => requirement.kind !== "plugin-setup" && requirement.mcpServer === name,
         ),
       },
       blocked,

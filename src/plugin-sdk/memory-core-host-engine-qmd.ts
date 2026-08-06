@@ -28,4 +28,5 @@ export type {
   QmdQueryResult,
   SessionFileEntry,
   SessionTranscriptCorpusEntry,
+  SessionTranscriptCorpusOptions,
 } from "../../packages/memory-host-sdk/src/engine-qmd.js";

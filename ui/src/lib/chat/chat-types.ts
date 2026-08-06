@@ -14,7 +14,13 @@ export type ChatAttachment = {
   sizeBytes?: number;
 };
 
-export type ChatQueueSkillWorkshopRevision = { proposalId: string; agentId?: string };
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
+  /** Process-local owner; revision requests must never replay after reconnect. */
+  connectionClient?: object;
+  connectionEpoch?: number;
+};
 
 export type ChatQueueItem = {
   id: string;
@@ -119,6 +125,12 @@ export type MessageContentItem =
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;
+        artifactId?: string;
+        playback?: "native" | "transcode";
+        sizeBytes?: number;
+        durationMs?: number;
+        width?: number;
+        height?: number;
       };
     }
   | {

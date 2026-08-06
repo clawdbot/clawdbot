@@ -200,6 +200,31 @@ describe("runNodeDaemonStatus", () => {
     mocks.service.readRuntime.mockReset().mockResolvedValue({ status: "running" });
   });
 
+  it("reports a failed service check instead of claiming the node is not installed", async () => {
+    mocks.service.isLoaded.mockRejectedValue(new Error("systemd unavailable"));
+
+    await runNodeDaemonStatus();
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Node service check failed: Error: systemd unavailable",
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(stdout()).not.toContain("not loaded");
+    expect(stdout()).not.toContain("openclaw node install");
+  });
+
+  it("reports a failed service check as JSON without inventing node status", async () => {
+    mocks.service.isLoaded.mockRejectedValue(new Error("systemd unavailable"));
+
+    await runNodeDaemonStatus({ json: true });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+      error: "Node service check failed: Error: systemd unavailable",
+    });
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+  });
+
   it("keeps missing service-unit status on stderr and prints recovery hints on stdout", async () => {
     mocks.service.readRuntime.mockResolvedValue({ status: "stopped", missingUnit: true });
 

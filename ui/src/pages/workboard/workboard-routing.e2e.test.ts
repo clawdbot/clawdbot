@@ -7,6 +7,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  waitForControlUiRoute,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -147,7 +148,11 @@ describeControlUiE2e("Control UI Workboard routing", () => {
       });
 
       await page.goto(`${server.baseUrl}workboard?board=ops&agent=main`);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+      await waitForControlUiRoute(page, {
+        pathname: "/workboard/ops",
+        routeId: "workboard",
+        search: "?agent=main",
+      });
       expect(new URL(page.url()).searchParams.get("board")).toBeNull();
       expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
 
@@ -160,7 +165,11 @@ describeControlUiE2e("Control UI Workboard routing", () => {
       });
 
       await page.goto(`${server.baseUrl}workboard/deleted?agent=main`);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
+      await waitForControlUiRoute(page, {
+        pathname: "/workboard",
+        routeId: "workboard",
+        search: "?agent=main",
+      });
       expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
       await page.locator(".workboard-page-title", { hasText: "Workboard" }).waitFor();
     } finally {

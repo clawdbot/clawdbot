@@ -83,6 +83,9 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       contextWindowTokens: attempt.contextTokenBudget,
       inputProvenance: attempt.inputProvenance,
       preparedUserTurnMessage,
+      preparedUserTurnTranscriptRecorder: preparedUserTurnMessage
+        ? attempt.userTurnTranscriptRecorder
+        : undefined,
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
       allowedToolNames: input.replayAllowedToolNames,
@@ -95,13 +98,9 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       onMessagePersisted: () => {
         input.sessionLockController.refreshAfterOwnedSessionWrite();
       },
-      onUserMessagePreparingForPersistence: (_message, recorder, preparedMessage) => {
+      onUserMessagePreparingForPersistence: (_message, recorder) => {
         latestPersistedUserMessage = undefined;
-        latestUserTurnTranscriptRecorder =
-          recorder ??
-          (preparedMessage === preparedUserTurnMessage
-            ? attempt.userTurnTranscriptRecorder
-            : undefined);
+        latestUserTurnTranscriptRecorder = recorder;
       },
       onUserMessagePersisted: (message, runtimeMessage) => {
         latestPersistedUserMessage = message;

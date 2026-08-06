@@ -89,6 +89,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   }
 
   let started = false;
+  let finished = false;
   let label = options.label;
   const total = options.total ?? null;
   let completed = 0;
@@ -144,7 +145,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   let timer: NodeJS.Timeout | null = null;
 
   const applyState = () => {
-    if (!started) {
+    if (!started || finished) {
       return;
     }
     if (controller) {
@@ -203,6 +204,11 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   };
 
   const done = () => {
+    // A finally block may finish an already-stopped reporter; never clear a newer owner's line.
+    if (finished) {
+      return;
+    }
+    finished = true;
     if (timer) {
       clearTimeout(timer);
       timer = null;

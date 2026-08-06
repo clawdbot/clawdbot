@@ -9,7 +9,7 @@ import {
   type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
 import { upsertPresence } from "../infra/system-presence.js";
-import { stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
+import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
@@ -20,6 +20,7 @@ import {
   removeRemoteNodeInfoForConnection,
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
+import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -38,6 +39,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayRuntimeState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -82,7 +84,6 @@ export async function prepareGatewayLifecycle(params: {
     gatewayInstanceRuntimeRef,
     startupState,
     readinessEventLoopHealth,
-    releasePluginRouteRegistry,
     browserAuthRateLimiter,
     wss,
     httpServer,
@@ -145,53 +146,13 @@ export async function prepareGatewayLifecycle(params: {
     completeControlUiDeviceAuthMigrationForEffectiveOperator,
   );
   workerGatewayEndpoint.resolve = getWorkerIngressEndpoint;
-  const presenceWatchedSessions = (connId: string): string[] => {
-    // Presence snapshots stay small even if a long-lived client accumulates
-    // subscriptions. Keep only the 32 most recently subscribed session keys.
-    return [...sessionMessageSubscribers.getForConnection(connId)].slice(-32).toSorted();
-  };
-  const updateWatchedSessionsPresence = (connId: string, previous: readonly string[]) => {
-    const watchedSessions = presenceWatchedSessions(connId);
-    if (
-      watchedSessions.length === previous.length &&
-      watchedSessions.every((key, index) => key === previous[index])
-    ) {
-      return;
-    }
-    const client = [...clients].find((candidate) => candidate.connId === connId);
-    if (!client?.presenceKey) {
-      return;
-    }
-    upsertPresence(client.presenceKey, {
-      watchedSessions: watchedSessions.length > 0 ? watchedSessions : undefined,
-    });
-    broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
-  };
   const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
     connId,
     sessionKey,
     options,
-  ) => {
-    const previous = presenceWatchedSessions(connId);
-    const rollback = sessionMessageSubscribers.subscribe(connId, sessionKey, options);
-    updateWatchedSessionsPresence(connId, previous);
-    if (!rollback) {
-      return undefined;
-    }
-    const rollbackPresence = (() => {
-      const rollbackPrevious = presenceWatchedSessions(connId);
-      rollback();
-      updateWatchedSessionsPresence(connId, rollbackPrevious);
-    }) as NonNullable<ReturnType<GatewayRequestContext["subscribeSessionMessageEvents"]>>;
-    rollbackPresence.commit = () => rollback.commit();
-    return rollbackPresence;
-  };
+  ) => sessionMessageSubscribers.subscribe(connId, sessionKey, options);
   const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
-    (connId, sessionKey) => {
-      const previous = presenceWatchedSessions(connId);
-      sessionMessageSubscribers.unsubscribe(connId, sessionKey);
-      updateWatchedSessionsPresence(connId, previous);
-    };
+    (connId, sessionKey) => sessionMessageSubscribers.unsubscribe(connId, sessionKey);
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
@@ -284,6 +245,21 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
+  runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
+    broadcastToConnIds,
+  });
+  runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
+    onReplace: (connId, sessionKeys) => {
+      const client = [...clients].find((candidate) => candidate.connId === connId);
+      if (!client?.presenceKey) {
+        return;
+      }
+      upsertPresence(client.presenceKey, {
+        watchedSessions: sessionKeys.length > 0 ? [...sessionKeys] : undefined,
+      });
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+    },
+  });
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {
     get cron() {
@@ -321,8 +297,24 @@ export async function prepareGatewayLifecycle(params: {
     clearTimeout(postReadyState.maintenanceTimer);
     postReadyState.maintenanceTimer = null;
   };
+  let outboundDeliveryRecoveryStopPromise: Promise<void> | null = null;
+  const stopOutboundDeliveryRecoveryForClose = () => {
+    outboundDeliveryRecoveryStopPromise ??= runtimeState.stopOutboundDeliveryRecovery();
+    return outboundDeliveryRecoveryStopPromise;
+  };
+  let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
+  const stopMediaCleanupForClose = () => {
+    mediaCleanupStopPromise ??= runtimeState.stopMediaCleanup();
+    return mediaCleanupStopPromise;
+  };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    // Fence background owners before any awaited close step can tear down the
+    // plugin/channel or shared-state runtime they still need.
+    void stopOutboundDeliveryRecoveryForClose();
+    void stopMediaCleanupForClose();
+    runtimeState.controlUiSessionPullRequests?.stop();
+    runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();
     startupState.dispatchReady = false;
     gatewayInstanceRuntimeRef.current?.close();
@@ -339,9 +331,13 @@ export async function prepareGatewayLifecycle(params: {
   const beginClosePrelude = async () => {
     clearSessionSuspensionTimers();
     markClosePreludeStarted();
-    // Join the last reload before any owner it can publish into is torn down.
-    // The close handler re-awaits this same promise to retain warning reporting.
-    await stopConfigReloaderForClose().catch(() => {});
+    // Owners are fenced synchronously above. Join them before any runtime they
+    // can publish into is torn down.
+    await Promise.all([
+      stopOutboundDeliveryRecoveryForClose(),
+      stopMediaCleanupForClose(),
+      stopConfigReloaderForClose().catch(() => {}),
+    ]);
   };
   const runClosePrelude = async () => {
     await beginClosePrelude();
@@ -370,7 +366,6 @@ export async function prepareGatewayLifecycle(params: {
         await monitor?.waitForIdle();
       },
       stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
-      clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
   };
@@ -406,7 +401,7 @@ export async function prepareGatewayLifecycle(params: {
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
-      releasePluginRouteRegistry,
+      clearSecretsRuntimeSnapshot,
       channelIds,
       stopChannel,
       pluginServices: runtimeState.pluginServices,
@@ -420,7 +415,7 @@ export async function prepareGatewayLifecycle(params: {
       tickInterval: runtimeState.tickInterval,
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
-      mediaCleanup: runtimeState.mediaCleanup,
+      stopMediaCleanup: stopMediaCleanupForClose,
       worktreeCleanup: runtimeState.worktreeCleanup,
       skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,
@@ -478,6 +473,30 @@ export async function prepareGatewayLifecycle(params: {
       clearFallbackGatewayContextForServer();
     }
   };
+
+  if (diagnosticsEnabled) {
+    // Gateway lifecycle owns both this existing heartbeat timer and the monitor
+    // it samples, so startup failure and normal close tear them down together.
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+      sampleLiveness: () => {
+        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
+        if (!sample || sample.degradedSinceMs == null) {
+          return null;
+        }
+        return {
+          reasons: sample.reasons,
+          intervalMs: sample.intervalMs,
+          degradedSinceMs: sample.degradedSinceMs,
+          eventLoopDelayP99Ms: sample.delayP99Ms,
+          eventLoopDelayMaxMs: sample.delayMaxMs,
+          eventLoopUtilization: sample.utilization,
+          cpuCoreRatio: sample.cpuCoreRatio,
+        };
+      },
+    });
+  }
 
   return {
     ...runtime,

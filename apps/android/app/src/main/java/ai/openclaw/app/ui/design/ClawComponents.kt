@@ -193,10 +193,11 @@ internal fun ClawPlainIconButton(
   icon: ImageVector,
   contentDescription: String,
   onClick: () -> Unit,
+  modifier: Modifier = Modifier,
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    modifier = modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = Color.Transparent,
     contentColor = ClawTheme.colors.text,

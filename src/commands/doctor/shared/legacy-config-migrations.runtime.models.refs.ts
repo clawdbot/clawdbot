@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
+import { normalizeAgentModelRefForConfig } from "../../../config/model-input.js";
 import {
   computeModelPolicyAllowlist,
   hasModelPolicyAllowlistMigrationMarker,
@@ -41,95 +43,49 @@ function shouldUpgradeClaudeProvider(provider: string | undefined): boolean {
   );
 }
 
-function upgradeRetiredGroqModelId(model: string): string | null {
-  const normalized = normalizeString(model);
-  switch (normalized) {
-    case "deepseek-r1-distill-llama-70b":
-      return "llama-3.3-70b-versatile";
-    case "gemma2-9b-it":
-    case "llama3-8b-8192":
-      return "llama-3.1-8b-instant";
-    case "llama3-70b-8192":
-      return "llama-3.3-70b-versatile";
-    case "meta-llama/llama-4-maverick-17b-128e-instruct":
-    case "moonshotai/kimi-k2-instruct":
-    case "moonshotai/kimi-k2-instruct-0905":
-      return "openai/gpt-oss-120b";
-    case "mistral-saba-24b":
-    case "qwen-qwq-32b":
-      return "qwen/qwen3-32b";
-    default:
-      return null;
-  }
+function modelTable(groups: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(groups).flatMap(([target, models]) =>
+      models.split(" ").map((model) => [model, target]),
+    ),
+  );
 }
 
-function upgradeRetiredXaiModelId(model: string): string | null {
-  const normalized = normalizeString(model);
-  switch (normalized) {
-    case "grok-code-fast":
-    case "grok-code-fast-1":
-    case "grok-code-fast-1-0825":
-      return "grok-build-0.1";
-    case "grok-4-fast-reasoning":
-    case "grok-4-1-fast-reasoning":
-    case "grok-4-0709":
-      return "grok-4.3";
-    case "grok-imagine-image-pro":
-      return "grok-imagine-image-quality";
-    default:
-      return null;
-  }
-}
+const RETIRED_GROQ_MODELS = modelTable({
+  "llama-3.3-70b-versatile": "deepseek-r1-distill-llama-70b llama3-70b-8192",
+  "llama-3.1-8b-instant": "gemma2-9b-it llama3-8b-8192",
+  "openai/gpt-oss-120b":
+    "meta-llama/llama-4-maverick-17b-128e-instruct moonshotai/kimi-k2-instruct moonshotai/kimi-k2-instruct-0905",
+  "qwen/qwen3-32b": "mistral-saba-24b qwen-qwq-32b",
+});
+const RETIRED_XAI_MODELS = modelTable({
+  "grok-build-0.1": "grok-code-fast grok-code-fast-1 grok-code-fast-1-0825",
+  "grok-4.3": "grok-4-fast-reasoning grok-4-1-fast-reasoning grok-4-0709",
+  "grok-imagine-image-quality": "grok-imagine-image-pro",
+});
+const RETIRED_OPENAI_MODELS = modelTable({
+  "gpt-5.3-codex": "gpt-5.2-codex gpt-5.1-codex gpt-5-codex",
+  "gpt-5.5-pro": "gpt-5-pro gpt-5.2-pro",
+  "gpt-5.4-nano": "gpt-4.1-nano gpt-5-nano",
+  "gpt-5.4-mini": "gpt-4.1-mini gpt-4o-mini gpt-5.1-codex-mini gpt-5-mini",
+  "gpt-5.5":
+    "gpt-4 gpt-4-turbo gpt-4.1 gpt-4o gpt-4o-2024-05-13 gpt-4o-2024-08-06 gpt-4o-2024-11-20 gpt-5 gpt-5-chat-latest gpt-5.1 gpt-5.1-chat-latest gpt-5.1-codex-max gpt-5.2 gpt-5.2-chat-latest",
+});
+const RETIRED_CODEX_MODEL_OVERRIDES = modelTable({
+  "gpt-5.5": "gpt-5.2 gpt-5.2-codex gpt-5.1-codex gpt-5-codex",
+  "gpt-5.4-mini": "gpt-4.1-nano gpt-5-nano",
+});
 
-function upgradeRetiredOpenAiModelId(model: string, provider?: string): string | null {
+function applyRetiredModelTable(
+  model: string,
+  table: Readonly<Record<string, string>>,
+  overrides?: Readonly<Record<string, string>>,
+): string | null {
   const normalized = normalizeString(model);
-  const codexProvider = provider === "openai-codex";
-  if (codexProvider && normalized === "gpt-5.2") {
-    return "gpt-5.5";
+  if (overrides && Object.hasOwn(overrides, normalized)) {
+    return overrides[normalized] ?? null;
   }
-  if (
-    normalized === "gpt-5.2-codex" ||
-    normalized === "gpt-5.1-codex" ||
-    normalized === "gpt-5-codex"
-  ) {
-    return codexProvider ? "gpt-5.5" : "gpt-5.3-codex";
-  }
-  if (normalized === "gpt-5-pro" || normalized === "gpt-5.2-pro") {
-    return "gpt-5.5-pro";
-  }
-  if (normalized === "gpt-4.1-nano" || normalized === "gpt-5-nano") {
-    if (codexProvider) {
-      return "gpt-5.4-mini";
-    }
-    return "gpt-5.4-nano";
-  }
-  if (
-    normalized === "gpt-4.1-mini" ||
-    normalized === "gpt-4o-mini" ||
-    normalized === "gpt-5.1-codex-mini" ||
-    normalized === "gpt-5-mini"
-  ) {
-    return "gpt-5.4-mini";
-  }
-  if (
-    normalized === "gpt-4" ||
-    normalized === "gpt-4-turbo" ||
-    normalized === "gpt-4.1" ||
-    normalized === "gpt-4o" ||
-    normalized === "gpt-4o-2024-05-13" ||
-    normalized === "gpt-4o-2024-08-06" ||
-    normalized === "gpt-4o-2024-11-20" ||
-    normalized === "gpt-5" ||
-    normalized === "gpt-5-chat-latest" ||
-    normalized === "gpt-5.1" ||
-    normalized === "gpt-5.1-chat-latest" ||
-    normalized === "gpt-5.1-codex-max" ||
-    normalized === "gpt-5.2" ||
-    normalized === "gpt-5.2-chat-latest"
-  ) {
-    return "gpt-5.5";
-  }
-  return null;
+  return Object.hasOwn(table, normalized) ? (table[normalized] ?? null) : null;
 }
 
 function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
@@ -146,6 +102,13 @@ function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
 function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
 }
+
+const RETIRED_OPUS_ALIASES = new Set("opus-4.5 opus-4.1 opus-4 opus-3".split(" "));
+const RETIRED_SONNET_ALIASES = new Set(
+  "sonnet-4.5 sonnet-4.1 sonnet-4.0 sonnet-4 sonnet-3.7 sonnet-3.5 sonnet-3 haiku-3.5 haiku-3".split(
+    " ",
+  ),
+);
 
 function upgradeOldClaudeToken(
   token: string,
@@ -233,25 +196,10 @@ function upgradeOldClaudeToken(
     }
     return `anthropic.${claudeTargetModelId("sonnet", "-", provider)}`;
   }
-  if (
-    normalized === "opus-4.5" ||
-    normalized === "opus-4.1" ||
-    normalized === "opus-4" ||
-    normalized === "opus-3"
-  ) {
+  if (RETIRED_OPUS_ALIASES.has(normalized)) {
     return opusTarget;
   }
-  if (
-    normalized === "sonnet-4.5" ||
-    normalized === "sonnet-4.1" ||
-    normalized === "sonnet-4.0" ||
-    normalized === "sonnet-4" ||
-    normalized === "sonnet-3.7" ||
-    normalized === "sonnet-3.5" ||
-    normalized === "sonnet-3" ||
-    normalized === "haiku-3.5" ||
-    normalized === "haiku-3"
-  ) {
+  if (RETIRED_SONNET_ALIASES.has(normalized)) {
     return sonnetTarget;
   }
   return null;
@@ -284,13 +232,17 @@ function upgradeRetiredModelRef(value: string): string | null {
   const normalizedModel = normalizeString(model);
   const retiredOwnerModel =
     normalizedProvider === "groq"
-      ? upgradeRetiredGroqModelId(model)
+      ? applyRetiredModelTable(model, RETIRED_GROQ_MODELS)
       : normalizedProvider === "xai"
-        ? upgradeRetiredXaiModelId(model)
+        ? applyRetiredModelTable(model, RETIRED_XAI_MODELS)
         : normalizedProvider === "openai" ||
             normalizedProvider === "openai-codex" ||
             normalizedProvider === "github-copilot"
-          ? upgradeRetiredOpenAiModelId(model, normalizedProvider)
+          ? applyRetiredModelTable(
+              model,
+              RETIRED_OPENAI_MODELS,
+              normalizedProvider === "openai-codex" ? RETIRED_CODEX_MODEL_OVERRIDES : undefined,
+            )
           : undefined;
   if (retiredOwnerModel) {
     return `${provider}/${retiredOwnerModel}${split.profile ? `@${split.profile}` : ""}`;
@@ -312,11 +264,34 @@ function upgradeRetiredModelRef(value: string): string | null {
   return `${upgraded}${split.profile ? `@${split.profile}` : ""}`;
 }
 
+function normalizeKnownModelRef(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value === trimmed ? null : trimmed;
+  }
+  const split = splitTrailingAuthProfile(trimmed);
+  const slash = split.model.indexOf("/");
+  const provider = slash > 0 ? normalizeString(split.model.slice(0, slash)) : "";
+  const modelId = slash > 0 ? split.model.slice(slash + 1) : split.model;
+  const normalizedModel =
+    provider === "google" ||
+    provider === "google-gemini-cli" ||
+    provider === "google-vertex" ||
+    provider === "together" ||
+    normalizeString(modelId).startsWith("google/")
+      ? normalizeAgentModelRefForConfig(split.model)
+      : split.model;
+  const normalized = `${normalizedModel}${split.profile ? `@${split.profile}` : ""}`;
+  return upgradeRetiredModelRef(normalized) ?? (normalized === value ? null : normalized);
+}
+
 const MODEL_REF_STRING_KEYS = new Set([
   "model",
   "primary",
   "summaryModel",
   "imageModel",
+  "utilityModel",
+  "voiceModel",
   "imageGenerationModel",
   "musicGenerationModel",
   "pdfModel",
@@ -342,12 +317,59 @@ function isModelPolicyAllowPath(path: string): boolean {
   return path.endsWith(".modelPolicy.allow");
 }
 
+function isMediaModelPath(path: string): boolean {
+  return ["image", "video", "music"].includes(pathKey(path)) && path.includes(".mediaModels.");
+}
+
+function isProviderCatalogsPath(path: string): boolean {
+  return path === ".providers" || path.endsWith(".models.providers");
+}
+
+function normalizeProviderCatalogModelId(provider: string, modelId: string): string {
+  const trimmed = modelId.trim();
+  const normalizedProvider = normalizeString(provider);
+  const normalized =
+    normalizedProvider === "google" ||
+    normalizedProvider === "google-gemini-cli" ||
+    normalizedProvider === "google-vertex" ||
+    normalizedProvider === "together" ||
+    normalizeString(trimmed).startsWith("google/")
+      ? normalizeConfiguredProviderCatalogModelId(provider, trimmed)
+      : trimmed;
+  const upgradedRef = upgradeRetiredModelRef(`${provider}/${normalized}`);
+  if (!upgradedRef) {
+    return normalized;
+  }
+  const slash = upgradedRef.indexOf("/");
+  return slash > 0 && normalizeString(upgradedRef.slice(0, slash)) === normalizeString(provider)
+    ? upgradedRef.slice(slash + 1)
+    : normalized;
+}
+
+function scanProviderCatalogModelIds(providers: Record<string, unknown>): boolean {
+  return Object.entries(providers).some(([providerId, providerValue]) => {
+    const models = getRecord(providerValue)?.models;
+    return (
+      Array.isArray(models) &&
+      models.some((model) => {
+        const modelId = getRecord(model)?.id;
+        return (
+          typeof modelId === "string" &&
+          normalizeProviderCatalogModelId(providerId, modelId) !== modelId
+        );
+      })
+    );
+  });
+}
+
 export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
   if (typeof value === "string") {
     return Boolean(
       key &&
-      (MODEL_REF_STRING_KEYS.has(key) || isChannelModelOverridePath(path)) &&
-      upgradeRetiredModelRef(value),
+      (MODEL_REF_STRING_KEYS.has(key) ||
+        isChannelModelOverridePath(path) ||
+        isMediaModelPath(path)) &&
+      normalizeKnownModelRef(value),
     );
   }
   if (Array.isArray(value)) {
@@ -355,7 +377,7 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
       typeof entry === "string" &&
       key &&
       (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
-        ? Boolean(upgradeRetiredModelRef(entry))
+        ? Boolean(normalizeKnownModelRef(entry))
         : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
     );
   }
@@ -363,8 +385,11 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
   if (!record) {
     return false;
   }
+  if (isProviderCatalogsPath(path) && scanProviderCatalogModelIds(record)) {
+    return true;
+  }
   if (key && MODEL_REF_MAP_KEYS.has(key)) {
-    return Object.keys(record).some((entryKey) => Boolean(upgradeRetiredModelRef(entryKey)));
+    return Object.keys(record).some((entryKey) => Boolean(normalizeKnownModelRef(entryKey)));
   }
   return Object.entries(record).some(([childKey, child]) =>
     scanKnownModelRefs(child, childKey, `${path}.${childKey}`),
@@ -414,7 +439,7 @@ export function migrateExplicitDefaultModelAllowPolicy(
 }
 
 function rewriteModelRefString(value: string, path: string, changes: string[]): string {
-  const upgraded = upgradeRetiredModelRef(value);
+  const upgraded = normalizeKnownModelRef(value);
   if (!upgraded) {
     return value;
   }
@@ -511,7 +536,7 @@ function rewriteModelRefMapKeys(
   const next: Record<string, unknown> = {};
   const consumedCanonicalKeys = new Set<string>();
   for (const [key, child] of Object.entries(record)) {
-    const upgradedKey = upgradeRetiredModelRef(key);
+    const upgradedKey = normalizeKnownModelRef(key);
     const nextKey = upgradedKey ?? key;
     if (!upgradedKey && consumedCanonicalKeys.has(key)) {
       continue;
@@ -547,6 +572,112 @@ function rewriteModelRefMapKeys(
   return { value: changed ? next : record, changed };
 }
 
+type ProviderCatalogModelRow = {
+  index: number;
+  model: unknown;
+  modelRecord?: Record<string, unknown>;
+  originalId?: string;
+  normalizedId?: string;
+  changed?: boolean;
+};
+
+function rewriteProviderCatalogModelIds(
+  providers: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): { value: Record<string, unknown>; changed: boolean } {
+  let changed = false;
+  const next: Record<string, unknown> = { ...providers };
+  for (const [providerId, providerValue] of Object.entries(providers)) {
+    const provider = getRecord(providerValue);
+    if (!provider || !Array.isArray(provider.models)) {
+      continue;
+    }
+    const rows: ProviderCatalogModelRow[] = provider.models.map((model, index) => {
+      const modelRecord = getRecord(model);
+      if (!modelRecord || typeof modelRecord.id !== "string") {
+        return { index, model };
+      }
+      const normalizedId = normalizeProviderCatalogModelId(providerId, modelRecord.id);
+      return {
+        index,
+        model,
+        modelRecord,
+        originalId: modelRecord.id,
+        normalizedId,
+        changed: normalizedId !== modelRecord.id,
+      };
+    });
+    if (!rows.some((row) => row.changed)) {
+      continue;
+    }
+
+    const rowsById = new Map<string, typeof rows>();
+    for (const row of rows) {
+      if (row.normalizedId === undefined) {
+        continue;
+      }
+      const grouped = rowsById.get(row.normalizedId) ?? [];
+      grouped.push(row);
+      rowsById.set(row.normalizedId, grouped);
+    }
+    const emittedIds = new Set<string>();
+    const models: unknown[] = [];
+    for (const row of rows) {
+      if (row.normalizedId === undefined || row.modelRecord === undefined) {
+        models.push(row.model);
+        continue;
+      }
+      const grouped = rowsById.get(row.normalizedId) ?? [row];
+      if (!grouped.some((candidate) => candidate.changed)) {
+        models.push(row.model);
+        continue;
+      }
+      if (emittedIds.has(row.normalizedId)) {
+        continue;
+      }
+      emittedIds.add(row.normalizedId);
+
+      const preferred =
+        grouped.find((candidate) => candidate.originalId === candidate.normalizedId) ?? grouped[0];
+      const preferredRecord = preferred?.modelRecord;
+      if (!preferred || !preferredRecord) {
+        models.push(row.model);
+        continue;
+      }
+      let merged: Record<string, unknown> = { ...preferredRecord, id: row.normalizedId };
+      for (const candidate of grouped) {
+        if (candidate === preferred || !candidate.modelRecord) {
+          continue;
+        }
+        const result = mergeModelRefMapEntries(
+          merged,
+          { ...candidate.modelRecord, id: row.normalizedId },
+          `${path}.${providerId}.models.${preferred.index}`,
+        );
+        merged = getRecord(result.value) ?? merged;
+        changes.push(
+          result.conflicts.length > 0
+            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept canonical values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
+            : `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}.`,
+        );
+      }
+      for (const candidate of grouped) {
+        if (!candidate.changed) {
+          continue;
+        }
+        changes.push(
+          `Upgraded ${path}.${providerId}.models.${candidate.index}.id from ${JSON.stringify(candidate.originalId)} to ${JSON.stringify(candidate.normalizedId)}.`,
+        );
+      }
+      models.push(merged);
+    }
+    next[providerId] = { ...provider, models };
+    changed = true;
+  }
+  return { value: changed ? next : providers, changed };
+}
+
 export function rewriteKnownModelRefs(
   value: unknown,
   path: string,
@@ -554,7 +685,11 @@ export function rewriteKnownModelRefs(
 ): { value: unknown; changed: boolean } {
   const key = pathKey(path);
   if (typeof value === "string") {
-    if (!MODEL_REF_STRING_KEYS.has(key) && !isChannelModelOverridePath(path)) {
+    if (
+      !MODEL_REF_STRING_KEYS.has(key) &&
+      !isChannelModelOverridePath(path) &&
+      !isMediaModelPath(path)
+    ) {
       return { value, changed: false };
     }
     const next = rewriteModelRefString(value, path, changes);
@@ -583,8 +718,13 @@ export function rewriteKnownModelRefs(
   }
   let working = record;
   let changed = false;
+  if (isProviderCatalogsPath(path)) {
+    const rewrittenCatalogs = rewriteProviderCatalogModelIds(record, path, changes);
+    working = rewrittenCatalogs.value;
+    changed ||= rewrittenCatalogs.changed;
+  }
   if (MODEL_REF_MAP_KEYS.has(key)) {
-    const rewrittenKeys = rewriteModelRefMapKeys(record, path, changes);
+    const rewrittenKeys = rewriteModelRefMapKeys(working, path, changes);
     working = rewrittenKeys.value;
     changed ||= rewrittenKeys.changed;
   }

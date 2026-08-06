@@ -166,6 +166,80 @@ describe("createNodePluginTools", () => {
     expect(result.content).toEqual([{ type: "text", text: "pong" }]);
   });
 
+  it("forwards the caller abort signal to node gateway invocations", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "remote-demo",
+          name: "remote_echo",
+          description: "Echo through a remote node",
+          command: "remote.echo",
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload: { ok: true } });
+    const controller = new AbortController();
+    const tool = expectDefined(
+      createNodePluginTools({})[0],
+      "createNodePluginTools({})[0] test invariant",
+    );
+
+    await tool.execute("call-cancellable", { text: "ping" }, controller.signal);
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "remote.echo",
+        params: { text: "ping" },
+        idempotencyKey: "call-cancellable",
+      },
+      { scopes: ["operator.write"], signal: controller.signal },
+    );
+  });
+
+  it("propagates caller cancellation through node gateway invocations", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "remote-demo",
+          name: "remote_echo",
+          description: "Echo through a remote node",
+          command: "remote.echo",
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _opts, _params, extra) => {
+      extra?.signal?.throwIfAborted();
+      return { payload: { ok: true } };
+    });
+    const controller = new AbortController();
+    const abortError = new DOMException("node call cancelled", "AbortError");
+    controller.abort(abortError);
+    const tool = expectDefined(
+      createNodePluginTools({})[0],
+      "createNodePluginTools({})[0] test invariant",
+    );
+
+    await expect(tool.execute("call-aborted", { text: "ping" }, controller.signal)).rejects.toBe(
+      abortError,
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "remote.echo",
+        params: { text: "ping" },
+        idempotencyKey: "call-aborted",
+      },
+      { scopes: ["operator.write"], signal: controller.signal },
+    );
+  });
+
   it("wraps node-host MCP arguments and maps MCP content", async () => {
     replaceNodePluginTools({
       nodeId: "node-1",
@@ -299,7 +373,7 @@ describe("createNodePluginTools", () => {
         idempotencyKey: expect.stringContaining("docs_search"),
         sessionKey: "agent:main:node-mcp-code-mode",
       },
-      { scopes: ["operator.write"] },
+      { scopes: ["operator.write"], signal: expect.any(AbortSignal) },
     );
   });
 
@@ -363,7 +437,7 @@ describe("createNodePluginTools", () => {
         nodeId: "node-c",
         params: { server: "docs", tool: "search_c", arguments: {} },
       }),
-      { scopes: ["operator.write"] },
+      { scopes: ["operator.write"], signal: expect.any(AbortSignal) },
     );
   });
 

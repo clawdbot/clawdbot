@@ -868,6 +868,8 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/parent-agent",
       config: cfg,
       workspaceDir: "/tmp/parent-workspace",
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
       createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
     } as never;
 
@@ -888,5 +890,8 @@ describe("describeImageWithModel", () => {
     expect(result.text).toBe("parent runtime");
     expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
     expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+    for (const call of resolveModelAsyncMock.mock.calls) {
+      expect(call[4]).toEqual(expect.objectContaining({ preparedModelRuntime }));
+    }
   });
 });

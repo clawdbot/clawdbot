@@ -47,6 +47,7 @@ describe("gateway startup benchmark script", () => {
     expect(helpResult.stdout).toContain("OpenClaw Gateway startup benchmark");
     expect(helpResult.stdout).toContain("--case <id>");
     expect(helpResult.stdout).toContain("--cpu-prof-dir <dir>");
+    expect(helpResult.stdout).toContain("--heap-prof-dir <dir>");
     expect(helpResult.stdout).toContain("default (gateway default)");
     expect(helpResult.stdout).not.toContain("[gateway-startup-bench]");
     expect(helpResult.stderr).toBe("");
@@ -63,12 +64,15 @@ describe("gateway startup benchmark script", () => {
         "--output",
         "startup.json",
         "--json",
+        "--heap-prof-dir",
+        "profiles",
         "--runs",
         "2",
       ]),
     ).toMatchObject({
       cases: [{ id: "default" }],
       json: true,
+      heapProfDir: "profiles",
       output: "startup.json",
       runs: 2,
     });
@@ -169,9 +173,37 @@ describe("gateway startup benchmark script", () => {
     expect(testing.classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
   });
 
+  it("preserves ready and trace records split across output chunks", () => {
+    const chunks = [
+      "[gateway] rea",
+      "dy (0 plugins, 0.8s)\nstartup trace: side",
+      "cars.ready 2.0ms total=7.5ms heapUsedMb=12.0\n",
+    ];
+    let carry = "";
+    const lines: string[] = [];
+    for (const chunk of chunks) {
+      const parsed = testing.collectOutputLines(carry, chunk);
+      carry = parsed.carry;
+      lines.push(...parsed.lines);
+    }
+    const trace: Record<string, number> = {};
+    for (const line of lines) {
+      testing.collectStartupTrace(line, trace);
+    }
+
+    expect(carry).toBe("");
+    expect(lines.map(testing.classifyGatewayReadyLog)).toContain("gateway-ready");
+    expect(trace).toMatchObject({
+      "sidecars.ready": 2,
+      "sidecars.ready.heapUsedMb": 12,
+      "sidecars.ready.total": 7.5,
+    });
+  });
+
   it("summarizes split ready log timings without the ambiguous readyLogMs field", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
+        completionMs: 50,
         cpuCoreRatio: null,
         cpuMs: null,
         exitCode: null,
@@ -201,6 +233,7 @@ describe("gateway startup benchmark script", () => {
       },
     ]);
 
+    expect(result.summary.completionMs?.p50).toBe(50);
     expect(result.summary.httpListenLogMs?.p50).toBe(10);
     expect(result.summary.gatewayReadyLogMs?.p50).toBe(40);
     expect("readyLogMs" in result.summary).toBe(false);
@@ -209,6 +242,7 @@ describe("gateway startup benchmark script", () => {
   it("flags samples that never produced readiness or process metrics", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
+        completionMs: null,
         cpuCoreRatio: null,
         cpuMs: null,
         exitCode: 1,
@@ -241,7 +275,7 @@ describe("gateway startup benchmark script", () => {
     expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
       {
         id: "demo",
-        reason: "missing /healthz, /readyz, cpu, rss",
+        reason: "missing /healthz, /readyz, completion, cpu, rss",
         sampleIndex: 1,
       },
     ]);
@@ -250,6 +284,7 @@ describe("gateway startup benchmark script", () => {
   it("flags samples that become ready and then exit nonzero", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
+        completionMs: 20,
         cpuCoreRatio: 0.5,
         cpuMs: 100,
         exitedBeforeTeardown: true,
@@ -292,6 +327,7 @@ describe("gateway startup benchmark script", () => {
   it("does not flag nonzero exits from intentional teardown", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
+        completionMs: 20,
         cpuCoreRatio: 0.5,
         cpuMs: 100,
         exitedBeforeTeardown: false,
@@ -328,6 +364,7 @@ describe("gateway startup benchmark script", () => {
   it("flags samples that become ready and then die from a signal", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
+        completionMs: 20,
         cpuCoreRatio: 0.5,
         cpuMs: 100,
         exitedBeforeTeardown: true,
@@ -382,6 +419,35 @@ describe("gateway startup benchmark script", () => {
 
     expect(startupTrace["sidecars.acp.runtime-ready.ready"]).toBeUndefined();
     expect(startupTrace["sidecars.acp.runtime-ready.readyCount"]).toBe(1);
+  });
+
+  it("collects prepared runtime grouping counts", () => {
+    const startupTrace: Record<string, number> = {};
+
+    testing.collectStartupTrace(
+      "[gateway] startup trace: sidecars.model-runtime-build agentCount=12 workspaceGroupCount=2 configuredFactsGroupCount=2 catalogSourceCount=0 credentialGroupCount=1 catalogGroupCount=0 runtimeRegistryCount=2 sourceConcurrencyLimitCount=2 fullCatalogConcurrencyLimitCount=1",
+      startupTrace,
+    );
+
+    expect(startupTrace["sidecars.model-runtime-build.agentCount"]).toBe(12);
+    expect(startupTrace["sidecars.model-runtime-build.configuredFactsGroupCount"]).toBe(2);
+    expect(startupTrace["sidecars.model-runtime-build.catalogGroupCount"]).toBe(0);
+    expect(startupTrace["sidecars.model-runtime-build.runtimeRegistryCount"]).toBe(2);
+  });
+
+  it("uses the recorded trace total for completion timing", async () => {
+    const startedAt = performance.now();
+    const completionMs = await testing.waitForStartupTracePhase({
+      deadlineAt: startedAt + 1_000,
+      isDone: () => false,
+      phase: "sidecars.ready",
+      startupTrace: {
+        "sidecars.ready": 20,
+        "sidecars.ready.total": 50,
+      },
+    });
+
+    expect(completionMs).toBe(50);
   });
 
   it("keeps counts and memory metrics out of the slow-duration ranking", () => {
@@ -471,6 +537,43 @@ describe("gateway startup benchmark script", () => {
       expect(manifest.providers).toEqual(["bench-catalog-stall"]);
       expect(source).toContain("api.registerProvider");
       expect(source).toContain("Date.now() + 2000");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("builds prepared-runtime scale cases with shared and distinct workspaces", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
+    try {
+      const benchCase = testing.parseOptions(["--case", "preparedRuntimeScaleMany"]).cases[0];
+      if (!benchCase) {
+        throw new Error("expected prepared runtime scale case");
+      }
+      const configPath = testing.writeConfig(root, benchCase);
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+        agents?: { list?: Array<{ id: string; workspace: string }> };
+        plugins?: { allow?: string[] };
+      };
+      const agents = config.agents?.list ?? [];
+      expect(agents).toHaveLength(12);
+      expect(new Set(agents.slice(0, 11).map((agent) => agent.workspace)).size).toBe(1);
+      expect(agents[11]?.workspace).not.toBe(agents[0]?.workspace);
+      const pluginId = config.plugins?.allow?.[0];
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          path.join(root, "plugins", pluginId ?? "missing", "openclaw.plugin.json"),
+          "utf8",
+        ),
+      ) as { modelCatalog?: unknown; providerCatalogEntry?: string; providers?: string[] };
+      expect(manifest.providers).toEqual(["bench-catalog-stall"]);
+      expect(manifest.providerCatalogEntry).toBe("./provider-discovery.cjs");
+      expect(manifest.modelCatalog).toBeUndefined();
+      expect(
+        fs.readFileSync(
+          path.join(root, "plugins", "bench-plugin-01", "provider-discovery.cjs"),
+          "utf8",
+        ),
+      ).toContain("preparedRuntimeStaticCatalogCallCount");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

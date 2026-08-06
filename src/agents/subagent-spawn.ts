@@ -7,7 +7,6 @@ import { promises as fs } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import {
   GatewayDrainingError,
@@ -33,6 +32,7 @@ import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
+  retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import {
@@ -66,8 +66,6 @@ import {
 import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
-
-const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 
 function sanitizeMountPathHint(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -132,7 +130,13 @@ export async function spawnSubagentDirect(
       launchReplayKey: swarmLaunchReplayKey,
       reservationPending,
     },
-    admission: { resolve: resolveAdmission, initial: admission, childDepth, maxSpawnDepth },
+    admission: {
+      resolve: resolveAdmission,
+      initial: admission,
+      reservation: admissionReservation,
+      childDepth,
+      maxSpawnDepth,
+    },
     childIdem,
   } = requestResolution.resolved;
   let modelApplied = false;
@@ -194,6 +198,16 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    const provisionalSessionIdentity = {
+      expectedSessionId: initialSession.entry?.sessionId,
+      expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
+    };
+    const cleanupCreatedSession = (emitLifecycleHooks = false) =>
+      cleanupProvisionalSession(childSessionKey, {
+        emitLifecycleHooks,
+        deleteTranscript: true,
+        ...provisionalSessionIdentity,
+      });
     const preparedSpawnContext = await prepareSubagentSessionContext({
       cfg,
       contextMode,
@@ -203,10 +217,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
     });
     if (preparedSpawnContext.status === "error") {
-      await cleanupProvisionalSession(childSessionKey, {
-        emitLifecycleHooks: false,
-        deleteTranscript: true,
-      });
+      await cleanupCreatedSession();
       return {
         status: "error",
         error: preparedSpawnContext.error,
@@ -220,15 +231,7 @@ export async function spawnSubagentDirect(
         resolvedModel,
       });
       if (runtimeModelPersistError) {
-        try {
-          await callSubagentGateway({
-            method: "sessions.delete",
-            params: { key: childSessionKey, emitLifecycleHooks: false },
-            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-          });
-        } catch {
-          // Best-effort cleanup only.
-        }
+        await cleanupCreatedSession();
         return {
           status: "error",
           error: runtimeModelPersistError,
@@ -253,15 +256,7 @@ export async function spawnSubagentDirect(
         },
       });
       if (bindResult.status === "error") {
-        try {
-          await callSubagentGateway({
-            method: "sessions.delete",
-            params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-          });
-        } catch {
-          // Best-effort cleanup only.
-        }
+        await cleanupCreatedSession();
         return {
           status: "error",
           error: bindResult.error,
@@ -315,10 +310,7 @@ export async function spawnSubagentDirect(
       mountPathHint,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
-      await cleanupProvisionalSession(childSessionKey, {
-        emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
-      });
+      await cleanupCreatedSession(threadBindingReady);
       return {
         status: materializedAttachments.status,
         error: materializedAttachments.error,
@@ -398,6 +390,15 @@ export async function spawnSubagentDirect(
       spawnMode,
       resolvedModelMetadata,
     });
+    const cleanupFailedSpawn = (waitForSessionDeletion?: boolean) =>
+      cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        attachmentAbsDir,
+        emitLifecycleHooks: threadBindingReady,
+        deleteTranscript: true,
+        ...provisionalSessionIdentity,
+        waitForSessionDeletion,
+      });
     type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
@@ -425,12 +426,7 @@ export async function spawnSubagentDirect(
       },
       async cleanupOnFailure({ phase, state }) {
         if (phase === "initialize") {
-          await cleanupFailedSpawnBeforeAgentStart({
-            childSessionKey,
-            attachmentAbsDir,
-            emitLifecycleHooks: threadBindingReady,
-            deleteTranscript: true,
-          });
+          await cleanupFailedSpawn();
           return;
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
@@ -470,14 +466,12 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        await cleanupProvisionalSession(childSessionKey, {
-          emitLifecycleHooks,
-          deleteTranscript: true,
-        });
+        await cleanupCreatedSession(emitLifecycleHooks);
       },
     };
     const pipelineResult = await runSpawnPipeline({
       adapter,
+      admissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
@@ -544,6 +538,7 @@ export async function spawnSubagentDirect(
       };
     }
     childRunId = pipelineResult.runId;
+    let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
       let launchTerminationConfirmed = false;
       activateSwarmRun({
@@ -560,7 +555,11 @@ export async function spawnSubagentDirect(
                 );
               }
             } catch (error) {
-              await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
+              await terminateAcceptedCollectorRun({
+                childSessionKey,
+                gatewayRunId,
+                ...provisionalSessionIdentity,
+              });
               launchTerminationConfirmed = true;
               throw error;
             }
@@ -574,28 +573,16 @@ export async function spawnSubagentDirect(
           const launchError = summarizeSpawnError(error);
           const [contextRollback, sessionCleanup] = await Promise.allSettled([
             rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
-            cleanupFailedSpawnBeforeAgentStart({
-              childSessionKey,
-              attachmentAbsDir,
-              emitLifecycleHooks: threadBindingReady,
-              deleteTranscript: true,
+            cleanupFailedSpawn(
               // A launch RPC can fail after acceptance. Keep the FIFO slot until
               // deleting the child session proves no accepted run remains active.
-              waitForSessionDeletion: !launchTerminationConfirmed,
-            }),
+              !launchTerminationConfirmed,
+            ),
           ]);
-          for (;;) {
-            try {
-              settleFailedQueuedSubagentLaunch(childRunId, launchError);
-              break;
-            } catch {
-              // The child is stopped; retry only the durable terminal write.
-              await new Promise<void>((resolve) => {
-                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-                timer.unref?.();
-              });
-            }
-          }
+          await retrySubagentCleanup(async () => {
+            settleFailedQueuedSubagentLaunch(childRunId, launchError);
+            return true;
+          });
           const cleanupComplete =
             contextRollback.status === "fulfilled" &&
             contextRollback.value &&
@@ -614,33 +601,10 @@ export async function spawnSubagentDirect(
         },
       });
       swarmReservationPending = false;
-      emitSessionLifecycleEvent({
-        sessionKey: childSessionKey,
-        reason: "create",
-        parentSessionKey: requesterInternalKey,
-        label: label || undefined,
-      });
-      const acceptedNote = resolveSubagentSpawnAcceptedNote({
-        spawnMode,
-        agentSessionKey: ctx.agentSessionKey,
-      });
-      return {
-        status: "accepted",
-        childSessionKey,
-        sessionKey: childSessionKey,
-        runId: childRunId,
-        mode: spawnMode,
-        taskName,
-        note: preparedSpawnContext.forkFallbackNote
-          ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
-          : acceptedNote,
-        ...resolvedModelMetadata,
-        modelApplied: resolvedModel ? modelApplied : undefined,
-        attachments: attachmentsReceipt,
-      };
+      collectorSessionKey = childSessionKey;
+    } else {
+      await emitSpawnLifecycleHooks(childRunId);
     }
-
-    await emitSpawnLifecycleHooks(childRunId);
 
     // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
@@ -657,6 +621,7 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
       taskName,
@@ -668,6 +633,7 @@ export async function spawnSubagentDirect(
       attachments: attachmentsReceipt,
     };
   } finally {
+    admissionReservation?.release();
     if (swarmReservationPending) {
       removeQueuedSwarmRun(childRunId);
     }

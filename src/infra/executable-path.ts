@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
@@ -127,13 +128,7 @@ function cacheExecutablePath(key: string, resolved: string | undefined): void {
     expiresAt: Date.now() + EXECUTABLE_PATH_CACHE_TTL_MS,
     resolved: resolved ?? null,
   });
-  while (executablePathCache.size > EXECUTABLE_PATH_CACHE_MAX_ENTRIES) {
-    const oldest = executablePathCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    executablePathCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(executablePathCache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
 }
 
 function executablePathCacheKey(
@@ -169,9 +164,12 @@ export function resolveExecutableFromPathEnv(
 ): string | undefined {
   const cacheKey = executablePathCacheKey(executable, pathEnv, env, options?.includeExtensionless);
   const cached = executablePathCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    // PATH probes synchronously stat every candidate. Reuse hits and misses until config reload or
-    // this short TTL expires; otherwise catalog polling repeatedly blocks the Gateway event loop.
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    // Hits and misses remain valid while the same PATH/PATHEXT/cwd key is used; config reload clears
+    // the map. Installs/removals under an unchanged key intentionally need reload or a 60s idle gap,
+    // because steady pollers must never fall back into synchronous PATH stat loops.
+    cached.expiresAt = now + EXECUTABLE_PATH_CACHE_TTL_MS;
     executablePathCache.delete(cacheKey);
     executablePathCache.set(cacheKey, cached);
     return cached.resolved ?? undefined;

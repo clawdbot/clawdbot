@@ -36,7 +36,8 @@ type CodeModeRunState = {
   // True only when every future bridge call is enforced read-only before execution.
   replaySafe: boolean;
   output: unknown[];
-  createdAt: number;
+  // Retain all output for cumulative limits, but never replay blocks already returned to the model.
+  deliveredOutputCount: number;
   expiresAt: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
@@ -105,6 +106,21 @@ export function disposeCodeModeRun(runId: string): void {
   scheduleActiveRunExpiry();
 }
 
+/** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
+export function disposeAllCodeModeRuns(): void {
+  activeRuns.forEach((state) => cancelPendingBridgeStates(state.pending));
+  activeRuns.clear();
+  resumingRunIds.clear();
+  scheduleActiveRunExpiry();
+}
+
+/** Advance the snapshot frontier before exposing output to a wait observer. */
+export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
+  const output = state.output.slice(state.deliveredOutputCount);
+  state.deliveredOutputCount = state.output.length;
+  return output;
+}
+
 /** Abort each bridge call whose result has not already reached its guest. */
 export function cancelPendingBridgeStates(pending: readonly PendingBridgeState[]): void {
   for (const entry of pending) {
@@ -142,16 +158,13 @@ export function waitForPendingBridgeSettlement(
   settlementMode: CodeModeSettlementMode,
 ): Promise<void> {
   const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  const outstanding = required.filter((entry) => !entry.settled);
   // Workers reject hostless pending guests; headless execution also validates
   // the frontier before reaching this shared settlement helper.
   if (
-    required.length === 0 ||
-    (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled))
+    outstanding.length === 0 ||
+    (settlementMode.kind === "awaiting" && outstanding.length !== required.length)
   ) {
-    return Promise.resolve();
-  }
-  const outstanding = required.filter((entry) => !entry.settled);
-  if (outstanding.length === 0) {
     return Promise.resolve();
   }
   const settlement =
@@ -172,8 +185,14 @@ function enforceActiveRunLimit(): void {
   }
 }
 
-export function reserveActiveRunSlot(): () => void {
-  enforceActiveRunLimit();
+export function reserveActiveRunSlot(ownedRunId?: string): () => void {
+  if (ownedRunId === undefined) {
+    enforceActiveRunLimit();
+  } else if (!activeRuns.delete(ownedRunId)) {
+    throw new ToolInputError("code mode run is unavailable or expired.");
+  }
+  // Resume transfers an existing slot without exposing a free capacity window
+  // to concurrent exec calls or rejecting its own run at the global limit.
   activeRunReservations += 1;
   let released = false;
   return () => {
@@ -195,6 +214,8 @@ export function snapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
+  deliveredOutputCount?: number;
+  reservedActiveRunSlot?: boolean;
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
@@ -251,8 +272,11 @@ function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
   output: unknown[];
+  reservedActiveRunSlot?: boolean;
 }) {
-  enforceActiveRunLimit();
+  if (!params.reservedActiveRunSlot) {
+    enforceActiveRunLimit();
+  }
   enforceSnapshotPayloadLimits(params);
 }
 
@@ -322,6 +346,7 @@ export function storeSnapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
+  deliveredOutputCount?: number;
 }) {
   const now = Date.now();
   const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
@@ -348,7 +373,7 @@ export function storeSnapshotState(params: {
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
     output: params.output,
-    createdAt: now,
+    deliveredOutputCount: params.output.length,
     expiresAt,
     agentWaitRetainUntil,
     runtime: params.runtime,
@@ -361,7 +386,7 @@ export function storeSnapshotState(params: {
     reason: codeModeWaitingReason(params.pending),
     pendingToolCalls: pendingToolCalls(params.pending),
     replaySafe: params.replaySafe,
-    output: params.output,
+    output: params.output.slice(params.deliveredOutputCount ?? 0),
     telemetry: telemetry(params.runtime),
   };
 }

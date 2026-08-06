@@ -171,6 +171,7 @@ export function recordTaskRunProgressByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;

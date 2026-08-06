@@ -7,10 +7,12 @@ import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
+import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
+import { printDaemonStatus } from "./status.print.js";
 
 type PortConnections = Awaited<
   ReturnType<typeof import("../../infra/ports.js").inspectPortConnections>
@@ -30,6 +32,8 @@ const callGatewayStatusProbe = vi.fn<
   error: null,
   server: { version: "2026.5.6", connId: "conn-1" },
 }));
+const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
+const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
@@ -47,13 +51,34 @@ type PortUsageTestSummary = {
   hints: string[];
 };
 
-const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsageTestSummary>>(
-  async (port: number) => ({
-    port,
-    status: "free",
-    listeners: [],
-    hints: [],
-  }),
+type PortUsageInspectionOptions = { probeHosts?: readonly string[] };
+
+const inspectPortUsage = vi.fn<
+  (port: number, options?: PortUsageInspectionOptions) => Promise<PortUsageTestSummary>
+>(async (port: number) => ({
+  port,
+  status: "free",
+  listeners: [],
+  hints: [],
+}));
+const inspectPortUsages = vi.fn<
+  (
+    ports: readonly number[],
+    options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+  ) => Promise<Map<number, PortUsageTestSummary>>
+>(
+  async (ports) =>
+    new Map(
+      ports.map((port) => [
+        port,
+        {
+          port,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+      ]),
+    ),
 );
 const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
   async (port: number) => ({
@@ -82,10 +107,15 @@ const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>
   details: [],
 }));
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
-const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
+const serviceIsLoaded = vi.fn<
+  (opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<boolean>
+>(async (_opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => true);
 const serviceReadRuntime = vi.fn<
-  (_env?: NodeJS.ProcessEnv) => Promise<{ status: string; detail?: string }>
->(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+  (
+    _env?: NodeJS.ProcessEnv,
+    _opts?: { timeoutMs?: number },
+  ) => Promise<{ status: string; detail?: string }>
+>(async (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -180,6 +210,11 @@ vi.mock("../../config/config.js", () => ({
   resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
 }));
 
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
+  isDefaultInstallIdentity: (env?: NodeJS.ProcessEnv) => isDefaultInstallIdentity(env),
+}));
+
 vi.mock("../../daemon/diagnostics.js", () => ({
   readLastGatewayErrorLine: (env: NodeJS.ProcessEnv, options?: { requirePatternMatch?: boolean }) =>
     readLastGatewayErrorLine(env, options),
@@ -189,7 +224,8 @@ vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
 }));
 
-vi.mock("../../daemon/launchd.js", () => ({
+vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd.js")>()),
   findStaleOpenClawUpdateLaunchdJobs: (env?: NodeJS.ProcessEnv) =>
     findStaleOpenClawUpdateLaunchdJobs(env),
 }));
@@ -198,7 +234,8 @@ vi.mock("../../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: (opts: unknown) => auditGatewayServiceConfig(opts),
 }));
 
-vi.mock("../../daemon/service.js", () => ({
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () =>
     createMockGatewayService({
       isLoaded: serviceIsLoaded,
@@ -210,6 +247,10 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("../../gateway/net.js", () => ({
   resolveGatewayBindHost: (bindMode: string, customBindHost?: string) =>
     resolveGatewayBindHost(bindMode, customBindHost),
+  resolveGatewayRequiredListenHosts: (bindHost: string) =>
+    /^\d+\.\d+\.\d+\.\d+$/.test(bindHost) && bindHost !== "0.0.0.0" && bindHost !== "127.0.0.1"
+      ? [bindHost, "127.0.0.1"]
+      : [bindHost],
 }));
 
 vi.mock("../../gateway/control-ui-links.js", () => ({
@@ -231,12 +272,22 @@ vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
 
 vi.mock("../../infra/ports.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
-  inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsage: (port: number, options?: PortUsageInspectionOptions) =>
+    inspectPortUsage(port, options),
+  inspectPortUsages: (
+    ports: readonly number[],
+    options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+  ) => inspectPortUsages(ports, options),
   formatPortDiagnostics: () => [],
 }));
 
 vi.mock("../../infra/restart-handoff.js", () => ({
   readGatewayRestartHandoffSync: (env?: NodeJS.ProcessEnv) => readGatewayRestartHandoffSync(env),
+}));
+
+vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-supervision.js")>()),
+  isGatewayExternallySupervised: (env?: NodeJS.ProcessEnv) => isGatewayExternallySupervised(env),
 }));
 
 vi.mock("../../infra/tailnet.js", () => ({
@@ -282,6 +333,7 @@ describe("gatherDaemonStatus", () => {
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "DAEMON_GATEWAY_TOKEN",
@@ -293,12 +345,18 @@ describe("gatherDaemonStatus", () => {
     deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
     deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
+    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
+    isGatewayExternallySupervised.mockReset().mockReturnValue(false);
     callGatewayStatusProbe.mockClear();
     resolveAdvertisedControlUiLinks.mockClear();
     resolveAdvertisedControlUiLinks.mockResolvedValue({
       httpUrl: "https://10.211.55.3:19001/",
       wsUrl: "wss://10.211.55.3:19001",
     });
+    resolveGatewayBindHost.mockClear();
+    resolveGatewayBindHost.mockImplementation(async (bindMode?: string) =>
+      bindMode === "loopback" ? "127.0.0.1" : "0.0.0.0",
+    );
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
@@ -314,6 +372,20 @@ describe("gatherDaemonStatus", () => {
       listeners: [],
       hints: [],
     }));
+    inspectPortUsages.mockReset();
+    inspectPortUsages.mockImplementation(async (ports: readonly number[]) => {
+      return new Map(
+        ports.map((port) => [
+          port,
+          {
+            port,
+            status: "free" as const,
+            listeners: [],
+            hints: [],
+          },
+        ]),
+      );
+    });
     inspectPortConnections.mockClear();
     inspectWindowsGatewayFirewall.mockClear();
     inspectWindowsGatewayFirewall.mockResolvedValue({
@@ -326,6 +398,9 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockReset();
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
+    serviceIsLoaded.mockClear();
+    serviceReadCommand.mockClear();
+    serviceReadRuntime.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
     daemonConfigWarnings = [];
@@ -380,6 +455,22 @@ describe("gatherDaemonStatus", () => {
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it("batches daemon and CLI port status inspection when ports differ", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(inspectPortUsages).toHaveBeenCalledWith(
+      [19001, 18789],
+      expect.objectContaining({
+        probeHostsByPort: new Map([[19001, ["0.0.0.0"]]]),
+      }),
+    );
+    expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
   it("reports the heap limit from the installed Gateway service", async () => {
@@ -493,9 +584,21 @@ describe("gatherDaemonStatus", () => {
 
     expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
     expect(status.gateway?.bindMode).toBe("loopback");
+    expect(inspectPortUsages).toHaveBeenCalledWith(
+      [19001, 18789],
+      expect.objectContaining({
+        probeHostsByPort: new Map([[19001, ["127.0.0.1"]]]),
+      }),
+    );
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://override.example:18790",
+      error: "connect ECONNREFUSED override.example:18790",
+    });
+
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },
       probe: true,
@@ -513,7 +616,79 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.url).toBe("wss://override.example:18790");
     expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(status.pluginVersionDrift).toBeUndefined();
+    expect(status.service.targetRole).toBe("diagnostic-only");
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
+
+  it("keeps the standalone gateway default when no native service target exists", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    serviceIsLoaded.mockResolvedValueOnce(false);
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      deep: true,
+    });
+
+    expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18789");
+    expect((callArg(callGatewayStatusProbe) as { url?: string }).url).toBe("ws://127.0.0.1:18789");
+    expect(status.service.targetRole).toBe("target");
+  });
+
+  it.each([
+    ["non-default install identity", false, false],
+    ["external supervisor", true, true],
+  ])(
+    "uses the active %s context instead of an unrelated native service",
+    async (_, isDefault, external) => {
+      setTestEnvValue("OPENCLAW_GATEWAY_PORT", "18900");
+      isDefaultInstallIdentity.mockReturnValue(isDefault);
+      isGatewayExternallySupervised.mockReturnValue(external);
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+          OPENCLAW_CONFIG_PATH: "/tmp/legacy-openclaw/openclaw.json",
+          OPENCLAW_STATE_DIR: "/tmp/legacy-openclaw",
+        },
+      });
+      resolveGatewayPort.mockImplementation((_cfg?: unknown, env?: unknown) =>
+        Number((env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_GATEWAY_PORT ?? 18789),
+      );
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok: false,
+        url: "ws://127.0.0.1:18900",
+        error: "connect ECONNREFUSED 127.0.0.1:18900",
+      });
+
+      const status = await gatherDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: true,
+        deep: true,
+      });
+
+      expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18900");
+      expect((callArg(callGatewayStatusProbe) as { url?: string }).url).toBe(
+        "ws://127.0.0.1:18900",
+      );
+      const probeInput = callArg(callGatewayStatusProbe) as {
+        config?: unknown;
+        configPath?: string;
+      };
+      expect(probeInput.config).toBe(cliLoadedConfig);
+      expect(probeInput.configPath).toBe("/tmp/openclaw-cli/openclaw.json");
+      const authInput = callArg(resolveGatewayProbeAuthSafeWithSecretInputsCalls) as {
+        cfg?: unknown;
+        env?: NodeJS.ProcessEnv;
+      };
+      expect(authInput.cfg).toBe(cliLoadedConfig);
+      expect(authInput.env?.OPENCLAW_GATEWAY_PORT).toBe("18900");
+      expect(status.service.targetRole).toBe("diagnostic-only");
+      expect(inspectGatewayRestart).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses fallback network details when interface discovery throws during status inspection", async () => {
     daemonLoadedConfig = {
@@ -569,6 +744,67 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
+
+  it("bounds both service-manager reads and still emits JSON after they time out", async () => {
+    serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
+      if (args?.timeoutMs === undefined) {
+        return await new Promise<boolean>(() => {});
+      }
+      throw new Error("systemctl is-enabled timed out");
+    });
+    serviceReadRuntime.mockImplementationOnce(async (_env, opts) => {
+      if (opts?.timeoutMs === undefined) {
+        return await new Promise<{ status: string }>(() => {});
+      }
+      throw new Error("systemctl show timed out");
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: { timeout: "100", json: true },
+      probe: false,
+      deep: true,
+    });
+
+    expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
+    expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
+    expect(status.service.loaded).toBe(false);
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl show timed out",
+    });
+
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    try {
+      printDaemonStatus(status, { json: true, deep: true });
+      expect(writeJson).toHaveBeenCalledOnce();
+      const serialized = JSON.stringify(writeJson.mock.calls[0]?.[0]);
+      if (!serialized) {
+        throw new Error("expected terminal JSON output");
+      }
+      expect(JSON.parse(serialized)).toMatchObject({
+        service: {
+          loaded: false,
+          runtime: {
+            status: "unknown",
+            detail: "Error: systemctl show timed out",
+          },
+        },
+      });
+    } finally {
+      writeJson.mockRestore();
+    }
+
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      printDaemonStatus(status, { json: false, deep: true });
+      const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  }, 1_000);
 
   it("keeps gateway status read-only when service management is unsupported", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);
@@ -1149,12 +1385,19 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("includes the last gateway error when the service is listening but the RPC probe fails", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
+    inspectPortUsages.mockResolvedValueOnce(
+      new Map([
+        [
+          19001,
+          {
+            port: 19001,
+            status: "busy",
+            listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+            hints: [],
+          },
+        ],
+      ]),
+    );
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://127.0.0.1:19001",
@@ -1185,12 +1428,6 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("does not read local gateway errors for an explicit probe URL", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",
@@ -1215,12 +1452,6 @@ describe("gatherDaemonStatus", () => {
         auth: { token: "daemon-token" },
       },
     };
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",

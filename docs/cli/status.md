@@ -21,6 +21,7 @@ openclaw status --usage
 | `--deep`                | Runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal). Also enables the security audit.         |
 | `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
 | `--json`                | Machine-readable output.                                                                                        |
+| `--timeout <ms>`        | Probe timeout in milliseconds (default: `10000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as

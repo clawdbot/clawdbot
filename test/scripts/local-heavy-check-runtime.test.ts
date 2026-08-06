@@ -148,6 +148,7 @@ describe("local-heavy-check-runtime", () => {
       "--checkers",
       "1",
     ]);
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
@@ -162,6 +163,7 @@ describe("local-heavy-check-runtime", () => {
     const { args, env } = applyLocalTsgoPolicy(
       ["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"],
       makeEnv({
+        GOMAXPROCS: "3",
         GOGC: "80",
         GOMEMLIMIT: "5GiB",
         OPENCLAW_TSGO_PPROF_DIR: "/tmp/profile",
@@ -178,6 +180,7 @@ describe("local-heavy-check-runtime", () => {
       "--declaration",
       "false",
     ]);
+    expect(env.GOMAXPROCS).toBe("3");
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
@@ -201,6 +204,7 @@ describe("local-heavy-check-runtime", () => {
       "--tsBuildInfoFile",
       ".artifacts/tsgo-cache/root.tsbuildinfo",
     ]);
+    expect(env.GOMAXPROCS).toBeUndefined();
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });
@@ -253,8 +257,18 @@ describe("local-heavy-check-runtime", () => {
       "--checkers",
       "1",
     ]);
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("does not oversubscribe a single-CPU host", () => {
+    const { env } = applyLocalTsgoPolicy([], makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "throttled" }), {
+      logicalCpuCount: 1,
+      totalMemoryBytes: 16 * 1024 ** 3,
+    });
+
+    expect(env.GOMAXPROCS).toBe("1");
   });
 
   it("allows forcing full-speed tsgo runs on roomy hosts", () => {
@@ -273,6 +287,7 @@ describe("local-heavy-check-runtime", () => {
       "--tsBuildInfoFile",
       ".artifacts/tsgo-cache/root.tsbuildinfo",
     ]);
+    expect(env.GOMAXPROCS).toBeUndefined();
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });

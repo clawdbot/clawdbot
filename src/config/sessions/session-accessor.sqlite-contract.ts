@@ -76,6 +76,10 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
 
 export type TranscriptEvent = unknown;
 
+export type TranscriptEventAppendOptions = {
+  appendIntent?: "active-branch";
+};
+
 export type SessionTranscriptStats = {
   eventCount: number;
   lastMutationAtMs?: number;
@@ -102,6 +106,7 @@ export type {
 } from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {
+  appendIntent?: "active-branch";
   config?: OpenClawConfig;
   cwd?: string;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
@@ -115,6 +120,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 
 export type TranscriptMessageAppendResult<TMessage> = {
   appended: boolean;
+  effectiveParentId?: string | null;
   message: TMessage;
   messageId: string;
 };
@@ -144,6 +150,7 @@ export type SessionTranscriptTurnWriteContext = {
 };
 
 export type SessionEntryPatchOptions = {
+  assertCommitAllowed?: () => void;
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   preserveActivity?: boolean;

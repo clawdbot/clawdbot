@@ -9,10 +9,12 @@ import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-name
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
+  attachToolAllowlistIntersection,
   couldNormalizeToolNamePrefixToAllowedTool,
   expandToolGroups,
   normalizeToolList,
   normalizeToolName,
+  readToolAllowlistIntersection,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy-shared.js";

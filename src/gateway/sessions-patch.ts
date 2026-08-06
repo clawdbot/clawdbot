@@ -13,7 +13,7 @@ import {
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -33,7 +33,7 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry, SessionToolOverrides } from "../config/sessions.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -47,6 +47,7 @@ import {
   isAgentHarnessSessionKeyOwnedBy,
   resolveMissingAgentHarnessSessionError,
 } from "../sessions/agent-harness-session-key.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   applyTraceOverride,
   applyVerboseOverride,
@@ -54,7 +55,6 @@ import {
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
 import {
-  applyModelOverrideToSessionEntry,
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../sessions/model-overrides.js";
@@ -69,7 +69,6 @@ import {
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isAgentSessionModelPatchOrigin,
-  shouldPreserveSessionAuthProfileOverride,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
@@ -124,6 +123,38 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
     return normalized;
   }
   return undefined;
+}
+
+function normalizeSessionToolOverrides(
+  raw: SessionToolOverrides,
+): SessionToolOverrides | undefined {
+  const normalizeBooleanMap = (value: Record<string, boolean> | undefined) => {
+    const entries = Object.entries(value ?? {}).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  };
+  const mcpToolsDeny = Object.fromEntries(
+    Object.entries(raw.mcpToolsDeny ?? {})
+      .map(
+        ([serverName, toolNames]) =>
+          [
+            serverName,
+            [...new Set(toolNames)].toSorted((left, right) => left.localeCompare(right)),
+          ] as const,
+      )
+      .filter(([, toolNames]) => toolNames.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+  const mcpServers = normalizeBooleanMap(raw.mcpServers);
+  const skills = normalizeBooleanMap(raw.skills);
+  const normalized: SessionToolOverrides = {
+    ...(mcpServers ? { mcpServers } : {}),
+    ...(Object.keys(mcpToolsDeny).length > 0 ? { mcpToolsDeny } : {}),
+    ...(skills ? { skills } : {}),
+    ...(raw.webSearch === false ? { webSearch: false } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 type SessionPatchProjectionEntry = {
@@ -396,6 +427,21 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("toolOverrides" in patch) {
+    const raw = patch.toolOverrides;
+    if (raw === null) {
+      delete next.toolOverrides;
+    } else if (raw !== undefined) {
+      // Session patches replace this sparse overlay atomically; they never deep-merge old policy.
+      const normalized = normalizeSessionToolOverrides(raw);
+      if (normalized) {
+        next.toolOverrides = normalized;
+      } else {
+        delete next.toolOverrides;
+      }
+    }
+  }
+
   if ("verboseLevel" in patch) {
     const raw = patch.verboseLevel;
     const parsed = parseVerboseOverride(raw);
@@ -521,22 +567,19 @@ export async function projectSessionsPatchEntry(params: {
     delete next.modelFallback;
     const raw = patch.model;
     if (raw === null) {
-      applyModelOverrideToSessionEntry({
+      applyModelOverrideWithAuthProfileCompatibility({
+        cfg,
+        agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
+        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection: {
           provider: resolvedDefault.provider,
           model: resolvedDefault.model,
           isDefault: true,
         },
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-          cfg,
-          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-          entry: next,
-          provider: resolvedDefault.provider,
-          ...(params.providerAuthMetadataSnapshot
-            ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-            : {}),
-        }),
+        ...(params.providerAuthMetadataSnapshot
+          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+          : {}),
       });
       delete next.liveModelSwitchPending;
     } else if (raw !== undefined) {
@@ -568,23 +611,20 @@ export async function projectSessionsPatchEntry(params: {
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      applyModelOverrideToSessionEntry({
+      applyModelOverrideWithAuthProfileCompatibility({
+        cfg,
+        agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
+        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection: {
           provider: resolved.provider,
           model: resolved.model,
           isDefault: resolved.isDefault,
         },
         profileOverride: resolved.profile,
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-          cfg,
-          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-          entry: next,
-          provider: resolved.provider,
-          ...(params.providerAuthMetadataSnapshot
-            ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-            : {}),
-        }),
+        ...(params.providerAuthMetadataSnapshot
+          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+          : {}),
         markLiveSwitchPending: true,
       });
     }

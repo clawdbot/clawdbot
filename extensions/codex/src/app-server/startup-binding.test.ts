@@ -76,15 +76,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              truncateAfterCompaction: true,
-            },
-          },
-        },
-      } as never,
+      config: undefined,
     });
 
     expect(binding?.threadId).toBe("thread-existing");
@@ -122,7 +114,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -163,7 +154,7 @@ describe("Codex app-server startup binding", () => {
       config: {
         agents: {
           defaults: {
-            compaction: { truncateAfterCompaction: true, maxActiveTranscriptBytes: "1b" },
+            compaction: { maxActiveTranscriptBytes: "1b" },
           },
         },
       } as never,
@@ -521,7 +512,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -553,7 +543,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -590,7 +579,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -628,7 +616,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -666,7 +653,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -698,7 +684,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: 1_000,
             },
           },
@@ -744,7 +729,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -790,7 +774,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -843,7 +826,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -887,7 +869,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -990,7 +971,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: 1_000,
             },
           },
@@ -1022,7 +1002,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: 1_000,
             },
           },

@@ -8,7 +8,7 @@
   },
   "type": "module",
   "optionalDependencies": {
-    "node-llama-cpp": "3.19.0"
+    "node-llama-cpp": "3.19.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

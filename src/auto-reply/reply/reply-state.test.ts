@@ -309,7 +309,7 @@ describe("shouldRunMemoryFlush", () => {
         entry: {
           totalTokens: 90_000,
           compactionCount: 2,
-          memoryFlushCompactionCount: 2,
+          memoryFlush: { kind: "succeeded", compactionCount: 2 },
         },
         contextWindowTokens: 100_000,
         reserveTokensFloor: 5_000,
@@ -338,8 +338,16 @@ describe("shouldRunMemoryFlush", () => {
 
     for (const entry of [
       { totalTokens: 95_000, compactionCount: 1 },
-      { totalTokens: 95_000, compactionCount: 2, memoryFlushCompactionCount: 1 },
-      { totalTokens: 95_000, compactionCount: 3, memoryFlushCompactionCount: 2 },
+      {
+        totalTokens: 95_000,
+        compactionCount: 2,
+        memoryFlush: { kind: "succeeded" as const, compactionCount: 1 },
+      },
+      {
+        totalTokens: 95_000,
+        compactionCount: 3,
+        memoryFlush: { kind: "succeeded" as const, compactionCount: 2 },
+      },
     ]) {
       expect(shouldRunMemoryFlush({ entry, ...params })).toBe(true);
     }
@@ -387,7 +395,7 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
     expect(
       hasAlreadyFlushedForCurrentCompaction({
         compactionCount: 3,
-        memoryFlushCompactionCount: 3,
+        memoryFlush: { kind: "succeeded", compactionCount: 3 },
       }),
     ).toBe(true);
   });
@@ -396,7 +404,7 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
     expect(
       hasAlreadyFlushedForCurrentCompaction({
         compactionCount: 3,
-        memoryFlushCompactionCount: 2,
+        memoryFlush: { kind: "succeeded", compactionCount: 2 },
       }),
     ).toBe(false);
   });
@@ -412,7 +420,7 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
   it("treats missing compactionCount as 0", () => {
     expect(
       hasAlreadyFlushedForCurrentCompaction({
-        memoryFlushCompactionCount: 0,
+        memoryFlush: { kind: "succeeded", compactionCount: 0 },
       }),
     ).toBe(true);
   });

@@ -73,8 +73,43 @@ describe("matrix qa config", () => {
       requireMention: true,
     });
     expect(sut?.replyToMode).toBe("off");
+    expect(sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "off",
+      preview: { toolProgress: true },
+    });
     expect(sut?.threadReplies).toBe("inbound");
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
+  });
+
+  it("preserves the scenario provider plugin without enabling unrelated plugins", () => {
+    const next = buildMatrixQaConfig(
+      {
+        plugins: {
+          allow: ["acpx", "memory-core", "qa-lab", "openai"],
+          entries: {
+            openai: { enabled: true },
+            unrelated: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        driverUserId: "@driver:matrix-qa.test",
+        homeserver: "http://127.0.0.1:28008/",
+        observerUserId: "@observer:matrix-qa.test",
+        sutAccessToken: "sut-token",
+        sutAccountId: "sut",
+        sutUserId: "@sut:matrix-qa.test",
+        topology,
+      },
+    );
+
+    expect(next.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "matrix"]);
+    expect(next.plugins?.allow).not.toContain("unrelated");
+    expect(next.plugins?.allow).not.toContain("anthropic");
+    expect(next.plugins?.entries?.matrix).toEqual({ enabled: true });
+    expect(next.plugins?.entries?.openai).toEqual({ enabled: true });
   });
 
   it("honors an explicit DM disable with a provisioned DM room", () => {
@@ -233,7 +268,12 @@ describe("matrix qa config", () => {
 
     expect(reset.channels?.matrix?.accounts?.sut?.autoJoin).toBeUndefined();
     expect(reset.channels?.matrix?.accounts?.sut?.autoJoinAllowlist).toBeUndefined();
-    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toBeUndefined();
+    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "off",
+      preview: { toolProgress: true },
+    });
   });
 
   it("normalizes Matrix QA overrides into the written account config", () => {
@@ -264,9 +304,52 @@ describe("matrix qa config", () => {
     expect(account?.groupPolicy).toBe("open");
     expect(account?.streaming).toEqual({
       block: { enabled: true },
+      chunkMode: "length",
       mode: "partial",
+      preview: { toolProgress: true },
     });
     expect(config.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
+  });
+
+  it("resets tool progress when a scalar streaming override follows an opt-out", () => {
+    const optedOut = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        streaming: {
+          mode: "quiet",
+          preview: { toolProgress: false },
+        },
+      },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+    const reset = buildMatrixQaConfig(optedOut, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: { streaming: "quiet" },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(optedOut.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "quiet",
+      preview: { toolProgress: false },
+    });
+    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "quiet",
+      preview: { toolProgress: true },
+    });
   });
 
   it("applies Matrix approval delivery overrides with gateway forwarding enabled", () => {

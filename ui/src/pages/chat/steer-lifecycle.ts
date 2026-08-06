@@ -17,12 +17,14 @@ import {
   setTransientQueuedMessageProjection,
   type ChatQueueScopedSessionHost,
   updateQueuedMessage,
+  writeChatQueueForScope,
 } from "./chat-queue.ts";
 import {
   isTerminalFailureChatSendAck,
   type ChatSendAck,
   type TerminalFailureChatSendAck,
 } from "./chat-send-ack.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -37,6 +39,8 @@ type SteerLifecycleHost = ChatQueueScopedSessionHost & {
   connected: boolean;
   chatRunId: string | null;
   chatMessages: unknown[];
+  currentSessionId?: string | null;
+  chatDisplayedLeafEntryId?: string | null;
   chatMessagesBySession?: ChatMessageCache;
   sessionsResult?: SessionsListResult | null;
   lastError?: string | null;
@@ -150,7 +154,17 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
   };
   if (visibleSessionMatches(state, sessionKey, item.agentId)) {
     if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
-      state.chatMessages = [...state.chatMessages, userMessage];
+      const scope = readChatSessionProjectionScope(state, {
+        sessionKey,
+        agentId: item.agentId,
+      });
+      // Steer retirement and history recovery must retain the same pending
+      // entry; rendering a separate row loses it during a concurrent snapshot.
+      reduceChatSessionProjection(
+        state,
+        { type: "sendPending", runId, message: userMessage },
+        { scope },
+      );
     }
     return;
   }
@@ -197,7 +211,11 @@ export function retireHistoryProvenSteeredChips(state: SteerLifecycleHost): void
     return;
   }
   const retiredIds = new Set(retired.map((item) => item.id));
-  state.chatQueue = state.chatQueue.filter((item) => !retiredIds.has(item.id));
+  writeChatQueueForScope(
+    state,
+    state.sessionKey,
+    state.chatQueue.filter((item) => !retiredIds.has(item.id)),
+  );
   for (const item of retired) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(state, item.attachments));
   }
@@ -346,10 +364,14 @@ export async function sendQueuedChatMessageWithQueueMode(
     // (session-row-only runs, or the captured run ended mid-request).
     const chipRunId = activeRunId && host.chatRunId === activeRunId ? activeRunId : ack.runId;
     const steeredIndicator = ackSteeredChip(steeringChip, chipRunId);
-    host.chatQueue = [
-      ...host.chatQueue.filter((entry) => entry.id !== id),
-      steeredIndicator,
-    ].toSorted((left, right) => left.createdAt - right.createdAt);
+    writeChatQueueForScope(
+      host,
+      itemSessionKey,
+      [...host.chatQueue.filter((entry) => entry.id !== id), steeredIndicator].toSorted(
+        (left, right) => left.createdAt - right.createdAt,
+      ),
+      item.agentId,
+    );
   } else {
     releaseChatAttachmentPayloads(attachments);
   }

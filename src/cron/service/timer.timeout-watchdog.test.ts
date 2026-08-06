@@ -708,6 +708,18 @@ describe("cron service timer regressions", () => {
         payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
         state: { nextRunAtMs: scheduledAt },
       });
+      cronJob.delivery = {
+        mode: "announce",
+        channel: "telegram",
+        to: "19098680",
+        bestEffort: true,
+      };
+      cronJob.failureAlert = {
+        after: 1,
+        mode: "announce",
+        channel: "telegram",
+        to: "12345",
+      };
       await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
       vi.setSystemTime(scheduledAt);
@@ -715,6 +727,7 @@ describe("cron service timer regressions", () => {
       const started = createDeferred<void>();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const sendCronFailureAlert = vi.fn(async () => {});
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
@@ -723,6 +736,7 @@ describe("cron service timer regressions", () => {
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun,
+        sendCronFailureAlert,
         runIsolatedAgentJob: vi.fn(
           async ({
             abortSignal,
@@ -770,6 +784,14 @@ describe("cron service timer regressions", () => {
       expect(job.state.lastError).toContain("stalled before execution start");
       expect(job.state.lastError).toContain("runtime-plugins");
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
+      expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+      expect(sendCronFailureAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "12345",
+          text: expect.stringContaining("runtime-plugins"),
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }

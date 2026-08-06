@@ -17,11 +17,11 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "../../inbound/admission.js";
-import {
-  normalizeWebInboundMessage,
-  withDeprecatedWebInboundMessageFlatAliases,
-} from "../../inbound/message-aliases.js";
-import type { AdmittedWebInboundMessage, WebInboundMessageInput } from "../../inbound/types.js";
+import { withDeprecatedWebInboundMessageFlatAliases } from "../../inbound/message-aliases.js";
+import type {
+  AdmittedWebInboundMessage,
+  DeprecatedWebInboundAdmissionTopLevelFields,
+} from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
@@ -37,6 +37,15 @@ import {
   createWhatsAppStatusReactionController,
   type StatusReactionController,
 } from "./status-reaction.js";
+
+function readDeprecatedAccessControlPassed(msg: AdmittedWebInboundMessage): boolean | undefined {
+  // The admitted type hides deprecated flat aliases, but normalized legacy
+  // listener inputs retain this one tri-state proof for preflight safety.
+  return (
+    msg as AdmittedWebInboundMessage &
+      Pick<DeprecatedWebInboundAdmissionTopLevelFields, "accessControlPassed">
+  ).accessControlPassed;
+}
 
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
@@ -54,8 +63,12 @@ export function createWebOnMessageHandler(params: {
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
 }) {
-  const hasExplicitlyPassedInboundAccess = (msg: WebInboundMessageInput): boolean =>
-    msg.admission ? msg.admission.ingress.decision === "allow" : msg.accessControlPassed === true;
+  const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean => {
+    if (msg.admission.ingress.decisiveGateId === "legacy-flat-compat") {
+      return readDeprecatedAccessControlPassed(msg) === true;
+    }
+    return msg.admission.ingress.decision === "allow";
+  };
 
   const withDirectSenderPeer = (
     msg: AdmittedWebInboundMessage,
@@ -140,9 +153,8 @@ export function createWebOnMessageHandler(params: {
     return processMessage(processParams);
   };
 
-  return async (rawMsg: WebInboundMessageInput) => {
-    const canRunDirectEarlyAudioPreflight = hasExplicitlyPassedInboundAccess(rawMsg);
-    const normalizedMsg = requireAdmittedWhatsAppInboundMessage(normalizeWebInboundMessage(rawMsg));
+  return async (normalizedMsg: AdmittedWebInboundMessage) => {
+    const canRunDirectEarlyAudioPreflight = hasExplicitlyPassedInboundAccess(normalizedMsg);
     const cfg = params.loadConfig?.() ?? params.cfg;
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
@@ -176,9 +188,9 @@ export function createWebOnMessageHandler(params: {
     }
 
     // Skip if this is a message we just sent (echo detection)
-    if (params.echoTracker.has(msg.payload.body)) {
+    if (params.echoTracker.has(msg.payload.body, conversationId)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
-      params.echoTracker.forget(msg.payload.body);
+      params.echoTracker.forget(msg.payload.body, conversationId);
       return;
     }
 

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -17,6 +18,7 @@ import {
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
+  maybeRestartService,
   shouldPrepareUpdatedInstallRestart,
 } from "./update-command-service.js";
 import { testing as updateCommandServiceTesting } from "./update-command-service.test-support.js";
@@ -173,6 +175,31 @@ describe("resolveUpdatedGatewayRestartPort", () => {
         serviceEnv: {},
       }),
     ).toBe(19000);
+  });
+});
+
+describe("maybeRestartService", () => {
+  it("reports service ownership skips to JSON callers", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+
+    await expect(
+      maybeRestartService({
+        shouldRestart: false,
+        result: {
+          status: "ok",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+        },
+        opts: { json: true },
+        refreshServiceEnv: false,
+        gatewayPort: 18789,
+        serviceMutationSkipMessage: "service management skipped: ownership conflict",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(true);
+
+    expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
   });
 });
 
@@ -766,6 +793,35 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
       recovered: false,
       detail:
         "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
+    });
+  });
+
+  it("preserves system LaunchDaemon recovery guidance", async () => {
+    const readState = vi.fn(async () => ({
+      installed: true,
+      loaded: false,
+      running: false,
+      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
+      command: null,
+      runtime: { status: "unknown", missingSupervision: true },
+    }));
+    const recover = vi.fn(async () => {
+      throw new Error("System LaunchDaemon system/ai.openclaw.stomme owns this label");
+    });
+
+    await expect(
+      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
+        service: {} as never,
+        deps: {
+          platform: "darwin",
+          readState: readState as never,
+          recover: recover as never,
+        },
+      }),
+    ).resolves.toEqual({
+      attempted: true,
+      recovered: false,
+      detail: "System LaunchDaemon system/ai.openclaw.stomme owns this label",
     });
   });
 });

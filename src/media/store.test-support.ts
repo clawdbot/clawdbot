@@ -1,11 +1,8 @@
-import type { request as httpRequest } from "node:http";
 import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import "./store.js";
 
 type MediaStoreTestApi = {
   setMediaStoreNetworkDepsForTest(deps?: {
-    httpRequest?: typeof httpRequest;
-    httpsRequest?: typeof httpRequest;
     resolvePinnedHostname?: typeof resolvePinnedHostname;
   }): void;
 };

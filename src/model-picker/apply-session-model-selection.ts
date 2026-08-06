@@ -2,6 +2,7 @@ import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
 } from "../agents/agent-runtime-id.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, normalizeProviderId } from "../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
@@ -9,6 +10,7 @@ import {
   resolveCompatibleAgentRuntimeForProvider,
   resolveSessionRuntimeOverrideForProvider,
 } from "../agents/session-runtime-compat.js";
+import { persistStickyModelSelectionBestEffort } from "../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
@@ -25,10 +27,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
-  applyModelOverrideToSessionEntry,
 } from "../sessions/model-overrides.js";
 
 export type SessionModelSelectionRequest = {
@@ -54,6 +56,7 @@ export type ApplySessionModelSelectionParams = {
   allowedModelKeys: ReadonlySet<string>;
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
+  canPersistStickyModelSelection?: boolean;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -93,18 +96,21 @@ type ApplySessionModelSelectionToEntryResult = {
   runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
 };
 
-/**
- * Applies the model transaction field family to one caller-owned snapshot.
- * Mixed directives reuse this mutator and retain their single broad persistence transaction.
- */
-export function applySessionModelSelectionToEntry(params: {
+/** Applies the model transaction field family to one caller-owned snapshot. */
+function applySessionModelSelectionToEntry(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
   entry: SessionEntry;
+  currentProvider: string;
   request: SessionModelSelectionRequest;
   runtime: AppliedRuntimeDirective;
   markLiveSwitchPending?: boolean;
 }): ApplySessionModelSelectionToEntryResult {
-  const modelChange = applyModelOverrideToSessionEntry({
+  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
     entry: params.entry,
+    currentProvider: params.currentProvider,
     selection: params.request,
     profileOverride: params.request.profileOverride,
     markLiveSwitchPending: params.markLiveSwitchPending,
@@ -208,7 +214,10 @@ export async function applySessionModelSelection(
   const initialEntry = { ...startingEntry };
   const nextEntry = { ...startingEntry };
   const applied = applySessionModelSelectionToEntry({
+    cfg: params.cfg,
+    agentDir: resolveAgentDir(params.cfg, params.agentId),
     entry: nextEntry,
+    currentProvider: params.currentProvider,
     request,
     runtime,
     markLiveSwitchPending: params.markLiveSwitchPending,
@@ -301,6 +310,9 @@ export async function applySessionModelSelection(
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
   const changed = applied.changed || thinkingRemap !== undefined;
+  if (params.canPersistStickyModelSelection === true && !request.isDefault) {
+    persistStickyModelSelectionBestEffort({ agentId: params.agentId, model: effectiveModelRef });
+  }
   if (changed) {
     triggerSessionPatchHook({
       cfg: params.cfg,

@@ -66,7 +66,7 @@ flow:
             expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'main', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: config.conversationId }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: controlUiChatUrl
           value:
-            expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/chat`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
+            expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
         - call: webOpenPage
           saveAs: uiTab
           args:

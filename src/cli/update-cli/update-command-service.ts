@@ -29,6 +29,7 @@ import {
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -111,6 +112,8 @@ export type PreManagedServiceStop = {
   inspected: boolean;
   runtimeInspected: boolean;
   running: boolean;
+  serviceMutationAllowed?: boolean;
+  serviceMutationSkipMessage?: string;
   serviceMatchesMutationRoot?: boolean;
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
@@ -127,6 +130,41 @@ type WindowsTaskAutoStartRecovery = {
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
+
+export class GatewayServiceUpdateOwnershipError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "GatewayServiceUpdateOwnershipError";
+  }
+}
+
+export function resolveGatewayServiceManagementBlockMessageForUpdate(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  try {
+    assertGatewayServiceManagementAllowedForUpdate(env);
+    return undefined;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+export function assertGatewayServiceManagementAllowedForUpdate(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  try {
+    assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new GatewayServiceUpdateOwnershipError(message, err);
+  }
+}
+
+export function isGatewayServiceManagementAllowedForUpdate(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return resolveGatewayServiceManagementBlockMessageForUpdate(env) === undefined;
+}
 
 export class UpdateCommandAbort extends Error {
   constructor() {
@@ -334,12 +372,38 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   shouldRestart: boolean;
   jsonMode: boolean;
 }): Promise<PreManagedServiceStop> {
+  const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
+    process.env,
+  );
+  if (serviceMutationSkipMessage) {
+    return {
+      stopped: false,
+      inspected: false,
+      runtimeInspected: false,
+      running: false,
+      serviceMutationAllowed: false,
+      serviceMutationSkipMessage,
+    };
+  }
   let service: ReturnType<typeof resolveGatewayService>;
   let serviceState: Awaited<ReturnType<typeof readGatewayServiceState>>;
   try {
     service = resolveGatewayService();
-    serviceState = await readGatewayServiceState(service, { env: process.env });
-  } catch {
+    serviceState = await readGatewayServiceState(service, {
+      env: process.env,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+    });
+  } catch (err) {
+    if (err instanceof GatewayServiceUpdateOwnershipError) {
+      return {
+        stopped: false,
+        inspected: false,
+        runtimeInspected: false,
+        running: false,
+        serviceMutationAllowed: false,
+        blockMessage: err.message,
+      };
+    }
     return { stopped: false, inspected: false, runtimeInspected: false, running: false };
   }
 
@@ -949,6 +1013,9 @@ function resolveManagedServiceNodeRunner(
  * when the package root is the same.
  */
 export async function resolveManagedServiceNodeRunnerOverride(): Promise<string | undefined> {
+  if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
+    return undefined;
+  }
   const command = await resolveGatewayService()
     .readCommand(process.env)
     .catch(() => null);
@@ -970,6 +1037,9 @@ export async function resolveManagedServiceNodeRunnerOverride(): Promise<string 
 export async function resolveManagedServicePackageUpdateRoot(params: {
   root: string;
 }): Promise<ManagedServiceRootRedirect | null> {
+  if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
+    return null;
+  }
   const command = await resolveGatewayService()
     .readCommand(process.env)
     .catch(() => null);
@@ -1004,9 +1074,11 @@ export async function gatewayServiceCommandUsesRoot(params: {
   }
   const command =
     params.command === undefined
-      ? await resolveGatewayService()
-          .readCommand(params.env ?? process.env)
-          .catch(() => null)
+      ? isGatewayServiceManagementAllowedForUpdate(params.env ?? process.env)
+        ? await resolveGatewayService()
+            .readCommand(params.env ?? process.env)
+            .catch(() => null)
+        : null
       : params.command;
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceRoot = layout?.packageRoot;
@@ -1037,8 +1109,22 @@ export async function maybeRestartService(params: {
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
   requireRunningServiceAfterRestart?: boolean;
+  serviceMutationSkipMessage?: string;
   timeoutMs: number;
 }): Promise<boolean> {
+  if (
+    params.shouldRestart &&
+    (!isGatewayServiceManagementAllowedForUpdate(process.env) ||
+      !isGatewayServiceManagementAllowedForUpdate(params.serviceEnv ?? process.env))
+  ) {
+    const message =
+      resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
+      resolveGatewayServiceManagementBlockMessageForUpdate(params.serviceEnv ?? process.env);
+    if (message) {
+      defaultRuntime.error(message);
+    }
+    return false;
+  }
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     opts: { requireRunningService?: boolean } = {},
@@ -1321,6 +1407,18 @@ export async function maybeRestartService(params: {
       ) {
         return false;
       }
+    }
+    return true;
+  }
+
+  if (params.serviceMutationSkipMessage) {
+    if (params.opts.json) {
+      defaultRuntime.error(params.serviceMutationSkipMessage);
+    } else {
+      defaultRuntime.log("");
+      defaultRuntime.log(
+        theme.warn(`Gateway: restart skipped: ${params.serviceMutationSkipMessage}`),
+      );
     }
     return true;
   }
