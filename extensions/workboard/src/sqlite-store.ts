@@ -522,9 +522,15 @@ function groupByCardId(rows: Row[]): Map<string, Row[]> {
   return grouped;
 }
 
-function loadCardChildRows(db: DatabaseSync): CardChildRows {
+function loadCardChildRows(
+  db: DatabaseSync,
+  options: { includeProof?: boolean } = {},
+): CardChildRows {
   const byTable = new Map<string, Map<string, Row[]>>();
   for (const table of CARD_CHILD_TABLES) {
+    if (table === "workboard_card_proof" && options.includeProof === false) {
+      continue;
+    }
     // Same order the per-card query produces, so grouped buckets stay ordinal-sorted.
     byTable.set(
       table,
@@ -734,6 +740,89 @@ function readLatestProofNote(db: DatabaseSync, cardId: string): string | undefin
     )
     .get(cardId) as Row | undefined;
   return row ? stringValue(row, "note") : undefined;
+}
+
+function readProofPagesByCard(
+  db: DatabaseSync,
+  limit: number,
+): Map<string, PersistedWorkboardCardProofPage["proofPage"]> {
+  const totals = db
+    .prepare(
+      `
+        SELECT card_id, COUNT(*) AS proof_total
+        FROM workboard_card_proof
+        GROUP BY card_id
+        ORDER BY card_id ASC
+      `,
+    )
+    .all() as Row[];
+  const pages = new Map<string, PersistedWorkboardCardProofPage["proofPage"]>(
+    totals.map((row) => {
+      const total = requiredNumber(row, "proof_total");
+      return [
+        requiredString(row, "card_id"),
+        { proof: [], total, hasMore: total > limit },
+      ] as const;
+    }),
+  );
+  const rows = db
+    .prepare(
+      `
+        SELECT proof.*
+        FROM workboard_cards AS card
+        CROSS JOIN workboard_card_proof AS proof
+        WHERE proof.id IN (
+          SELECT latest.id
+          FROM workboard_card_proof AS latest
+          WHERE latest.card_id = card.id
+          ORDER BY latest.ordinal DESC, latest.id DESC
+          LIMIT ?
+        )
+        ORDER BY card.id ASC, proof.ordinal DESC, proof.id DESC
+      `,
+    )
+    .all(limit) as Row[];
+  for (const row of rows) {
+    const cardId = requiredString(row, "card_id");
+    const page = pages.get(cardId);
+    if (!page) {
+      throw new Error(`workboard proof page missing total for card: ${cardId}`);
+    }
+    page.proof.push(proofFromRow(row));
+  }
+  for (const page of pages.values()) {
+    page.proof.reverse();
+  }
+  return pages;
+}
+
+function readLatestProofNotesByCard(db: DatabaseSync): Map<string, string> {
+  const rows = db
+    .prepare(
+      `
+        SELECT
+          card.id AS card_id,
+          (
+            SELECT noted.note
+            FROM workboard_card_proof AS noted
+            WHERE
+              noted.card_id = card.id
+              AND noted.note IS NOT NULL
+              AND trim(noted.note) <> ''
+            ORDER BY noted.ordinal DESC, noted.id DESC
+            LIMIT 1
+          ) AS note
+        FROM workboard_cards AS card
+        ORDER BY card.id ASC
+      `,
+    )
+    .all() as Row[];
+  return new Map(
+    rows.flatMap((row) => {
+      const note = stringValue(row, "note");
+      return note ? [[requiredString(row, "card_id"), note] as const] : [];
+    }),
+  );
 }
 
 function readMetadata(
@@ -1473,13 +1562,26 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   async listCardProofPages(
     request: Parameters<NonNullable<WorkboardCardStore["listCardProofPages"]>>[0],
   ) {
-    return runReadTransaction(this.db, () =>
-      (
-        this.db
-          .prepare("SELECT * FROM workboard_cards ORDER BY created_at ASC, id ASC")
-          .all() as Row[]
-      ).map((row) => readCardProofPage(this.db, row, request)),
-    );
+    return runReadTransaction(this.db, () => {
+      const rows = this.db
+        .prepare("SELECT * FROM workboard_cards ORDER BY created_at ASC, id ASC")
+        .all() as Row[];
+      const preloaded = loadCardChildRows(this.db, { includeProof: false });
+      const proofPages = readProofPagesByCard(this.db, request.limit);
+      const latestProofNotes = readLatestProofNotesByCard(this.db);
+      return rows.map((row) => {
+        const cardId = requiredString(row, "id");
+        const result: PersistedWorkboardCardProofPage = {
+          card: readCard(this.db, row, { includeProof: false, preloaded }),
+          proofPage: proofPages.get(cardId) ?? { proof: [], total: 0, hasMore: false },
+        };
+        const latestProofNote = latestProofNotes.get(cardId);
+        if (latestProofNote) {
+          result.latestProofNote = latestProofNote;
+        }
+        return result;
+      });
+    });
   }
 
   async delete(key: string): Promise<boolean> {
