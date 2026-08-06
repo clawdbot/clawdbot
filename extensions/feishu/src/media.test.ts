@@ -269,11 +269,11 @@ describe("sendMediaFeishu msg_type routing", () => {
             credentials.httpTimeoutMs === 5_000,
         ),
       ).toBe(true);
-      expect(
-        JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}"),
-      ).toEqual({
-        file_key: "file_key_1",
-      });
+      expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual(
+        {
+          file_key: "file_key_1",
+        },
+      );
       expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("video preview upload timed out");
     } finally {
       vi.useRealTimers();
