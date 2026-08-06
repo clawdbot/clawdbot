@@ -47,6 +47,7 @@ enum GatewayDiscoveryPreferences {
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
+    @MainActor
     static func prepareStartupConfig(
         isPreview: Bool,
         saver: ([String: Any]) -> Bool) -> StartupConfig
@@ -76,6 +77,7 @@ enum GatewayDiscoveryPreferences {
             remoteIdentity: remoteIdentity)
     }
 
+    @MainActor
     static func migrateLegacyUnboundDiscoveryRoute(_ currentRoot: [String: Any])
         -> (root: [String: Any], changed: Bool)
     {
