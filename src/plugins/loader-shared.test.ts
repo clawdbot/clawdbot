@@ -144,6 +144,30 @@ describe("validatePluginConfig source values", () => {
   });
 });
 
+describe("validatePluginConfig manifest schema isolation", () => {
+  it("returns an error instead of throwing on a structurally invalid schema", () => {
+    const result = validatePluginConfig({
+      schema: {
+        type: "object",
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+      },
+      value: {},
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok ? [] : result.error.join(" ")).toContain("invalid schema");
+  });
+
+  it("returns an error instead of throwing when a schema is nested past the stack limit", () => {
+    let schema: Record<string, unknown> = { type: "object" };
+    for (let depth = 0; depth < 3_000; depth++) {
+      schema = { type: "object", properties: { nested: schema } };
+    }
+
+    expect(validatePluginConfig({ schema, value: {} })).toMatchObject({ ok: false });
+  });
+});
+
 describe("validatePluginConfig empty schema classification", () => {
   it("validates pattern properties instead of requiring empty config", () => {
     const schema = {

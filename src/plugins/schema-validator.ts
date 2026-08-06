@@ -346,6 +346,26 @@ function formatValidationErrors(
 }
 
 /**
+ * Validate a value against a schema supplied by a plugin manifest.
+ * Manifest schemas are third-party input, so every failure mode is a validation
+ * result: a structurally invalid schema, and a traversal that exhausts the stack
+ * on a deeply nested one. validateJsonSchemaValue keeps throwing for repo-owned
+ * schemas, where a malformed one is a programming error and must stay loud.
+ */
+export function validateManifestSchemaValue(
+  params: Parameters<typeof validateJsonSchemaValue>[0],
+): ReturnType<typeof validateJsonSchemaValue> {
+  try {
+    return validateJsonSchemaValue(params);
+  } catch (error) {
+    // The thrown text can embed raw manifest content (TypeBox echoes a bad regex
+    // pattern), and callers log it, so it is sanitized like every other error path.
+    const text = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+    return { ok: false, errors: [{ path: "<root>", message: text, text }] };
+  }
+}
+
+/**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
  * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
  */

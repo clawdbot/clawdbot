@@ -42,7 +42,7 @@ import {
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validateManifestSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -223,7 +223,7 @@ export function validatePluginConfig(params: {
     }
     return resultError(["<root>: config must be empty"]);
   }
-  const result = validateJsonSchemaValue({
+  const result = validateManifestSchemaValue({
     schema,
     cacheKey: params.cacheKey ?? JSON.stringify(schema),
     value: value ?? {},

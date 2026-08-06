@@ -131,6 +131,7 @@ describe("config plugin validation", () => {
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
   let blockedPluginDir = "";
+  let malformedSchemaPluginDir = "";
   const suiteEnv = () =>
     ({
       HOME: suiteHome,
@@ -257,6 +258,15 @@ describe("config plugin validation", () => {
       id: "blocked-plugin",
       schema: { type: "object" },
     });
+    malformedSchemaPluginDir = path.join(suiteHome, "malformed-schema-plugin");
+    await writePluginFixture({
+      dir: malformedSchemaPluginDir,
+      id: "malformed-schema-plugin",
+      schema: {
+        type: "object",
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+      },
+    });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
       process.cwd(),
@@ -279,6 +289,27 @@ describe("config plugin validation", () => {
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("reports a malformed plugin configSchema as an issue instead of throwing", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [malformedSchemaPluginDir] },
+        entries: { "malformed-schema-plugin": { enabled: true } },
+        allow: ["malformed-schema-plugin"],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.malformed-schema-plugin.config",
+        "invalid schema",
+      );
+    }
   });
 
   it("reports missing plugin refs across entries and allowlist surfaces", () => {
