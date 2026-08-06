@@ -98,10 +98,20 @@ export function createClickClackClient(options: ClientOptions) {
       await request<{ root: ClickClackMessage; replies: ClickClackMessage[] }>(
         `/api/messages/${encodeURIComponent(messageId)}/thread`,
       ),
-    createChannelMessage: async (channelId: string, body: string): Promise<ClickClackMessage> => {
+    createChannelMessage: async (
+      channelId: string,
+      body: string,
+      opts?: { quotedMessageId?: string },
+    ): Promise<ClickClackMessage> => {
       const data = await request<{ message: ClickClackMessage }>(
         `/api/channels/${encodeURIComponent(channelId)}/messages`,
-        { method: "POST", body: JSON.stringify({ body }) },
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body,
+            ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
+          }),
+        },
       );
       return data.message;
     },
@@ -125,10 +135,17 @@ export function createClickClackClient(options: ClientOptions) {
     createDirectMessage: async (
       conversationId: string,
       body: string,
+      opts?: { quotedMessageId?: string },
     ): Promise<ClickClackMessage> => {
       const data = await request<{ message: ClickClackMessage }>(
         `/api/dms/${encodeURIComponent(conversationId)}/messages`,
-        { method: "POST", body: JSON.stringify({ body }) },
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body,
+            ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
+          }),
+        },
       );
       return data.message;
     },
