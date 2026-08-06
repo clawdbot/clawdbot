@@ -13,8 +13,18 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
+import {
+  context,
+  diag,
+  DiagLogLevel,
+  metrics,
+  propagation,
+  ROOT_CONTEXT,
+  trace,
+} from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
@@ -40,6 +50,7 @@ import {
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   createOtelContext,
+  getReportedExporterHealth,
   startOtelService,
   stopStartedOtelServices,
 } from "./service.test-helpers.js";
@@ -47,6 +58,7 @@ import {
 const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
 const ENDPOINT_ENV_KEYS = [
   "OTEL_SDK_DISABLED",
+  "OTEL_PROPAGATORS",
   "OTEL_TRACES_EXPORTER",
   "OTEL_METRICS_EXPORTER",
   "OTEL_LOGS_EXPORTER",
@@ -253,6 +265,172 @@ async function emitRealSdkSignals() {
   });
   await waitForDiagnosticEventsDrained();
 }
+
+test("disables every OpenClaw route while preserving W3C propagation", async () => {
+  const receiver = await startOtlpReceiver();
+  const stdoutWrites: string[] = [];
+  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    stdoutWrites.push(String(chunk));
+    return true;
+  });
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_SDK_DISABLED = " TrUe ";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: true,
+    logs: true,
+    logsExporter: "both",
+  });
+
+  try {
+    await emitRealSdkSignals();
+    const incoming = {
+      baggage: "tenant=example",
+      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    };
+    const extracted = propagation.extract(ROOT_CONTEXT, incoming);
+    expect(trace.getSpanContext(extracted)).toMatchObject({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: 1,
+    });
+    expect(propagation.getBaggage(extracted)?.getEntry("tenant")?.value).toBe("example");
+    const outgoing: Record<string, string> = {};
+    await context.with(extracted, async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(trace.getSpanContext(context.active())).toMatchObject({
+        traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+        spanId: "00f067aa0ba902b7",
+        traceFlags: 1,
+      });
+      expect(propagation.getBaggage(context.active())?.getEntry("tenant")?.value).toBe("example");
+      propagation.inject(context.active(), outgoing);
+    });
+    expect(outgoing.traceparent).toBe(incoming.traceparent);
+    expect(outgoing.baggage).toBe(incoming.baggage);
+    expect(getReportedExporterHealth(ctx)).toEqual([]);
+
+    ctx.config.diagnostics!.enabled = false;
+    await service.start(ctx);
+    expect(context.with(extracted, () => trace.getSpanContext(context.active()))).toBeUndefined();
+    expect(propagation.fields()).toEqual([]);
+    expect(receiver.requests).toEqual([]);
+  } finally {
+    stdoutWrite.mockRestore();
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+  expect(stdoutWrites).toEqual([]);
+}, 30_000);
+
+test("preserves externally owned context and propagation globals while disabled", async () => {
+  releasePreloadedOtelGlobals();
+  const externalContextManager = new AsyncLocalStorageContextManager().enable();
+  expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
+  expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
+  process.env.OTEL_SDK_DISABLED = "true";
+  const { service, ctx } = await startOtelService();
+  const incoming = {
+    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  };
+  const extracted = propagation.extract(ROOT_CONTEXT, incoming);
+
+  await service.stop?.(ctx);
+
+  expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
+  await context.with(extracted, async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(trace.getSpanContext(context.active())?.traceId).toBe(
+      "4bf92f3577b34da6a3ce929d0e0e4736",
+    );
+  });
+});
+
+test("does not remove context and propagation globals installed after startup", async () => {
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_SDK_DISABLED = "true";
+  const { service, ctx } = await startOtelService();
+
+  context.disable();
+  propagation.disable();
+  const externalContextManager = new AsyncLocalStorageContextManager().enable();
+  expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
+  expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
+  const incoming = {
+    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  };
+  const extracted = propagation.extract(ROOT_CONTEXT, incoming);
+
+  await service.stop?.(ctx);
+
+  expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
+  await context.with(extracted, async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(trace.getSpanContext(context.active())?.traceId).toBe(
+      "4bf92f3577b34da6a3ce929d0e0e4736",
+    );
+  });
+});
+
+test.each([
+  { value: " B3 ", fields: ["b3"] },
+  {
+    value: "b3MULTI",
+    fields: ["x-b3-traceid", "x-b3-spanid", "x-b3-flags", "x-b3-sampled", "x-b3-parentspanid"],
+  },
+  { value: " JaEgEr ", fields: ["uber-trace-id"] },
+  { value: "none", fields: [] },
+])("keeps OTEL_PROPAGATORS=$value available while disabled", async ({ value, fields }) => {
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_SDK_DISABLED = "true";
+  process.env.OTEL_PROPAGATORS = value;
+  const { service, ctx } = await startOtelService();
+
+  try {
+    expect(propagation.fields()).toEqual(fields);
+  } finally {
+    await service.stop?.(ctx);
+  }
+  expect(propagation.fields()).toEqual([]);
+});
+
+test("warns and skips an unavailable disabled-mode propagator", async () => {
+  const diagnostics = captureOtelDiagnostics();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_SDK_DISABLED = "true";
+  process.env.OTEL_PROPAGATORS = "missing";
+  const { service, ctx } = await startOtelService();
+
+  try {
+    expect(propagation.fields()).toEqual([]);
+    expect(diagnostics).toContain(
+      'Propagator "missing" requested through environment variable is unavailable.',
+    );
+  } finally {
+    await service.stop?.(ctx);
+  }
+});
+
+test("warns and leaves the SDK enabled for an invalid disabled value", async () => {
+  const diagnostics = captureOtelDiagnostics();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_SDK_DISABLED = "invalid";
+  const { service, ctx } = await startOtelService({
+    traces: false,
+    metrics: false,
+    logs: false,
+  });
+
+  try {
+    expect(diagnostics.join("\n")).toContain(
+      "Unknown value 'invalid' for OTEL_SDK_DISABLED, expected 'true' or 'false'",
+    );
+    expect(propagation.fields()).toEqual([]);
+  } finally {
+    await service.stop?.(ctx);
+  }
+});
 
 const SHARED_ENDPOINT_ROUTING_CASES = [
   {
