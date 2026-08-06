@@ -152,7 +152,7 @@ export async function sendFileUrl(
  * The user_list endpoint uses the same base URL as the chatbot API but
  * with method=user_list instead of method=chatbot.
  */
-async function fetchChatUsers(
+export async function fetchChatUsers(
   incomingUrl: string,
   allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
