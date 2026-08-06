@@ -614,6 +614,27 @@ describe("compaction-safeguard summary budgets", () => {
     }
   });
 
+  it("keeps the rescued tail's final characters intact, including surrogates", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    // The last identifier ends the rescued tail, so a separator undercounted in
+    // the budget shows up as its final code unit going missing.
+    const body = [
+      `## Decisions\n${"d".repeat(max)}`,
+      "## Open TODOs\nNone.",
+      "## Constraints/Rules\nNone.",
+      "## Pending user asks\nNone.",
+      "## Exact identifiers\nN823JB-END🚀",
+    ].join("\n");
+
+    const out = capCompactionSummaryPreservingSuffix(body, "~".repeat(max), max);
+
+    expect(out.length).toBeLessThanOrEqual(max);
+    // Whole identifier, surrogate pair included. Undercounting the separator
+    // drops the final code unit and leaves a lone high surrogate here.
+    expect(out).toContain("N823JB-END🚀");
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
   it("keeps the audited sections when a front-heavy body is capped", () => {
     const max = MAX_COMPACTION_SUMMARY_CHARS;
     // A valid summary whose bulk sits under the first heading, pushing the later
