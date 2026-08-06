@@ -62,14 +62,18 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
-            echo "::error::Expected a final stable or extended-stable release tag; got ${RELEASE_TAG}."
+          if [[ "${RELEASE_TAG}" != v* ]]; then
+            echo "::error::Expected a Docker release tag with a v prefix; got ${RELEASE_TAG}."
             exit 1
           fi
-          git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
           version="${RELEASE_TAG#v}"
           policy="$(node scripts/lib/docker-release-policy.mjs "${version}")"
           channel="$(jq -r '.channel' <<< "${policy}")"
+          if [[ "${channel}" == "beta" && "${PUBLISH_TARGET}" == "docker-channel" ]]; then
+            echo "::error::Beta releases have no moving Docker channel aliases; select the Vercel target."
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
           default_aliases="$(jq -r '.movingAliases.default | join(" ")' <<< "${policy}")"
           slim_aliases="$(jq -r '.movingAliases.slim | join(" ")' <<< "${policy}")"
           browser_aliases="$(jq -r '.movingAliases.browser | join(" ")' <<< "${policy}")"

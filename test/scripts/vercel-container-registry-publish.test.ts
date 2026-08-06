@@ -168,7 +168,14 @@ describe("Vercel Container Registry publishing", () => {
     const validateDispatch = manualResolve.steps?.find(
       (step) => step.name === "Validate dispatch source",
     );
+    const resolvePolicy = manualResolve.steps?.find(
+      (step) => step.name === "Resolve release channel policy",
+    );
     expect(validateDispatch?.run).toContain('"${PUBLISH_TARGET}" == "docker-channel"');
+    expect(resolvePolicy?.run).not.toContain("Expected a final stable or extended-stable");
+    expect(resolvePolicy?.run).toContain(
+      '"${channel}" == "beta" && "${PUBLISH_TARGET}" == "docker-channel"',
+    );
     expect(manualApproval.environment).toBe("docker-release");
     expect(manualVcrPublish.needs).toEqual(["resolve", "approve"]);
     expect(manualVcrPublish.if).toBe("${{ needs.resolve.outputs.publish_target == 'vercel' }}");
