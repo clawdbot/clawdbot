@@ -286,6 +286,99 @@ describe("subagent registry seam flow", () => {
     addSubagentRunForTests(entry: SubagentRunRecordOverrides): void;
     registerSubagentRun(params: SubagentRunParamsOverrides): void;
   };
+  type RunRecordFixtureOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
+    Partial<Omit<SubagentRunRecordOverrides, "runId">>;
+  type KilledRunOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
+    Required<Pick<SubagentRunRecord, "task" | "createdAt">> &
+    Partial<Omit<SubagentRunRecordOverrides, "runId" | "task" | "createdAt">>;
+  type RunningTaskParams = Parameters<typeof createRunningTaskRun>[0];
+  type RunningTaskParamsOverrides = Required<
+    Pick<RunningTaskParams, "runId" | "childSessionKey" | "startedAt">
+  > &
+    Pick<RunningTaskParams, "task"> &
+    Partial<Omit<RunningTaskParams, "runId" | "childSessionKey" | "startedAt" | "task">>;
+  type SuspendedDeliveryRunOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
+    Required<
+      Pick<
+        SubagentRunRecord,
+        "childSessionKey" | "requesterSessionKey" | "requesterDisplayKey" | "task" | "createdAt"
+      >
+    > & {
+      endedAt: number;
+      delivery: Partial<NonNullable<SubagentRunRecord["delivery"]>>;
+    } & Partial<
+      Omit<
+        SubagentRunRecordOverrides,
+        | "runId"
+        | "childSessionKey"
+        | "requesterSessionKey"
+        | "requesterDisplayKey"
+        | "task"
+        | "createdAt"
+        | "startedAt"
+        | "endedAt"
+        | "outcome"
+        | "expectsCompletionMessage"
+        | "delivery"
+      >
+    >;
+
+  const makeKilledRun = (
+    killedAt: number,
+    overrides: KilledRunOverrides,
+  ): SubagentRunRecordOverrides => ({
+    endedAt: killedAt,
+    endedReason: SUBAGENT_ENDED_REASON_KILLED,
+    outcome: { status: "error", error: "manual kill" },
+    suppressAnnounceReason: "killed",
+    killReconciliation: { killedAt },
+    cleanupHandled: true,
+    cleanupCompletedAt: killedAt,
+    ...overrides,
+  });
+  const makeCompletedCollectorRun = (
+    overrides: RunRecordFixtureOverrides,
+  ): SubagentRunRecordOverrides => ({
+    collect: true,
+    collectorCompletion: { status: "done" },
+    ...overrides,
+  });
+  const makeRunningTaskParams = (overrides: RunningTaskParamsOverrides): RunningTaskParams => ({
+    runtime: "subagent",
+    sourceId: overrides.runId,
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    deliveryStatus: "pending",
+    lastEventAt: overrides.startedAt,
+    ...overrides,
+  });
+  const makeSuspendedDeliveryRun = ({
+    delivery: deliveryOverrides,
+    ...overrides
+  }: SuspendedDeliveryRunOverrides): SubagentRunRecordOverrides => ({
+    expectsCompletionMessage: true,
+    startedAt: overrides.createdAt,
+    outcome: { status: "ok" },
+    ...overrides,
+    delivery: {
+      status: "suspended",
+      createdAt: overrides.createdAt,
+      attemptCount: 3,
+      lastError: "gateway request timeout for agent",
+      payload: {
+        requesterSessionKey: overrides.requesterSessionKey,
+        requesterDisplayKey: overrides.requesterDisplayKey,
+        childSessionKey: overrides.childSessionKey,
+        childRunId: overrides.runId,
+        task: overrides.task,
+        endedAt: overrides.endedAt,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+      },
+      suspendedReason: "expiry",
+      ...deliveryOverrides,
+    },
+  });
   let mod: RegistryHarness;
   const findRequesterRun = (runId: string) =>
     mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
@@ -494,19 +587,19 @@ describe("subagent registry seam flow", () => {
       ["one", now - 1],
       ["two", now + 1_000],
     ] as const) {
-      mod.addSubagentRunForTests({
-        runId: `run-collector-${suffix}`,
-        childSessionKey: `agent:main:subagent:collector-${suffix}`,
-        task: "retain lifetime group count",
-        cleanup: suffix === "one" ? "keep" : "delete",
-        createdAt: now - 10_000,
-        endedAt: now - 5_000,
-        cleanupCompletedAt: now - 4_000,
-        archiveAtMs,
-        collect: true,
-        groupId: "swarm:lifetime",
-        collectorCompletion: { status: "done" },
-      });
+      mod.addSubagentRunForTests(
+        makeCompletedCollectorRun({
+          runId: `run-collector-${suffix}`,
+          childSessionKey: `agent:main:subagent:collector-${suffix}`,
+          task: "retain lifetime group count",
+          cleanup: suffix === "one" ? "keep" : "delete",
+          createdAt: now - 10_000,
+          endedAt: now - 5_000,
+          cleanupCompletedAt: now - 4_000,
+          archiveAtMs,
+          groupId: "swarm:lifetime",
+        }),
+      );
     }
 
     await mod.testing.sweepOnceForTests();
@@ -532,20 +625,20 @@ describe("subagent registry seam flow", () => {
       ["agent:main:requester-one", now - 1],
       ["agent:main:requester-two", now + 1_000],
     ] as const) {
-      mod.addSubagentRunForTests({
-        runId: `run-${requesterSessionKey}`,
-        childSessionKey: `${requesterSessionKey}:subagent:collector`,
-        requesterSessionKey,
-        task: "retain requester-scoped collector groups",
-        cleanup: "delete",
-        createdAt: now - 10_000,
-        endedAt: now - 5_000,
-        cleanupCompletedAt: now - 4_000,
-        archiveAtMs,
-        collect: true,
-        groupId: "swarm:shared-group-id",
-        collectorCompletion: { status: "done" },
-      });
+      mod.addSubagentRunForTests(
+        makeCompletedCollectorRun({
+          runId: `run-${requesterSessionKey}`,
+          childSessionKey: `${requesterSessionKey}:subagent:collector`,
+          requesterSessionKey,
+          task: "retain requester-scoped collector groups",
+          cleanup: "delete",
+          createdAt: now - 10_000,
+          endedAt: now - 5_000,
+          cleanupCompletedAt: now - 4_000,
+          archiveAtMs,
+          groupId: "swarm:shared-group-id",
+        }),
+      );
     }
 
     await mod.testing.sweepOnceForTests();
@@ -556,17 +649,17 @@ describe("subagent registry seam flow", () => {
 
   it("keeps completed collectors while any group member is incomplete", async () => {
     const now = Date.now();
-    mod.addSubagentRunForTests({
-      runId: "run-collector-complete",
-      childSessionKey: "agent:main:subagent:collector-complete",
-      task: "completed collector",
-      createdAt: now - 10_000,
-      endedAt: now - 5_000,
-      archiveAtMs: now - 1,
-      collect: true,
-      groupId: "swarm:incomplete-member",
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-complete",
+        childSessionKey: "agent:main:subagent:collector-complete",
+        task: "completed collector",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        groupId: "swarm:incomplete-member",
+      }),
+    );
     mod.addSubagentRunForTests({
       runId: "run-collector-incomplete",
       childSessionKey: "agent:main:subagent:collector-incomplete",
@@ -616,17 +709,17 @@ describe("subagent registry seam flow", () => {
       cleanupCompletedAt: now - 4_000,
       archiveAtMs: now - 1,
     });
-    mod.addSubagentRunForTests({
-      runId: "run-collector-before-await",
-      childSessionKey: "agent:main:subagent:collector-before-await",
-      task: "completed collector present at sweep start",
-      createdAt: now - 10_000,
-      endedAt: now - 5_000,
-      archiveAtMs: now - 1,
-      collect: true,
-      groupId: "swarm:late-member",
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-before-await",
+        childSessionKey: "agent:main:subagent:collector-before-await",
+        task: "completed collector present at sweep start",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        groupId: "swarm:late-member",
+      }),
+    );
 
     const sweep = mod.testing.runSweeperTickForTests();
     await waitForFast(() => expect(releaseFirstDelete).toBeTypeOf("function"));
@@ -665,17 +758,17 @@ describe("subagent registry seam flow", () => {
         releaseCollectorDelete = () => resolve({});
       });
     });
-    mod.addSubagentRunForTests({
-      runId: "run-collector-cleanup-snapshot",
-      childSessionKey: "agent:main:subagent:collector-cleanup-snapshot",
-      task: "completed collector present before cleanup",
-      createdAt: now - 10_000,
-      endedAt: now - 5_000,
-      archiveAtMs: now - 1,
-      collect: true,
-      groupId: "swarm:cleanup-race",
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-cleanup-snapshot",
+        childSessionKey: "agent:main:subagent:collector-cleanup-snapshot",
+        task: "completed collector present before cleanup",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        groupId: "swarm:cleanup-race",
+      }),
+    );
 
     const sweep = mod.testing.runSweeperTickForTests();
     await waitForFast(() => expect(releaseCollectorDelete).toBeTypeOf("function"));
@@ -714,31 +807,31 @@ describe("subagent registry seam flow", () => {
         releaseCollectorDelete = () => resolve({});
       });
     });
-    mod.addSubagentRunForTests({
-      runId: "run-collector-replaced-during-cleanup",
-      childSessionKey: "agent:main:subagent:collector-before-replacement",
-      task: "collector before replacement",
-      createdAt: now - 10_000,
-      endedAt: now - 5_000,
-      archiveAtMs: now - 1,
-      collect: true,
-      groupId: "swarm:replacement-race",
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-replaced-during-cleanup",
+        childSessionKey: "agent:main:subagent:collector-before-replacement",
+        task: "collector before replacement",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        groupId: "swarm:replacement-race",
+      }),
+    );
 
     const sweep = mod.testing.runSweeperTickForTests();
     await waitForFast(() => expect(releaseCollectorDelete).toBeTypeOf("function"));
-    mod.addSubagentRunForTests({
-      runId: "run-collector-replaced-during-cleanup",
-      childSessionKey: "agent:main:subagent:collector-after-replacement",
-      task: "collector after replacement",
-      createdAt: now,
-      endedAt: now,
-      archiveAtMs: now - 1,
-      collect: true,
-      groupId: "swarm:replacement-race",
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-replaced-during-cleanup",
+        childSessionKey: "agent:main:subagent:collector-after-replacement",
+        task: "collector after replacement",
+        createdAt: now,
+        endedAt: now,
+        archiveAtMs: now - 1,
+        groupId: "swarm:replacement-race",
+      }),
+    );
     releaseCollectorDelete?.();
     await sweep;
 
@@ -761,17 +854,17 @@ describe("subagent registry seam flow", () => {
         updatedAt: now,
       },
     });
-    mod.addSubagentRunForTests({
-      runId: "run-collector-clean",
-      childSessionKey: "agent:main:subagent:collector-clean",
-      task: "completed sibling",
-      createdAt: now - 10_000,
-      endedAt: now - 5_000,
-      archiveAtMs: now - 1,
-      collect: true,
-      groupId: "swarm:cleanup-pending",
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-clean",
+        childSessionKey: "agent:main:subagent:collector-clean",
+        task: "completed sibling",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        groupId: "swarm:cleanup-pending",
+      }),
+    );
     mod.addSubagentRunForTests({
       runId: "run-collector-cleanup-pending",
       childSessionKey: "agent:main:subagent:collector-cleanup-pending",
@@ -801,19 +894,19 @@ describe("subagent registry seam flow", () => {
     await fs.mkdir(attachmentsRootDir);
     await fs.mkdir(attachmentsDir);
     try {
-      mod.addSubagentRunForTests({
-        runId: "run-collector-unsafe-attachments",
-        childSessionKey: "agent:main:subagent:collector-unsafe-attachments",
-        task: "retain record until attachments are safely removed",
-        createdAt: Date.now() - 10_000,
-        endedAt: Date.now() - 5_000,
-        archiveAtMs: Date.now() - 1,
-        collect: true,
-        groupId: "swarm:unsafe-attachments",
-        attachmentsDir,
-        attachmentsRootDir,
-        collectorCompletion: { status: "done" },
-      });
+      mod.addSubagentRunForTests(
+        makeCompletedCollectorRun({
+          runId: "run-collector-unsafe-attachments",
+          childSessionKey: "agent:main:subagent:collector-unsafe-attachments",
+          task: "retain record until attachments are safely removed",
+          createdAt: Date.now() - 10_000,
+          endedAt: Date.now() - 5_000,
+          archiveAtMs: Date.now() - 1,
+          groupId: "swarm:unsafe-attachments",
+          attachmentsDir,
+          attachmentsRootDir,
+        }),
+      );
 
       await mod.testing.sweepOnceForTests();
 
@@ -1360,30 +1453,30 @@ describe("subagent registry seam flow", () => {
   });
 
   it("remaps a collector that completed before its acceptance response", () => {
-    mod.addSubagentRunForTests({
-      runId: "run-terminal-race",
-      childSessionKey: "agent:main:subagent:terminal-race",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "finish before acceptance",
-      cleanup: "keep",
-      collect: true,
-      swarmRunId: "run-terminal-race",
-      schedulerSlotId: "run-terminal-race",
-      swarmLaunchPending: false,
-      queuedLaunch: {
-        request: { sessionKey: "agent:main:subagent:terminal-race" },
-        timeoutMs: 1_000,
-        schedulerGroupKey: "terminal-race",
-        maxConcurrent: 1,
-      },
-      groupId: "terminal-race",
-      createdAt: 1_000,
-      endedAt: 2_000,
-      execution: { status: "terminal", endedAt: 2_000 },
-      completion: { required: false, resultText: "done", capturedAt: 2_000 },
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-terminal-race",
+        childSessionKey: "agent:main:subagent:terminal-race",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "finish before acceptance",
+        cleanup: "keep",
+        swarmRunId: "run-terminal-race",
+        schedulerSlotId: "run-terminal-race",
+        swarmLaunchPending: false,
+        queuedLaunch: {
+          request: { sessionKey: "agent:main:subagent:terminal-race" },
+          timeoutMs: 1_000,
+          schedulerGroupKey: "terminal-race",
+          maxConcurrent: 1,
+        },
+        groupId: "terminal-race",
+        createdAt: 1_000,
+        endedAt: 2_000,
+        execution: { status: "terminal", endedAt: 2_000 },
+        completion: { required: false, resultText: "done", capturedAt: 2_000 },
+      }),
+    );
 
     expect(mod.startQueuedSubagentRun("run-terminal-race", "gateway-terminal-race")).toBe(true);
     const remapped = mod.getSubagentRunByRunId("gateway-terminal-race");
@@ -1397,23 +1490,23 @@ describe("subagent registry seam flow", () => {
   });
 
   it("refuses to remap an unrelated terminal collector without a pending launch", () => {
-    mod.addSubagentRunForTests({
-      runId: "run-terminal-stale",
-      childSessionKey: "agent:main:subagent:terminal-stale",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "stale acceptance callback",
-      cleanup: "keep",
-      collect: true,
-      swarmRunId: "run-terminal-stale",
-      schedulerSlotId: "run-terminal-stale",
-      groupId: "terminal-stale",
-      createdAt: 1_000,
-      endedAt: 2_000,
-      execution: { status: "terminal", endedAt: 2_000 },
-      completion: { required: false, resultText: "done", capturedAt: 2_000 },
-      collectorCompletion: { status: "done" },
-    });
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-terminal-stale",
+        childSessionKey: "agent:main:subagent:terminal-stale",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "stale acceptance callback",
+        cleanup: "keep",
+        swarmRunId: "run-terminal-stale",
+        schedulerSlotId: "run-terminal-stale",
+        groupId: "terminal-stale",
+        createdAt: 1_000,
+        endedAt: 2_000,
+        execution: { status: "terminal", endedAt: 2_000 },
+        completion: { required: false, resultText: "done", capturedAt: 2_000 },
+      }),
+    );
 
     expect(mod.startQueuedSubagentRun("run-terminal-stale", "gateway-terminal-stale")).toBe(false);
     expect(mod.getSubagentRunByRunId("run-terminal-stale")).toMatchObject({
@@ -3692,19 +3785,14 @@ describe("subagent registry seam flow", () => {
         endedAt,
       }),
     );
-    mod.addSubagentRunForTests({
-      runId: "run-killed-with-persisted-completion",
-      task: "recover persisted completion",
-      createdAt: startedAt,
-      startedAt,
-      endedAt: killedAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt },
-      cleanupHandled: true,
-      cleanupCompletedAt: killedAt,
-    });
+    mod.addSubagentRunForTests(
+      makeKilledRun(killedAt, {
+        runId: "run-killed-with-persisted-completion",
+        task: "recover persisted completion",
+        createdAt: startedAt,
+        startedAt,
+      }),
+    );
 
     await mod.testing.sweepOnceForTests();
 
@@ -3740,18 +3828,14 @@ describe("subagent registry seam flow", () => {
       const runId = `run-task-first-${taskStatus}`;
       const childSessionKey = `agent:main:subagent:task-first-${taskStatus}`;
       expect(
-        createRunningTaskRun({
-          runtime: "subagent",
-          sourceId: runId,
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          childSessionKey,
-          runId,
-          task: "repair task-first completion",
-          deliveryStatus: "pending",
-          startedAt,
-          lastEventAt: startedAt,
-        }),
+        createRunningTaskRun(
+          makeRunningTaskParams({
+            childSessionKey,
+            runId,
+            task: "repair task-first completion",
+            startedAt,
+          }),
+        ),
       ).not.toBeNull();
       expect(
         finalizeTaskRunByRunId({
@@ -3766,20 +3850,15 @@ describe("subagent registry seam flow", () => {
         }),
       ).toHaveLength(1);
       mocks.loadSessionStore.mockReturnValue({});
-      mod.addSubagentRunForTests({
-        runId,
-        childSessionKey,
-        task: "repair task-first completion",
-        createdAt: startedAt,
-        startedAt,
-        endedAt: killedAt,
-        endedReason: SUBAGENT_ENDED_REASON_KILLED,
-        outcome: { status: "error", error: "manual kill" },
-        suppressAnnounceReason: "killed",
-        killReconciliation: { killedAt },
-        cleanupHandled: true,
-        cleanupCompletedAt: killedAt,
-      });
+      mod.addSubagentRunForTests(
+        makeKilledRun(killedAt, {
+          runId,
+          childSessionKey,
+          task: "repair task-first completion",
+          createdAt: startedAt,
+          startedAt,
+        }),
+      );
 
       await mod.testing.sweepOnceForTests();
 
@@ -3814,18 +3893,15 @@ describe("subagent registry seam flow", () => {
       const runId = "run-task-first-replacement";
       const childSessionKey = "agent:main:subagent:task-first-steer";
       expect(
-        createRunningTaskRun({
-          runtime: "subagent",
-          sourceId: taskRunId,
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          childSessionKey,
-          runId: taskRunId,
-          task: "finish after steer",
-          deliveryStatus: "pending",
-          startedAt: originalStartedAt,
-          lastEventAt: originalStartedAt,
-        }),
+        createRunningTaskRun(
+          makeRunningTaskParams({
+            sourceId: taskRunId,
+            childSessionKey,
+            runId: taskRunId,
+            task: "finish after steer",
+            startedAt: originalStartedAt,
+          }),
+        ),
       ).not.toBeNull();
       expect(
         finalizeTaskRunByRunId({
@@ -3839,24 +3915,19 @@ describe("subagent registry seam flow", () => {
         }),
       ).toHaveLength(1);
       mocks.loadSessionStore.mockReturnValue({});
-      mod.addSubagentRunForTests({
-        runId,
-        taskRunId,
-        childSessionKey,
-        task: "finish after steer",
-        generation: 2,
-        createdAt: replacementStartedAt,
-        startedAt: replacementStartedAt,
-        sessionStartedAt: originalStartedAt,
-        runTimeoutSeconds: 10,
-        endedAt: killedAt,
-        endedReason: SUBAGENT_ENDED_REASON_KILLED,
-        outcome: { status: "error", error: "manual kill" },
-        suppressAnnounceReason: "killed",
-        killReconciliation: { killedAt },
-        cleanupHandled: true,
-        cleanupCompletedAt: killedAt,
-      });
+      mod.addSubagentRunForTests(
+        makeKilledRun(killedAt, {
+          runId,
+          taskRunId,
+          childSessionKey,
+          task: "finish after steer",
+          generation: 2,
+          createdAt: replacementStartedAt,
+          startedAt: replacementStartedAt,
+          sessionStartedAt: originalStartedAt,
+          runTimeoutSeconds: 10,
+        }),
+      );
 
       await mod.testing.sweepOnceForTests();
 
@@ -3886,18 +3957,14 @@ describe("subagent registry seam flow", () => {
       const killedAt = Date.parse("2026-03-24T11:55:00Z");
       const runId = "run-killed-projection-retry";
       const childSessionKey = "agent:main:subagent:projection-retry";
-      const task = createRunningTaskRun({
-        runtime: "subagent",
-        sourceId: runId,
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        childSessionKey,
-        runId,
-        task: "retry completion projection",
-        deliveryStatus: "pending",
-        startedAt,
-        lastEventAt: startedAt,
-      });
+      const task = createRunningTaskRun(
+        makeRunningTaskParams({
+          childSessionKey,
+          runId,
+          task: "retry completion projection",
+          startedAt,
+        }),
+      );
       expect(task).not.toBeNull();
       finalizeTaskRunByRunId({
         runId,
@@ -3924,20 +3991,15 @@ describe("subagent registry seam flow", () => {
           endedAt: completedAt,
         },
       });
-      mod.addSubagentRunForTests({
-        runId,
-        childSessionKey,
-        task: "retry completion projection",
-        createdAt: startedAt,
-        startedAt,
-        endedAt: killedAt,
-        endedReason: SUBAGENT_ENDED_REASON_KILLED,
-        outcome: { status: "error", error: "manual kill" },
-        suppressAnnounceReason: "killed",
-        killReconciliation: { killedAt },
-        cleanupHandled: true,
-        cleanupCompletedAt: killedAt,
-      });
+      mod.addSubagentRunForTests(
+        makeKilledRun(killedAt, {
+          runId,
+          childSessionKey,
+          task: "retry completion projection",
+          createdAt: startedAt,
+          startedAt,
+        }),
+      );
 
       await mod.testing.sweepOnceForTests();
 
@@ -3978,20 +4040,15 @@ describe("subagent registry seam flow", () => {
         endedAt,
       },
     });
-    mod.addSubagentRunForTests({
-      runId: "run-opaque-killed-with-persisted-completion",
-      childSessionKey: "agent:main:subagent:opaque-child",
-      task: "recover opaque persisted completion",
-      createdAt: startedAt,
-      startedAt,
-      endedAt: killedAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt },
-      cleanupHandled: true,
-      cleanupCompletedAt: killedAt,
-    });
+    mod.addSubagentRunForTests(
+      makeKilledRun(killedAt, {
+        runId: "run-opaque-killed-with-persisted-completion",
+        childSessionKey: "agent:main:subagent:opaque-child",
+        task: "recover opaque persisted completion",
+        createdAt: startedAt,
+        startedAt,
+      }),
+    );
 
     await mod.testing.sweepOnceForTests();
 
@@ -4032,21 +4089,16 @@ describe("subagent registry seam flow", () => {
         endedAt: completedAt,
       },
     });
-    mod.addSubagentRunForTests({
-      runId: "run-opaque-finalizer-miss",
-      childSessionKey,
-      task: "bound opaque finalizer failure",
-      expectsCompletionMessage: false,
-      createdAt: startedAt,
-      startedAt,
-      endedAt: killedAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt },
-      cleanupHandled: true,
-      cleanupCompletedAt: killedAt,
-    });
+    mod.addSubagentRunForTests(
+      makeKilledRun(killedAt, {
+        runId: "run-opaque-finalizer-miss",
+        childSessionKey,
+        task: "bound opaque finalizer failure",
+        expectsCompletionMessage: false,
+        createdAt: startedAt,
+        startedAt,
+      }),
+    );
 
     await mod.testing.sweepOnceForTests();
 
@@ -4077,18 +4129,14 @@ describe("subagent registry seam flow", () => {
         },
       });
       expect(
-        createRunningTaskRun({
-          runtime: "subagent",
-          sourceId: runId,
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          childSessionKey,
-          runId,
-          task: "preserve operator cancellation",
-          deliveryStatus: "pending",
-          startedAt,
-          lastEventAt: startedAt,
-        }),
+        createRunningTaskRun(
+          makeRunningTaskParams({
+            childSessionKey,
+            runId,
+            task: "preserve operator cancellation",
+            startedAt,
+          }),
+        ),
       ).not.toBeNull();
       expect(
         finalizeTaskRunByRunId({
@@ -4101,23 +4149,18 @@ describe("subagent registry seam flow", () => {
           error: "Cancelled by operator.",
         }),
       ).toHaveLength(1);
-      mod.addSubagentRunForTests({
-        runId,
-        childSessionKey,
-        task: "preserve operator cancellation",
-        cleanup: "delete",
-        expectsCompletionMessage: true,
-        createdAt: startedAt,
-        startedAt,
-        endedAt: killedAt,
-        endedReason: "subagent-killed",
-        outcome: { status: "error", error: "manual kill" },
-        suppressAnnounceReason: "killed",
-        killReconciliation: { killedAt },
-        cleanupHandled: true,
-        cleanupCompletedAt: killedAt,
-        archiveAtMs: Date.now(),
-      });
+      mod.addSubagentRunForTests(
+        makeKilledRun(killedAt, {
+          runId,
+          childSessionKey,
+          task: "preserve operator cancellation",
+          cleanup: "delete",
+          expectsCompletionMessage: true,
+          createdAt: startedAt,
+          startedAt,
+          archiveAtMs: Date.now(),
+        }),
+      );
 
       expect(killedAt + 5 * 60_000).toBeGreaterThan(Date.now());
       vi.setSystemTime(killedAt + 5 * 60_000);
@@ -4169,18 +4212,14 @@ describe("subagent registry seam flow", () => {
           endedAt: completedAt,
         },
       });
-      createRunningTaskRun({
-        runtime: "subagent",
-        sourceId: runId,
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        childSessionKey,
-        runId,
-        task: "preserve earlier completion",
-        deliveryStatus: "pending",
-        startedAt,
-        lastEventAt: startedAt,
-      });
+      createRunningTaskRun(
+        makeRunningTaskParams({
+          childSessionKey,
+          runId,
+          task: "preserve earlier completion",
+          startedAt,
+        }),
+      );
       finalizeTaskRunByRunId({
         runId,
         runtime: "subagent",
@@ -4191,22 +4230,17 @@ describe("subagent registry seam flow", () => {
         error: "Cancelled by operator.",
         suppressDelivery: true,
       });
-      mod.addSubagentRunForTests({
-        runId,
-        childSessionKey,
-        task: "preserve earlier completion",
-        expectsCompletionMessage: false,
-        createdAt: startedAt,
-        startedAt,
-        runTimeoutSeconds: 8,
-        endedAt: killedAt,
-        endedReason: "subagent-killed",
-        outcome: { status: "error", error: "manual kill" },
-        suppressAnnounceReason: "killed",
-        killReconciliation: { killedAt },
-        cleanupHandled: true,
-        cleanupCompletedAt: killedAt,
-      });
+      mod.addSubagentRunForTests(
+        makeKilledRun(killedAt, {
+          runId,
+          childSessionKey,
+          task: "preserve earlier completion",
+          expectsCompletionMessage: false,
+          createdAt: startedAt,
+          startedAt,
+          runTimeoutSeconds: 8,
+        }),
+      );
 
       vi.setSystemTime(killedAt + 5 * 60_000);
       await mod.testing.sweepOnceForTests();
@@ -4254,18 +4288,14 @@ describe("subagent registry seam flow", () => {
         },
       });
       vi.setSystemTime(startedAt);
-      createRunningTaskRun({
-        runtime: "subagent",
-        sourceId: runId,
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        childSessionKey,
-        runId,
-        task: "cancel during result capture",
-        deliveryStatus: "pending",
-        startedAt,
-        lastEventAt: startedAt,
-      });
+      createRunningTaskRun(
+        makeRunningTaskParams({
+          childSessionKey,
+          runId,
+          task: "cancel during result capture",
+          startedAt,
+        }),
+      );
       vi.setSystemTime(now);
       finalizeTaskRunByRunId({
         runId,
@@ -4283,21 +4313,16 @@ describe("subagent registry seam flow", () => {
             finishCapture = resolve;
           }),
       );
-      mod.addSubagentRunForTests({
-        runId,
-        childSessionKey,
-        task: "cancel during result capture",
-        expectsCompletionMessage: true,
-        createdAt: startedAt,
-        startedAt,
-        endedAt: killedAt,
-        endedReason: "subagent-killed",
-        outcome: { status: "error", error: "manual kill" },
-        suppressAnnounceReason: "killed",
-        killReconciliation: { killedAt },
-        cleanupHandled: true,
-        cleanupCompletedAt: killedAt,
-      });
+      mod.addSubagentRunForTests(
+        makeKilledRun(killedAt, {
+          runId,
+          childSessionKey,
+          task: "cancel during result capture",
+          expectsCompletionMessage: true,
+          createdAt: startedAt,
+          startedAt,
+        }),
+      );
 
       const sweep = mod.testing.sweepOnceForTests();
       await vi.waitFor(() => expect(mocks.captureSubagentCompletionReply).toHaveBeenCalled());
@@ -4359,18 +4384,14 @@ describe("subagent registry seam flow", () => {
           endedAt: completedAt,
         },
       });
-      createRunningTaskRun({
-        runtime: "subagent",
-        sourceId: runId,
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        childSessionKey,
-        runId,
-        task: "complete between yield and kill",
-        deliveryStatus: "pending",
-        startedAt,
-        lastEventAt: startedAt,
-      });
+      createRunningTaskRun(
+        makeRunningTaskParams({
+          childSessionKey,
+          runId,
+          task: "complete between yield and kill",
+          startedAt,
+        }),
+      );
       mod.addSubagentRunForTests({
         runId,
         childSessionKey,
@@ -4431,20 +4452,15 @@ describe("subagent registry seam flow", () => {
         endedAt,
       }),
     );
-    mod.addSubagentRunForTests({
-      runId: "run-killed-with-persisted-kill",
-      task: "expire persisted kill",
-      expectsCompletionMessage: false,
-      createdAt: startedAt,
-      startedAt,
-      endedAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: endedAt },
-      cleanupHandled: true,
-      cleanupCompletedAt: endedAt,
-    });
+    mod.addSubagentRunForTests(
+      makeKilledRun(endedAt, {
+        runId: "run-killed-with-persisted-kill",
+        task: "expire persisted kill",
+        expectsCompletionMessage: false,
+        createdAt: startedAt,
+        startedAt,
+      }),
+    );
 
     await mod.testing.sweepOnceForTests();
 
@@ -4459,20 +4475,16 @@ describe("subagent registry seam flow", () => {
 
   it("keeps requester stop delivery suppressed after kill reconciliation", async () => {
     const killedAt = Date.now() - 5 * 60_000;
-    mod.addSubagentRunForTests({
-      runId: "run-requester-stop-suppressed",
-      childSessionKey: "agent:main:subagent:requester-stop-suppressed",
-      task: "do not re-inject after stop",
-      expectsCompletionMessage: true,
-      createdAt: killedAt - 60_000,
-      endedAt: killedAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt, suppressTaskDelivery: true },
-      cleanupHandled: true,
-      cleanupCompletedAt: killedAt,
-    });
+    mod.addSubagentRunForTests(
+      makeKilledRun(killedAt, {
+        runId: "run-requester-stop-suppressed",
+        childSessionKey: "agent:main:subagent:requester-stop-suppressed",
+        task: "do not re-inject after stop",
+        expectsCompletionMessage: true,
+        createdAt: killedAt - 60_000,
+        killReconciliation: { killedAt, suppressTaskDelivery: true },
+      }),
+    );
 
     await mod.testing.sweepOnceForTests();
     await waitForFast(() => {
@@ -4492,20 +4504,15 @@ describe("subagent registry seam flow", () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
       request.method === "agent.wait" ? { status: "pending" } : {},
     );
-    mod.addSubagentRunForTests({
-      runId: "run-released-successor-old",
-      childSessionKey,
-      task: "retire only old ownership",
-      cleanup: "delete",
-      createdAt: killedAt - 60_000,
-      endedAt: killedAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt },
-      cleanupHandled: true,
-      cleanupCompletedAt: killedAt,
-    });
+    mod.addSubagentRunForTests(
+      makeKilledRun(killedAt, {
+        runId: "run-released-successor-old",
+        childSessionKey,
+        task: "retire only old ownership",
+        cleanup: "delete",
+        createdAt: killedAt - 60_000,
+      }),
+    );
     mod.registerSubagentRun({
       runId: "run-released-successor-new",
       childSessionKey,
@@ -4563,32 +4570,27 @@ describe("subagent registry seam flow", () => {
       sessionKey: "agent:main:internal-session-effects:run-old-tombstone",
       storePath: "/tmp/test-store",
     };
-    mod.addSubagentRunForTests({
-      runId: "run-old-tombstone",
-      childSessionKey: "agent:main:subagent:reused",
-      task: "old generation",
-      cleanup: "delete",
-      createdAt: oldStartedAt,
-      startedAt: oldStartedAt,
-      sessionStartedAt: oldStartedAt,
-      endedAt: oldEndedAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: oldEndedAt },
-      cleanupHandled: true,
-      cleanupCompletedAt: oldEndedAt,
-      archiveAtMs: Date.now(),
-      retainAttachmentsOnKeep: true,
-      attachmentsDir,
-      attachmentsRootDir,
-      execution: {
-        status: "terminal",
+    mod.addSubagentRunForTests(
+      makeKilledRun(oldEndedAt, {
+        runId: "run-old-tombstone",
+        childSessionKey: "agent:main:subagent:reused",
+        task: "old generation",
+        cleanup: "delete",
+        createdAt: oldStartedAt,
         startedAt: oldStartedAt,
-        endedAt: oldEndedAt,
-        transcriptTarget: oldTranscriptTarget,
-      },
-    });
+        sessionStartedAt: oldStartedAt,
+        archiveAtMs: Date.now(),
+        retainAttachmentsOnKeep: true,
+        attachmentsDir,
+        attachmentsRootDir,
+        execution: {
+          status: "terminal",
+          startedAt: oldStartedAt,
+          endedAt: oldEndedAt,
+          transcriptTarget: oldTranscriptTarget,
+        },
+      }),
+    );
     mod.addSubagentRunForTests({
       runId: "run-new-generation",
       childSessionKey: "agent:main:subagent:reused",
@@ -4638,18 +4640,15 @@ describe("subagent registry seam flow", () => {
           endedAt: newEndedAt,
         },
       });
-      createRunningTaskRun({
-        runtime: "subagent",
-        sourceId: "run-old-no-start",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        childSessionKey,
-        runId: "run-old-no-start",
-        task: "keep old cancellation canonical",
-        deliveryStatus: "pending",
-        startedAt: oldStartedAt,
-        lastEventAt: oldStartedAt,
-      });
+      createRunningTaskRun(
+        makeRunningTaskParams({
+          sourceId: "run-old-no-start",
+          childSessionKey,
+          runId: "run-old-no-start",
+          task: "keep old cancellation canonical",
+          startedAt: oldStartedAt,
+        }),
+      );
       finalizeTaskRunByRunId({
         runId: "run-old-no-start",
         runtime: "subagent",
@@ -4659,21 +4658,16 @@ describe("subagent registry seam flow", () => {
         lastEventAt: oldKilledAt,
         error: SUBAGENT_KILL_TASK_ERROR,
       });
-      mod.addSubagentRunForTests({
-        runId: "run-old-no-start",
-        childSessionKey,
-        task: "keep old cancellation canonical",
-        createdAt: oldStartedAt,
-        startedAt: oldStartedAt,
-        endedAt: oldKilledAt,
-        endedReason: "subagent-killed",
-        outcome: { status: "error", error: "manual kill" },
-        suppressAnnounceReason: "killed",
-        killReconciliation: { killedAt: oldKilledAt },
-        cleanupHandled: true,
-        cleanupCompletedAt: oldKilledAt,
-        runTimeoutSeconds: 60,
-      });
+      mod.addSubagentRunForTests(
+        makeKilledRun(oldKilledAt, {
+          runId: "run-old-no-start",
+          childSessionKey,
+          task: "keep old cancellation canonical",
+          createdAt: oldStartedAt,
+          startedAt: oldStartedAt,
+          runTimeoutSeconds: 60,
+        }),
+      );
       mod.addSubagentRunForTests({
         runId: "run-new-no-start",
         childSessionKey,
@@ -4785,22 +4779,17 @@ describe("subagent registry seam flow", () => {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded: mocks.runSubagentEnded,
     } as never);
-    mod.addSubagentRunForTests({
-      runId: "run-old-completed-tombstone",
-      childSessionKey,
-      task: "old completed generation",
-      cleanup: "delete",
-      createdAt: oldStartedAt,
-      startedAt: oldStartedAt,
-      sessionStartedAt: oldStartedAt,
-      endedAt: oldKilledAt,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: oldKilledAt },
-      cleanupHandled: true,
-      cleanupCompletedAt: oldKilledAt,
-    });
+    mod.addSubagentRunForTests(
+      makeKilledRun(oldKilledAt, {
+        runId: "run-old-completed-tombstone",
+        childSessionKey,
+        task: "old completed generation",
+        cleanup: "delete",
+        createdAt: oldStartedAt,
+        startedAt: oldStartedAt,
+        sessionStartedAt: oldStartedAt,
+      }),
+    );
     mod.addSubagentRunForTests({
       runId: "run-new-generation-after-completion",
       childSessionKey,
@@ -6124,18 +6113,14 @@ describe("subagent registry seam flow", () => {
     try {
       const runId = "run-interrupted-persist-failure";
       const childSessionKey = "agent:main:subagent:interrupted-persist-failure";
-      createRunningTaskRun({
-        runtime: "subagent",
-        sourceId: runId,
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        childSessionKey,
-        runId,
-        task: "preserve interrupted task",
-        deliveryStatus: "pending",
-        startedAt: 1,
-        lastEventAt: 1,
-      });
+      createRunningTaskRun(
+        makeRunningTaskParams({
+          childSessionKey,
+          runId,
+          task: "preserve interrupted task",
+          startedAt: 1,
+        }),
+      );
       const entry = createSubagentRunRecord({
         runId,
         childSessionKey,
@@ -6450,40 +6435,24 @@ describe("subagent registry seam flow", () => {
   it("expires suspended cron final deliveries after seven days", async () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
     const runId = "run-suspended-cron-expired";
-    mod.addSubagentRunForTests({
-      runId,
-      childSessionKey: "agent:main:subagent:suspended-cron",
-      controllerSessionKey: "agent:main:cron:cron-1:run:parent",
-      requesterSessionKey: "agent:main:cron:cron-1:run:parent",
-      requesterDisplayKey: "cron",
-      task: "cron suspended delivery",
-      expectsCompletionMessage: true,
-      spawnMode: "session",
-      createdAt: now - 8 * 24 * 60 * 60_000,
-      startedAt: now - 8 * 24 * 60 * 60_000,
-      endedAt: now - 8 * 24 * 60 * 60_000,
-      outcome: { status: "ok" },
-      completion: { required: true, resultText: "large final payload" },
-      delivery: {
-        status: "suspended",
+    mod.addSubagentRunForTests(
+      makeSuspendedDeliveryRun({
+        runId,
+        childSessionKey: "agent:main:subagent:suspended-cron",
+        controllerSessionKey: "agent:main:cron:cron-1:run:parent",
+        requesterSessionKey: "agent:main:cron:cron-1:run:parent",
+        requesterDisplayKey: "cron",
+        task: "cron suspended delivery",
+        spawnMode: "session",
         createdAt: now - 8 * 24 * 60 * 60_000,
-        lastAttemptAt: now - 7 * 24 * 60 * 60_000 - 1,
-        attemptCount: 3,
-        lastError: "gateway request timeout for agent",
-        payload: {
-          requesterSessionKey: "agent:main:cron:cron-1:run:parent",
-          requesterDisplayKey: "cron",
-          childSessionKey: "agent:main:subagent:suspended-cron",
-          childRunId: runId,
-          task: "cron suspended delivery",
-          endedAt: now - 8 * 24 * 60 * 60_000,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
+        endedAt: now - 8 * 24 * 60 * 60_000,
+        completion: { required: true, resultText: "large final payload" },
+        delivery: {
+          lastAttemptAt: now - 7 * 24 * 60 * 60_000 - 1,
+          suspendedAt: now - 7 * 24 * 60 * 60_000 - 1,
         },
-        suspendedAt: now - 7 * 24 * 60 * 60_000 - 1,
-        suspendedReason: "expiry",
-      },
-    });
+      }),
+    );
 
     await mod.testing.sweepOnceForTests();
 
@@ -6530,40 +6499,24 @@ describe("subagent registry seam flow", () => {
     mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
       throw new Error("registry deletion failed");
     });
-    mod.addSubagentRunForTests({
-      runId,
-      childSessionKey,
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "discard suspended delete delivery",
-      cleanup: "delete",
-      expectsCompletionMessage: true,
-      spawnMode: "run",
-      createdAt: now - 8 * 24 * 60 * 60_000,
-      startedAt: now - 8 * 24 * 60 * 60_000,
-      endedAt: now - 8 * 24 * 60 * 60_000,
-      outcome: { status: "ok" },
-      delivery: {
-        status: "suspended",
+    mod.addSubagentRunForTests(
+      makeSuspendedDeliveryRun({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "discard suspended delete delivery",
+        cleanup: "delete",
+        spawnMode: "run",
         createdAt: now - 8 * 24 * 60 * 60_000,
-        lastAttemptAt: now - 7 * 24 * 60 * 60_000 - 1,
-        attemptCount: 3,
-        lastError: "gateway request timeout for agent",
-        payload: {
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          childSessionKey,
-          childRunId: runId,
-          task: "discard suspended delete delivery",
-          endedAt: now - 8 * 24 * 60 * 60_000,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
+        endedAt: now - 8 * 24 * 60 * 60_000,
+        delivery: {
+          lastAttemptAt: now - 7 * 24 * 60 * 60_000 - 1,
+          suspendedAt: now - 7 * 24 * 60 * 60_000 - 1,
         },
-        suspendedAt: now - 7 * 24 * 60 * 60_000 - 1,
-        suspendedReason: "expiry",
-      },
-    });
+      }),
+    );
     const original = structuredClone(mod.getSubagentRunByChildSessionKey(childSessionKey));
 
     await expect(mod.testing.sweepOnceForTests()).rejects.toThrow("registry deletion failed");
@@ -6586,39 +6539,23 @@ describe("subagent registry seam flow", () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
     for (let i = 0; i < 51; i += 1) {
       const runId = `run-suspended-pressure-${i}`;
-      mod.addSubagentRunForTests({
-        runId,
-        childSessionKey: `agent:main:subagent:suspended-pressure-${i}`,
-        controllerSessionKey: "agent:main:main",
-        requesterSessionKey: "agent:main:telegram:direct:418181497",
-        requesterDisplayKey: "telegram",
-        task: "interactive suspended delivery",
-        expectsCompletionMessage: true,
-        spawnMode: "session",
-        createdAt: now - 60_000,
-        startedAt: now - 60_000,
-        endedAt: now - 60_000,
-        outcome: { status: "ok" },
-        delivery: {
-          status: "suspended",
+      mod.addSubagentRunForTests(
+        makeSuspendedDeliveryRun({
+          runId,
+          childSessionKey: `agent:main:subagent:suspended-pressure-${i}`,
+          controllerSessionKey: "agent:main:main",
+          requesterSessionKey: "agent:main:telegram:direct:418181497",
+          requesterDisplayKey: "telegram",
+          task: "interactive suspended delivery",
+          spawnMode: "session",
           createdAt: now - 60_000,
-          lastAttemptAt: now - 60_000 + i,
-          attemptCount: 3,
-          lastError: "gateway request timeout for agent",
-          payload: {
-            requesterSessionKey: "agent:main:telegram:direct:418181497",
-            requesterDisplayKey: "telegram",
-            childSessionKey: `agent:main:subagent:suspended-pressure-${i}`,
-            childRunId: runId,
-            task: "interactive suspended delivery",
-            endedAt: now - 60_000,
-            outcome: { status: "ok" },
-            expectsCompletionMessage: true,
+          endedAt: now - 60_000,
+          delivery: {
+            lastAttemptAt: now - 60_000 + i,
+            suspendedAt: now - 60_000 + i,
           },
-          suspendedAt: now - 60_000 + i,
-          suspendedReason: "expiry",
-        },
-      });
+        }),
+      );
     }
 
     await mod.testing.sweepOnceForTests();
