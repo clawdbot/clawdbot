@@ -643,7 +643,7 @@ describe("runInstallPolicy", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "rejects symlinked interpreter script args even when command symlinks are allowed",
+    "rejects symlinked interpreter script args",
     async () => {
       const dir = await makeTempDir();
       const realScriptPath = await writePolicyScript(dir);
