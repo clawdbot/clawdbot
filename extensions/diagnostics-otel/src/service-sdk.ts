@@ -167,7 +167,7 @@ function configuredResourceDetectors(): ResourceDetector[] {
   });
 }
 
-export type OpenClawOtelSdkOptions = {
+type OpenClawOtelSdkOptions = {
   metricReaders?: IMetricReader[];
   resource?: Resource;
   sampler?: Sampler;
