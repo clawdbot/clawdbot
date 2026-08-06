@@ -51,10 +51,19 @@ const NON_GUARD_ERROR = new Error("Something else went wrong.");
 
 const serviceEnv = { OPENCLAW_PROFILE: "default" };
 
-async function recover(jsonMode = false): Promise<void> {
+const FUTURE_BLOCK: FutureConfigBlock = {
+  action: "restart",
+  currentVersion: "0.0.0",
+  touchedVersion: "9.9.9",
+  message: "block",
+  hints: [],
+};
+
+async function recover(jsonMode = false, packageReplacementVerified = true): Promise<void> {
   await maybeRestartServiceAfterFailedMutableUpdate({
     preManagedServiceStop: { stopped: true, serviceEnv } as never,
     jsonMode,
+    packageReplacementVerified,
   });
 }
 
@@ -72,15 +81,9 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     mocks.error.mockReset();
   });
 
-  it("starts the installed unit when the version guard refuses the restart", async () => {
+  it("starts the installed unit when a verified package swap hits the version guard", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
-    mocks.readFutureConfigBlock.mockResolvedValue({
-      action: "restart",
-      currentVersion: "0.0.0",
-      touchedVersion: "9.9.9",
-      message: "block",
-      hints: [],
-    });
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
 
     await recover();
 
@@ -98,13 +101,7 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
 
   it("reports both failures when recovery cannot start the service either", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
-    mocks.readFutureConfigBlock.mockResolvedValue({
-      action: "restart",
-      currentVersion: "0.0.0",
-      touchedVersion: "9.9.9",
-      message: "block",
-      hints: [],
-    });
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
     mocks.recoveryStart.mockRejectedValue(new Error("unit openclaw-gateway.service not found"));
 
     await recover();
@@ -117,13 +114,7 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
 
   it("reports recovery failure through the error channel in json mode", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
-    mocks.readFutureConfigBlock.mockResolvedValue({
-      action: "restart",
-      currentVersion: "0.0.0",
-      touchedVersion: "9.9.9",
-      message: "block",
-      hints: [],
-    });
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
     mocks.recoveryStart.mockRejectedValue(new Error("start refused"));
 
     await recover(true);
@@ -136,6 +127,7 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     await maybeRestartServiceAfterFailedMutableUpdate({
       preManagedServiceStop: { stopped: false } as never,
       jsonMode: false,
+      packageReplacementVerified: true,
     });
 
     expect(mocks.restart).not.toHaveBeenCalled();
@@ -144,7 +136,6 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
 
   it("does not reach the exempt start when the config is not newer than this binary", async () => {
     mocks.restart.mockRejectedValue(NON_GUARD_ERROR);
-    // readFutureConfigActionBlock returns null → config is not future-stamped
     mocks.readFutureConfigBlock.mockResolvedValue(null);
 
     await recover();
@@ -156,15 +147,9 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     expect(messages()).toContain("Something else went wrong");
   });
 
-  it("reaches the exempt start when config is future-stamped and unit is installed", async () => {
+  it("reaches the exempt start when swap is verified, config is future-stamped, and unit is installed", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
-    mocks.readFutureConfigBlock.mockResolvedValue({
-      action: "restart",
-      currentVersion: "0.0.0",
-      touchedVersion: "9.9.9",
-      message: "block",
-      hints: [],
-    });
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
     mocks.readState.mockResolvedValue({ installed: true });
 
     await recover();
@@ -176,13 +161,7 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
 
   it("does not reach the exempt start when the unit is not installed", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
-    mocks.readFutureConfigBlock.mockResolvedValue({
-      action: "restart",
-      currentVersion: "0.0.0",
-      touchedVersion: "9.9.9",
-      message: "block",
-      hints: [],
-    });
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
     mocks.readState.mockResolvedValue({ installed: false });
 
     await recover();
@@ -191,5 +170,32 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     expect(mocks.readState).toHaveBeenCalledTimes(1);
     expect(mocks.recoveryStart).not.toHaveBeenCalled();
     expect(messages()).toContain("recovery start skipped because no managed service is installed");
+  });
+
+  it("keeps the guarded restart only for Git-rollback paths without a verified package swap", async () => {
+    mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
+
+    await recover(false, false);
+
+    expect(mocks.readFutureConfigBlock).not.toHaveBeenCalled();
+    expect(mocks.recoveryStart).not.toHaveBeenCalled();
+    expect(messages()).toContain("Failed to restart managed gateway service after failed update");
+  });
+
+  it("keeps the guarded restart only for pre-swap failures even when config looks future-stamped", async () => {
+    mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
+
+    await maybeRestartServiceAfterFailedMutableUpdate({
+      preManagedServiceStop: { stopped: true, serviceEnv } as never,
+      jsonMode: false,
+      // Producer never set the fact — install failed before replacement landed.
+      packageReplacementVerified: undefined,
+    });
+
+    expect(mocks.readFutureConfigBlock).not.toHaveBeenCalled();
+    expect(mocks.recoveryStart).not.toHaveBeenCalled();
+    expect(messages()).toContain("Failed to restart managed gateway service after failed update");
   });
 });

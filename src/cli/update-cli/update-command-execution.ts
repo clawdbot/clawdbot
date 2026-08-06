@@ -257,6 +257,8 @@ export async function executeMutableUpdate(params: {
           await maybeRestartServiceAfterFailedMutableUpdate({
             preManagedServiceStop,
             jsonMode: Boolean(params.opts.json),
+            // Schema refusal aborts before any package replacement.
+            packageReplacementVerified: false,
           });
         }
         defaultRuntime.exit(1);
@@ -277,6 +279,9 @@ export async function executeMutableUpdate(params: {
     await maybeRestartServiceAfterFailedMutableUpdate({
       preManagedServiceStop,
       jsonMode: Boolean(params.opts.json),
+      // Thrown failures never carry a producer-verified package replacement.
+      // Git rollbacks and pre-swap aborts stay on the guarded restart only.
+      packageReplacementVerified: false,
     });
     throw err;
   }

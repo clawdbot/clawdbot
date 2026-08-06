@@ -111,6 +111,7 @@ export async function finishUpdate(params: {
         root: result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
+        packageReplacementVerified: result.packageReplacementVerified === true,
       });
     }
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.

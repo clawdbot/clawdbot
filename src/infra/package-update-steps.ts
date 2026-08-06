@@ -38,6 +38,30 @@ import {
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
 /**
+ * True when the package-update producer has already installed a replacement
+ * tree. Used by failed-update recovery to decide whether the future-config
+ * start exception is allowed — Git rollbacks and pre-swap failures must not
+ * infer that fact from config metadata alone.
+ */
+export function didCompletePackageReplacement(
+  steps: ReadonlyArray<{ name: string; exitCode: number | null }>,
+): boolean {
+  if (steps.some((step) => step.name === "global install swap" && step.exitCode === 0)) {
+    return true;
+  }
+  const installLanded = steps.some(
+    (step) =>
+      (step.name === "global update" || step.name === "global update (omit optional)") &&
+      step.exitCode === 0,
+  );
+  if (!installLanded) {
+    return false;
+  }
+  // Doctor only runs against the replacement tree after install verification.
+  return steps.some((step) => step.name.startsWith("openclaw doctor"));
+}
+
+/**
  * Captures one package-manager or filesystem step from the global update flow.
  * Callers surface these records directly in update diagnostics.
  */
@@ -75,6 +99,7 @@ type PackageUpdateStepsResult = {
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
+  packageReplacementVerified: boolean;
 };
 
 function packageUpdateFailure(
@@ -82,7 +107,13 @@ function packageUpdateFailure(
   verifiedPackageRoot: string | null,
   steps = [failedStep],
 ): PackageUpdateStepsResult {
-  return { steps, verifiedPackageRoot, afterVersion: null, failedStep };
+  return {
+    steps,
+    verifiedPackageRoot,
+    afterVersion: null,
+    failedStep,
+    packageReplacementVerified: didCompletePackageReplacement(steps),
+  };
 }
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
@@ -1246,6 +1277,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       verifiedPackageRoot,
       afterVersion,
       failedStep,
+      packageReplacementVerified: didCompletePackageReplacement(steps),
     };
   } finally {
     await cleanupStagedNpmInstall(stagedInstall);
