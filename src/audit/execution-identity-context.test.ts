@@ -11,7 +11,6 @@ import {
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { recordAuditEvent } from "./audit-event-store.js";
-import { recordExecutionDecisionFact } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
@@ -1083,60 +1082,6 @@ describe("execution identity context storage", () => {
           },
         },
       ],
-    });
-  });
-
-  it("keeps a corrupt generic fact unknown before its decision page is returned", () => {
-    const database = databaseOptions();
-    const context = prepareExecutionIdentityContextAtAdmission(facts("run-corrupt-fact"), {
-      ...database,
-      now: 100,
-      contextId: "context-corrupt-fact",
-      executionId: "execution-corrupt-fact",
-      runtimeInstanceId: "runtime-1",
-    });
-    recordExecutionDecisionFact(
-      {
-        schemaVersion: 1,
-        receiptId: "corrupt-generic-fact",
-        contextId: context.contextId,
-        executionId: context.executionId,
-        runId: context.runId,
-        occurredAt: 150,
-        action: { family: "tool", operation: "policy" },
-        decision: { outcome: "denied", reasonCode: "tool_policy_denied" },
-        enforcement: {
-          coverageState: "enforced",
-          policyRefs: ["tool-policy:deny"],
-          grantRefs: [],
-          contextFieldsUsed: ["runId"],
-        },
-        source: {
-          owner: "tool-policy",
-          recordRef: "generic-record",
-          decisionBoundary: "agent-tool.before-call",
-        },
-        missingEvidence: [],
-        remediation: [{ code: "choose_allowed_tool", text: "Choose an allowed tool." }],
-      },
-      { ...database, now: 150 },
-    );
-    openOpenClawStateDatabase(database)
-      .db.prepare("UPDATE execution_decision_facts SET receipt_json = ? WHERE receipt_id = ?")
-      .run("{", "corrupt-generic-fact");
-
-    expect(
-      inspectExecutionIdentityRun(
-        { executionId: context.executionId, decisionLimit: 1 },
-        { ...database, now: 200 },
-      ),
-    ).toMatchObject({
-      coverage: {
-        state: "unknown",
-        missingEvidence: expect.arrayContaining(["decision.fact.valid"]),
-      },
-      decisions: [{ decision: { outcome: "not-applicable" } }],
-      nextDecisionCursor: "1",
     });
   });
 

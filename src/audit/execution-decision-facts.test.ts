@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  DecisionReceiptV1,
+  ExecutionIdentityContextV1,
+} from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -12,6 +15,7 @@ import {
   recordExecutionDecisionFact,
   summarizeExecutionDecisionFactsForContext,
 } from "./execution-decision-facts.js";
+import { presentExecutionDecisionReceipts } from "./execution-decision-receipts.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -155,6 +159,23 @@ describe("execution decision facts", () => {
 
   it("turns corrupt retained payloads into bounded unknown receipts", () => {
     const database = databaseOptions();
+    const context: ExecutionIdentityContextV1 = {
+      schemaVersion: 1,
+      contextId: "context-1",
+      executionId: "execution-1",
+      runId: "run-1",
+      createdAt: 50,
+      trustDomain: { kind: "gateway-cell", domainRef: "domain-1", state: "present" },
+      invoker: { state: "absent" },
+      ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+      agentPrincipal: { kind: "agent", domainRef: "domain-1", principalRef: "agent-main" },
+      agentDefinition: { definitionRef: "main", state: "present" },
+      runtimeInstance: { runtimeRef: "runtime-1", kind: "embedded", state: "present" },
+      applicableGrants: [],
+      assurance: [],
+      coverageState: "unattributed",
+      missingEvidence: [],
+    };
     recordExecutionDecisionFact(receipt("corrupt"), { ...database, now: 100 });
     openOpenClawStateDatabase(database)
       .db.prepare("UPDATE execution_decision_facts SET receipt_json = ? WHERE receipt_id = ?")
@@ -182,6 +203,21 @@ describe("execution decision facts", () => {
       count: 1,
       coverageState: "unknown",
       missingEvidence: ["decision.fact.valid"],
+    });
+    expect(
+      presentExecutionDecisionReceipts({
+        context,
+        approvalLinkState: "unambiguous",
+        decisionLimit: 1,
+        options: { ...database, now: 100 },
+      }),
+    ).toMatchObject({
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["decision.fact.valid"]),
+      },
+      decisions: [{ decision: { outcome: "not-applicable" } }],
+      nextDecisionCursor: "1",
     });
   });
 });
