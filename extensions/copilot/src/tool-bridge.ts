@@ -22,10 +22,7 @@ import {
   resolveModelAuthMode,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createAgentHarnessToolSurfaceRuntime,
-  createOpenClawCodingToolsForAgentHarness,
-} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
@@ -204,8 +201,11 @@ export async function createCopilotToolBridge(
   const createOpenClawCodingTools =
     input.createOpenClawCodingTools ??
     (admittedAttempt
-      ? (options: OpenClawCodingToolsOptions) =>
-          createOpenClawCodingToolsForAgentHarness(admittedAttempt, options)
+      ? async (options: OpenClawCodingToolsOptions) => {
+          const { createOpenClawCodingToolsForAgentHarness } =
+            await import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime");
+          return createOpenClawCodingToolsForAgentHarness(admittedAttempt, options);
+        }
       : (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools);
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({

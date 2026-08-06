@@ -938,7 +938,7 @@ async function createCodexSideToolBridge(input: {
   let tools: AnyAgentTool[] = [];
   if (supportsModelTools(runtimeModel)) {
     const { createOpenClawCodingToolsForAgentHarnessSideQuestion } =
-      await import("openclaw/plugin-sdk/agent-harness-tool-runtime");
+      await import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime");
     const sandboxSessionKey =
       input.params.sandboxSessionKey?.trim() ||
       input.params.sessionKey?.trim() ||

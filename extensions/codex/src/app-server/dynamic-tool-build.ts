@@ -235,7 +235,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const agentHarnessCodingToolsFactory = injectedOpenClawCodingToolsFactory
     ? undefined
     : (dynamicToolBuildState.agentHarnessCodingToolsFactory ??
-      (await import("openclaw/plugin-sdk/agent-harness-tool-runtime"))
+      (await import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))
         .createOpenClawCodingToolsForAgentHarness);
   const createOpenClawCodingTools =
     injectedOpenClawCodingToolsFactory ??
