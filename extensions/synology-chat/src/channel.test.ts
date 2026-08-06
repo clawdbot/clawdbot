@@ -187,6 +187,7 @@ describe("createSynologyChatPlugin", () => {
         "synology-chat": {
           token: "test-token",
           incomingUrl: "https://nas/incoming",
+          webhookUrl: "https://gateway.example.com/webhook/synology?proxy-token=redacted",
         },
       },
     };
@@ -202,7 +203,10 @@ describe("createSynologyChatPlugin", () => {
       accountId: "default",
       configured: true,
       lifecycle: "ready",
+      webhookPath: "/webhook/synology",
+      attachmentsReady: true,
     });
+    expect(snapshot).not.toHaveProperty("webhookUrl");
   });
 
   describe("config", () => {

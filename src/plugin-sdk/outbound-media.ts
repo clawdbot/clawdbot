@@ -308,6 +308,11 @@ export function createHostedOutboundMediaStore(
     incomingByteLength: number,
     nowMs = Date.now(),
   ): Promise<void> {
+    if (options.maxTotalBytes !== undefined && incomingByteLength > options.maxTotalBytes) {
+      throw new Error(
+        `hosted outbound media payload exceeds aggregate byte capacity (${incomingByteLength}/${options.maxTotalBytes} bytes)`,
+      );
+    }
     const rows = await options.metadataStore.entries();
     const validRows = rows.filter((row) => {
       const id = parseHostedOutboundMediaMetaKey(row.key);
