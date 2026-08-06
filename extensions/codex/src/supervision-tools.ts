@@ -16,6 +16,7 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./app-server/auth-bridge.js";
+import { redactCodexAppServerDiagnostic } from "./app-server/client.js";
 import {
   assertCodexAppServerConnectionSecurity,
   codexAppServerStartOptionsKey,
@@ -24,7 +25,6 @@ import {
   type CodexAppServerStartOptions,
   type CodexSupervisionEndpoint,
 } from "./app-server/config.js";
-import { redactCodexAppServerDiagnostic } from "./app-server/client.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
