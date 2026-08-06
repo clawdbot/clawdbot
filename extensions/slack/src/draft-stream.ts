@@ -4,6 +4,7 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
+import { trackSlackDraftMessage } from "./draft-message-boundaries.js";
 import { formatSlackError } from "./errors.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
@@ -57,6 +58,7 @@ export function createSlackDraftStream(params: {
 
   let streamMessageId: string | undefined;
   let streamChannelId: string | undefined;
+  let untrackConversationBoundary: (() => void) | undefined;
   let lastSentKey = "";
   const streamState = { stopped: false, final: false };
 
@@ -94,11 +96,12 @@ export function createSlackDraftStream(params: {
         });
         return;
       }
+      const threadTs = params.resolveThreadTs?.();
       const sent = await send(params.target, trimmed, {
         cfg: params.cfg,
         token: params.token,
         accountId: params.accountId,
-        threadTs: params.resolveThreadTs?.(),
+        threadTs,
         identity: params.identity,
         ...(params.eventScope
           ? { client: params.eventScope.client, enterpriseEventScope: params.eventScope }
@@ -113,6 +116,15 @@ export function createSlackDraftStream(params: {
         params.warn?.("slack stream preview stopped (missing identifiers from sendMessage)");
         return;
       }
+      stopTrackingConversationBoundary();
+      untrackConversationBoundary = trackSlackDraftMessage({
+        accountId: params.accountId,
+        teamId: params.eventScope?.teamId,
+        channelId: streamChannelId,
+        threadTs,
+        messageTs: streamMessageId,
+        onInterveningMessage: forceNewMessage,
+      });
       params.onMessageSent?.();
     } catch (err) {
       streamState.stopped = true;
@@ -128,12 +140,19 @@ export function createSlackDraftStream(params: {
       isEmpty: (value) => !normalizeUpdate(value).text.trim(),
     });
 
+  const stopTrackingConversationBoundary = () => {
+    untrackConversationBoundary?.();
+    untrackConversationBoundary = undefined;
+  };
+
   const stop = () => {
+    stopTrackingConversationBoundary();
     streamState.stopped = true;
     loop.stop();
   };
 
   const clear = async () => {
+    stopTrackingConversationBoundary();
     await discardPending();
     const channelId = streamChannelId;
     const messageId = streamMessageId;
@@ -155,10 +174,16 @@ export function createSlackDraftStream(params: {
   };
 
   const forceNewMessage = () => {
+    stopTrackingConversationBoundary();
     streamMessageId = undefined;
     streamChannelId = undefined;
     lastSentKey = "";
     loop.resetPending();
+  };
+
+  const discardPendingAndStopTracking = async () => {
+    stopTrackingConversationBoundary();
+    await discardPending();
   };
 
   params.log?.(`slack stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
@@ -167,8 +192,8 @@ export function createSlackDraftStream(params: {
     update,
     flush: loop.flush,
     clear,
-    discardPending,
-    seal: discardPending,
+    discardPending: discardPendingAndStopTracking,
+    seal: discardPendingAndStopTracking,
     stop,
     forceNewMessage,
     messageId: () => streamMessageId,

@@ -1230,6 +1230,25 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
+  it("posts the final below a human message that interrupted the live preview", async () => {
+    let messageId: string | undefined = "171234.567";
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(async () => {
+        messageId = undefined;
+      }),
+      messageId: () => messageId,
+      channelId: () => (messageId ? "C123" : undefined),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledOnce();
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
   it.each([
     { name: "ASCII", text: "x".repeat(4_001) },
     { name: "UTF-8", text: "界".repeat(1_334) },
