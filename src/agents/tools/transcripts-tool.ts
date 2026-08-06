@@ -68,6 +68,9 @@ function ownsTranscriptSession(
       if (channel === ownerChannel) {
         return ctx.agentAccountId?.trim() === ownerAccountId;
       }
+      if (channel && (!provider || accountBindingChannels.includes(channel))) {
+        return false;
+      }
       return typeof ownerAgentId === "string" || isLocalMainOperator;
     }
     // Persisted ingress ownership remains authoritative if provider discovery
@@ -75,8 +78,8 @@ function ownsTranscriptSession(
     return isLocalMainOperator;
   }
   const sourceAccountId = session.source.accountId?.trim();
-  if (!provider && sourceAccountId) {
-    // Without provider metadata, core cannot prove whether this legacy account
+  if (!provider) {
+    // Without provider metadata, core cannot prove whether a legacy row
     // belonged to a binding namespace. Keep recovery on the recorded agent's
     // local surface, or local main for ownerless rows, instead of guessing.
     return typeof ownerAgentId === "string"

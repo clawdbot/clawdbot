@@ -64,7 +64,7 @@ describe("transcripts tool account ownership", () => {
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
-      accountBindingChannels: ["discord"],
+      accountBindingChannels: ["discord", "slack"],
       resolveAccountId,
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -114,8 +114,20 @@ describe("transcripts tool account ownership", () => {
       channel: "discord",
       accountId: "account-b",
     });
+    const otherBindingChannelTool = createTool(stateDir, "main", {
+      channel: "slack",
+      accountId: "account-a",
+    });
     await expect(
       otherAccountTool.execute("call-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await expect(
+      otherBindingChannelTool.execute(
+        "call-other-binding-status",
+        { action: "status" },
+        undefined,
+        vi.fn(),
+      ),
     ).resolves.toMatchObject({ details: { active: [] } });
     await expect(
       otherAccountTool.execute(
@@ -135,9 +147,7 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).resolves.toMatchObject({
-      details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
-    });
+    ).resolves.toMatchObject({ details: { active: [] } });
     await expect(
       ownerTool.execute("call-provider-missing-owner", { action: "status" }, undefined, vi.fn()),
     ).resolves.toMatchObject({
@@ -399,6 +409,13 @@ describe("transcripts tool account ownership", () => {
         stoppedAt: "2026-07-03T12:05:00.000Z",
         metadata: { agentId: "research" },
       },
+      {
+        sessionId: "beta-accountless",
+        source: { providerId: "discord-voice" },
+        startedAt: "2026-07-04T12:00:00.000Z",
+        stoppedAt: "2026-07-04T12:05:00.000Z",
+        metadata: { agentId: "main" },
+      },
     ];
     for (const session of sessions) {
       await store.writeSession(session);
@@ -501,6 +518,22 @@ describe("transcripts tool account ownership", () => {
         vi.fn(),
       ),
     ).rejects.toThrow("transcripts session not found: beta-agent-only");
+    await expect(
+      webchatTool.execute(
+        "call-provider-missing-accountless",
+        { action: "summarize", sessionId: "beta-accountless" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: beta-accountless");
+    await expect(
+      localMainTool.execute(
+        "call-provider-missing-accountless-local",
+        { action: "summarize", sessionId: "beta-accountless" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "beta-accountless" } });
     await expect(
       createTool(stateDir, "research", { channel: "webchat", accountId: "operator" }).execute(
         "call-provider-missing-named-channel",
