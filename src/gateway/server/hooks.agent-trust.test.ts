@@ -781,4 +781,39 @@ describe("dispatchAgentHook trust handling", () => {
       ),
     );
   });
+
+  it("targets requestHeartbeat to the hook's agentId, not globally (#119808)", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      result: { summary: "done", text: "done" },
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Targeted", "hooks"),
+      deliver: true,
+      delivery: { mode: "announce" as const },
+    });
+
+    await waitForFast(() =>
+      expect(requestHeartbeatMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "hooks",
+        }),
+      ),
+    );
+  });
+
+  it("targets requestHeartbeat to the hook's agentId on error path (#119808)", async () => {
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    dispatchAgentHook(buildAgentPayload("Targeted error", "hooks"));
+
+    await waitForFast(() =>
+      expect(requestHeartbeatMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "hooks",
+        }),
+      ),
+    );
+  });
 });

@@ -314,6 +314,8 @@ export function createGatewayHooksRequestHandler(params: {
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
+          agentId: value.agentId,
+          sessionKey: hookEventSessionKey,
         });
       }
     };
@@ -471,7 +473,13 @@ export function createGatewayHooksRequestHandler(params: {
               sessionKey: eventSessionKey,
             });
             if (value.wakeMode === "now") {
-              requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+              requestHeartbeat({
+                source: "hook",
+                intent: "immediate",
+                reason: `hook:${jobId}`,
+                agentId: value.agentId,
+                sessionKey: hookEventSessionKey,
+              });
             }
           } else if (result.status === "ok" && !value.deliver) {
             logHooks.info("hook agent run completed without announcement", {
