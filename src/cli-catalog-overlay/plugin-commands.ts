@@ -1,3 +1,4 @@
+import { isReservedNonPluginCommandRoot } from "../cli/command-registration-policy.js";
 import type { PluginCliDescriptorEntry } from "../plugins/cli-registry-loader.js";
 
 export type CliCatalogPluginCommand = {
@@ -19,22 +20,27 @@ export function buildPluginCatalogCommands(
   entries: readonly PluginCliDescriptorEntry[],
 ): readonly CliCatalogPluginCommand[] {
   return entries.flatMap((entry) => {
-    return entry.descriptors.map((descriptor) => {
+    return entry.descriptors.flatMap((descriptor): CliCatalogPluginCommand[] => {
       const commandPath = [...entry.parentPath, descriptor.name];
-      return {
-        pluginId: entry.pluginId,
-        commandPath,
-        parentPath: entry.parentPath,
-        depth: commandPath.length,
-        name: descriptor.name,
-        descriptorName: descriptor.name,
-        description: descriptor.description,
-        hasSubcommands: descriptor.hasSubcommands,
-        commandHints: [commandPath.join(" ")],
-        sourceKind: "plugin" as const,
-        sourceId: `${entry.pluginId}:${commandPath.join(" ")}`,
-        discoveryMode: "plugin-descriptor" as const,
-      };
+      if (isReservedNonPluginCommandRoot(commandPath[0])) {
+        return [];
+      }
+      return [
+        {
+          pluginId: entry.pluginId,
+          commandPath,
+          parentPath: entry.parentPath,
+          depth: commandPath.length,
+          name: descriptor.name,
+          descriptorName: descriptor.name,
+          description: descriptor.description,
+          hasSubcommands: descriptor.hasSubcommands,
+          commandHints: [commandPath.join(" ")],
+          sourceKind: "plugin" as const,
+          sourceId: `${entry.pluginId}:${commandPath.join(" ")}`,
+          discoveryMode: "plugin-descriptor" as const,
+        },
+      ];
     });
   });
 }
