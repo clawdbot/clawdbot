@@ -134,9 +134,12 @@ function encodeEdgeDecoration(unit: NameUnit | undefined): string {
 function encodeInteriorDecoration(unit: DecorationUnit): string {
   const spelled = unit.marks.join(DECORATION_SPACING);
   if (!spelled) {
-    // A gap spelled with joiners alone is gone from normalized text, so it may
-    // be omitted; plain spacing between word runs stays required.
-    return unit.spaced ? String.raw`\s+` : DECORATION_SPACING;
+    // Joiners vanish from normalized text while whitespace survives it. So a
+    // gap spelled with joiners alone may be omitted but never replaced by
+    // whitespace -- the spaced spelling normalizes to a different name -- and
+    // a spaced gap keeps its separator required while reaching across the
+    // joiners the raw text still carries for stripping.
+    return unit.spaced ? String.raw`${JOINER_SPACING}\s${DECORATION_SPACING}` : JOINER_SPACING;
   }
   // A gap carrying whitespace keeps a one-separator floor so the bare
   // concatenation of the surrounding words never matches.

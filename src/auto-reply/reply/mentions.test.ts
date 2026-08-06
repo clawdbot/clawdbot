@@ -183,6 +183,30 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("कख नमस्ते", regexes)).toBe(true);
   });
 
+  it("keeps a joiner-only gap from accepting whitespace", () => {
+    // Normalization strips the joiner but keeps interior whitespace, so the
+    // spaced spelling normalizes to a different name than "क‍ख" does and
+    // must neither match nor be stripped.
+    const cfg = configForName("क‍ख");
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns("क ख नमस्ते", regexes)).toBe(false);
+    expect(matchesMentionPatterns("@क ख नमस्ते", regexes)).toBe(false);
+    expect(stripMentions("क ख नमस्ते", {} as MsgContext, cfg, "decorated-agent")).toBe("क ख नमस्ते");
+    expect(stripMentions("क‍ख /status", {} as MsgContext, cfg, "decorated-agent")).toBe("/status");
+  });
+
+  it("strips a spaced gap whose raw spelling also carries a joiner", () => {
+    // The separator stays required -- normalized text keeps it -- while the
+    // stripping path still has to reach across the joiner raw text carries.
+    const cfg = configForName("क‍ ख");
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns("क ख नमस्ते", regexes)).toBe(true);
+    expect(matchesMentionPatterns("कख नमस्ते", regexes)).toBe(false);
+    expect(stripMentions("क‍ ख /status", {} as MsgContext, cfg, "decorated-agent")).toBe("/status");
+  });
+
   it("matches a leading-emoji name with the emoji typed or omitted", () => {
     const regexes = buildMentionRegexes(configForName("🦋小蝶"), "decorated-agent");
 
