@@ -1062,9 +1062,10 @@ export function createReplyOperation(params: {
         options.followupAdmissionBarrierTimeout,
       );
     }
+    const backend = getAttachedBackend(operation);
     let cancelFailed = false;
     try {
-      getAttachedBackend(operation)?.cancel("superseded");
+      backend?.cancel("superseded");
     } catch (error) {
       cancelFailed = true;
       diag.warn(
@@ -1076,13 +1077,15 @@ export function createReplyOperation(params: {
       logStaleTakeoverRelease();
       return true;
     }
-    if (cancelFailed) {
-      scheduleTerminalSettle();
-      return false;
+    // cancel() only requests shutdown. A missing backend can also be a live
+    // pre-attachment owner, so only complete() may release the exact lane token.
+    if (!cancelFailed) {
+      diag.warn(
+        `reply run stale takeover retained: sessionKey=${currentSessionKey} reason=${reason} owner=awaiting_terminal_completion backend=${backend ? "attached" : "pending"}`,
+      );
     }
-    clearState();
-    logStaleTakeoverRelease();
-    return true;
+    scheduleTerminalSettle();
+    return false;
   });
   const finalizationLease = replyRunSettle.createReplyRunFinalizationLease({
     owner: operation,
@@ -1103,7 +1106,12 @@ export function createReplyOperation(params: {
           result,
         )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
       );
-      expireReplyOperationByOperation.get(operation)?.("finalization_stalled");
+      const expired = expireReplyOperationByOperation.get(operation)?.("finalization_stalled");
+      if (expired === false && replyRunState.activeRunsByKey.get(currentSessionKey) === operation) {
+        // This lease is the finalization owner's bounded shutdown deadline.
+        // Do not grant a second terminal-settle lifetime after it expires.
+        forceClearReplyOperation(operation);
+      }
     },
   });
   const terminalSettleTimer = replyRunSettle.createReplyRunSettleTimer({

@@ -914,29 +914,31 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   };
   try {
     if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
-      // Reply expiry aborts synchronously and clears registry ownership. Let the
-      // command lane observe that abort before recovery decides whether to reset it.
+      // Let the command lane observe synchronous reply completion before recovery
+      // decides whether to reset it, but keep all owners on the shared drain path.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      const embeddedDrained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
-      const ownerSettled = await waitForExpiredOwnerSettlement();
-      const drained = embeddedDrained && ownerSettled;
-      return { aborted: true, drained, forceCleared: false };
     }
-    const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
-    const embeddedDrained = aborted
-      ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)
-      : false;
+    let aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+    const embeddedDrained =
+      aborted || stampedStaleReplyRun
+        ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)
+        : false;
     const ownerSettled = await waitForExpiredOwnerSettlement();
     const drained = embeddedDrained && ownerSettled;
+    // A retained cancel request can complete asynchronously after expire()
+    // returns. Count that exact owner settlement as the accepted abort.
+    if (!aborted && stampedStaleReplyRun && drained) {
+      aborted = true;
+    }
     const persistenceSnapshot =
       params.forceClear === true && params.sessionKey
         ? tryLoadForceClearSessionSnapshot(params.sessionKey)
         : undefined;
     const forceCleared =
       params.forceClear === true &&
-      ((!expiredReplyRun && stampedStaleReplyRun) || !aborted || !drained)
+      ((!expiredReplyRun && stampedStaleReplyRun && !ownerSettled) || !aborted || !drained)
         ? forceClearEmbeddedAgentRun(
             params.sessionId,
             embeddedRunHandle,

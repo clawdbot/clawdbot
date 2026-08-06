@@ -74,7 +74,7 @@ describe("force-clear terminal state persistence", () => {
       forceClear: true,
       settleMs: 100,
     });
-    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
     expect(followupObservedActiveHandle).toEqual([]);
 
     clearActiveEmbeddedRun(sessionId, handle, sessionKey);
@@ -167,6 +167,68 @@ describe("force-clear terminal state persistence", () => {
     await vi.waitFor(() => {
       expect(followupObservedActiveOwner).toEqual([false]);
     });
+  });
+
+  it("force-clears a reply-only backend that accepts cancellation without completing", async () => {
+    const sessionKey = "agent:main:reply-only-cancel-pending";
+    const sessionId = "session-reply-only-cancel-pending";
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const cancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    operation.setPhase("running");
+
+    const followupObservedActiveOwner: boolean[] = [];
+    runAfterReplyOperationClear(operation, () => {
+      followupObservedActiveOwner.push(isReplyRunActiveForSessionId(sessionId));
+    });
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 20,
+    });
+
+    expect(result).toEqual({ aborted: false, drained: false, forceCleared: true });
+    expect(cancel).toHaveBeenCalledWith("superseded");
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
+    await vi.waitFor(() => {
+      expect(followupObservedActiveOwner).toEqual([false]);
+    });
+  });
+
+  it("force-clears active handle and reply owners when cancellation never completes", async () => {
+    const sessionKey = "agent:main:handle-cancel-pending";
+    const sessionId = "session-handle-cancel-pending";
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const abort = vi.fn();
+    const handle = createRunHandle({ abort });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: handle.abort,
+      isStreaming: handle.isStreaming,
+    });
+    operation.setPhase("running");
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 20,
+    });
+
+    expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
+    expect(abort).toHaveBeenCalled();
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
   });
 
   it("persists killed status after a force-cleared run", async () => {

@@ -385,8 +385,8 @@ describe("reply run registry", () => {
     const operation = createTestReplyOperation({ sessionId: "session-stale-owner" });
     operation.setPhase("running");
 
-    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
 
     const settlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
     let settled = false;
@@ -513,6 +513,112 @@ describe("reply run registry", () => {
     expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
   });
 
+  it("retains exact ownership when stale backend cancellation awaits terminal completion", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-cancel-pending" });
+    operation.setPhase("running");
+    const cancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(false);
+    expect(cancel).toHaveBeenCalledWith("superseded");
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+
+    releaseRecovery();
+    await recoveryBarrier;
+    await Promise.resolve();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    expect(forceClearReplyOperation(operation, new Error("terminal completion timed out"))).toBe(
+      true,
+    );
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-cancel-pending");
+    });
+    expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+  });
+
+  it("retains pre-backend ownership and rejects a backend that attaches after expiry", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-cancel-before-attach" });
+    operation.setPhase("running");
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(false);
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+
+    const lateCancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: lateCancel,
+      isStreaming: () => true,
+    });
+    expect(lateCancel).toHaveBeenCalledWith("superseded");
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+
+    releaseRecovery();
+    await recoveryBarrier;
+    await Promise.resolve();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    expect(forceClearReplyOperation(operation)).toBe(true);
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-cancel-before-attach");
+    });
+    expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+  });
+
+  it("bounds retained ownership when stale cancellation awaits terminal completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createTestReplyOperation({ sessionId: "session-cancel-pending-bound" });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => {},
+        isStreaming: () => true,
+      });
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+
+      expect(expireStaleReplyOperation(operation, "no_activity")).toBe(false);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - 1);
+      expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+      expect(afterClear).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+      expect(afterClear).toHaveBeenCalledWith("session-cancel-pending-bound");
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds retained ownership when stale cancellation throws undefined", async () => {
     vi.useFakeTimers();
     try {
@@ -590,12 +696,17 @@ describe("reply run registry", () => {
       expireStaleReplyOperation(operation, "stuck_recovery", {
         afterClearBarrier: recoveryBarrier,
       }),
-    ).toBe(true);
+    ).toBe(false);
     const afterClear = vi.fn();
     runAfterReplyOperationClear(operation, afterClear);
     expect(afterClear).not.toHaveBeenCalled();
 
     releaseRecovery();
+    await recoveryBarrier;
+    await Promise.resolve();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    expect(forceClearReplyOperation(operation)).toBe(true);
     await vi.waitFor(() => {
       expect(afterClear).toHaveBeenCalledWith("session-late-callback");
     });
@@ -1005,7 +1116,7 @@ describe("reply run registry", () => {
     }
   });
 
-  it("keeps run_stalled attribution when backend cancel re-enters abortByUser", () => {
+  it("keeps run_stalled attribution and ownership when cancel re-enters abortByUser", () => {
     const operation = createTestReplyOperation({
       sessionKey: "agent:main:reentrant-expire",
       sessionId: "reentrant-session",
@@ -1021,8 +1132,10 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(expireStaleReplyOperation(operation, "no_activity")).toBe(true);
+    expect(expireStaleReplyOperation(operation, "no_activity")).toBe(false);
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBe(operation);
+    expect(forceClearReplyOperation(operation)).toBe(true);
     expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBeUndefined();
   });
 

@@ -6,7 +6,10 @@ import {
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  runAfterReplyOperationClear,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   onDiagnosticEvent,
@@ -244,7 +247,14 @@ describe("stuck session recovery integration", () => {
             resolve("aborted");
             return;
           }
-          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), { once: true });
+          operation.abortSignal.addEventListener(
+            "abort",
+            () => {
+              operation.complete();
+              resolve("aborted");
+            },
+            { once: true },
+          );
         }),
       { warnAfterMs: Number.MAX_SAFE_INTEGER },
     );
@@ -269,6 +279,62 @@ describe("stuck session recovery integration", () => {
     expect(getQueueSize(lane)).toBe(0);
   });
 
+  it("keeps queued lane work behind reply-only force-clear settlement", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionKey = "agent:main:reply-only-force-clear";
+      const sessionId = "reply-only-force-clear-session";
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => {},
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+      let ownerCleared = false;
+      runAfterReplyOperationClear(operation, () => {
+        ownerCleared = true;
+      });
+
+      void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      const queued = enqueueCommandInLane(
+        lane,
+        async () => {
+          expect(ownerCleared).toBe(true);
+          return "drained";
+        },
+        { warnAfterMs: Number.MAX_SAFE_INTEGER },
+      );
+
+      const recovery = recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey,
+        ageMs: 720_000,
+        queueDepth: 1,
+        allowActiveAbort: true,
+      });
+      // The shared deadline can leave the owner-settlement clamp's final 100 ms.
+      await vi.advanceTimersByTimeAsync(15_100);
+
+      await expect(recovery).resolves.toMatchObject({
+        status: "aborted",
+        action: "abort_embedded_run",
+        aborted: false,
+        drained: false,
+        forceCleared: true,
+      });
+      await expect(queued).resolves.toBe("drained");
+      expect(ownerCleared).toBe(true);
+      expect(getQueueSize(lane)).toBe(0);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("reclaims continuous argument churn after its semantic progress clock becomes stale", async () => {
     const sessionKey = "agent:main:argument-churn";
     const sessionId = "argument-churn-session";
@@ -288,7 +354,14 @@ describe("stuck session recovery integration", () => {
       () =>
         new Promise<"aborted">((resolve) => {
           markActiveStarted();
-          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), { once: true });
+          operation.abortSignal.addEventListener(
+            "abort",
+            () => {
+              operation.complete();
+              resolve("aborted");
+            },
+            { once: true },
+          );
         }),
       { warnAfterMs: Number.MAX_SAFE_INTEGER },
     );
