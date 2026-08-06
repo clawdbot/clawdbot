@@ -137,6 +137,9 @@ function buildCommittedMessage(
       output: message.usage.output,
       cacheRead: message.usage.cacheRead,
       cacheWrite: message.usage.cacheWrite,
+      ...(message.usage.usageReport
+        ? { usageReport: structuredClone(message.usage.usageReport) }
+        : {}),
       ...(message.usage.contextUsage
         ? { contextUsage: structuredClone(message.usage.contextUsage) }
         : {}),

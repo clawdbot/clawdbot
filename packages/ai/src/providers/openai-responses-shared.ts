@@ -623,6 +623,11 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   } catch (error) {
     cleanStreamingScratchBuffers(output);
     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+    // Responses usage arrives only on terminal events; mid-stream failure
+    // must not leave the zero placeholder looking like measured usage.
+    if (output.usage.usageReport?.state !== "available") {
+      output.usage.usageReport = { state: "unavailable" };
+    }
     output.errorMessage = params.formatError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();

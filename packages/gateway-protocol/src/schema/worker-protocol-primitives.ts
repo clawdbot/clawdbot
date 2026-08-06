@@ -70,6 +70,11 @@ export const WorkerTranscriptUsageSchema = closedObject({
   output: Type.Number({ minimum: 0 }),
   cacheRead: Type.Number({ minimum: 0 }),
   cacheWrite: Type.Number({ minimum: 0 }),
+  usageReport: Type.Optional(
+    closedObject({
+      state: Type.Union([Type.Literal("available"), Type.Literal("unavailable")]),
+    }),
+  ),
   contextUsage: Type.Optional(
     Type.Union([
       closedObject({

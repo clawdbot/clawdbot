@@ -370,6 +370,16 @@ describe("hasNonzeroUsage", () => {
   it("returns false for undefined usage", () => {
     expect(hasNonzeroUsage(undefined)).toBe(false);
   });
+
+  it("returns false when usageReport is unavailable even if buckets are positive", () => {
+    expect(
+      hasNonzeroUsage({
+        input: 10,
+        output: 4,
+        usageReport: { state: "unavailable" },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("derivePromptTokens", () => {

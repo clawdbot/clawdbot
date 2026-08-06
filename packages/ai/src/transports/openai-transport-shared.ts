@@ -56,6 +56,7 @@ export type MutableAssistantOutput = {
     cacheRead: number;
     cacheWrite: number;
     reasoningTokens?: number;
+    usageReport?: NonNullable<Usage["usageReport"]>;
     totalTokens: number;
     cost: Usage["cost"];
   };
@@ -93,6 +94,8 @@ export function parseOpenAICompletionsUsage(
     Number.isFinite(reasoningTokens)
       ? { reasoningTokens }
       : {}),
+    // Provider sent a usage payload; zeros here are measured, not stream placeholders.
+    usageReport: { state: "available" },
     totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };

@@ -56,6 +56,9 @@ export function projectWorkerInferenceTerminalMessage(params: {
       output: usage.output,
       cacheRead: usage.cacheRead,
       cacheWrite: usage.cacheWrite,
+      ...(usage.usageReport?.state === "available" || usage.usageReport?.state === "unavailable"
+        ? { usageReport: { state: usage.usageReport.state } }
+        : {}),
       ...(usage.contextUsage?.state === "available"
         ? {
             contextUsage: {

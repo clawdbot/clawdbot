@@ -277,6 +277,12 @@ export interface Usage {
   cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
+  /**
+   * Whether input/output/cache/totalTokens reflect a provider-reported usage
+   * payload. Streams that fail before the terminal usage chunk must set
+   * `unavailable` so zero placeholders are not treated as measured usage.
+   */
+  usageReport?: { state: "available" | "unavailable" };
   /** Exact context snapshot for the final provider iteration. */
   contextUsage?:
     | { state: "available"; promptTokens: number; totalTokens: number }

@@ -17,6 +17,8 @@ type TransportUsage = {
   cacheRead: number;
   cacheWrite: number;
   contextUsage?: ContextUsage;
+  /** Absent until a provider usage payload arrives or the stream fails without one. */
+  usageReport?: NonNullable<Usage["usageReport"]>;
   totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
@@ -109,6 +111,26 @@ export function createEmptyTransportUsage(): TransportUsage {
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
+}
+
+type UsageReportCarrier = {
+  usageReport?: NonNullable<Usage["usageReport"]>;
+};
+
+/** Mark token buckets as provider-reported (call only after a real usage payload). */
+export function markTransportUsageReportAvailable(usage: UsageReportCarrier): void {
+  usage.usageReport = { state: "available" };
+}
+
+/**
+ * Streams initialize usage to zero before any provider payload. On error/abort,
+ * keep an already-reported payload; otherwise mark the zeros as unmeasured.
+ */
+export function markTransportUsageReportUnavailableUnlessReported(usage: UsageReportCarrier): void {
+  if (usage.usageReport?.state === "available") {
+    return;
+  }
+  usage.usageReport = { state: "unavailable" };
 }
 
 export function createWritableTransportEventStream() {

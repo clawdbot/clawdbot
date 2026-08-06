@@ -84,7 +84,11 @@ import {
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
+import {
+  failTransportStream,
+  finalizeTransportStream,
+  markTransportUsageReportUnavailableUnlessReported,
+} from "./transport-stream-shared.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -367,6 +371,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           error,
           cleanup: () => {
             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+            // OpenAI sends usage only on the final chunk; a mid-stream failure
+            // must not leave the zero placeholder looking like measured usage.
+            markTransportUsageReportUnavailableUnlessReported(output.usage);
             finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
           },
         });
@@ -858,6 +865,9 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse") {
     tagPendingCommentaryText(output.content);
   }
+  // Terminal usage arrives only on the final include_usage chunk. If none
+  // arrived, the zero placeholder must not look like measured usage.
+  markTransportUsageReportUnavailableUnlessReported(output.usage);
 }
 
 function shouldFilterDeepSeekDsmlText(compat: ReturnType<typeof getCompat>) {

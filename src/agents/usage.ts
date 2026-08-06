@@ -15,6 +15,7 @@ export type UsageLike = {
   cacheRead?: number;
   cacheWrite?: number;
   contextUsage?: ContextUsage;
+  usageReport?: { state: "available" | "unavailable" };
   total?: number;
   // Common alternates across providers/SDKs.
   inputTokens?: number;
@@ -60,6 +61,8 @@ export type NormalizedUsage = {
   cacheRead?: number;
   cacheWrite?: number;
   contextUsage?: ContextUsage;
+  /** Mirrors Usage.usageReport when the provider payload provenance is known. */
+  usageReport?: { state: "available" | "unavailable" };
   reasoningTokens?: number;
   total?: number;
 };
@@ -109,6 +112,10 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
 /** Return true when any normalized usage bucket is positive. */
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
+    return false;
+  }
+  // Unmeasured stream placeholders must not count as accounting usage.
+  if (usage.usageReport?.state === "unavailable") {
     return false;
   }
   return (
@@ -218,12 +225,18 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 
+  const usageReport =
+    raw.usageReport?.state === "available" || raw.usageReport?.state === "unavailable"
+      ? ({ state: raw.usageReport.state } as const)
+      : undefined;
+
   if (
     input === undefined &&
     output === undefined &&
     cacheRead === undefined &&
     cacheWrite === undefined &&
     contextUsage === undefined &&
+    usageReport === undefined &&
     reasoningTokens === undefined &&
     total === undefined
   ) {
@@ -236,6 +249,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     cacheRead,
     cacheWrite,
     ...(contextUsage ? { contextUsage } : {}),
+    ...(usageReport ? { usageReport } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,
   };

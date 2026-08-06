@@ -54,6 +54,7 @@ import { log } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
   assignTransportErrorDetails,
+  markTransportUsageReportUnavailableUnlessReported,
   mergeTransportMetadata,
   transportAbortError,
 } from "./transport-stream-shared.js";
@@ -263,6 +264,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             summarizeOpenAITransportError(error),
         );
         assignTransportErrorDetails(output, error, options?.signal);
+        // Responses usage arrives only on terminal events; mid-stream failure
+        // must not leave the zero placeholder looking like measured usage.
+        markTransportUsageReportUnavailableUnlessReported(output.usage);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       } finally {

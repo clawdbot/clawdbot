@@ -450,6 +450,9 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
         delete (block as { index?: number }).index;
       }
     }
+    if (output.usage.usageReport?.state !== "available") {
+      output.usage.usageReport = { state: "unavailable" };
+    }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
     assignTransportErrorDetails(output, failure, options?.signal);
     const formattedError = formatProviderError(failure);
@@ -808,6 +811,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
         cacheWrite: 0,
         totalTokens:
           chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
+        usageReport: { state: "available" },
         cost: {
           input: 0,
           output: 0,

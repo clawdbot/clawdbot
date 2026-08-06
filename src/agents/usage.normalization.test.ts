@@ -97,6 +97,13 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ reasoningTokens: 1 })).toBe(true);
     expect(hasNonzeroUsage({ input: 1 })).toBe(true);
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
+    expect(
+      hasNonzeroUsage({
+        input: 12,
+        output: 3,
+        usageReport: { state: "unavailable" },
+      }),
+    ).toBe(false);
   });
 
   it("does not clamp derived session total tokens to the context window", () => {

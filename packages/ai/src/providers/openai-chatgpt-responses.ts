@@ -510,6 +510,11 @@ export const streamOpenAICodexResponses: StreamFunction<
         delete (block as { partialJson?: string }).partialJson;
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      // Responses usage arrives only on terminal events; mid-stream failure
+      // must not leave the zero placeholder looking like measured usage.
+      if (output.usage.usageReport?.state !== "available") {
+        output.usage.usageReport = { state: "unavailable" };
+      }
       output.errorMessage =
         normalizedError instanceof Error ? normalizedError.message : String(normalizedError);
       stream.push({ type: "error", reason: output.stopReason, error: output });
