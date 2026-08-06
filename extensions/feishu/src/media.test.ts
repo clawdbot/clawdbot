@@ -97,6 +97,16 @@ function callData<T>(
   return arg.data as T;
 }
 
+function sendTestVideo(replyToMessageId?: string) {
+  return sendMediaFeishu({
+    cfg: emptyConfig,
+    to: "user:ou_target",
+    mediaBuffer: Buffer.from("video"),
+    fileName: "clip.mp4",
+    ...(replyToMessageId ? { replyToMessageId } : {}),
+  });
+}
+
 async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
   const originalHome = process.env.HOME;
   return await withTempDir("openclaw-feishu-media-", async (tempHome) => {
@@ -228,7 +238,71 @@ describe("sendMediaFeishu msg_type routing", () => {
       "csv=p=0",
     ]);
     expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
+    expect(callData<{ image?: Buffer }>(imageCreateMock).image).toEqual(Buffer.from("opus-output"));
+    const ffmpegArgs = mockCallArg<string[]>(runFfmpegMock, 0, 0);
+    expect(ffmpegArgs).toEqual(
+      expect.arrayContaining(["-ss", "0.5", "-frames:v", "1", "-c:v", "mjpeg", "-f", "image2"]),
+    );
+    expect(ffmpegArgs.at(-1)).toContain("preview.jpg");
+    expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
+    const messageData = callData<{ content?: string; msg_type?: string }>(messageCreateMock);
+    expect(messageData.msg_type).toBe("media");
+    expect(JSON.parse(messageData.content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+      image_key: "image_key_1",
+    });
+  });
+
+  it("sends video without a cover when preview rendering fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+    await sendTestVideo();
+    expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+    });
+    warnSpy.mockRestore();
+  });
+
+  it("sends video without a cover when preview upload times out", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let signalUploadStart: () => void;
+    const uploadStarted = new Promise<void>((resolve) => {
+      signalUploadStart = resolve;
+    });
+    vi.useFakeTimers();
+    imageCreateMock.mockImplementation(() => {
+      signalUploadStart();
+      return new Promise(() => {
+        // Keep the upload pending so the timeout path is exercised.
+      });
+    });
+    try {
+      const send = sendTestVideo();
+      await uploadStarted;
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await send;
+      expect(imageCreateMock).toHaveBeenCalledOnce();
+      expect(
+        createFeishuClientMock.mock.calls.some(
+          ([credentials]) =>
+            typeof credentials === "object" &&
+            credentials !== null &&
+            "httpTimeoutMs" in credentials &&
+            credentials.httpTimeoutMs === 5_000,
+        ),
+      ).toBe(true);
+      expect(
+        JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}"),
+      ).toEqual({
+        file_key: "file_key_1",
+      });
+      expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("video preview upload timed out");
+    } finally {
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+    }
   });
 
   it("uses msg_type=audio for opus", async () => {
