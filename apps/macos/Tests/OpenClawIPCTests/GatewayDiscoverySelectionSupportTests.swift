@@ -75,7 +75,7 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `legacy tailnet discovery without reachability flags still switches to direct transport`() async {
+    @Test func `tailnet discovery without reachability flags uses secure direct transport`() async {
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
@@ -91,7 +91,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 state: state)
 
             #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == "ws://\(tailnetHost):18789")
+            #expect(state.remoteUrl == "wss://\(tailnetHost):18789")
         }
     }
 
@@ -116,7 +116,7 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `selecting direct reachable lan gateway ignores stale local tunnel port`() async {
+    @Test func `selecting direct reachable lan gateway keeps ssh transport`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
             let state = AppState(preview: true)
@@ -129,6 +129,44 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 19999,
                     gatewayDirectReachable: true,
                     stableID: "bonjour|nearby-gateway-custom"),
+                state: state)
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:29876")
+        }
+    }
+
+    @Test func `selecting tls advertised lan gateway keeps ssh transport`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state.remoteTransport = .ssh
+            state.remoteUrl = "ws://localhost:29876"
+
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: self.makeGateway(
+                    serviceHost: "nearby-gateway.local",
+                    servicePort: 443,
+                    gatewayTls: true,
+                    stableID: "bonjour|nearby-gateway-tls"),
+                state: state)
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:29876")
+        }
+    }
+
+    @Test func `selecting lan gateway preserves explicit direct transport`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state.remoteTransport = .direct
+
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: self.makeGateway(
+                    serviceHost: "nearby-gateway.local",
+                    servicePort: 19999,
+                    stableID: "bonjour|nearby-gateway-manual"),
                 state: state)
 
             #expect(state.remoteTransport == .direct)

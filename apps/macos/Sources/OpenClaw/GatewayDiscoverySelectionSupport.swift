@@ -53,10 +53,6 @@ enum GatewayDiscoverySelectionSupport {
         for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool
     {
         guard GatewayDiscoveryHelpers.directUrl(for: gateway) != nil else { return false }
-        if gateway.gatewayTls || gateway.gatewayDirectReachable {
-            return true
-        }
-
         guard let host = GatewayDiscoveryHelpers.resolvedServiceHost(for: gateway)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
