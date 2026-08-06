@@ -266,15 +266,14 @@ Skill Workshop tool, so run proposal review actions from a normal host-side
 agent session or the CLI.
 </Note>
 
-## Suggested skills
+## Self-learning
 
-OpenClaw detects durable instructions such as “next time,” “remember to,” and reactive corrections
-when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
-the most recent detected workflow through `skill_workshop`; the user decides whether to create a
-proposal. This built-in suggestion does not create or change a skill by itself. Set
-`skills.workshop.autonomous.mode` to `propose` to create pending proposals directly, or to `auto`
-to apply scanner-approved captures through the normal Workshop service. The Control UI Workshop
-tab shows whether self-learning is on; use the config setting to choose all three modes.
+After substantial work, an isolated background review can turn corrections and
+successful procedures into Workshop proposals; see
+[Self-learning](/tools/self-learning). Set `skills.workshop.autonomous.mode` to
+`propose` to create pending proposals, or to `auto` to apply scanner-approved
+captures through the normal Workshop service. The Control UI Workshop tab shows
+whether self-learning is on; use the config setting to choose all three modes.
 
 ### Scan past sessions
 
@@ -331,7 +330,7 @@ the proposal threshold, and troubleshooting.
 
 | Setting                    | Default  | Effect                                                                                                                                                              |
 | -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode`          | `"auto"` | `"off"` keeps the suggestion nudge, `"propose"` creates pending captures, and `"auto"` applies captures through the normal Workshop scanner and apply path.         |
+| `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures through the normal Workshop scanner and apply path.        |
 | `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
 | `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
 | `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
