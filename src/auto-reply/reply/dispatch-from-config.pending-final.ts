@@ -240,9 +240,16 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
           updatedAt: Date.now(),
         };
       }
-      // Unmapped (legacy) markers: data-safety — keep the marker whenever any
-      // payload failed before delivery, since we cannot identify which to drop.
-      if (failedBeforeDeliver.length > 0) {
+      // Unmapped (legacy) markers: we cannot identify which payloads failed,
+      // so retaining the whole marker after a mixed settlement risks replaying
+      // already-delivered siblings on recovery. Only retain when every relevant
+      // delivery failed before send — the all-failed case is safe because no
+      // sibling was delivered. Mixed or partial cases clear the marker, matching
+      // the pre-fix cleanup behavior. (#119162)
+      if (
+        relevantDeliveries.length > 0 &&
+        failedBeforeDeliver.length === relevantDeliveries.length
+      ) {
         return null;
       }
       return {
