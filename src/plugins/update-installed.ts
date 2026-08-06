@@ -112,6 +112,9 @@ export async function updateNpmInstalledPlugins(params: {
     ranNpmInstaller = true;
   });
   const clawHubRiskAcknowledgementOptions = resolveClawHubRiskAcknowledgementOptions(params);
+  const recordSkippedOutcome = (pluginId: string, message: string) => {
+    outcomes.push({ pluginId, status: "skipped", message });
+  };
 
   const recordFailure = (
     pluginId: string,
@@ -152,21 +155,13 @@ export async function updateNpmInstalledPlugins(params: {
 
   for (const pluginId of targets) {
     if (params.skipIds?.has(pluginId)) {
-      outcomes.push({
-        pluginId,
-        status: "skipped",
-        message: `Skipping "${pluginId}" (already updated).`,
-      });
+      recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (already updated).`);
       continue;
     }
 
     const record = Object.hasOwn(installs, pluginId) ? installs[pluginId] : undefined;
     if (!record) {
-      outcomes.push({
-        pluginId,
-        status: "skipped",
-        message: `No install record for "${pluginId}".`,
-      });
+      recordSkippedOutcome(pluginId, `No install record for "${pluginId}".`);
       continue;
     }
 
@@ -209,21 +204,16 @@ export async function updateNpmInstalledPlugins(params: {
         rootConfig: params.config,
       });
       if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
-        outcomes.push({
+        recordSkippedOutcome(
           pluginId,
-          status: "skipped",
-          message: `Skipping "${pluginId}" (${enableState.reason ?? "disabled by plugin config"}).`,
-        });
+          `Skipping "${pluginId}" (${enableState.reason ?? "disabled by plugin config"}).`,
+        );
         continue;
       }
     }
 
     if (!isPluginInstallRecordUpdateSource(record)) {
-      outcomes.push({
-        pluginId,
-        status: "skipped",
-        message: `Skipping "${pluginId}" (source: ${record.source}).`,
-      });
+      recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (source: ${record.source}).`);
       continue;
     }
 
@@ -299,21 +289,13 @@ export async function updateNpmInstalledPlugins(params: {
     };
 
     if ((record.source === "npm" || record.source === "git") && !effectiveSpec) {
-      outcomes.push({
-        pluginId,
-        status: "skipped",
-        message: `Skipping "${pluginId}" (missing ${record.source} spec).`,
-      });
+      recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (missing ${record.source} spec).`);
       continue;
     }
 
     const recordClawHubPackage = resolveRecordedClawHubPackage(record);
     if (record.source === "clawhub" && !recordClawHubPackage && !officialClawHubSpec) {
-      outcomes.push({
-        pluginId,
-        status: "skipped",
-        message: `Skipping "${pluginId}" (missing ClawHub package metadata).`,
-      });
+      recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (missing ClawHub package metadata).`);
       continue;
     }
 
@@ -328,11 +310,10 @@ export async function updateNpmInstalledPlugins(params: {
           `Skipping "${pluginId}" update: bundled version ${bundledSource.version} is newer than the installed ${record.source} version ${record.version}. ` +
             `Uninstall the ${record.source} plugin to use the bundled version, or pin a newer version explicitly.`,
         );
-        outcomes.push({
+        recordSkippedOutcome(
           pluginId,
-          status: "skipped",
-          message: `Skipping "${pluginId}": bundled version ${bundledSource.version} is newer than ${record.source} version ${record.version}.`,
-        });
+          `Skipping "${pluginId}": bundled version ${bundledSource.version} is newer than ${record.source} version ${record.version}.`,
+        );
         continue;
       }
     }
@@ -341,11 +322,10 @@ export async function updateNpmInstalledPlugins(params: {
       record.source === "marketplace" &&
       (!record.marketplaceSource || !record.marketplacePlugin)
     ) {
-      outcomes.push({
+      recordSkippedOutcome(
         pluginId,
-        status: "skipped",
-        message: `Skipping "${pluginId}" (missing marketplace source metadata).`,
-      });
+        `Skipping "${pluginId}" (missing marketplace source metadata).`,
+      );
       continue;
     }
 
