@@ -72,6 +72,42 @@ function validateManagedOnlyAccount(
   }
 }
 
+type ClickClackDiscussionConfigValue = {
+  enabled?: boolean;
+};
+
+type ClickClackManagedAccountConfigValue = {
+  managedOnly?: boolean;
+  discussions?: ClickClackDiscussionConfigValue;
+};
+
+function validateManagedOnlyDiscussions(
+  value: ClickClackManagedAccountConfigValue & {
+    accounts?: Record<string, ClickClackManagedAccountConfigValue>;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.managedOnly === true && value.discussions?.enabled !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["discussions", "enabled"],
+      message: "managedOnly accounts require discussions.enabled=true",
+    });
+  }
+  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+    if (
+      account.managedOnly === true &&
+      (account.discussions?.enabled ?? value.discussions?.enabled) !== true
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accounts", accountId, "discussions", "enabled"],
+        message: "managedOnly accounts require discussions.enabled=true",
+      });
+    }
+  }
+}
+
 const ClickClackAccountConfigSchema = ClickClackAccountConfigSchemaBase.superRefine(
   validateManagedOnlyAccount,
 );
@@ -80,9 +116,12 @@ const ClickClackConfigSchema = buildMultiAccountChannelSchema(ClickClackAccountC
     validateManagedOnlyAccount,
   ),
 });
+const ClickClackValidatedConfigSchema = ClickClackConfigSchema.superRefine(
+  validateManagedOnlyDiscussions,
+);
 
 /**
  * Config schema exported to core so `openclaw doctor` and config validation
  * understand both default and named ClickClack accounts.
  */
-export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema);
+export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackValidatedConfigSchema);

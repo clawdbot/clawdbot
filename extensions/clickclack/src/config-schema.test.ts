@@ -4,6 +4,7 @@ import { clickClackConfigSchema } from "./config-schema.js";
 describe("ClickClack config schema compatibility", () => {
   it("accepts managedOnly on named accounts used by the gateway", () => {
     const result = clickClackConfigSchema.runtime?.safeParse({
+      discussions: { enabled: true },
       accounts: {
         "agent-compass": {
           enabled: true,
@@ -12,7 +13,6 @@ describe("ClickClack config schema compatibility", () => {
           workspace: "wsp_managed",
           managedOnly: true,
           agentId: "compass",
-          discussions: { enabled: true },
         },
       },
     });
@@ -30,6 +30,38 @@ describe("ClickClack config schema compatibility", () => {
           baseUrl: "http://127.0.0.1:8100",
           token: "test-token",
           workspace: "wsp_managed",
+          ...account,
+        },
+      },
+    });
+
+    expect(result?.success).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "root discussions are disabled",
+      channel: { discussions: { enabled: false } },
+    },
+    {
+      label: "root discussions are omitted",
+      channel: {},
+    },
+    {
+      label: "the account overrides enabled discussions with false",
+      channel: { discussions: { enabled: true } },
+      account: { discussions: { enabled: false } },
+    },
+  ])("rejects managedOnly accounts when $label", ({ channel, account }) => {
+    const result = clickClackConfigSchema.runtime?.safeParse({
+      ...channel,
+      accounts: {
+        "agent-compass": {
+          baseUrl: "http://127.0.0.1:8100",
+          token: "test-token",
+          workspace: "wsp_managed",
+          managedOnly: true,
+          agentId: "compass",
           ...account,
         },
       },

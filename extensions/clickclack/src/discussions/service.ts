@@ -61,12 +61,8 @@ import {
 const RECONCILE_INTERVAL_MS = 60_000;
 const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
 
-function resolveDiscussionAgentId(cfg: CoreConfig, sessionKey: string): string | undefined {
-  try {
-    return resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
-  } catch {
-    return undefined;
-  }
+function resolveDiscussionAgentId(cfg: CoreConfig, sessionKey: string): string {
+  return resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
 }
 type DiscussionServiceOptions = {
   clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;

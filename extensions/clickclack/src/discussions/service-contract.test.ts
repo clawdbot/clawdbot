@@ -280,6 +280,19 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed agent session keys before selecting an ordinary fallback", async () => {
+    const harness = createHarness({ label: "Malformed session key" });
+    const sessionKey = "agent::malformed";
+
+    await expect(harness.service.info(sessionKey)).rejects.toThrow(
+      "Malformed agent session key; refusing default-agent resolution.",
+    );
+    await expect(harness.service.open(sessionKey)).rejects.toThrow(
+      "Malformed agent session key; refusing default-agent resolution.",
+    );
+    expect(harness.createChannel).not.toHaveBeenCalled();
+  });
+
   it("selects a managed-only discussion account by the session agent", async () => {
     const harness = createHarness({ label: "Managed account" });
     harness.config.channels!.clickclack = {
