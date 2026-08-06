@@ -34,6 +34,7 @@ type BeforeAgentReplyResult =
 const {
   hasHooksMock,
   runBeforeAgentReplyMock,
+  runBeforeAgentRunMock,
   executePreparedCliRunMock,
   prepareCliRunContextMock,
   closeClaudeLiveSessionForContextMock,
@@ -48,6 +49,7 @@ const {
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
     async () => undefined,
   ),
+  runBeforeAgentRunMock: vi.fn(async () => undefined),
   executePreparedCliRunMock: vi.fn<
     (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
   >(async () => ({ text: "" })),
@@ -65,6 +67,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => ({
     hasHooks: hasHooksMock,
     runBeforeAgentReply: runBeforeAgentReplyMock,
+    runBeforeAgentRun: runBeforeAgentRunMock,
   })),
 }));
 
@@ -155,6 +158,8 @@ beforeEach(() => {
   hasHooksMock.mockReturnValue(false);
   runBeforeAgentReplyMock.mockReset();
   runBeforeAgentReplyMock.mockResolvedValue(undefined);
+  runBeforeAgentRunMock.mockReset();
+  runBeforeAgentRunMock.mockResolvedValue(undefined);
   executePreparedCliRunMock.mockReset();
   executePreparedCliRunMock.mockResolvedValue({ text: "" });
   prepareCliRunContextMock.mockReset();
@@ -325,6 +330,36 @@ describe("runCliAgent before_agent_reply seam", () => {
       provider: "google-gemini-cli",
       agentDir: "/tmp/agent",
     });
+  });
+
+  it("does not settle auth health when before_agent_run blocks before backend execution", async () => {
+    const profileId = "codex-cli:selected";
+    const store = {
+      version: 1,
+      profiles: { [profileId]: { type: "oauth", provider: "codex-cli" } },
+    };
+    const recorder = {
+      persistBlocked: vi.fn(async (message) => ({ message })),
+    } as unknown as NonNullable<Parameters<typeof runCliAgent>[0]["userTurnTranscriptRecorder"]>;
+    prepareCliRunContextMock.mockImplementationOnce(async (params) => ({
+      ...(makeStubContext(params as typeof baseRunParams & { trigger?: string }) as object),
+      effectiveAuthProfileId: profileId,
+      authProfileStore: store,
+      agentDir: "/tmp/agent",
+    }));
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_run");
+    runBeforeAgentRunMock.mockResolvedValueOnce({
+      pluginId: "policy-plugin",
+      decision: { outcome: "block", message: "Blocked by policy." },
+    });
+
+    await expect(
+      runCliAgent({ ...baseRunParams, userTurnTranscriptRecorder: recorder }),
+    ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(markAuthProfileFailureMock).not.toHaveBeenCalled();
+    expect(markAuthProfileSuccessMock).not.toHaveBeenCalled();
   });
 
   it.each([

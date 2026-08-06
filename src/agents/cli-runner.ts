@@ -720,7 +720,7 @@ async function runCliAgentInternal(
           modelId: context.modelId,
         },
       });
-    } else if (result && result.meta.stopReason !== "error") {
+    } else if (result?.meta.executionTrace?.attempts?.at(-1)?.result === "success") {
       const provider = authProfileStore.profiles[profileId]?.provider ?? params.provider;
       await settleCliAuthProfile({
         store: authProfileStore,
