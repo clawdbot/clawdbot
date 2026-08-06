@@ -15,6 +15,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -358,38 +359,29 @@ class ActivityPage extends OpenClawLightDomElement {
     });
     const mode = this.routeData?.mode ?? "live";
     const body = html`
-      <div
-        class="activity-mode-tabs"
-        role="tablist"
-        aria-label=${t("activity.runInspector.activityView")}
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected=${mode === "live" ? "true" : "false"}
-          aria-controls="activity-live-panel"
-          @click=${() => this.selectMode("live")}
-        >
-          ${t("activity.runInspector.liveMode")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected=${mode === "run" ? "true" : "false"}
-          aria-controls="activity-run-panel"
-          @click=${() => this.selectMode("run")}
-        >
-          ${t("activity.runInspector.mode")}
-        </button>
+      ${renderHubTabs({
+        id: "activity-mode",
+        active: mode,
+        tabs: [
+          { value: "live", label: t("activity.runInspector.liveMode") },
+          { value: "run", label: t("activity.runInspector.mode") },
+        ],
+        ariaLabel: t("activity.runInspector.activityView"),
+        panelId: "activity-mode-panel",
+        className: "activity-mode-tabs",
+        variant: "sub",
+        onSelect: (selected) => this.selectMode(selected),
+      })}
+      <div id="activity-mode-panel">
+        ${mode === "run"
+          ? renderRunInspector({
+              basePath: this.context.basePath,
+              state: this.runInspector,
+              onRetry: () =>
+                this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
+            })
+          : html`<div id="activity-live-panel">${liveActivity}</div>`}
       </div>
-      ${mode === "run"
-        ? renderRunInspector({
-            basePath: this.context.basePath,
-            state: this.runInspector,
-            onRetry: () =>
-              this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
-          })
-        : html`<div id="activity-live-panel">${liveActivity}</div>`}
     `;
     return html`
       <section class="content-header">

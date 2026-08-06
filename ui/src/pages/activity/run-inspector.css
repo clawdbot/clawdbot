@@ -1,31 +1,7 @@
 .activity-mode-tabs {
-  display: inline-flex;
-  width: fit-content;
-  gap: var(--space-1);
   margin-bottom: var(--space-3);
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
 }
 
-.activity-mode-tabs button {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-  color: var(--muted);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-
-.activity-mode-tabs button[aria-selected="true"] {
-  color: var(--text);
-  background: var(--bg);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.activity-mode-tabs button:focus-visible,
 .run-inspector button:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
