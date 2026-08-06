@@ -3577,6 +3577,65 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("retains an earlier explicit restart across a later planner-derived restart and an ordinary exact revert", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18793 } } satisfies OpenClawConfig;
+    const configC = { gateway: { reload: {}, port: 18794 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+      },
+    );
+
+    // 1. Explicit writer-required restart A -> B arms a deferred restart with
+    //    explicit provenance (hard lifecycle contract).
+    harness.emitWrite(
+      makeWrite(configB, "hash-b", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart.mock.calls[0]?.[1]).toEqual(configB);
+
+    // 2. A later planner-derived restart B -> C re-arms the deferred restart.
+    //    The earlier explicit writer intent must survive this re-arm: the
+    //    reverting write's followUp can never speak for the earlier writer.
+    harness.emitWrite(makeWrite(configC, "hash-c"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configC);
+
+    // 3. Ordinary exact revert C -> A matches the running config, but the
+    //    pending restart debt is still explicit (retained through the
+    //    planner-derived re-arm). The revert must NOT cancel the restart.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(3);
+    expect(harness.onRestart.mock.calls[2]?.[1]).toEqual(configA);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(false);
+
+    await harness.reloader.stop();
+  });
+
   it.each([
     {
       label: "none",

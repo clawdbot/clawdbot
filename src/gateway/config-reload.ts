@@ -778,7 +778,10 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     if (plan.restartGateway) {
-      pendingRestartWasExplicit = false;
+      // A later planner-derived restart re-arms the deferred restart but must
+      // NOT downgrade explicit writer provenance: once an explicit restart is
+      // pending, only an explicit revert-cancel path may retire that debt, and
+      // the reverting write's followUp can never speak for the earlier writer.
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
