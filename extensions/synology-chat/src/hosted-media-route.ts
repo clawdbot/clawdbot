@@ -18,7 +18,6 @@ export function resolveSynologyPublicWebhookRouteKey(webhookUrlValue: string): s
     ) {
       return undefined;
     }
-    webhookUrl.pathname = normalizeExactPath(webhookUrl.pathname);
     webhookUrl.searchParams.sort();
     return webhookUrl.toString();
   } catch {
@@ -55,7 +54,9 @@ export function resolveSynologyHostedMediaRoute(params: {
   return {
     localRoutePath: toSynologyHostedMediaStoreRoutePath(params.webhookPath),
     publicBaseUrl: webhookUrl.origin,
-    publicRoutePath: normalizeExactPath(webhookUrl.pathname),
+    // webhookUrl is the operator's exact proxy contract; trailing slashes and
+    // encoded path segments can be route-significant and must not be rewritten.
+    publicRoutePath: webhookUrl.pathname,
     publicSearch: webhookUrl.search,
   };
 }

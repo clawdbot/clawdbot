@@ -96,6 +96,17 @@ describe("Synology Chat hosted outbound media", () => {
     ).toThrow("must be an absolute HTTPS URL");
   });
 
+  it("preserves an exact public callback path with a trailing slash", async () => {
+    const prepared = await prepareSynologyHostedMedia({
+      account: createAccount({
+        webhookUrl: "https://gateway.example.com/public/synology/?proxy-token=keep",
+      }),
+      mediaUrl: "https://files.example.com/floor-plan.png",
+    });
+
+    expect(new URL(prepared.url).pathname).toBe("/public/synology/");
+  });
+
   it("freezes source bytes and serves repeat GET/HEAD requests on the internal route", async () => {
     const account = createAccount();
     const prepared = await prepareSynologyHostedMedia({

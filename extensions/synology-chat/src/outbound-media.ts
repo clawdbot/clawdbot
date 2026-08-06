@@ -48,9 +48,8 @@ export type SynologyHostedMediaUrl = string & {
   readonly [synologyHostedMediaUrlBrand]: true;
 };
 
-export type PreparedSynologyHostedMedia = {
+type PreparedSynologyHostedMedia = {
   url: SynologyHostedMediaUrl;
-  cleanup: () => Promise<void>;
 };
 
 const preparationLimiter = createWebhookInFlightLimiter({
@@ -257,7 +256,6 @@ export async function prepareSynologyHostedMedia(params: {
     const querySeparator = route.publicSearch ? "&" : "?";
     return {
       url: `${route.publicBaseUrl}${route.publicRoutePath}${route.publicSearch}${querySeparator}${tokenParam}=${encodeURIComponent(token)}` as SynologyHostedMediaUrl,
-      cleanup,
     };
   } finally {
     preparationLimiter.release(params.account.accountId);

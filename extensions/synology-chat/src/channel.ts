@@ -317,18 +317,16 @@ async function sendSynologyChatMedia(
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   });
-  let accepted = false;
-  try {
-    accepted = await sendHostedFileUrl(incomingUrl, prepared.url, ctx.to, account.allowInsecureSsl);
-  } finally {
-    // Once Synology accepts the webhook it may fetch later or retry. Only
-    // pre-acceptance failure can safely revoke the capability immediately.
-    if (!accepted) {
-      await prepared.cleanup();
-    }
-  }
+  const accepted = await sendHostedFileUrl(
+    incomingUrl,
+    prepared.url,
+    ctx.to,
+    account.allowInsecureSsl,
+  );
   if (!accepted) {
-    throw new Error("Synology Chat did not accept the hosted attachment request");
+    // A timeout or lost response is indeterminate: the NAS may already have
+    // queued this capability. Retain it until bounded expiry for delayed fetches.
+    throw new Error("Synology Chat attachment request acceptance could not be confirmed");
   }
   return createSynologyChatSendResult({
     chatId: ctx.to,
