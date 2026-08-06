@@ -29,7 +29,7 @@ import {
 } from "./transport.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
+const CODEX_APP_SERVER_DIAGNOSTIC_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 // agents_wait can use a 600s inner budget plus 30s handler grace. Keep the
@@ -355,7 +355,7 @@ export class CodexAppServerClient {
 
   /** Returns a bounded, redacted stderr diagnostic from the app-server process. */
   getStderrDiagnostic(): string | undefined {
-    return redactCodexAppServerLinePreview(this.stderrTail) || undefined;
+    return redactCodexAppServerDiagnostic(this.stderrTail) || undefined;
   }
 
   /** Returns the terminal transport error that closed this physical client. */
@@ -1095,20 +1095,25 @@ function readCodexVersionFromUserAgent(userAgent: string | undefined): string | 
   return match?.[1];
 }
 
-function redactCodexAppServerLinePreview(value: string): string {
+/**
+ * Makes app-server supplied diagnostics safe for logs and owner-visible tool
+ * results. App-server RPC errors can include server-controlled text, so keep
+ * the preview small and remove common credential encodings before it escapes.
+ */
+export function redactCodexAppServerDiagnostic(value: string): string {
   const compact = value.replace(/\s+/g, " ").trim();
   const redacted = compact
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, "$1<redacted>")
     .replace(
-      /("(?:api_?key|authorization|token|access_token|refresh_token)"\s*:\s*")([^"]+)(")/gi,
+      /("[a-z0-9_-]*(?:api_?key|authorization|token|access_token|refresh_token|client_secret|secret|password|cookie)"\s*:\s*")([^"]+)(")/gi,
       "$1<redacted>$3",
     )
     .replace(
-      /\b([a-z0-9_]*(?:api_?key|authorization|access_token|refresh_token|token))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
+      /\b([a-z0-9_-]*(?:api_?key|authorization|access_token|refresh_token|client_secret|token|secret|password|cookie))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
       "$1$2$3<redacted>$4",
     );
-  return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
-    ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+  return redacted.length > CODEX_APP_SERVER_DIAGNOSTIC_MAX
+    ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_DIAGNOSTIC_MAX)}...`
     : redacted;
 }
 
@@ -1118,7 +1123,7 @@ function appendBoundedTail(current: string, next: string, maxLength: number): st
 }
 
 function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail: string): Error {
-  const stderrPreview = redactCodexAppServerLinePreview(stderrTail);
+  const stderrPreview = redactCodexAppServerDiagnostic(stderrTail);
   const suffix = stderrPreview ? ` stderr=${JSON.stringify(stderrPreview)}` : "";
   return new Error(
     `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(
@@ -1141,7 +1146,7 @@ function shouldBufferCodexAppServerParseFailure(value: string, error: unknown): 
 }
 
 function logCodexAppServerParseFailure(value: string, error: unknown, fragmentCount: number): void {
-  const linePreview = redactCodexAppServerLinePreview(value);
+  const linePreview = redactCodexAppServerDiagnostic(value);
   const suffix = fragmentCount > 1 ? ` fragments=${fragmentCount}` : "";
   embeddedAgentLog.warn("failed to parse codex app-server message", {
     error,

@@ -233,12 +233,39 @@ describe("Codex supervision compatibility tools", () => {
           {
             endpointId: "broken",
             ok: false,
-            detail: "Codex app-server rejected Bearer [redacted]",
+            detail: "Codex app-server rejected Bearer <redacted>",
           },
         ],
       },
     });
     expect(JSON.stringify(result)).not.toContain(token);
+  });
+
+  it("bounds and redacts non-Bearer endpoint probe failure details", async () => {
+    const token = "super-secret-access-token-0123456789";
+    const trailingDiagnostic = "x".repeat(600);
+    const request = createEndpointRequest(async () => {
+      throw new Error(`Codex app-server rejected access_token=${token} ${trailingDiagnostic}`);
+    });
+    const tools = createCodexSupervisionTools({
+      getPluginConfig: () => ({
+        supervision: {
+          enabled: true,
+          endpoints: [{ id: "broken", transport: "stdio-proxy" }],
+        },
+      }),
+      senderIsOwner: true,
+      request,
+    });
+
+    const result = await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
+    const detail = (result.details?.health as Array<{ detail?: string }>)[0]?.detail;
+
+    expect(detail).toContain("access_token=<redacted>");
+    expect(detail).toMatch(/\.\.\.$/);
+    expect(detail?.length).toBe(503);
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(JSON.stringify(result)).not.toContain(trailingDiagnostic);
   });
 
   it("omits stored transcript metadata and endpoint errors when raw reads are disabled", async () => {

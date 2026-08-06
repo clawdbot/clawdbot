@@ -24,6 +24,7 @@ import {
   type CodexAppServerStartOptions,
   type CodexSupervisionEndpoint,
 } from "./app-server/config.js";
+import { redactCodexAppServerDiagnostic } from "./app-server/client.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
@@ -1065,7 +1066,9 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             health.push({
               endpointId: endpoint.id,
               ok: false,
-              detail: error instanceof Error ? error.message : String(error),
+              detail: redactCodexAppServerDiagnostic(
+                error instanceof Error ? error.message : String(error),
+              ),
             });
           }
         }
