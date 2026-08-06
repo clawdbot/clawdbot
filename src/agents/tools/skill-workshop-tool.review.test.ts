@@ -184,6 +184,9 @@ describe("skill_workshop review mode", () => {
       skillKey: "weather-planner",
     });
     expect(proposalMutationBudget.patchProposalIds?.size).toBe(1);
+    expect((extended.details as { description?: string }).description ?? "").not.toContain(
+      "Replacement",
+    );
     const inspected = await createSkillWorkshopTool({ workspaceDir }).execute("inspect-extend", {
       action: "inspect",
       proposal_id: (extended.details as { id: string }).id,

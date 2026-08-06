@@ -212,7 +212,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
   // the sole record of the earlier corrections that qualify the eventual review.
   const shallowBySession = new Map<
     string,
-    { senderScope: string; iterations: number; messages: unknown[]; aborted: boolean }
+    {
+      senderScope: string;
+      iterations: number;
+      messages: unknown[];
+      aborted: boolean;
+      lastRunId?: string;
+    }
   >();
   let reviewInFlight = false;
   const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
@@ -390,6 +396,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           accumulator = { senderScope, iterations: 0, messages: [], aborted: false };
           shallowBySession.set(sessionKey, accumulator);
         }
+        const runId = params.ctx.runId?.trim();
+        if (runId && accumulator.lastRunId === runId) {
+          // A duplicate terminal report for the same run carries no new work.
+          log.debug(`experience review skipped: reason=duplicate-run-report session=${sessionKey}`);
+          return;
+        }
+        accumulator.lastRunId = runId;
         accumulator.iterations += modelIterations;
         accumulator.aborted = accumulator.aborted || !params.event.success;
         accumulator.messages = [...accumulator.messages, ...turnMessages].slice(

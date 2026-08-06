@@ -135,12 +135,12 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 4 }));
-    scheduler.schedule(completedRun({ modelIterations: 4 }));
+    scheduler.schedule(completedRun({ modelIterations: 4, runId: "run-a" }));
+    scheduler.schedule(completedRun({ modelIterations: 4, runId: "run-b" }));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).not.toHaveBeenCalled();
 
-    scheduler.schedule(completedRun({ modelIterations: 4 }));
+    scheduler.schedule(completedRun({ modelIterations: 4, runId: "run-c" }));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 12 }));
     scheduler.clear();
@@ -154,11 +154,13 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 4, userText: "Always deploy from main." }));
     scheduler.schedule(
-      completedRun({ modelIterations: 4, userText: "Never skip the smoke test." }),
+      completedRun({ modelIterations: 4, runId: "run-a", userText: "Always deploy from main." }),
     );
-    scheduler.schedule(completedRun({ modelIterations: 4, userText: "Ship it." }));
+    scheduler.schedule(
+      completedRun({ modelIterations: 4, runId: "run-b", userText: "Never skip the smoke test." }),
+    );
+    scheduler.schedule(completedRun({ modelIterations: 4, runId: "run-c", userText: "Ship it." }));
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(runReview).toHaveBeenCalledTimes(1);
@@ -178,12 +180,12 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 6, senderId: "alice" }));
-    scheduler.schedule(completedRun({ modelIterations: 6, senderId: "bob" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-a", senderId: "alice" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-b", senderId: "bob" }));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).not.toHaveBeenCalled();
 
-    scheduler.schedule(completedRun({ modelIterations: 6, senderId: "bob" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-c", senderId: "bob" }));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 12 }));
     scheduler.clear();
@@ -197,10 +199,29 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 6, senderName: "Alice" }));
-    scheduler.schedule(completedRun({ modelIterations: 6, senderName: "Bob" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-a", senderName: "Alice" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-b", senderName: "Bob" }));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
+  it("ignores duplicate terminal reports for the same run in shallow accumulation", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ modelIterations: 5, runId: "run-dup" }));
+    scheduler.schedule(completedRun({ modelIterations: 5, runId: "run-dup" }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).not.toHaveBeenCalled();
+
+    scheduler.schedule(completedRun({ modelIterations: 5, runId: "run-next" }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
     scheduler.clear();
   });
 
@@ -212,9 +233,9 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 6 }));
-    scheduler.schedule(completedRun({ success: false, error: "provider failed" }));
-    scheduler.schedule(completedRun({ modelIterations: 6 }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-a" }));
+    scheduler.schedule(completedRun({ success: false, error: "provider failed", runId: "run-b" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-c" }));
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(runReview).not.toHaveBeenCalled();
@@ -229,8 +250,8 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 6, chatType: "group" }));
-    scheduler.schedule(completedRun({ modelIterations: 6, chatType: "group" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-a", chatType: "group" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-b", chatType: "group" }));
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(runReview).not.toHaveBeenCalled();
@@ -245,8 +266,8 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 6, success: false }));
-    scheduler.schedule(completedRun({ modelIterations: 6, success: true }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-a", success: false }));
+    scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-b", success: true }));
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ turnAborted: true }));
@@ -262,7 +283,7 @@ describe("skill experience review scheduler", () => {
     });
 
     for (let index = 0; index < 12; index += 1) {
-      scheduler.schedule(completedRun({ modelIterations: 0 }));
+      scheduler.schedule(completedRun({ modelIterations: 0, runId: `run-${String(index)}` }));
     }
     await vi.advanceTimersByTimeAsync(30_000);
 
@@ -278,13 +299,17 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ modelIterations: 5, sessionKey: "agent:main:evicted" }));
+    scheduler.schedule(
+      completedRun({ modelIterations: 5, runId: "run-a", sessionKey: "agent:main:evicted" }),
+    );
     for (let index = 0; index < 256; index += 1) {
       scheduler.schedule(
         completedRun({ modelIterations: 5, sessionKey: `agent:main:filler-${String(index)}` }),
       );
     }
-    scheduler.schedule(completedRun({ modelIterations: 5, sessionKey: "agent:main:evicted" }));
+    scheduler.schedule(
+      completedRun({ modelIterations: 5, runId: "run-b", sessionKey: "agent:main:evicted" }),
+    );
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(runReview).not.toHaveBeenCalled();

@@ -436,6 +436,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const goal = readStringParam(params, "goal");
       const evidence = readStringParam(params, "evidence");
 
+      let resolvedPatchSkillKey: string | undefined;
       if (action === "patch") {
         if (options.updateProposals !== true) {
           throw new ToolInputError("this Skill Workshop session cannot patch live skills");
@@ -450,6 +451,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
+        resolvedPatchSkillKey = target.skillKey;
         const readHash = options.proposalMutationBudget?.readSkillHashes?.get(target.skillKey);
         if (!readHash) {
           throw new ToolInputError(
@@ -539,6 +541,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           });
           contentText = proposalMutationText("Created skill update proposal", proposal.record);
         } else if (action === "patch") {
+          // No description forwarding: a patch may only change the quoted span, and
+          // proposal rendering would regenerate frontmatter from a new description.
           proposal = await proposeUpdateSkill({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
@@ -549,7 +553,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               required: true,
               label: "skill_name",
             }),
-            description: readStringParam(params, "description"),
+            expectedCurrentContentHash: options.proposalMutationBudget?.readSkillHashes?.get(
+              resolvedPatchSkillKey ?? "",
+            ),
             composePatch: {
               oldString:
                 readStringParam(params, "old_string", { label: "old_string", trim: false }) ?? "",

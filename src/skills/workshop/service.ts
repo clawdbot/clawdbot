@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { buildWorkspaceSkillStatus, resolveSkillStatusEntry } from "../discovery/status.js";
 import {
   assertInsideWorkspace,
@@ -263,6 +264,14 @@ export async function proposeUpdateSkill(
   const currentContent = await readWorkspaceSkillFile(targetSkill.filePath);
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
+  }
+  if (
+    input.expectedCurrentContentHash !== undefined &&
+    sha256Hex(currentContent) !== input.expectedCurrentContentHash
+  ) {
+    throw new Error(
+      "Patch target changed since the reviewer's read: read the skill again and redraft the patch.",
+    );
   }
   // Composition uses the same read that currentContentHash binds the proposal to, so a
   // composed draft can never derive from a different body than the one apply validates.

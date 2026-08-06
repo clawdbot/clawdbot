@@ -237,6 +237,8 @@ export type SkillProposalUpdateInput = {
    * hash-binds the proposal. An empty oldString appends newString to the end.
    */
   composePatch?: { oldString: string; newString: string };
+  /** Refuse composition when the service's own read hashes differently (reviewer receipt). */
+  expectedCurrentContentHash?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
   autonomousCapture?: boolean;
