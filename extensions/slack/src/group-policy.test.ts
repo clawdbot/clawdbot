@@ -54,6 +54,72 @@ describe("slack group policy", () => {
     expect(wildcardTools).toEqual({ deny: ["exec"] });
   });
 
+  it.each([
+    { configuredChannelId: "C01234567", groupId: "c01234567" },
+    { configuredChannelId: "c01234567", groupId: "C01234567" },
+    { configuredChannelId: "channel:C01234567", groupId: "c01234567" },
+    { configuredChannelId: "channel:c01234567", groupId: "C01234567" },
+  ])(
+    "applies $configuredChannelId channel and sender policies to session $groupId",
+    ({ configuredChannelId, groupId }) => {
+      const channelPolicyCfg = {
+        channels: {
+          slack: {
+            channels: {
+              [configuredChannelId]: {
+                requireMention: false,
+                tools: { allow: ["message.send"] },
+                toolsBySender: {
+                  "id:user:alice": { allow: ["sessions.list"] },
+                },
+              },
+              "*": {
+                requireMention: true,
+                tools: { deny: ["exec"] },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveSlackGroupRequireMention({ cfg: channelPolicyCfg, groupId })).toBe(false);
+      expect(
+        resolveSlackGroupToolPolicy({
+          cfg: channelPolicyCfg,
+          groupId,
+          senderId: "user:bob",
+        }),
+      ).toEqual({ allow: ["message.send"] });
+      expect(
+        resolveSlackGroupToolPolicy({
+          cfg: channelPolicyCfg,
+          groupId,
+          senderId: "user:alice",
+        }),
+      ).toEqual({ allow: ["sessions.list"] });
+    },
+  );
+
+  it("prefers the exact channel ID when case variants have different policies", () => {
+    const caseSensitiveCfg = {
+      channels: {
+        slack: {
+          channels: {
+            c01234567: { tools: { allow: ["message.send"] } },
+            C01234567: { tools: { deny: ["exec"] } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSlackGroupToolPolicy({ cfg: caseSensitiveCfg, groupId: "c01234567" })).toEqual({
+      allow: ["message.send"],
+    });
+    expect(resolveSlackGroupToolPolicy({ cfg: caseSensitiveCfg, groupId: "C01234567" })).toEqual({
+      deny: ["exec"],
+    });
+  });
+
   it("keeps wildcard fields hidden by a matched whole entry", () => {
     const partialCfg = {
       channels: {

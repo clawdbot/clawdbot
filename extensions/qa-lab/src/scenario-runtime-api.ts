@@ -25,7 +25,7 @@ export type QaScenarioRuntimeEnv<
   transport: TTransport;
 };
 
-type QaScenarioRuntimeDeps = {
+export type QaScenarioRuntimeDeps = {
   fs: typeof NodeFs;
   path: typeof NodePath;
   sleep: (ms?: number) => Promise<unknown>;
@@ -101,6 +101,8 @@ type QaScenarioRuntimeDeps = {
   hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
 };
 
+type QaScenarioRuntimeApiDeps = Pick<QaScenarioRuntimeDeps, "sleep" | "waitForTransportReady">;
+
 type QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: string;
   imageUnderstandingLargePngBase64: string;
@@ -109,7 +111,7 @@ type QaScenarioRuntimeConstants = {
 
 type QaScenarioRuntimeApi<
   TEnv extends QaScenarioRuntimeEnv = QaScenarioRuntimeEnv,
-  TDeps extends QaScenarioRuntimeDeps = QaScenarioRuntimeDeps,
+  TDeps extends QaScenarioRuntimeApiDeps = QaScenarioRuntimeDeps,
 > = TDeps & {
   env: TEnv;
   lab: TEnv["lab"];
@@ -134,7 +136,7 @@ type QaScenarioRuntimeApi<
 
 export function createQaScenarioRuntimeApi<
   TEnv extends QaScenarioRuntimeEnv,
-  TDeps extends QaScenarioRuntimeDeps,
+  TDeps extends QaScenarioRuntimeApiDeps,
 >(params: {
   env: TEnv;
   scenario: QaSeedScenarioWithSource;
@@ -148,45 +150,26 @@ export function createQaScenarioRuntimeApi<
     await params.deps.sleep(100);
   };
 
-  return Object.assign(
-    {
-      env: params.env,
-      lab: params.env.lab,
-      transport,
-      state: transportState,
-      scenario: params.scenario,
-      config: params.scenario.execution.config ?? {},
-      fs: params.deps.fs,
-      path: params.deps.path,
-      sleep: params.deps.sleep,
-      randomUUID: params.deps.randomUUID,
-      runScenario: params.deps.runScenario,
-      waitForCondition: transport.waitForCondition,
-      waitForOutboundMessage: params.deps.waitForOutboundMessage,
-      waitForNoOutbound: params.deps.waitForNoOutbound,
-      waitForNoTransportOutbound: params.deps.waitForNoTransportOutbound,
-      recentOutboundSummary: params.deps.recentOutboundSummary,
-      formatConversationTranscript: params.deps.formatConversationTranscript,
-      readTransportTranscript: params.deps.readTransportTranscript,
-      formatTransportTranscript: params.deps.formatTransportTranscript,
-      fetchJson: params.deps.fetchJson,
-      waitForGatewayHealthy: params.deps.waitForGatewayHealthy,
-      waitForTransportReady: params.deps.waitForTransportReady,
-      waitForChannelReady: params.deps.waitForTransportReady,
-      waitForQaChannelReady: params.deps.waitForTransportReady,
-    },
-    params.deps,
-    {
-      imageUnderstandingPngBase64: params.constants.imageUnderstandingPngBase64,
-      imageUnderstandingLargePngBase64: params.constants.imageUnderstandingLargePngBase64,
-      imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,
-      getTransportSnapshot: transportState.getSnapshot.bind(transportState),
-      resetTransport: resetTransportState,
-      injectInboundMessage: transportState.addInboundMessage.bind(transportState),
-      injectOutboundMessage: transportState.addOutboundMessage.bind(transportState),
-      readTransportMessage: transportState.readMessage.bind(transportState),
-      resetBus: resetTransportState,
-      reset: resetTransportState,
-    },
-  );
+  return {
+    ...params.deps,
+    env: params.env,
+    lab: params.env.lab,
+    transport,
+    state: transportState,
+    scenario: params.scenario,
+    config: params.scenario.execution.config ?? {},
+    waitForCondition: transport.waitForCondition,
+    waitForChannelReady: params.deps.waitForTransportReady,
+    waitForQaChannelReady: params.deps.waitForTransportReady,
+    imageUnderstandingPngBase64: params.constants.imageUnderstandingPngBase64,
+    imageUnderstandingLargePngBase64: params.constants.imageUnderstandingLargePngBase64,
+    imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,
+    getTransportSnapshot: transportState.getSnapshot.bind(transportState),
+    resetTransport: resetTransportState,
+    injectInboundMessage: transportState.addInboundMessage.bind(transportState),
+    injectOutboundMessage: transportState.addOutboundMessage.bind(transportState),
+    readTransportMessage: transportState.readMessage.bind(transportState),
+    resetBus: resetTransportState,
+    reset: resetTransportState,
+  };
 }

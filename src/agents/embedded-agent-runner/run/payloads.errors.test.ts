@@ -1090,112 +1090,67 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("strips literal synthetic run prefixes without stripping semantic run summaries", () => {
-    const genericPayloads = buildPayloads({
+  it.each([
+    {
+      name: "strips a literal synthetic run prefix",
+      meta: "run make build",
+      error: "Command failed with exit code 2",
+      expected: "⚠️ 🛠️ Exec failed: `make build` (exit 2)",
+    },
+    {
+      name: "preserves a semantic test summary",
+      meta: "run tests",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run tests` (exit 1)",
+    },
+    {
+      name: "preserves a semantic deploy summary",
+      meta: "run deploy",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run deploy` (exit 1)",
+    },
+    {
+      name: "preserves a compound summary",
+      meta: "run tests → install dependencies",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run tests → install dependencies` (exit 1)",
+    },
+    {
+      name: "preserves an inline-script summary",
+      meta: "run node inline script",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run node inline script` (exit 1)",
+    },
+    {
+      name: "preserves a heredoc summary",
+      meta: "run python3 inline script (heredoc)",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run python3 inline script (heredoc)` (exit 1)",
+    },
+    {
+      name: "preserves a sed summary",
+      meta: "run sed on file",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run sed on file` (exit 1)",
+    },
+    {
+      name: "preserves a pipeline summary",
+      meta: "run tests -> show first 3 lines",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run tests -> show first 3 lines` (exit 1)",
+    },
+  ])("formats exec metadata: $name", ({ meta, error, expected }) => {
+    const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
-        meta: "run make build",
-        error: "Command failed with exit code 2",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const semanticPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const scriptPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run deploy",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const compoundPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests → install dependencies",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const inlineScriptPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const heredocPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 inline script (heredoc)",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const sedSummaryPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run sed on file",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const pipelineSummaryPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests -> show first 3 lines",
-        error: "Command failed with exit code 1",
+        meta,
+        error,
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
     });
 
-    expectSinglePayloadSummary(genericPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `make build` (exit 2)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(semanticPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(scriptPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run deploy` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(compoundPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests → install dependencies` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(inlineScriptPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run node inline script` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(heredocPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run python3 inline script (heredoc)` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(sedSummaryPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run sed on file` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(pipelineSummaryPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests -> show first 3 lines` (exit 1)",
-      isError: true,
-    });
+    expectSinglePayloadSummary(payloads, { text: expected, isError: true });
   });
 
   it("keeps arbitrary exec cwd suffixes inside markdown command text", () => {
