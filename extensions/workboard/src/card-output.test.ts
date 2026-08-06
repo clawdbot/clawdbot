@@ -178,13 +178,13 @@ describe("Workboard card output projection", () => {
   });
 
   it("drains byte-bounded proof pages without gaps or duplicates", () => {
-    const proof = createProof(100).map((entry) => ({
-      ...entry,
-      label: "l".repeat(160),
-      command: "c".repeat(1000),
-      url: `https://example.com/${"u".repeat(1980)}`,
-      note: "n".repeat(2000),
-    }));
+    const proof = createProof(100).map((entry) => {
+      entry.label = "l".repeat(160);
+      entry.command = "c".repeat(1000);
+      entry.url = `https://example.com/${"u".repeat(1980)}`;
+      entry.note = "n".repeat(2000);
+      return entry;
+    });
     const chunks: string[][] = [];
     let cursor: string | undefined;
 
