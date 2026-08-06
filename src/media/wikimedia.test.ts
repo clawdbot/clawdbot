@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { withWikimediaOriginalFallback } from "./wikimedia.js";
 
 const THUMB =
-  "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
+  "https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
 const ORIGINAL =
-  "https://upload.wikimedia.org/wikipedia/commons/e/e7/007_American_Pit_Bull_Terrier.jpg";
+  "https://upload.wikimedia.org/wikipedia/commons/8/88/007_American_Pit_Bull_Terrier.jpg";
 
 describe("withWikimediaOriginalFallback", () => {
   it("retries the ORIGINAL file (thumb -> original rewrite) when the first run fails", async () => {

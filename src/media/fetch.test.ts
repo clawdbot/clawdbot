@@ -1653,9 +1653,9 @@ describe("readRemoteMediaBuffer", () => {
     // match — the original-file retry must still fire (the old body-text predicate could
     // not, leaving the fix dead on the real outgoing-reply path).
     const thumbUrl =
-      "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
+      "https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
     const originalUrl =
-      "https://upload.wikimedia.org/wikipedia/commons/e/e7/007_American_Pit_Bull_Terrier.jpg";
+      "https://upload.wikimedia.org/wikipedia/commons/8/88/007_American_Pit_Bull_Terrier.jpg";
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(new Response(null, { status: 400 }))
@@ -1731,9 +1731,9 @@ describe("readRemoteMediaBuffer", () => {
   // mirror the saveRemoteMedia Wikimedia tests above, against readRemoteMediaBuffer.
   it("retries against the original file even when the 400 response body was drained (readRemoteMediaBuffer / Telegram reply path)", async () => {
     const thumbUrl =
-      "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
+      "https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/007_American_Pit_Bull_Terrier.jpg/800px-007_American_Pit_Bull_Terrier.jpg";
     const originalUrl =
-      "https://upload.wikimedia.org/wikipedia/commons/e/e7/007_American_Pit_Bull_Terrier.jpg";
+      "https://upload.wikimedia.org/wikipedia/commons/8/88/007_American_Pit_Bull_Terrier.jpg";
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(new Response(null, { status: 400 }))
