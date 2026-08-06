@@ -171,10 +171,23 @@ export async function updateNpmInstalledPlugins(params: {
     }
 
     const trustedOfficialNpmInstall = resolveOfficialNpmInstall({ pluginId, record });
+    const replacementPluginId = trustedOfficialNpmInstall?.replacementPluginId;
+    if (
+      replacementPluginId &&
+      replacementPluginId !== pluginId &&
+      Object.hasOwn(installs, replacementPluginId)
+    ) {
+      outcomes.push({
+        pluginId,
+        status: "error",
+        message: `Cannot replace "${pluginId}" with "${replacementPluginId}" because both plugin install records exist. Remove one of the conflicting installs, then retry the update.`,
+      });
+      continue;
+    }
     const trustedOfficialNpmSpec = trustedOfficialNpmInstall?.npmSpec;
     const npmSpecOverride =
       params.specOverrides?.[pluginId] ??
-      (trustedOfficialNpmInstall?.replacementPluginId ? trustedOfficialNpmSpec : undefined);
+      (replacementPluginId ? trustedOfficialNpmSpec : undefined);
     const trustedOfficialClawHubInstall = resolveOfficialClawHubInstall({ pluginId, record });
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
@@ -526,7 +539,7 @@ export async function updateNpmInstalledPlugins(params: {
         clawhubSpecs,
         officialNpmFallbackSpecs,
         trustedSourceLinkedOfficialInstall,
-        expectedReplacementPluginId: trustedOfficialNpmInstall?.replacementPluginId,
+        expectedReplacementPluginId: replacementPluginId,
         getFallbackExpectedIntegrity,
         installNpmSpecForUpdate,
         logger,
