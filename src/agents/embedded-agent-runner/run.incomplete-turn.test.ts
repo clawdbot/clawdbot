@@ -48,6 +48,24 @@ const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
 
 const runEmbeddedAgent = runIncompleteTurnOwnerHarness;
 
+type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+type LastAssistantFixture = Omit<LastAssistant, "content" | "stopReason" | "usage"> & {
+  content: Array<Record<string, unknown>>;
+  stopReason: LastAssistant["stopReason"] | "end_turn";
+  usage: Partial<LastAssistant["usage"]> & { total?: number };
+};
+
+function makeLastAssistant(overrides: Partial<LastAssistantFixture> = {}): LastAssistant {
+  return {
+    role: "assistant",
+    stopReason: "stop",
+    provider: "openai",
+    model: "gpt-5.5",
+    content: [],
+    ...overrides,
+  } as unknown as LastAssistant;
+}
+
 function resolveIncompleteTurnPayloadText(
   params: Omit<Parameters<typeof resolveIncompleteTurnPayloadTextCore>[0], "externalAbort"> & {
     externalAbort?: boolean;
@@ -196,13 +214,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         externalAbort: false,
         assistantTexts: [],
         toolMetas: [{ toolName: "web_search", meta: "query=next voice note" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -225,14 +239,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const timeoutError = new Error("caller deadline elapsed");
     timeoutError.name = "TimeoutError";
     const setTerminalLifecycleMeta = vi.fn();
-    const interruptedAssistant = {
-      role: "assistant",
+    const interruptedAssistant = makeLastAssistant({
       stopReason: "error",
       errorMessage: "HTTP 429 Too Many Requests",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedClassifyFailoverReason.mockReturnValue("rate_limit");
     mockedIsRateLimitAssistantError.mockReturnValue(true);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
@@ -271,13 +281,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const abortError = new Error("caller cancelled");
     abortError.name = "AbortError";
     const setTerminalLifecycleMeta = vi.fn();
-    const lateAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const lateAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Late answer" }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
       controller.abort(abortError);
       return makeAttemptResult({
@@ -308,13 +314,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("propagates canonical assistant aborts into terminal lifecycle metadata", async () => {
     const setTerminalLifecycleMeta = vi.fn();
-    const abortedAssistant = {
-      role: "assistant",
+    const abortedAssistant = makeLastAssistant({
       stopReason: "aborted",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -353,13 +355,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             content: [{ type: "text", text: "NO_REPLY" }],
             details: { aggregated: "NO_REPLY" },
           } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          {
-            role: "assistant",
-            stopReason: "stop",
-            provider: "openai",
+          makeLastAssistant({
             model: "gpt-5.4",
-            content: [],
-          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          }),
         ],
       }),
     });
@@ -385,13 +383,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             role: "user",
             content: [{ type: "text", text: "Current cron prompt" }],
           } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          {
-            role: "assistant",
-            stopReason: "stop",
-            provider: "openai",
+          makeLastAssistant({
             model: "gpt-5.4",
-            content: [],
-          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          }),
         ],
       }),
     });
@@ -411,21 +405,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             content: [{ type: "text", text: "NO_REPLY" }],
             details: { aggregated: "NO_REPLY" },
           } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          {
-            role: "assistant",
-            stopReason: "stop",
-            provider: "openai",
+          makeLastAssistant({
             model: "gpt-5.4",
-            content: [],
-          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          }),
         ],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -464,13 +450,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       return makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "web_fetch" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
 
@@ -521,13 +504,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           hadPotentialSideEffects: false,
           replaySafe: true,
         },
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
 
@@ -571,25 +551,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       return makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "web_fetch" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -641,13 +617,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       return makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "web_fetch" }, { toolName: "exec" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
 
@@ -690,13 +663,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       return makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec" }, { toolName: "web_fetch" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
 
@@ -716,13 +686,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const finalText =
       "1. Verdict: the answer completed cleanly. 2. Evidence: the runner captured final text.";
-    const finalAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const finalAssistant = makeLastAssistant({
       content: [{ type: "text", text: finalText }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -756,13 +722,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not recover a stale prior assistant after the current prompt times out", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    const staleAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const staleAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Stale answer from the prior attempt." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -786,20 +748,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not resolve a successful run from a stale transcript assistant", async () => {
-    const staleAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const staleAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Prior transcript reply." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
-    const completedAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    });
+    const completedAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Current run reply." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"]>;
+    });
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Current run reply." }]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -829,20 +783,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("retains the yielded attempt assistant for paused-turn payload classification", async () => {
-    const completedAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const completedAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Earlier completed cycle." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"]>;
-    const yieldedAssistant = {
-      role: "assistant",
+    });
+    const yieldedAssistant = makeLastAssistant({
       stopReason: "aborted",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", name: "sessions_yield", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -869,13 +816,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("recovers a completed prompt-timeout assistant without collected assistant text", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const finalText = "Completed answer after the timeout race.";
-    const finalAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const finalAssistant = makeLastAssistant({
       content: [{ type: "text", text: finalText }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: undefined as unknown as string[],
@@ -899,13 +842,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const partialText = "Partial answer before the timeout race.";
     const finalText = "Complete answer after the timeout race.";
-    const finalAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const finalAssistant = makeLastAssistant({
       content: [{ type: "text", text: finalText }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [partialText],
@@ -943,13 +882,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       { text: completedText },
       { text: partialText },
     ]);
-    const finalAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const finalAssistant = makeLastAssistant({
       content: [{ type: "text", text: finalText }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [completedText, partialText],
@@ -972,14 +907,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("records same-model rate-limit retries without a profile-rotation trace", async () => {
     const rateLimitMessage =
       "429 rate_limit_exceeded: requests per minute exceeded; Retry-After: 30";
-    const rateLimitAssistant = {
-      role: "assistant",
+    const rateLimitAssistant = makeLastAssistant({
       stopReason: "error",
-      provider: "openai",
-      model: "gpt-5.5",
       errorMessage: rateLimitMessage,
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedClassifyFailoverReason.mockImplementation((raw) =>
       raw.includes("429") ? "rate_limit" : null,
     );
@@ -996,13 +927,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: rateLimitAssistant,
       }),
     );
-    const recoveredAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const recoveredAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Recovered after a short rate-limit wait." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered after a short rate-limit wait."],
@@ -1044,10 +971,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       markUserMessagePersisted(attemptParams);
       return makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -1056,19 +981,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_reasoning_only", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "Visible answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -1091,11 +1014,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const acceptedSessionSpawns = [
       { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
     ];
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [
         { type: "toolCall", id: "tool_write", name: "write", arguments: { path: "note.txt" } },
         { type: "toolCall", id: "tool_cron", name: "cron", arguments: { action: "add" } },
@@ -1106,7 +1026,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           arguments: { task: "follow up" },
         },
       ],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const settledToolResults = [
       toolUseAssistant,
       { role: "toolResult", toolCallId: "tool_write", toolName: "write", isError: false },
@@ -1140,13 +1060,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         bridgeCalls: { search: 1, describe: 2, call: 3 },
       });
     });
-    const finalAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const finalAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Write completed. Here is the final answer." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Write completed. Here is the final answer."],
@@ -1198,13 +1114,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       terminalReplyExpectation: "required" as const,
     },
   ])("finalizes a settled failed tool once for a $label turn (#118274)", async (runPolicy) => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const failureText = "The exec tool failed: post-processing error.";
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
@@ -1254,13 +1167,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         },
       });
     });
-    const finalAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const finalAssistant = makeLastAssistant({
       content: [{ type: "text", text: failureText }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [failureText],
@@ -1305,13 +1214,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("preserves a structured visible failed-tool payload without finalizing (#118274)", async () => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const visibleError = {
       text: "Review the failed operation.",
       isError: true,
@@ -1347,13 +1253,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("keeps the original failed-tool warning if finalization fails (#118274)", async () => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const warning = { text: "⚠️ 🛠️ Exec failed", isError: true };
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt
@@ -1400,15 +1303,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
     });
     try {
-      const toolUseAssistant = {
-        role: "assistant",
+      const toolUseAssistant = makeLastAssistant({
         stopReason: "toolUse",
-        provider: "openai",
-        model: "gpt-5.5",
         content: [
           { type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } },
         ],
-      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      });
       mockedClassifyFailoverReason.mockReturnValue(null);
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
         markUserMessagePersisted(attemptParams);
@@ -1445,13 +1345,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("continues from settled side-effecting tools after an empty stop without replaying them", async () => {
-    const emptyStopAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const emptyStopAssistant = makeLastAssistant();
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       markUserMessagePersisted(attemptParams);
@@ -1463,13 +1357,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: emptyStopAssistant,
       });
     });
-    const finalAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
+    const finalAssistant = makeLastAssistant({
       content: [{ type: "text", text: "Write completed. Here is the final answer." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Write completed. Here is the final answer."],
@@ -1511,13 +1401,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       terminalReplyExpectation: undefined,
     },
   ])("does not continue settled tools for $label", async (runPolicy) => {
-    const emptyStopAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const emptyStopAssistant = makeLastAssistant();
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       markUserMessagePersisted(attemptParams);
@@ -1546,13 +1430,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("surfaces failure without cascading when the settled-tool continuation is also empty", async () => {
-    const emptyStopAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const emptyStopAssistant = makeLastAssistant();
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       markUserMessagePersisted(attemptParams);
@@ -1618,13 +1496,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       },
     },
   ])("does not escape finalization through a $label", async ({ finalAttempt }) => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
@@ -1658,13 +1533,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("surfaces the existing incomplete-turn error after one tool-use continuation", async () => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -1696,13 +1568,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not claim completion for a toolUse terminal whose tools never started", async () => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -1730,13 +1599,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("ignores stale prior-turn tool results with colliding ids", async () => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -1770,16 +1636,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not claim completion when only part of a multi-tool request dispatched", async () => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [
         { type: "toolCall", id: "tool_1", name: "write", arguments: { path: "a.txt" } },
         { type: "toolCall", id: "tool_2", name: "write", arguments: { path: "b.txt" } },
       ],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -1815,11 +1678,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
-          model: "gpt-5.5",
           content: [
             {
               type: "thinking",
@@ -1827,19 +1687,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_silent_group", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
-          model: "gpt-5.5",
           content: [{ type: "text", text: "Visible answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -1862,10 +1719,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       markUserMessagePersisted(attemptParams);
       return makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -1874,7 +1729,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_retry_boundary", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -1915,10 +1770,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["Delivered through the message tool."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "gpt-5.4",
           content: [
             {
@@ -1927,7 +1779,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_after_send", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -1944,10 +1796,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries reasoning-only turns when the assistant ended in error", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    const errorAssistant = {
-      role: "assistant",
+    const errorAssistant = makeLastAssistant({
       stopReason: "error",
-      provider: "openai",
       model: "gpt-5.4",
       errorMessage: "provider failed after emitting reasoning",
       content: [
@@ -1957,7 +1807,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           thinkingSignature: JSON.stringify({ id: "rs_error_turn", type: "reasoning" }),
         },
       ],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -1968,13 +1818,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "gpt-5.4",
           content: [{ type: "text", text: "Recovered." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -1994,8 +1841,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "anthropic",
           model: "sonnet-4.6",
@@ -2009,7 +1855,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2043,10 +1889,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "anthropic-messages",
-          stopReason: "stop",
           provider: "kimi",
           model: "kimi-for-coding",
           content: [
@@ -2056,20 +1900,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: "",
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible Kimi answer."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "anthropic-messages",
-          stopReason: "stop",
           provider: "kimi",
           model: "kimi-for-coding",
           content: [{ type: "text", text: "Visible Kimi answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2092,25 +1934,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       markUserMessagePersisted(attemptParams);
       return makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "Visible answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2131,13 +1969,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries replay-safe missing turns despite a stale aborted transcript assistant", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    const staleAssistant = {
-      role: "assistant",
+    const staleAssistant = makeLastAssistant({
       stopReason: "aborted",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -2145,13 +1979,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: undefined,
       }),
     );
-    const recoveredAssistant = {
-      role: "assistant",
+    const recoveredAssistant = makeLastAssistant({
       stopReason: "end_turn",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "text", text: "Recovered answer." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered answer."],
@@ -2185,13 +2016,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: undefined,
       });
     });
-    const recoveredAssistant = {
-      role: "assistant",
+    const recoveredAssistant = makeLastAssistant({
       stopReason: "end_turn",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "text", text: "Recovered answer." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered answer."],
@@ -2303,13 +2131,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: undefined,
       }),
     );
-    const recoveredAssistant = {
-      role: "assistant",
+    const recoveredAssistant = makeLastAssistant({
       stopReason: "end_turn",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "text", text: "Recovered answer." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered answer."],
@@ -2334,12 +2159,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "anthropic",
           model: "claude-opus-4.7",
-          content: [],
           usage: {
             input: 0,
             output: 0,
@@ -2347,15 +2169,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             cacheWrite: 0,
             totalTokens: 0,
           },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible Claude answer."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "anthropic",
           model: "claude-opus-4.7",
           content: [{ type: "text", text: "Visible Claude answer." }],
@@ -2366,7 +2186,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             cacheWrite: 0,
             totalTokens: 105,
           },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2401,13 +2221,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "openai-completions",
-          stopReason: "stop",
           provider: "llamacpp",
           model: "qwen3.6-27b",
-          content: [],
           usage: {
             input: 512,
             output: 103,
@@ -2415,16 +2232,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             cacheWrite: 0,
             totalTokens: 615,
           },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible local answer."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "openai-completions",
-          stopReason: "stop",
           provider: "llamacpp",
           model: "qwen3.6-27b",
           content: [{ type: "text", text: "Visible local answer." }],
@@ -2435,7 +2250,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             cacheWrite: 0,
             totalTokens: 645,
           },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2470,13 +2285,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "anthropic-messages",
-          stopReason: "stop",
           provider: "sub2api",
           model: "claude-opus-4-7",
-          content: [],
           usage: {
             input: 2048,
             output: 3100,
@@ -2484,16 +2296,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             cacheWrite: 0,
             totalTokens: 5148,
           },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible Anthropic-compatible answer."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "anthropic-messages",
-          stopReason: "stop",
           provider: "sub2api",
           model: "claude-opus-4-7",
           content: [{ type: "text", text: "Visible Anthropic-compatible answer." }],
@@ -2504,7 +2314,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             cacheWrite: 0,
             totalTokens: 2308,
           },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2526,13 +2336,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2554,10 +2362,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -2569,7 +2375,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -2592,10 +2398,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const reasoningOnlyAttempt = async () =>
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -2607,7 +2411,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       });
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
       (
@@ -2718,13 +2522,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     { label: "timed out", aborted: false, timedOut: true, promptError: null },
     { label: "prompt error", aborted: false, timedOut: false, promptError: new Error("closed") },
   ])("does not continue a $label tool-use terminal turn", ({ aborted, timedOut, promptError }) => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "tool_use", id: "tool_1", name: "bash", input: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const instruction = resolveSettledToolTerminalContinuationInstruction({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -2754,16 +2555,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   ])(
     "recognizes successful and failed current-batch tools with $label (#118274)",
     ({ lastToolError }) => {
-      const toolUseAssistant = {
-        role: "assistant",
+      const toolUseAssistant = makeLastAssistant({
         stopReason: "toolUse",
-        provider: "openai",
-        model: "gpt-5.5",
         content: [
           { type: "toolCall", id: "tool_ok", name: "read", arguments: {} },
           { type: "toolCall", id: "tool_failed", name: "exec", arguments: {} },
         ],
-      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      });
       const instruction = resolveSettledToolTerminalContinuationInstruction({
         provider: "openai",
         modelId: "gpt-5.5",
@@ -2805,13 +2603,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       lastErrorToolName: "exec",
     },
   ])("does not finalize $label (#118274)", ({ resultToolName, lastErrorToolName }) => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const instruction = resolveSettledToolTerminalContinuationInstruction({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -2842,16 +2637,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not settle same-name terminal calls from one failed result (#118274)", () => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [
         { type: "toolCall", id: "tool_1", name: "exec", arguments: {} },
         { type: "toolCall", id: "tool_2", name: "exec", arguments: {} },
       ],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const instruction = resolveSettledToolTerminalContinuationInstruction({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -2902,13 +2694,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attemptOverrides: { didSendDeterministicApprovalPrompt: true },
     },
   ])("does not finalize a failed terminal tool when $label (#118274)", ({ attemptOverrides }) => {
-    const toolUseAssistant = {
-      role: "assistant",
+    const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     const instruction = resolveSettledToolTerminalContinuationInstruction({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -2960,13 +2749,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       asyncStarted,
       isError,
     }) => {
-      const emptyStopAssistant = {
-        role: "assistant",
-        stopReason: "stop",
-        provider: "openai",
-        model: "gpt-5.5",
-        content: [],
-      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      const emptyStopAssistant = makeLastAssistant();
       const instruction = resolveSettledToolTerminalContinuationInstruction({
         provider: "openai",
         modelId: "gpt-5.5",
@@ -2989,13 +2772,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   );
 
   it("does not use a stale prior-turn empty stop to prove a settled continuation", () => {
-    const staleEmptyStopAssistant = {
-      role: "assistant",
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const staleEmptyStopAssistant = makeLastAssistant();
     const instruction = resolveSettledToolTerminalContinuationInstruction({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -3024,23 +2801,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Analysis...", "Here is the final answer after update_plan."],
         toolMetas: [{ toolName: "update_plan" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
-          model: "gpt-5.5",
           content: [
             { type: "text", text: "Analysis..." },
             { type: "tool_use", id: "tool_1", name: "update_plan", input: {} },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        currentAttemptAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
+        }),
+        currentAttemptAssistant: makeLastAssistant({
           content: [{ type: "text", text: "Here is the final answer after update_plan." }],
-        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+        }),
       }),
     });
 
@@ -3055,16 +2825,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Let me update the file..."],
         toolMetas: [{ toolName: "write" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             { type: "text", text: "Let me update the file..." },
             { type: "tool_use", id: "tool_1", name: "write", input: {} },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
         currentAttemptAssistant: undefined,
       }),
     });
@@ -3181,8 +2949,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Initial analysis of the codebase..."],
         toolMetas: [{ toolName: "read", meta: "path=src/index.ts" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
           provider: "anthropic",
           model: "sonnet-4.6",
@@ -3190,7 +2957,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             { type: "text", text: "Initial analysis of the codebase..." },
             { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3211,10 +2978,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             asyncStarted: true,
           },
         ],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -3224,7 +2989,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               input: { action: "generate", prompt: "a portrait" },
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3239,16 +3004,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Let me update the file..."],
         toolMetas: [{ toolName: "write" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             { type: "text", text: "Let me update the file..." },
             { type: "tool_use", id: "tool_1", name: "write", input: {} },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3265,13 +3028,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Initial analysis...", "Here is the final answer."],
         toolMetas: [{ toolName: "read" }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "anthropic",
           model: "sonnet-4.6",
           content: [{ type: "text", text: "Here is the final answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3288,10 +3050,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "qwen3.6-35b-a3b",
           content: [
             {
@@ -3300,7 +3059,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               // no signature — unsigned thinking block
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3316,10 +3075,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["Here is the answer to your question."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "qwen3.6-35b-a3b",
           content: [
             {
@@ -3328,7 +3084,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             },
             { type: "text", text: "Here is the answer to your question." },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3374,22 +3130,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       makeAttemptResult({
         assistantTexts: [finalText],
         toolMetas: [{ toolName: "update_plan", replaySafe: true }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
-          model: "gpt-5.5",
           content: [{ type: "tool_use", id: "tool_1", name: "update_plan", input: {} }],
           usage: { input: 100, output: 5, total: 105 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        currentAttemptAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
+        }),
+        currentAttemptAssistant: makeLastAssistant({
           content: [{ type: "text", text: finalText }],
           usage: { input: 200, output: 20, total: 220 },
-        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+        }),
       }),
     );
 
@@ -3444,10 +3193,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -3456,7 +3203,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_helper", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3471,8 +3218,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "google",
           model: "gemini-2.5-pro",
@@ -3483,7 +3229,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "gemini_rs_helper", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3499,9 +3245,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "amazon-bedrock",
           model: "openai.gpt-oss-120b-1:0",
           content: [
@@ -3511,7 +3255,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: "bedrock-reasoning-signature",
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3526,8 +3270,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "ollama",
           model: "gemma4:31b",
@@ -3538,7 +3281,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "ollama_rs_helper", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3554,10 +3297,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "qwen3.6-35b-a3b",
           content: [
             {
@@ -3565,7 +3305,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinking: "let me plan the tool calls I need to make...",
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3580,8 +3320,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "ollama",
           model: "gemma4:31b",
@@ -3591,7 +3330,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinking: "internal reasoning",
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3607,8 +3346,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "ollama",
           model: "gemma4:31b",
@@ -3618,7 +3356,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinking: "internal reasoning",
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3634,13 +3372,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "ollama",
           model: "gemma4:31b",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3656,14 +3393,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "ollama",
           model: "minimax-m2.7:cloud",
-          content: [],
           usage: { input: 100, output: 6, totalTokens: 106 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3685,13 +3419,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             childSessionKey: "agent:claude:subagent:child",
           },
         ],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "ollama",
           model: "gemma4:31b",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3708,14 +3441,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [],
+        lastAssistant: makeLastAssistant({
           usage: { input: 24794, output: 111, cacheRead: 4608, totalTokens: 29513 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3732,14 +3460,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [],
+        lastAssistant: makeLastAssistant({
           usage: { input: 5000, output: 200, totalTokens: 5200 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3756,14 +3479,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "llama-cpp-local",
           model: "qwen3.6-27b",
-          content: [],
           usage: { input: 950, output: 103, totalTokens: 1053 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3779,14 +3499,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "ollama",
           model: "glm-5.1:cloud",
-          content: [],
           usage: { input: 100, output: 0, totalTokens: 100 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3800,10 +3517,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["NO_REPLY"],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "gpt-5.4",
           content: [
             {
@@ -3814,7 +3528,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             { type: "text", text: "" },
             { type: "text", text: "NO_REPLY" },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3830,13 +3544,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["Delivered through the message tool."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "ollama",
           model: "kimi-k2.6:cloud",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3852,8 +3563,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["Delivered through the message tool."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "google",
           model: "gemini-2.5-pro",
@@ -3864,7 +3574,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_messaging_end_turn", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3880,13 +3590,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         didSendViaMessagingTool: false,
         messagingToolSentMediaUrls: ["file:///tmp/render.png"],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3902,14 +3609,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["Delivered before the provider error."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "error",
           provider: "ollama",
           model: "kimi-k2.6:cloud",
           errorMessage: "provider failed after delivery",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -3927,13 +3632,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           childSessionKey: "agent:claude:subagent:child",
         },
       ],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
+      lastAssistant: makeLastAssistant({
         provider: "anthropic",
         model: "sonnet-4.6",
-        content: [],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     };
 
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
@@ -3959,13 +3661,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         acceptedSessionSpawns,
         timedOut: true,
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "toolUse",
-          provider: "openai",
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -3991,13 +3690,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     } = {
       assistantTexts: [],
       acceptedSessionSpawns: [],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
+      lastAssistant: makeLastAssistant({
         provider: "anthropic",
         model: "sonnet-4.6",
-        content: [],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     };
 
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
@@ -4018,14 +3714,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: [],
         didSendViaMessagingTool: true,
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "error",
           provider: "ollama",
           model: "kimi-k2.6:cloud",
           errorMessage: "provider failed mid-turn",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4153,13 +3847,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           meta: "send",
           error: "delivery failed for second target",
         },
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "error",
-          provider: "openai",
           model: "gpt-5.4",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4175,10 +3866,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: [],
         didSendViaMessagingTool: true,
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -4187,7 +3876,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_side_effect", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4203,10 +3892,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "error",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -4215,7 +3902,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_helper_error", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4230,10 +3917,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["Visible answer."],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [
             {
@@ -4246,7 +3931,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             },
             { type: "text", text: "" },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4260,8 +3945,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "error",
           provider: "anthropic",
           model: "claude-opus-4-8",
@@ -4272,7 +3956,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               thinkingSignature: JSON.stringify({ id: "rs_error_payload", type: "reasoning" }),
             },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4286,13 +3970,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["Partial answer"],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "length",
           provider: "ollama",
           model: "qwen3.5",
           content: [{ type: "text", text: "Partial answer" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4306,13 +3989,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["Complete answer"],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "ollama",
           model: "qwen3.5",
           content: [{ type: "text", text: "Complete answer" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4327,13 +4008,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Partial answer"],
         toolMediaUrls: ["file:///tmp/render.png"],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "length",
           provider: "ollama",
           model: "qwen3.5",
           content: [{ type: "text", text: "Partial answer" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4348,13 +4028,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Partial answer"],
         hasToolMediaBlockReply: true,
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "length",
           provider: "ollama",
           model: "qwen3.5",
           content: [{ type: "text", text: "Partial answer" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4369,13 +4048,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: ["Partial answer"],
         successfulCronAdds: 1,
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "length",
           provider: "ollama",
           model: "qwen3.5",
           content: [{ type: "text", text: "Partial answer" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4411,8 +4089,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         attempt: makeAttemptResult({
           assistantTexts: [],
           ...attemptState,
-          lastAssistant: {
-            role: "assistant",
+          lastAssistant: makeLastAssistant({
             stopReason: "error",
             provider: "anthropic",
             model: "claude-opus-4-8",
@@ -4426,7 +4103,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
                 }),
               },
             ],
-          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+          }),
         }),
       });
 
@@ -4435,8 +4112,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   );
 
   it("retries replay-safe errored turns that only emitted thinking blocks", () => {
-    const assistant = {
-      role: "assistant",
+    const assistant = makeLastAssistant({
       stopReason: "error",
       provider: "anthropic",
       model: "claude-opus-4-8",
@@ -4450,7 +4126,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         { type: "text", text: " " },
       ],
       usage: { input: 100, output: 1120, totalTokens: 1220 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    });
     expect(
       shouldRetrySilentErrorAssistantTurn({
         attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
@@ -4460,14 +4136,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not retry errored empty turns when non-zero output may indicate progress", () => {
-    const assistant = {
-      role: "assistant",
+    const assistant = makeLastAssistant({
       stopReason: "error",
       provider: "ollama",
       model: "glm-5.1:cloud",
-      content: [],
       usage: { input: 100, output: 12, totalTokens: 112 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    });
     expect(
       shouldRetrySilentErrorAssistantTurn({
         attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
@@ -4496,14 +4170,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       content: [{ type: "provider_metadata", value: "opaque" }],
     },
   ])("does not retry errored turns containing $name", ({ content }) => {
-    const assistant = {
-      role: "assistant",
+    const assistant = makeLastAssistant({
       stopReason: "error",
       provider: "anthropic",
       model: "claude-opus-4-8",
       content,
       usage: { input: 100, output: 1120, totalTokens: 1220 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    });
     expect(
       shouldRetrySilentErrorAssistantTurn({
         attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
@@ -4513,8 +4186,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not retry errored thinking-only turns after side effects", () => {
-    const assistant = {
-      role: "assistant",
+    const assistant = makeLastAssistant({
       stopReason: "error",
       provider: "anthropic",
       model: "claude-opus-4-8",
@@ -4525,7 +4197,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         },
       ],
       usage: { input: 100, output: 1120, totalTokens: 1220 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    });
     expect(
       shouldRetrySilentErrorAssistantTurn({
         attempt: makeAttemptResult({
@@ -4548,14 +4220,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   ] as const)(
     "uses current-attempt replay metadata when %s",
     (_label, cumulativeDirty, currentDirty, expected) => {
-      const assistant = {
-        role: "assistant",
+      const assistant = makeLastAssistant({
         stopReason: "error",
         provider: "openrouter",
         model: "test-model",
-        content: [],
         usage: { input: 100, output: 0, totalTokens: 100 },
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+      });
       expect(
         shouldRetrySilentErrorAssistantTurn({
           attempt: makeAttemptResult({
@@ -4586,14 +4256,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "llamacpp",
           model: "qwen3.6-27b",
-          content: [],
           usage: { input: 512, output: 103, totalTokens: 615 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4609,13 +4276,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4637,21 +4302,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             content: [{ type: "text", text: "" }],
             details: { aggregated: "" },
           } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          {
-            role: "assistant",
-            stopReason: "stop",
-            provider: "openai",
-            model: "gpt-5.5",
+          makeLastAssistant({
             content: [{ type: "text", text: "" }],
-          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          }),
         ],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
+        lastAssistant: makeLastAssistant({
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4669,14 +4326,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
+        lastAssistant: makeLastAssistant({
           provider: "amazon-bedrock",
           model: "openai.gpt-oss-120b-1:0",
           content: [{ type: "text", text: "" }],
           usage: { input: 950, output: 103, totalTokens: 1053 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -4686,13 +4341,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("treats clean empty assistant turns as silent only for reply-optional runs", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        provider: "openai",
-        model: "gpt-5.5",
+      lastAssistant: makeLastAssistant({
         content: [{ type: "text", text: "" }],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
 
     expect(
@@ -4728,11 +4379,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("treats reasoning-only assistant turns as silent only for reply-optional runs", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
-      lastAssistant: {
-        role: "assistant",
+      lastAssistant: makeLastAssistant({
         stopReason: "end_turn",
-        provider: "openai",
-        model: "gpt-5.5",
         content: [
           {
             type: "thinking",
@@ -4740,7 +4388,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             thinkingSignature: JSON.stringify({ id: "rs_silent_helper", type: "reasoning" }),
           },
         ],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
 
     expect(
@@ -4776,13 +4424,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("treats exact NO_REPLY assistant turns as silent only when the caller allows it", () => {
     const attempt = makeAttemptResult({
       assistantTexts: ["NO_REPLY"],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        provider: "openai",
-        model: "gpt-5.5",
+      lastAssistant: makeLastAssistant({
         content: [{ type: "text", text: "NO_REPLY" }],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
 
     expect(
@@ -4809,13 +4453,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const attempt = makeAttemptResult({
       assistantTexts: ["NO_REPLY"],
       toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        provider: "openai",
-        model: "gpt-5.5",
+      lastAssistant: makeLastAssistant({
         content: [{ type: "text", text: "NO_REPLY" }],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
 
     expect(
@@ -4832,47 +4472,33 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("does not treat error or side-effect empty turns as silent", () => {
     const errorAttempt = makeAttemptResult({
       assistantTexts: [],
-      lastAssistant: {
-        role: "assistant",
+      lastAssistant: makeLastAssistant({
         stopReason: "error",
-        provider: "openai",
-        model: "gpt-5.5",
-        content: [],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
     const silentErrorAttempt = makeAttemptResult({
       assistantTexts: ["NO_REPLY"],
-      lastAssistant: {
-        role: "assistant",
+      lastAssistant: makeLastAssistant({
         stopReason: "error",
-        provider: "openai",
-        model: "gpt-5.5",
         content: [{ type: "text", text: "NO_REPLY" }],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
     const sideEffectAttempt = makeAttemptResult({
       assistantTexts: [],
       didSendViaMessagingTool: true,
       messagingToolSentTexts: ["sent already"],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        provider: "openai",
-        model: "gpt-5.5",
+      lastAssistant: makeLastAssistant({
         content: [{ type: "text", text: "" }],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
     const postToolEmptyAttempt = makeAttemptResult({
       assistantTexts: [],
       toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-      lastAssistant: {
-        role: "assistant",
+      lastAssistant: makeLastAssistant({
         api: "openai-completions",
-        stopReason: "stop",
         provider: "stepfun",
         model: "step-router-v1",
-        content: [],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
 
     expect(
@@ -4918,25 +4544,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
+        lastAssistant: makeLastAssistant({
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
+        lastAssistant: makeLastAssistant({
           content: [{ type: "text", text: "Visible answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -4958,11 +4576,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: ["NO_REPLY"],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
+        lastAssistant: makeLastAssistant({
           content: [
             {
               type: "thinking",
@@ -4971,7 +4585,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             },
             { type: "text", text: "NO_REPLY" },
           ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -5014,32 +4628,24 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "openai-completions",
-          stopReason: "stop",
           provider: "stepfun",
           model: "step-router-v1",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        currentAttemptAssistant: {
-          role: "assistant",
+        }),
+        currentAttemptAssistant: makeLastAssistant({
           api: "openai-completions",
-          stopReason: "stop",
           provider: "stepfun",
           model: "step-router-v1",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+        }),
       }),
     );
-    const finalAssistant = {
-      role: "assistant",
+    const finalAssistant = makeLastAssistant({
       api: "openai-completions",
-      stopReason: "stop",
       provider: "stepfun",
       model: "step-router-v1",
       content: [{ type: "text", text: "Visible StepFun answer." }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible StepFun answer."],
@@ -5085,14 +4691,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       makeAttemptResult({
         assistantTexts: ["NO_REPLY"],
         toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           api: "openai-completions",
-          stopReason: "stop",
           provider: "stepfun",
           model: "step-router-v1",
           content: [{ type: "text", text: "NO_REPLY" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -5121,13 +4725,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const sideEffectToolAttempt = makeAttemptResult({
       assistantTexts: [],
       toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        provider: "openai",
-        model: "gpt-5.5",
+      lastAssistant: makeLastAssistant({
         content: [{ type: "text", text: "" }],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
 
     expect(
@@ -5167,24 +4767,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       assistantTexts: [],
       toolMetas: [{ toolName: "sessions", meta: "patch failed", replaySafe: false, isError: true }],
       lastToolError: { toolName: "sessions", error: "patch failed" },
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        provider: "openai",
-        model: "gpt-5.5",
+      lastAssistant: makeLastAssistant({
         content: [{ type: "text", text: "" }],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
     const errorStopAttempt = makeAttemptResult({
       assistantTexts: [],
       toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
-      lastAssistant: {
-        role: "assistant",
+      lastAssistant: makeLastAssistant({
         stopReason: "error",
-        provider: "openai",
-        model: "gpt-5.5",
-        content: [],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
     });
 
     expect(
@@ -5226,13 +4818,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
+        lastAssistant: makeLastAssistant({
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -5258,13 +4846,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
+        lastAssistant: makeLastAssistant({
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     );
 
@@ -5289,13 +4874,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
           provider: "google-vertex",
           model: "gemini-3.1-flash",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
@@ -5312,13 +4896,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: [],
         didSendViaMessagingTool: true,
-        lastAssistant: {
-          role: "assistant",
+        lastAssistant: makeLastAssistant({
           stopReason: "end_turn",
-          provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
       }),
     });
 
