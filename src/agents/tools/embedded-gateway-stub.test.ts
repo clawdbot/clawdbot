@@ -258,30 +258,4 @@ describe("embedded gateway stub", () => {
     ).rejects.toThrow("limit must be a positive integer");
     expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
   });
-
-  it("rejects malformed chat history offsets before reading session files", async () => {
-    const callGateway = createEmbeddedCallGateway();
-
-    await expect(
-      callGateway({
-        method: "chat.history",
-        params: { sessionKey: "agent:main:main", offset: -1 },
-      }),
-    ).rejects.toThrow("offset must be a non-negative integer");
-    await expect(
-      callGateway({
-        method: "chat.history",
-        params: { sessionKey: "agent:main:main", offset: 1.5 },
-      }),
-    ).rejects.toThrow("offset must be a non-negative integer");
-    await expect(
-      callGateway({
-        method: "chat.history",
-        params: { sessionKey: "agent:main:main", offset: "1abc" },
-      }),
-    ).rejects.toThrow("offset must be a non-negative integer");
-    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
-    expect(runtime.readRecentSessionMessagesWithStatsAsync).not.toHaveBeenCalled();
-    expect(runtime.readSessionMessagesPageWithStatsAsync).not.toHaveBeenCalled();
-  });
 });

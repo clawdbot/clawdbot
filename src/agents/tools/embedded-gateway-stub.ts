@@ -20,7 +20,7 @@ import {
   type FastMode,
 } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "./common.js";
+import { readPositiveIntegerParam } from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
@@ -96,73 +96,6 @@ async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
     runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
   }
   return runtimeMod;
-}
-
-function readOffsetParam(params: Record<string, unknown>): number | undefined {
-  const offset = readNonNegativeIntegerParam(params, "offset");
-  if (params.offset !== undefined && offset === undefined) {
-    throw new Error("offset must be a non-negative integer");
-  }
-  return offset;
-}
-
-function readChatHistoryMessageSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const metadata = (message as Record<string, unknown>)["__openclaw"];
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return undefined;
-  }
-  const seq = (metadata as Record<string, unknown>).seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
-}
-
-function resolveChatHistoryNextOffset(params: {
-  messages: unknown[];
-  totalMessages: number;
-  offset: number;
-  rawPageMessages: number;
-}): number {
-  const oldestSeq = params.messages
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  if (oldestSeq !== undefined) {
-    return Math.max(params.offset, params.totalMessages - oldestSeq + 1);
-  }
-  return params.offset + params.rawPageMessages;
-}
-
-function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
-  if (messages.length <= max) {
-    return messages;
-  }
-  const start = Math.max(0, messages.length - max);
-  const boundarySeq = readChatHistoryMessageSeq(messages[start]);
-  if (boundarySeq === undefined) {
-    return messages.slice(start);
-  }
-  // Offset cursors can only resume at transcript-record boundaries.
-  // Keep boundary rows with the same seq together so projection mirrors are not stranded.
-  let safeStart = start;
-  while (safeStart > 0 && readChatHistoryMessageSeq(messages[safeStart - 1]) === boundarySeq) {
-    safeStart--;
-  }
-  return messages.slice(safeStart);
-}
-
-function dropChatHistoryOverreadContextMessage(
-  messages: unknown[],
-  contextMessage: unknown,
-): unknown[] {
-  if (contextMessage === undefined) {
-    return messages;
-  }
-  const index = messages.indexOf(contextMessage);
-  if (index < 0) {
-    return messages;
-  }
-  return [...messages.slice(0, index), ...messages.slice(index + 1)];
 }
 
 async function handleSessionsList(params: Record<string, unknown>) {
