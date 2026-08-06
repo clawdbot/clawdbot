@@ -23,8 +23,7 @@ const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.pl
 export { FEISHU_USER_AGENT };
 
 const FEISHU_WS_CONFIG = {
-  PingInterval: 30,
-  PingTimeout: 3,
+  pingTimeout: 3,
 } as const;
 
 /** User-Agent header value for all Feishu API requests. */
@@ -228,8 +227,6 @@ export async function createFeishuWSClient(
     loggerLevel: feishuClientSdk.LoggerLevel.info,
     wsConfig: FEISHU_WS_CONFIG,
     ...(agent ? { agent } : {}),
-  } as ConstructorParameters<typeof feishuClientSdk.WSClient>[0] & {
-    wsConfig: typeof FEISHU_WS_CONFIG;
   });
 }
 
