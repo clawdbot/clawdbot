@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS } from "../agents/mcp-transport-config.js";
@@ -227,6 +228,7 @@ function runStandaloneMcpAppHost(config: {
   initialLoadTimeoutMs: number;
   defaultRequestTimeoutMs: number;
   requestTimeoutGraceMs: number;
+  timerSafeMax: number;
 }): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
@@ -345,8 +347,11 @@ function runStandaloneMcpAppHost(config: {
       cache: "no-store",
       credentials: "omit",
       signal: AbortSignal.timeout(
-        (payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) +
-          config.requestTimeoutGraceMs,
+        Math.min(
+          (payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) +
+            config.requestTimeoutGraceMs,
+          config.timerSafeMax,
+        ),
       ),
     });
     const body = (await response.json().catch(() => undefined)) as
@@ -537,6 +542,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
     initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
     defaultRequestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
     requestTimeoutGraceMs: MCP_APP_STANDALONE_REQUEST_GRACE_MS,
+    timerSafeMax: MAX_TIMER_TIMEOUT_MS,
   })});`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
   return {

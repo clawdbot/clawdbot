@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -224,11 +225,10 @@ describe("MCP App standalone host", () => {
     expect(body).toContain("if (!initializeAccepted)");
     // Initial view load keeps a bounded timeout passed through serialized config;
     // operation fetches honor the configured MCP request deadline plus a bounded
-    // gateway grace.
+    // gateway grace clamped to the timer-safe maximum.
     expect(body).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
-    expect(body).toContain(
-      "(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) + config.requestTimeoutGraceMs",
-    );
+    expect(body).toContain("Math.min(");
+    expect(body).toContain("config.timerSafeMax");
     expect(body).not.toContain('postMessage(message, "*")');
     expect(body).not.toContain(view.html);
     expect(body).not.toContain("agent:main:main");
@@ -290,9 +290,8 @@ describe("MCP App standalone host", () => {
     const body = String(shell.end.mock.calls[0]?.[0]);
     // The operation fetch must use the configured deadline plus a bounded grace,
     // not the hardcoded 30s cap.
-    expect(body).toContain(
-      "(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) + config.requestTimeoutGraceMs",
-    );
+    expect(body).toContain("Math.min(");
+    expect(body).toContain("config.timerSafeMax");
     expect(body).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
   });
 
@@ -309,6 +308,29 @@ describe("MCP App standalone host", () => {
     expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
       requestTimeoutMs: 120_000,
     });
+  });
+
+  it("clamps the browser operation timeout at the timer-safe maximum even when the configured deadline plus grace would overflow", async () => {
+    // requestTimeoutMs at the timer-safe maximum + 5,000 ms grace would overflow
+    // AbortSignal.timeout; the clamp must keep the serialized timeout within range.
+    const maxView = { ...view, requestTimeoutMs: MAX_TIMER_TIMEOUT_MS };
+    mocks.getMcpAppViewLease.mockReturnValue(maxView);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view: maxView, nowMs, secret });
+    const accepted = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${issued.ticket}`,
+    });
+    expect(accepted.res.statusCode).toBe(200);
+    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
+      requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+
+    const shell = await request({ url: "/__openclaw__/mcp-app" });
+    const body = String(shell.end.mock.calls[0]?.[0]);
+    // The clamp is applied in the serialized host so the operation timeout stays
+    // within the timer-safe range even at the maximum configured deadline.
+    expect(body).toContain("Math.min(");
+    expect(body).toContain("config.timerSafeMax");
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
