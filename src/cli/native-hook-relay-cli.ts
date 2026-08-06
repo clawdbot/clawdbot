@@ -89,27 +89,49 @@ function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptio
   return opts;
 }
 
+type ProcStatResult =
+  | { status: "present"; startTime: number; ppid: number }
+  | { status: "missing" }
+  | { status: "unreadable" };
+
 /**
  * Reads the starttime (clock ticks since boot) and ppid from /proc/[pid]/stat.
- * Returns null when the proc entry is not readable (process gone).
+ *
+ * Returns a discriminated status:
+ * - "present" — the entry was read and the fields parsed successfully.
+ * - "missing"  — the proc entry does not exist (ENOENT; process is gone).
+ * - "unreadable" — the entry exists but cannot be read or parsed (transient
+ *   I/O, EACCES, malformed content). The caller should retry, not exit.
  */
-function readProcStat(pid: number): { startTime: number; ppid: number } | null {
+function readProcStat(pid: number): ProcStatResult {
   try {
     const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
     // /proc/[pid]/stat: pid (comm) state ppid ... starttime
     const closeParen = raw.lastIndexOf(")");
     if (closeParen < 0) {
-      return null;
+      // Malformed /proc content — treat as unreadable since the entry existed
+      // enough to produce output but could not be parsed.
+      return { status: "unreadable" };
     }
     const fields = raw.slice(closeParen + 2).split(" ");
     // field index 1 after ")" is ppid
     const ppid = Number(fields[1]);
     // field index 19 after ")" is starttime (22nd field overall)
     const startTime = Number(fields[19]);
-    return { startTime, ppid };
-  } catch {
-    return null;
+    return { status: "present", startTime, ppid };
+  } catch (error) {
+    // ENOENT means the /proc/[pid] directory is gone — the process exited.
+    if (isNodeErrorCode(error, "ENOENT")) {
+      return { status: "missing" };
+    }
+    // Any other error (EACCES, EIO, EAGAIN, etc.) is a transient read failure;
+    // the process may still be alive.
+    return { status: "unreadable" };
   }
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
 
 /**
@@ -137,10 +159,13 @@ export function installParentDeathWatchLinux(
 ): { dispose: () => void } {
   const read = deps?.readProcStat ?? readProcStat;
   const initial = read(parentPid);
-  if (!initial) {
+  if (initial.status === "missing") {
     // Parent already gone; exit immediately.
     process.exit(0);
   }
+  // On "unreadable" at startup, start the poll and retry — we cannot
+  // confirm death. A persistent read failure will eventually be bounded
+  // by the relay's own deadline.
 
   const pollMs = 5000;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -158,13 +183,17 @@ export function installParentDeathWatchLinux(
       return;
     }
     const current = read(parentPid);
-    if (!current) {
+    if (current.status === "missing") {
       // /proc entry missing — parent process no longer exists.
       disposeTimer();
       process.exit(0);
       return;
     }
-    if (current.startTime !== initial.startTime) {
+    if (current.status === "unreadable") {
+      // Transient read failure — retry next poll interval.
+      return;
+    }
+    if (initial.status === "present" && current.startTime !== initial.startTime) {
       // Start time changed — the original parent died and this PID was
       // recycled for an unrelated process.
       disposeTimer();
@@ -175,7 +204,7 @@ export function installParentDeathWatchLinux(
     // orphan to PID 1 (or a subreaper). Self-stat ppid is live (unlike
     // cached process.ppid).
     const self = read(process.pid);
-    if (self && self.ppid !== parentPid) {
+    if (self.status === "present" && self.ppid !== parentPid) {
       disposeTimer();
       process.exit(0);
     }

@@ -680,11 +680,16 @@ describe("parent death watch", () => {
     pid: number,
     ppid: number,
     startTime: number,
-  ): {
-    startTime: number;
-    ppid: number;
-  } {
-    return { startTime, ppid };
+  ): { status: "present"; startTime: number; ppid: number } {
+    return { status: "present" as const, startTime, ppid };
+  }
+
+  function makeMissing(): { status: "missing" } {
+    return { status: "missing" as const };
+  }
+
+  function makeUnreadable(): { status: "unreadable" } {
+    return { status: "unreadable" as const };
   }
 
   function createReadProcStatMock(
@@ -700,14 +705,14 @@ describe("parent death watch", () => {
     return vi.fn((pid: number) => {
       if (pid === PARENT_PID) {
         if (!parentAlive) {
-          return null;
+          return makeMissing();
         }
         return makeProcStat(PARENT_PID, 1, parentStartTime);
       }
       if (pid === process.pid) {
         return makeProcStat(process.pid, selfPpid, SELF_START_TIME);
       }
-      return null;
+      return makeMissing();
     });
   }
 
@@ -758,7 +763,7 @@ describe("parent death watch", () => {
       if (pid === process.pid) {
         return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
       }
-      return null;
+      return makeMissing();
     });
 
     installParentDeathWatchLinux(PARENT_PID, { readProcStat });
@@ -768,7 +773,7 @@ describe("parent death watch", () => {
     expect(exitSpy).not.toHaveBeenCalled();
 
     // Tick 2: parent proc entry gone → exit(0).
-    readProcStat.mockReturnValue(null);
+    readProcStat.mockReturnValue(makeMissing());
     vi.advanceTimersByTime(5000);
     expect(exitSpy).toHaveBeenCalledWith(0);
     exitSpy.mockRestore();
@@ -783,7 +788,7 @@ describe("parent death watch", () => {
       if (pid === process.pid) {
         return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
       }
-      return null;
+      return makeMissing();
     });
 
     installParentDeathWatchLinux(PARENT_PID, { readProcStat });
@@ -800,7 +805,7 @@ describe("parent death watch", () => {
       if (pid === process.pid) {
         return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
       }
-      return null;
+      return makeMissing();
     });
     vi.advanceTimersByTime(5000);
     expect(exitSpy).toHaveBeenCalledWith(0);
@@ -816,7 +821,7 @@ describe("parent death watch", () => {
       if (pid === process.pid) {
         return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
       }
-      return null;
+      return makeMissing();
     });
 
     installParentDeathWatchLinux(PARENT_PID, { readProcStat });
@@ -833,7 +838,7 @@ describe("parent death watch", () => {
       if (pid === process.pid) {
         return makeProcStat(process.pid, 1, SELF_START_TIME);
       }
-      return null;
+      return makeMissing();
     });
     vi.advanceTimersByTime(5000);
     expect(exitSpy).toHaveBeenCalledWith(0);
@@ -850,6 +855,90 @@ describe("parent death watch", () => {
     // Advance well past several intervals — nothing should fire.
     vi.advanceTimersByTime(30000);
     expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it("does not exit when the parent /proc entry is unreadable at poll time", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const readProcStat = vi.fn((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
+      }
+      return makeMissing();
+    });
+
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
+
+    // Tick 1: parent alive.
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Tick 2: parent proc entry unreadable (transient I/O) — do not exit.
+    readProcStat.mockReturnValue(makeUnreadable());
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Tick 3: still unreadable — still not exiting; relay deadline bounds this.
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    exitSpy.mockRestore();
+  });
+
+  it("does not exit at startup when the parent /proc entry is unreadable", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const readProcStat = vi.fn((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeUnreadable();
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
+      }
+      return makeMissing();
+    });
+
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
+
+    // Startup: unreadable parent — do not exit.
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // First poll: parent now readable — still alive.
+    readProcStat.mockImplementation((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
+      }
+      if (pid === process.pid) {
+        return makeProcStat(process.pid, PARENT_PID, SELF_START_TIME);
+      }
+      return makeMissing();
+    });
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    exitSpy.mockRestore();
+  });
+
+  it("does not exit when self-stat is unreadable during the reparenting check", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const readProcStat = vi.fn((pid: number) => {
+      if (pid === PARENT_PID) {
+        return makeProcStat(PARENT_PID, 1, PARENT_START_TIME);
+      }
+      if (pid === process.pid) {
+        // Self-stat unreadable but parent still alive — keep polling.
+        return makeUnreadable();
+      }
+      return makeMissing();
+    });
+
+    installParentDeathWatchLinux(PARENT_PID, { readProcStat });
+
+    vi.advanceTimersByTime(5000);
+    expect(exitSpy).not.toHaveBeenCalled();
+
     exitSpy.mockRestore();
   });
 
