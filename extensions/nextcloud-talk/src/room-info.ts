@@ -1,4 +1,5 @@
 // Nextcloud Talk plugin module implements room info behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -25,6 +26,14 @@ export const testing = {
 
 function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
   return `${params.accountId}:${params.roomToken}`;
+}
+
+function cacheRoomInfo(
+  key: string,
+  value: { kind?: "direct" | "group"; fetchedAt: number; error?: string },
+): void {
+  roomCache.set(key, value);
+  pruneMapToMaxSize(roomCache, ROOM_CACHE_MAX_ENTRIES);
 }
 
 function coerceRoomType(value: unknown): number | undefined {
@@ -100,7 +109,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
     });
     try {
       if (!response.ok) {
-        roomCache.set(key, {
+        cacheRoomInfo(key, {
           fetchedAt: Date.now(),
           error: `status:${response.status}`,
         });
@@ -115,13 +124,13 @@ export async function resolveNextcloudTalkRoomKind(params: {
       }>(response, "Nextcloud Talk room info failed");
       const type = coerceRoomType(payload.ocs?.data?.type);
       const kind = resolveRoomKindFromType(type);
-      roomCache.set(key, { fetchedAt: Date.now(), kind });
+      cacheRoomInfo(key, { fetchedAt: Date.now(), kind });
       return kind;
     } finally {
       await release();
     }
   } catch (err) {
-    roomCache.set(key, {
+    cacheRoomInfo(key, {
       fetchedAt: Date.now(),
       error: formatErrorMessage(err),
     });
