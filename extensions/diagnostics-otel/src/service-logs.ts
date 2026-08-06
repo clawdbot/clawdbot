@@ -20,7 +20,7 @@ import {
   normalizeOtelLogString,
   type OtelContentCapturePolicy,
 } from "./service-content-normalization.js";
-import { observeOtlpExporterHealth } from "./service-exporter-health.js";
+import { observeOtlpExporterHealth, type ExporterHealthUpdate } from "./service-exporter-health.js";
 import { errorCategory, formatError } from "./service-exporter.js";
 import {
   addTraceAttributes,
@@ -32,7 +32,6 @@ import type {
   OtelHttpAgentFactory,
   OtelHttpAgentOptions,
   OtelLogger,
-  TelemetryExporterDiagnosticEvent,
 } from "./service-types.js";
 
 const LOG_SEVERITY_MAP: Record<string, SeverityNumber> = {
@@ -46,7 +45,7 @@ const LOG_SEVERITY_MAP: Record<string, SeverityNumber> = {
 
 export function createDiagnosticsLogExporter(params: {
   contentCapturePolicy: OtelContentCapturePolicy;
-  emitExporterEvent: (event: Omit<TelemetryExporterDiagnosticEvent, "type" | "seq" | "ts">) => void;
+  emitExporterEvent: (event: ExporterHealthUpdate) => void;
   flushIntervalMs?: number;
   headers?: Record<string, string>;
   logger: OtelLogger;
@@ -89,6 +88,10 @@ export function createDiagnosticsLogExporter(params: {
   if (logsEnabled) {
     let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
     let otelLogger: { emit: (logRecord: LogRecord) => void } | undefined;
+    const activeTransports: ExporterHealthUpdate["transport"][] = [
+      ...(logsToOtlp ? (["otlp-http-protobuf"] as const) : []),
+      ...(logsToStdout ? (["stdout"] as const) : []),
+    ];
     if (logsToOtlp) {
       const logExporter = observeOtlpExporterHealth(
         new OTLPLogExporter({
@@ -114,12 +117,12 @@ export function createDiagnosticsLogExporter(params: {
     const reportLogExportFailure = (
       err: unknown,
       label: "log record" | "security event",
-      transport?: "otlp-http-protobuf" | "stdout",
+      transport: ExporterHealthUpdate["transport"],
     ) => {
       emitExporterEvent({
         exporter: "diagnostics-otel",
         signal: "logs",
-        ...(transport ? { transport } : {}),
+        transport,
         status: "failure",
         reason: "emit_failed",
         errorCategory: errorCategory(err),
@@ -133,14 +136,19 @@ export function createDiagnosticsLogExporter(params: {
         logger.error(`diagnostics-otel: ${label} export failed: ${formatError(err)}`);
       }
     };
-    const reportLogExportRecovery = (transport?: "otlp-http-protobuf" | "stdout") => {
+    const reportLogExportRecovery = (transport: ExporterHealthUpdate["transport"]) => {
       emitExporterEvent({
         exporter: "diagnostics-otel",
         signal: "logs",
-        ...(transport ? { transport } : {}),
+        transport,
         status: "recovered",
         reason: "emit_failed",
       });
+    };
+    const reportLogPreparationFailure = (err: unknown, label: "log record" | "security event") => {
+      for (const transport of activeTransports) {
+        reportLogExportFailure(err, label, transport);
+      }
     };
 
     const emitLogRecord = (
@@ -236,10 +244,9 @@ export function createDiagnosticsLogExporter(params: {
     recordLogRecord = (evt, metadata) => {
       try {
         const record = buildDiagnosticLogRecord(evt, metadata);
-        reportLogExportRecovery();
         emitLogRecord(record, "log record");
       } catch (err) {
-        reportLogExportFailure(err, "log record");
+        reportLogPreparationFailure(err, "log record");
       }
     };
     recordSecurityEvent = (evt, metadata) => {
@@ -248,10 +255,9 @@ export function createDiagnosticsLogExporter(params: {
       }
       try {
         const record = buildSecurityLogRecord(evt, metadata);
-        reportLogExportRecovery();
         emitLogRecord(record, "security event");
       } catch (err) {
-        reportLogExportFailure(err, "security event");
+        reportLogPreparationFailure(err, "security event");
       }
     };
   }

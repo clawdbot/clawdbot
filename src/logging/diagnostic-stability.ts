@@ -27,6 +27,7 @@ export type DiagnosticStabilityEventRecord = {
   surface?: string;
   action?: string;
   reason?: string;
+  errorCategory?: string;
   outcome?: string;
   mode?: string;
   level?: string;
@@ -142,9 +143,28 @@ type DiagnosticStabilityState = {
   nextIndex: number;
   count: number;
   dropped: number;
+  exporterSeq: number;
   exporterRecords: Map<string, DiagnosticStabilityEventRecord>;
   exporterDropped: number;
   unsubscribe: (() => void) | null;
+};
+
+export type DiagnosticExporterHealthUpdate = {
+  signal: "traces" | "metrics" | "logs";
+  transport: string;
+  endpointMode?: "configured" | "default_endpoint";
+  status: "started" | "failure" | "recovered" | "dropped";
+  reason?:
+    | "configured"
+    | "default_endpoint"
+    | "export_failed"
+    | "handler_failed"
+    | "emit_failed"
+    | "queue_full"
+    | "shutdown_failed"
+    | "start_failed"
+    | "unsupported_protocol";
+  errorCategory?: string;
 };
 
 function createState(capacity = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY): DiagnosticStabilityState {
@@ -154,6 +174,7 @@ function createState(capacity = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY): Diagnost
     nextIndex: 0,
     count: 0,
     dropped: 0,
+    exporterSeq: 0,
     exporterRecords: new Map(),
     exporterDropped: 0,
     unsubscribe: null,
@@ -172,15 +193,27 @@ function copyMemory(memory: DiagnosticMemoryUsage): DiagnosticMemoryUsage {
   return { ...memory };
 }
 
-function copyReasonCode(reason: string | undefined): string | undefined {
-  if (!reason || !SAFE_REASON_CODE.test(reason)) {
+function copyReasonCode(reason: unknown): string | undefined {
+  if (typeof reason !== "string" || !SAFE_REASON_CODE.test(reason)) {
     return undefined;
   }
   return reason;
 }
 
-function copyExporterCode(value: string | undefined): string | undefined {
-  return value && SAFE_EXPORTER_CODE.test(value) ? value : undefined;
+function copyExporterCode(value: unknown): string | undefined {
+  return typeof value === "string" && SAFE_EXPORTER_CODE.test(value) ? value : undefined;
+}
+
+function isDiagnosticExporterSignal(
+  value: unknown,
+): value is DiagnosticExporterHealthUpdate["signal"] {
+  return value === "traces" || value === "metrics" || value === "logs";
+}
+
+function isDiagnosticExporterStatus(
+  value: unknown,
+): value is DiagnosticExporterHealthUpdate["status"] {
+  return value === "started" || value === "failure" || value === "recovered" || value === "dropped";
 }
 
 function assignReasonCode(
@@ -551,25 +584,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.pluginId = event.pluginId;
       assignReasonCode(record, event.reason);
       break;
-    case "telemetry.exporter": {
+    case "telemetry.exporter":
       record.source = copyExporterCode(event.exporter);
       record.target = event.signal;
       record.outcome = event.status;
-      const transport = copyExporterCode(event.transport);
-      if (transport) {
-        record.transport = transport;
-      }
-      if (event.endpointMode === "configured" || event.endpointMode === "default_endpoint") {
-        record.mode = event.endpointMode;
-      } else if (
-        event.status === "started" &&
-        (event.reason === "configured" || event.reason === "default_endpoint")
-      ) {
-        record.mode = event.reason;
-      }
       assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
-    }
     case "diagnostic.async_queue.dropped":
       record.droppedEvents = event.droppedEvents;
       record.droppedTrustedEvents = event.droppedTrustedEvents;
@@ -626,6 +646,44 @@ function upsertExporterRecord(record: DiagnosticStabilityEventRecord): void {
   }
   state.exporterRecords.delete(key);
   state.exporterRecords.set(key, record);
+}
+
+/** Records a trusted diagnostics-exporter health transition outside the public event contract. */
+export function recordDiagnosticExporterHealth(
+  exporter: string,
+  update: DiagnosticExporterHealthUpdate,
+): void {
+  const source = copyExporterCode(exporter);
+  if (
+    !source ||
+    !isDiagnosticExporterSignal(update.signal) ||
+    !isDiagnosticExporterStatus(update.status)
+  ) {
+    return;
+  }
+  const state = getDiagnosticStabilityState();
+  state.exporterSeq += 1;
+  const record: DiagnosticStabilityEventRecord = {
+    seq: state.exporterSeq,
+    ts: Date.now(),
+    type: "telemetry.exporter",
+    source,
+    target: update.signal,
+    outcome: update.status,
+  };
+  const transport = copyExporterCode(update.transport);
+  if (transport) {
+    record.transport = transport;
+  }
+  if (update.endpointMode === "configured" || update.endpointMode === "default_endpoint") {
+    record.mode = update.endpointMode;
+  }
+  const errorCategory = copyReasonCode(update.errorCategory);
+  if (errorCategory) {
+    record.errorCategory = errorCategory;
+  }
+  assignReasonCode(record, update.reason ?? update.errorCategory);
+  upsertExporterRecord(record);
 }
 
 function listRecords(): DiagnosticStabilityEventRecord[] {
@@ -792,9 +850,6 @@ export function startDiagnosticStabilityRecorder(): void {
   }
   state.unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
     if (event.type === "telemetry.exporter") {
-      if (metadata.trusted) {
-        upsertExporterRecord(sanitizeDiagnosticEvent(event));
-      }
       return;
     }
     if (metadata.trusted || event.type === "log.record") {

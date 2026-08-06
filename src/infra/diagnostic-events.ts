@@ -761,15 +761,11 @@ export type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
   type: "telemetry.exporter";
   exporter: string;
   signal: "traces" | "metrics" | "logs";
-  transport?: string;
-  endpointMode?: "configured" | "default_endpoint";
-  status: "started" | "failure" | "recovered" | "dropped";
+  status: "started" | "failure" | "dropped";
   reason?:
     | "configured"
-    | "default_endpoint"
-    | "export_failed"
-    | "handler_failed"
     | "emit_failed"
+    | "handler_failed"
     | "queue_full"
     | "shutdown_failed"
     | "start_failed"

@@ -222,13 +222,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { emitDiagnosticEvent, type DiagnosticEventPayload } from "../api.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
-import { createExporterHealthEventEmitter } from "./service-exporter-health.js";
+import {
+  createExporterHealthEventEmitter,
+  type ExporterHealthUpdate,
+} from "./service-exporter-health.js";
 import { createDiagnosticsLogExporter } from "./service-logs.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   CHILD_SPAN_ID,
   createOtelContext,
   createTestTrace,
+  getReportedExporterHealth,
   GRANDCHILD_SPAN_ID,
   MODEL_CALL_SPAN_ID,
   MODEL_CALL_FIXTURE,
@@ -261,6 +265,7 @@ const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
 const ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
+const ORIGINAL_OTEL_SDK_DISABLED = process.env.OTEL_SDK_DISABLED;
 const OTEL_PROTOCOL_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_PROTOCOL",
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
@@ -622,6 +627,7 @@ describe("diagnostics-otel service", () => {
       delete process.env[key];
     }
     delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
+    delete process.env.OTEL_SDK_DISABLED;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
     telemetryState.spans.length = 0;
@@ -688,6 +694,11 @@ describe("diagnostics-otel service", () => {
       delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
     } else {
       process.env.OTEL_SEMCONV_STABILITY_OPT_IN = ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN;
+    }
+    if (ORIGINAL_OTEL_SDK_DISABLED === undefined) {
+      delete process.env.OTEL_SDK_DISABLED;
+    } else {
+      process.env.OTEL_SDK_DISABLED = ORIGINAL_OTEL_SDK_DISABLED;
     }
     if (ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT === undefined) {
       delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -1195,18 +1206,39 @@ describe("diagnostics-otel service", () => {
       { status: "started", reason: "configured" },
       { status: "failure", reason: "shutdown_failed" },
     ]);
+    expect(
+      getReportedExporterHealth(ctx).map(({ transport, status, reason }) => ({
+        transport,
+        status,
+        reason,
+      })),
+    ).toEqual([
+      {
+        transport: "otlp-http-protobuf",
+        status: "started",
+        reason: "configured",
+      },
+      {
+        transport: "otlp-http-protobuf",
+        status: "failure",
+        reason: "shutdown_failed",
+      },
+    ]);
 
     await expect(service.stop?.(ctx)).resolves.toBeUndefined();
     await waitForDiagnosticEventsDrained();
-    expect(events.at(-1)).toMatchObject({
+    expect(events.at(-1)).toMatchObject({ status: "dropped" });
+    expect(getReportedExporterHealth(ctx).at(-1)).toMatchObject({
       transport: "otlp-http-protobuf",
       status: "dropped",
     });
-    expect(JSON.stringify(events)).not.toContain("private shutdown details");
+    expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
+      "private shutdown details",
+    );
     unsubscribe();
   });
 
-  test("preserves SDK startup failure when rollback shutdown also fails", async () => {
+  test("preserves SDK startup failure through host rollback when shutdown also fails", async () => {
     const events: TelemetryExporterEvent[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {
       if (event.type === "telemetry.exporter") {
@@ -1242,8 +1274,14 @@ describe("diagnostics-otel service", () => {
     );
     expect(sdkShutdown).toHaveBeenCalledOnce();
     await waitForDiagnosticEventsDrained();
+    expect(events.map(({ status, reason }) => ({ status, reason }))).toEqual([
+      {
+        status: "failure",
+        reason: "start_failed",
+      },
+    ]);
     expect(
-      events.map(({ transport, endpointMode, status, reason }) => ({
+      getReportedExporterHealth(ctx).map(({ transport, endpointMode, status, reason }) => ({
         transport,
         endpointMode,
         status,
@@ -1259,7 +1297,22 @@ describe("diagnostics-otel service", () => {
     ]);
     await expect(service.stop?.(ctx)).resolves.toBeUndefined();
     await waitForDiagnosticEventsDrained();
-    expect(events.at(-1)).toMatchObject({
+    expect(events.map(({ status, reason }) => ({ status, reason }))).toEqual([
+      {
+        status: "failure",
+        reason: "start_failed",
+      },
+    ]);
+    expect(getReportedExporterHealth(ctx).at(-1)).toMatchObject({
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "start_failed",
+    });
+
+    await expect(service.stop?.(ctx)).resolves.toBeUndefined();
+    await waitForDiagnosticEventsDrained();
+    expect(events.at(-1)).toMatchObject({ status: "dropped" });
+    expect(getReportedExporterHealth(ctx).at(-1)).toMatchObject({
       transport: "otlp-http-protobuf",
       status: "dropped",
     });
@@ -1302,14 +1355,23 @@ describe("diagnostics-otel service", () => {
       await expect(service.start(ctx)).rejects.toThrow("private startup details");
       await waitForDiagnosticEventsDrained();
 
+      expect(events.map(({ signal, status, reason }) => ({ signal, status, reason }))).toEqual([
+        {
+          signal: "traces",
+          status: "failure",
+          reason: "start_failed",
+        },
+      ]);
       expect(
-        events.map(({ signal, transport, endpointMode: eventMode, status, reason }) => ({
-          signal,
-          transport,
-          endpointMode: eventMode,
-          status,
-          reason,
-        })),
+        getReportedExporterHealth(ctx).map(
+          ({ signal, transport, endpointMode: eventMode, status, reason }) => ({
+            signal,
+            transport,
+            endpointMode: eventMode,
+            status,
+            reason,
+          }),
+        ),
       ).toEqual([
         {
           signal: "traces",
@@ -1319,9 +1381,14 @@ describe("diagnostics-otel service", () => {
           reason: "start_failed",
         },
       ]);
-      expect(JSON.stringify(events)).not.toContain(OTEL_TEST_ENDPOINT);
-      expect(JSON.stringify(events)).not.toContain("private startup details");
+      expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
+        OTEL_TEST_ENDPOINT,
+      );
+      expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
+        "private startup details",
+      );
 
+      await service.stop?.(ctx);
       await service.stop?.(ctx);
       unsubscribe();
     },
@@ -1447,16 +1514,22 @@ describe("diagnostics-otel service", () => {
         events.push(event);
       }
     });
-    await startOtelService({ traces: true, metrics: true, logs: true });
+    const { ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
 
-    const exporterEvents = events.filter((event) => event.type === "telemetry.exporter");
     for (const signal of ["traces", "metrics", "logs"]) {
-      const event = exporterEvents.find((entry) => entry.signal === signal);
+      const event = events.find((entry) => entry.signal === signal);
       expect(event?.type).toBe("telemetry.exporter");
       expect(event?.exporter).toBe("diagnostics-otel");
-      expect(event?.transport).toBe("otlp-http-protobuf");
       expect(event?.status).toBe("started");
       expect(event?.reason).toBe("configured");
+      expect(getReportedExporterHealth(ctx).find((entry) => entry.signal === signal)).toMatchObject(
+        {
+          transport: "otlp-http-protobuf",
+          endpointMode: "configured",
+          status: "started",
+          reason: "configured",
+        },
+      );
     }
     expect(
       telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
@@ -1467,6 +1540,183 @@ describe("diagnostics-otel service", () => {
       "openclaw.reason": "configured",
     });
 
+    unsubscribe();
+  });
+
+  test("coalesces multi-transport logs into one public lifecycle", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    const { service, ctx } = await startOtelService({
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "both",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(events.map(({ signal, status, reason }) => ({ signal, status, reason }))).toEqual([
+      { signal: "logs", status: "started", reason: "configured" },
+    ]);
+    expect(
+      getReportedExporterHealth(ctx).map(({ transport, status }) => ({ transport, status })),
+    ).toEqual([
+      { transport: "otlp-http-protobuf", status: "started" },
+      { transport: "stdout", status: "started" },
+    ]);
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).toHaveBeenCalledTimes(1);
+
+    await service.stop?.(ctx);
+    await waitForDiagnosticEventsDrained();
+    expect(events.map((event) => event.status)).toEqual(["started", "dropped"]);
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  test("keeps disabled owned SDK signals out of the operator health projection", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_SDK_DISABLED = " TRUE ";
+
+    const { ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      logsExporter: "stdout",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(events.map(({ signal, status, reason }) => ({ signal, status, reason }))).toEqual([
+      { signal: "logs", status: "started", reason: "configured" },
+    ]);
+    expect(
+      getReportedExporterHealth(ctx).map(({ signal, transport, status, reason }) => ({
+        signal,
+        transport,
+        status,
+        reason,
+      })),
+    ).toEqual([
+      {
+        signal: "logs",
+        transport: "stdout",
+        status: "started",
+        reason: "configured",
+      },
+    ]);
+    expect(sdkStart).toHaveBeenCalledOnce();
+
+    unsubscribe();
+  });
+
+  test("keeps disabled owned SDK protocol failures out of operator health", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_SDK_DISABLED = "true";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/json";
+
+    const { ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      logsExporter: "stdout",
+      configure: (context) => {
+        delete context.config.diagnostics?.otel?.protocol;
+      },
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(events.map(({ signal, status, reason }) => ({ signal, status, reason }))).toEqual([
+      { signal: "logs", status: "started", reason: "configured" },
+    ]);
+    expect(
+      getReportedExporterHealth(ctx).map(({ signal, transport, status, reason }) => ({
+        signal,
+        transport,
+        status,
+        reason,
+      })),
+    ).toEqual([
+      {
+        signal: "logs",
+        transport: "stdout",
+        status: "started",
+        reason: "configured",
+      },
+    ]);
+    expect(sdkStart).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
+
+  test("keeps disabled malformed owned SDK routes out of operator health", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_SDK_DISABLED = "true";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: false,
+      logs: false,
+    });
+    ctx.config.diagnostics!.otel!.tracesEndpoint = "not a collector URL";
+
+    await expect(service.start(ctx)).rejects.toThrow(
+      "Configured OpenTelemetry collector endpoint is invalid",
+    );
+    await waitForDiagnosticEventsDrained();
+
+    expect(events).toEqual([]);
+    expect(getReportedExporterHealth(ctx)).toEqual([]);
+    await service.stop?.(ctx);
+    unsubscribe();
+  });
+
+  test("keeps disabled owned SDK start failures out of operator health", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_SDK_DISABLED = "true";
+    sdkStart.mockImplementationOnce(() => {
+      throw new TypeError("mocked disabled SDK start failure");
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: false,
+    });
+
+    await expect(service.start(ctx)).rejects.toThrow("mocked disabled SDK start failure");
+    await waitForDiagnosticEventsDrained();
+
+    expect(events).toEqual([]);
+    expect(getReportedExporterHealth(ctx)).toEqual([]);
+    await service.stop?.(ctx);
+    await service.stop?.(ctx);
     unsubscribe();
   });
 
@@ -1487,7 +1737,7 @@ describe("diagnostics-otel service", () => {
     await defaultEndpoint.service.stop?.(defaultEndpoint.ctx);
 
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
-    await startOtelService({
+    const externalSdk = await startOtelService({
       traces: true,
       metrics: true,
       logs: true,
@@ -1496,6 +1746,40 @@ describe("diagnostics-otel service", () => {
 
     expect(
       events
+        .filter((event) => event.status === "started")
+        .map(({ signal, status, reason }) => ({
+          signal,
+          status,
+          reason,
+        })),
+    ).toEqual([
+      {
+        signal: "traces",
+        status: "started",
+        reason: "configured",
+      },
+      {
+        signal: "traces",
+        status: "started",
+        reason: "configured",
+      },
+      {
+        signal: "metrics",
+        status: "started",
+        reason: "configured",
+      },
+      {
+        signal: "logs",
+        status: "started",
+        reason: "configured",
+      },
+    ]);
+    const healthReports = [
+      ...getReportedExporterHealth(defaultEndpoint.ctx),
+      ...getReportedExporterHealth(externalSdk.ctx),
+    ];
+    expect(
+      healthReports
         .filter((event) => event.status === "started")
         .map(({ signal, transport, endpointMode, status, reason }) => ({
           signal,
@@ -1539,12 +1823,6 @@ describe("diagnostics-otel service", () => {
   });
 
   test("retires trace ownership across external, unsupported, and supported restarts", async () => {
-    const events: TelemetryExporterEvent[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "telemetry.exporter") {
-        events.push(event);
-      }
-    });
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
 
@@ -1561,7 +1839,7 @@ describe("diagnostics-otel service", () => {
       await waitForDiagnosticEventsDrained();
 
       expect(
-        events.map(({ signal, transport, status, reason }) => ({
+        getReportedExporterHealth(ctx).map(({ signal, transport, status, reason }) => ({
           signal,
           transport,
           status,
@@ -1612,18 +1890,11 @@ describe("diagnostics-otel service", () => {
         },
       ]);
     } finally {
-      unsubscribe();
       await service.stop?.(ctx);
     }
   });
 
   test("retires unsupported OTLP failures on disabled restart and stop", async () => {
-    const events: TelemetryExporterEvent[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "telemetry.exporter") {
-        events.push(event);
-      }
-    });
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
     delete ctx.config.diagnostics!.otel!.protocol;
@@ -1639,7 +1910,7 @@ describe("diagnostics-otel service", () => {
       await waitForDiagnosticEventsDrained();
 
       expect(
-        events.map(({ transport, status, reason }) => ({
+        getReportedExporterHealth(ctx).map(({ transport, status, reason }) => ({
           transport,
           status,
           reason,
@@ -1659,18 +1930,11 @@ describe("diagnostics-otel service", () => {
         { transport: "otlp-http-protobuf", status: "dropped", reason: undefined },
       ]);
     } finally {
-      unsubscribe();
       await service.stop?.(ctx);
     }
   });
 
   test("rebuilds the current log route set while preserving logs both", async () => {
-    const events: TelemetryExporterEvent[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "telemetry.exporter") {
-        events.push(event);
-      }
-    });
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
       logs: true,
@@ -1686,7 +1950,7 @@ describe("diagnostics-otel service", () => {
       await waitForDiagnosticEventsDrained();
 
       expect(
-        events.map(({ transport, status }) => ({
+        getReportedExporterHealth(ctx).map(({ transport, status }) => ({
           transport,
           status,
         })),
@@ -1701,7 +1965,6 @@ describe("diagnostics-otel service", () => {
         { transport: "stdout", status: "started" },
       ]);
     } finally {
-      unsubscribe();
       await service.stop?.(ctx);
     }
   });
@@ -1863,30 +2126,41 @@ describe("diagnostics-otel service", () => {
     expect(
       events.map((event) => ({
         signal: event.signal,
-        transport: event.transport,
         status: event.status,
         reason: event.reason,
       })),
     ).toEqual([
       {
         signal: "traces",
-        transport: "otlp-http-protobuf",
         status: "failure",
         reason: "unsupported_protocol",
       },
       {
         signal: "metrics",
-        transport: "otlp-http-protobuf",
         status: "failure",
         reason: "unsupported_protocol",
       },
       {
         signal: "logs",
-        transport: "otlp-http-protobuf",
         status: "failure",
         reason: "unsupported_protocol",
       },
     ]);
+    expect(
+      getReportedExporterHealth(ctx).map(({ signal, transport, status, reason }) => ({
+        signal,
+        transport,
+        status,
+        reason,
+      })),
+    ).toEqual(
+      ["traces", "metrics", "logs"].map((signal) => ({
+        signal,
+        transport: "otlp-http-protobuf",
+        status: "failure",
+        reason: "unsupported_protocol",
+      })),
+    );
     expect(vi.mocked(ctx.logger.warn).mock.calls).toEqual(
       ["traces", "metrics", "logs"].map((signal) => [
         `diagnostics-otel: unsupported ${signal} protocol grpc; OTLP export disabled`,
@@ -2293,7 +2567,7 @@ describe("diagnostics-otel service", () => {
         throw new TypeError("repeated private failure");
       });
 
-    await startOtelService({ logs: true });
+    const { ctx } = await startOtelService({ logs: true });
     for (const message of ["first failure", "second failure", "recovery"]) {
       await emitAndFlush({
         type: "log.record",
@@ -2302,12 +2576,10 @@ describe("diagnostics-otel service", () => {
       });
     }
 
-    const exporterEvents = events.filter((event) => event.type === "telemetry.exporter");
-    const failureEvent = exporterEvents.find((event) => event.status === "failure");
+    const failureEvent = events.find((event) => event.status === "failure");
     expect(failureEvent?.type).toBe("telemetry.exporter");
     expect(failureEvent?.exporter).toBe("diagnostics-otel");
     expect(failureEvent?.signal).toBe("logs");
-    expect(failureEvent?.transport).toBe("otlp-http-protobuf");
     expect(failureEvent?.status).toBe("failure");
     expect(failureEvent?.reason).toBe("emit_failed");
     expect(failureEvent?.errorCategory).toBe("TypeError");
@@ -2321,12 +2593,18 @@ describe("diagnostics-otel service", () => {
       "openclaw.errorCategory": "TypeError",
     });
     expect(
-      exporterEvents
+      events.filter((event) => event.reason === "emit_failed").map((event) => event.status),
+    ).toEqual(["failure"]);
+    expect(
+      getReportedExporterHealth(ctx)
         .filter(
           (event) => event.transport === "otlp-http-protobuf" && event.reason === "emit_failed",
         )
         .map((event) => event.status),
     ).toEqual(["failure", "recovered"]);
+    expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
+      "sk-test-secret",
+    );
 
     unsubscribe();
   });
@@ -2349,7 +2627,7 @@ describe("diagnostics-otel service", () => {
         throw new TypeError("private enqueue failure");
       })
       .mockImplementationOnce(() => {});
-    await startOtelService({ traces: false, metrics: false, logs: true });
+    const { ctx } = await startOtelService({ traces: false, metrics: false, logs: true });
     const exporter = firstLogProcessorOptions().exporter as
       | {
           export(items: unknown, callback: (result: ExportResult) => void): void;
@@ -2374,7 +2652,7 @@ describe("diagnostics-otel service", () => {
     await waitForDiagnosticEventsDrained();
 
     expect(
-      events
+      getReportedExporterHealth(ctx)
         .filter((event) => event.transport === "otlp-http-protobuf")
         .map(({ status, reason }) => ({ status, reason })),
     ).toEqual([
@@ -2386,7 +2664,7 @@ describe("diagnostics-otel service", () => {
     completeExport?.({ code: ExportResultCode.SUCCESS });
     await waitForDiagnosticEventsDrained();
     expect(
-      events
+      getReportedExporterHealth(ctx)
         .filter((event) => event.transport === "otlp-http-protobuf")
         .map(({ status, reason }) => ({ status, reason })),
     ).toEqual([
@@ -2394,7 +2672,10 @@ describe("diagnostics-otel service", () => {
       { status: "failure", reason: "export_failed" },
       { status: "recovered", reason: "export_failed" },
     ]);
-    expect(JSON.stringify(events)).not.toContain("private");
+    expect(events.map((event) => event.status)).not.toContain("recovered");
+    expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
+      "private",
+    );
 
     unsubscribe();
   });
@@ -2413,7 +2694,7 @@ describe("diagnostics-otel service", () => {
     stdout.spy.mockImplementationOnce(failWrite).mockImplementationOnce(failWrite);
 
     try {
-      await startOtelService({
+      const { ctx } = await startOtelService({
         traces: false,
         metrics: false,
         logs: true,
@@ -2424,15 +2705,18 @@ describe("diagnostics-otel service", () => {
       }
 
       expect(
-        events
+        getReportedExporterHealth(ctx)
           .filter((event) => event.transport === "stdout" && event.reason === "emit_failed")
           .map(({ status, errorCategory }) => ({ status, errorCategory })),
       ).toEqual([
         { status: "failure", errorCategory: "TypeError" },
         { status: "recovered", errorCategory: undefined },
       ]);
+      expect(events.map((event) => event.status)).not.toContain("recovered");
       expect(stdout.writes).toHaveLength(1);
-      expect(JSON.stringify(events)).not.toContain("private stdout failure");
+      expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
+        "private stdout failure",
+      );
     } finally {
       stdout.spy.mockRestore();
       unsubscribe();
@@ -2440,7 +2724,7 @@ describe("diagnostics-otel service", () => {
   });
 
   test("preserves and recovers bounded exporter facts for log preparation failures", () => {
-    const events: TelemetryExporterEvent[] = [];
+    const events: ExporterHealthUpdate[] = [];
     const logger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -2458,7 +2742,7 @@ describe("diagnostics-otel service", () => {
         logBodies: false,
       },
       emitExporterEvent: createExporterHealthEventEmitter((event) => {
-        events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
+        events.push(event);
       }),
       logger,
       logsEnabled: true,
@@ -2505,13 +2789,13 @@ describe("diagnostics-otel service", () => {
       })),
     ).toEqual([
       {
-        transport: undefined,
+        transport: "otlp-http-protobuf",
         status: "failure",
         reason: "emit_failed",
         errorCategory: "TypeError",
       },
       {
-        transport: undefined,
+        transport: "otlp-http-protobuf",
         status: "recovered",
         reason: "emit_failed",
         errorCategory: undefined,

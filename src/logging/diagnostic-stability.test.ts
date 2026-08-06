@@ -2,17 +2,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
-  emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
+  recordDiagnosticExporterHealth,
   resetDiagnosticStabilityRecorderForTest,
   selectDiagnosticStabilitySnapshot,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
+  type DiagnosticExporterHealthUpdate,
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
 
@@ -459,26 +460,23 @@ describe("diagnostic stability recorder", () => {
       type: "telemetry.exporter",
       exporter: "diagnostics-otel",
       signal: "traces",
-      transport: "otlp-http-protobuf",
       status: "failure",
-      reason: "export_failed",
+      reason: "emit_failed",
     });
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-otel",
+    recordDiagnosticExporterHealth("diagnostics-otel", {
       signal: "traces",
       transport: "otlp-http-protobuf",
+      endpointMode: "default_endpoint",
       status: "started",
-      reason: "default_endpoint",
+      reason: "configured",
     });
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-otel",
+    recordDiagnosticExporterHealth("diagnostics-otel", {
       signal: "traces",
       transport: "otlp-http-protobuf",
+      endpointMode: "default_endpoint",
       status: "failure",
       reason: "export_failed",
-      errorCategory: "collector-secret-message",
+      errorCategory: "https://collector.example/private",
     });
     for (let index = 0; index < 1005; index += 1) {
       emitDiagnosticEvent({
@@ -508,7 +506,7 @@ describe("diagnostic stability recorder", () => {
         mode: "default_endpoint",
       }),
     ]);
-    expect(JSON.stringify(snapshot)).not.toContain("collector-secret-message");
+    expect(JSON.stringify(snapshot)).not.toContain("collector.example");
     expect(defaultSnapshot.count).toBe(1000);
     expect(defaultSnapshot.events).toEqual(
       expect.arrayContaining([
@@ -526,25 +524,20 @@ describe("diagnostic stability recorder", () => {
   it("retains exporter ownership through recovery", async () => {
     startDiagnosticStabilityRecorder();
 
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-otel",
+    recordDiagnosticExporterHealth("diagnostics-otel", {
       signal: "metrics",
       transport: "otlp-http-protobuf",
+      endpointMode: "configured",
       status: "started",
       reason: "configured",
     });
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-otel",
+    recordDiagnosticExporterHealth("diagnostics-otel", {
       signal: "metrics",
       transport: "otlp-http-protobuf",
       status: "failure",
       reason: "export_failed",
     });
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-otel",
+    recordDiagnosticExporterHealth("diagnostics-otel", {
       signal: "metrics",
       transport: "otlp-http-protobuf",
       status: "recovered",
@@ -570,18 +563,14 @@ describe("diagnostic stability recorder", () => {
   it("preserves explicit and dependency-default ownership on startup failures", async () => {
     startDiagnosticStabilityRecorder();
 
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-otel",
+    recordDiagnosticExporterHealth("diagnostics-otel", {
       signal: "traces",
       transport: "otlp-http-protobuf",
       endpointMode: "default_endpoint",
       status: "failure",
       reason: "start_failed",
     });
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-otel",
+    recordDiagnosticExporterHealth("diagnostics-otel", {
       signal: "metrics",
       transport: "otlp-http-protobuf",
       endpointMode: "configured",
@@ -616,30 +605,39 @@ describe("diagnostic stability recorder", () => {
   it("keeps safe generic codes while dropping unsafe sources and redacting transports", async () => {
     startDiagnosticStabilityRecorder();
 
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-prometheus",
+    recordDiagnosticExporterHealth("diagnostics-prometheus", {
       signal: "metrics",
       transport: "prometheus-scrape",
       status: "started",
       reason: "configured",
     });
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "custom-exporter",
+    recordDiagnosticExporterHealth("custom-exporter", {
       signal: "logs",
       transport: "collector.internal:4318",
+      endpointMode:
+        "https://private.example/mode" as DiagnosticExporterHealthUpdate["endpointMode"],
       status: "failure",
       reason: "queue_full",
+      errorCategory: "TypeError",
     });
-    emitTrustedDiagnosticEvent({
-      type: "telemetry.exporter",
-      exporter: "https://private.example/exporter",
+    recordDiagnosticExporterHealth("https://private.example/exporter", {
       signal: "traces",
       transport: "vendor-proto",
       status: "failure",
       reason: "export_failed",
     });
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "private-signal",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "export_failed",
+    } as unknown as DiagnosticExporterHealthUpdate);
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "private-status",
+      reason: "export_failed",
+    } as unknown as DiagnosticExporterHealthUpdate);
     await waitForDiagnosticEventsDrained();
 
     const snapshot = getDiagnosticStabilitySnapshot({
@@ -655,22 +653,22 @@ describe("diagnostic stability recorder", () => {
         source: "custom-exporter",
         outcome: "failure",
         reason: "queue_full",
+        errorCategory: "TypeError",
       }),
     ]);
     expect(snapshot.events[1]).not.toHaveProperty("transport");
+    expect(snapshot.events[1]).not.toHaveProperty("mode");
     expect(JSON.stringify(snapshot)).not.toContain("collector.internal");
     expect(JSON.stringify(snapshot)).not.toContain("private.example");
+    expect(JSON.stringify(snapshot)).not.toContain("private-signal");
+    expect(JSON.stringify(snapshot)).not.toContain("private-status");
   });
 
   it("replaces retired routes while retaining every current logs both route", async () => {
     startDiagnosticStabilityRecorder();
-    const emitExporter = (
-      event: Omit<
-        Extract<Parameters<typeof emitTrustedDiagnosticEvent>[0], { type: "telemetry.exporter" }>,
-        "type"
-      >,
-    ) => {
-      emitTrustedDiagnosticEvent({ type: "telemetry.exporter", ...event });
+    const emitExporter = (event: DiagnosticExporterHealthUpdate & { exporter: string }) => {
+      const { exporter, ...update } = event;
+      recordDiagnosticExporterHealth(exporter, update);
     };
 
     emitExporter({

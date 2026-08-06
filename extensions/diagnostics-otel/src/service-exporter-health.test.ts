@@ -1,14 +1,13 @@
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { describe, expect, it, vi } from "vitest";
-import type { DiagnosticEventPayload } from "../api.js";
 import {
   createExporterHealthEventEmitter,
+  createPublicExporterHealthEventEmitter,
   observeOtlpExporterHealth,
+  type ExporterHealthUpdate,
 } from "./service-exporter-health.js";
 
-type ExporterEvent = Extract<DiagnosticEventPayload, { type: "telemetry.exporter" }>;
-
-function createObservedExporter(events: ExporterEvent[]) {
+function createObservedExporter(events: ExporterHealthUpdate[]) {
   let resultCallback: ((result: ExportResult) => void) | undefined;
   const shutdown = vi.fn(async () => {});
   const exporter = {
@@ -20,7 +19,7 @@ function createObservedExporter(events: ExporterEvent[]) {
   observeOtlpExporterHealth(exporter, {
     signal: "traces",
     emitExporterEvent: createExporterHealthEventEmitter((event) => {
-      events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
+      events.push(event);
     }),
   });
   return {
@@ -35,9 +34,76 @@ function createObservedExporter(events: ExporterEvent[]) {
   };
 }
 
+describe("createPublicExporterHealthEventEmitter", () => {
+  it("emits one public lifecycle for a signal with multiple transports", () => {
+    const events: ExporterHealthUpdate[] = [];
+    const emit = createPublicExporterHealthEventEmitter((event) => events.push(event));
+
+    emit({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emit({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "started",
+      reason: "configured",
+    });
+    emit({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "dropped",
+    });
+    emit({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "dropped",
+    });
+
+    expect(events.map(({ status, transport }) => ({ status, transport }))).toEqual([
+      { status: "started", transport: "otlp-http-protobuf" },
+      { status: "dropped", transport: "stdout" },
+    ]);
+  });
+
+  it("coalesces matching failures without publishing recovery", () => {
+    const events: ExporterHealthUpdate[] = [];
+    const emit = createPublicExporterHealthEventEmitter((event) => events.push(event));
+    const base = {
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      reason: "emit_failed",
+      errorCategory: "TypeError",
+    } as const;
+
+    emit({ ...base, transport: "otlp-http-protobuf", status: "failure" });
+    emit({ ...base, transport: "stdout", status: "failure" });
+    emit({ ...base, transport: "otlp-http-protobuf", status: "recovered" });
+    emit({ ...base, transport: "stdout", status: "recovered" });
+    emit({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "failure",
+      reason: "queue_full",
+    });
+
+    expect(events.map(({ status, reason }) => ({ status, reason }))).toEqual([
+      { status: "failure", reason: "emit_failed" },
+      { status: "failure", reason: "queue_full" },
+    ]);
+  });
+});
+
 describe("observeOtlpExporterHealth", () => {
   it("emits one final failure transition and one recovery transition", () => {
-    const events: ExporterEvent[] = [];
+    const events: ExporterHealthUpdate[] = [];
     const observed = createObservedExporter(events);
     const consumerCallback = vi.fn();
 
@@ -73,7 +139,7 @@ describe("observeOtlpExporterHealth", () => {
   });
 
   it("records a shutdown rejection without exposing its message", async () => {
-    const events: ExporterEvent[] = [];
+    const events: ExporterHealthUpdate[] = [];
     const observed = createObservedExporter(events);
     observed.shutdown.mockRejectedValueOnce(new TypeError("private collector details"));
 
@@ -91,7 +157,7 @@ describe("observeOtlpExporterHealth", () => {
   });
 
   it("records and rethrows a synchronous dependency export failure once", () => {
-    const events: ExporterEvent[] = [];
+    const events: ExporterHealthUpdate[] = [];
     const exportItems = vi.fn((_items: unknown, _callback: (result: ExportResult) => void) => {
       throw new TypeError("private serialization details");
     });
@@ -102,7 +168,7 @@ describe("observeOtlpExporterHealth", () => {
     observeOtlpExporterHealth(exporter, {
       signal: "logs",
       emitExporterEvent: createExporterHealthEventEmitter((event) => {
-        events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
+        events.push(event);
       }),
     });
 
@@ -121,7 +187,7 @@ describe("observeOtlpExporterHealth", () => {
   });
 
   it("does not misclassify a synchronous consumer callback failure", () => {
-    const events: ExporterEvent[] = [];
+    const events: ExporterHealthUpdate[] = [];
     const exporter = {
       export: vi.fn((_items: unknown, callback: (result: ExportResult) => void) => {
         callback({ code: ExportResultCode.SUCCESS });
@@ -131,7 +197,7 @@ describe("observeOtlpExporterHealth", () => {
     observeOtlpExporterHealth(exporter, {
       signal: "metrics",
       emitExporterEvent: createExporterHealthEventEmitter((event) => {
-        events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
+        events.push(event);
       }),
     });
 
