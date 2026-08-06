@@ -373,7 +373,20 @@ POST a JSON body matching the AG-UI `RunAgentInput` schema:
 { "role": "user", "content": "Hello" }
 ```
 
-Supported roles: `user`, `assistant`, `system`, `tool`.
+Supported roles: `user`, `assistant`, `system`, `developer`, `tool`.
+
+`system` and `developer` both carry instructions and are applied to the turn's
+system prompt. Send the whole conversation each turn as AG-UI clients normally
+do — only the messages after the last assistant turn are forwarded as the new
+prompt, and the rest are already in the session's history.
+
+A `tool` message with empty `content` is a complete turn: a frontend tool that
+succeeds without producing output still reports its success, and the agent
+continues from there.
+
+Image content blocks are forwarded to image-capable models. Only images on the
+current turn are sent — images already in the history stay in the session rather
+than being re-uploaded on every later turn.
 
 ---
 
@@ -431,6 +444,39 @@ curl -N http://localhost:8000/v1/ag-ui/operator \
   -H "X-OpenClaw-Agent-Id: my-agent" \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
+
+The header names an agent, and it is validated against your configured agents.
+Matching follows the same normalization as the gateway's own agent header, so
+`My-Agent` resolves to the agent `my-agent`. A name that matches no configured
+agent is rejected with `400 invalid_request_error` — the turn never runs. This
+matters because the alternative would be to fall through to the default agent:
+the request would succeed while executing in a different agent's workspace with
+that agent's tools and history. The turn either runs on the agent you named or
+it does not run.
+
+The selected agent also determines the session: history, persistence, and the
+one-run-at-a-time rule below are all scoped to that agent, not to the default.
+
+### One run at a time per session
+
+A session runs one turn at a time. If a second request arrives for a session
+that is mid-run, it is refused with `409 conflict_error` and the first run
+continues undisturbed:
+
+```json
+{
+  "error": {
+    "message": "A run is already in progress for this session. Retry once it completes, or use a distinct X-OpenClaw-Session-Key.",
+    "type": "conflict_error"
+  }
+}
+```
+
+The refusal is deliberate and it is the reason two browser tabs on one session
+cannot interleave: each run owns its stream for its whole lifetime, so one run's
+tool events can never be written into another run's response. Retry when the
+first run finishes, or give each caller its own `X-OpenClaw-Session-Key`
+(see [Session isolation](#session-isolation)) so they run in parallel.
 
 ---
 
@@ -493,14 +539,33 @@ The header value must match these rules; invalid values return
 
 Non-streaming errors return JSON:
 
-| Status | Type                    | Meaning                                                                                     |
-| ------ | ----------------------- | ------------------------------------------------------------------------------------------- |
-| 400    | `invalid_request_error` | Invalid request (missing messages, bad JSON, bad session-key header)                        |
-| 401    | `unauthorized`          | Invalid device or gateway token                                                             |
-| 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved |
-| 405    | —                       | Method not allowed (only POST accepted)                                                     |
+| Status | Type                    | Meaning                                                                                                                                                            |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 400    | `invalid_request_error` | Invalid request: no prompt, image, or tool result in `messages`; bad JSON; bad session-key header; unknown `X-OpenClaw-Agent-Id`; tool schemas over the size limit |
+| 401    | `unauthorized`          | Invalid device or gateway token                                                                                                                                    |
+| 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved                                                                        |
+| 405    | —                       | Method not allowed (only POST accepted)                                                                                                                            |
+| 409    | `conflict_error`        | A run is already in progress for this session — retry, or use a distinct session key                                                                               |
+| 503    | `service_unavailable`   | (`/v1/ag-ui`) The pairing allow-list could not be read — a gateway storage fault, not a pairing state. Retry after checking the gateway logs                       |
 
-Errors that happen mid-stream emit a `RUN_ERROR` event and close the connection.
+Every error is answered before the stream is committed where that is possible,
+so a failed request gets a JSON status rather than a partial event stream.
+Errors that happen mid-stream emit a `RUN_ERROR` event and close the connection,
+so a run always ends in a terminal event.
+
+### Model-context limits
+
+Everything a page supplies that reaches the model is bounded, so a single
+request cannot consume the agent's context window:
+
+| Input                          | Limit             | Over the limit                                                 |
+| ------------------------------ | ----------------- | -------------------------------------------------------------- |
+| `context` entries              | 8,000 characters  | Truncated, with a marker telling the model the view is partial |
+| `state` (shared state JSON)    | 8,000 characters  | Truncated, with the same marker                                |
+| `tools` + state-writer schemas | 24,000 characters | Rejected with `400` before the stream opens                    |
+
+Tool schemas are rejected rather than trimmed because silently dropping a tool
+would leave your page believing the agent can call something it can never see.
 
 ---
 

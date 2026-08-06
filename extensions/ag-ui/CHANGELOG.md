@@ -60,8 +60,7 @@
   standalone via `npx @contextableai/clawpilotkit` against any ag-ui
   gateway. See its README for setup.
 - **Reasoning event surfacing** — emit AG-UI `REASONING_START`, `REASONING_MESSAGE_START/CONTENT/END`, `REASONING_END` events when the agent streams reasoning content (extended thinking). Requires models with thinking enabled (e.g. Claude with `thinkingDefault`, OpenAI o-series). On by default; disable via `surfaceReasoning: false` in channel defaults.
-- **Step reporting** — emit AG-UI `STEP_STARTED` / `STEP_FINISHED` events from OpenClaw's `onItemEvent` callback, giving an AG-UI client clients visibility into multi-step agent progress. On by default; disable via `surfaceSteps: false` in channel defaults.
-- New channel defaults: `surfaceReasoning: true`, `surfaceSteps: true`.
+- New channel default: `surfaceReasoning: true`.
 - **`X-OpenClaw-Session-Key` header for per-user session isolation** — when present, the validated header value is composed under the route-derived session key as `<route.sessionKey>[:user:<header>][:thread:<threadId>]`. The header subdivides the route scope and never replaces it, enabling multi-user web apps (e.g. an AG-UI client deployments where one AG-UI client is shared across authenticated users) to keep per-user conversation history isolated. Treat as a trusted-proxy-only header (analogous to `X-Forwarded-For`) — see the new "Session isolation" section in the README. Values are validated for length (1–256), charset (`[A-Za-z0-9._@:-]`), and path-traversal sequences; invalid values return `400 invalid_request_error` before the agent is dispatched. Thanks to @mikehole for the contribution (#22).
 
 ### Changed
