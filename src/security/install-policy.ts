@@ -267,7 +267,7 @@ async function assertSecureCommandAncestorDirs(params: {
     }
     if (process.platform === "win32" && perms.source === "unknown") {
       throw new Error(
-        `${params.label} parent directory ACL verification unavailable on Windows for ${dir}. Move the policy command to a path whose ACLs can be verified.`,
+        `${params.label} parent directory ACL verification unavailable on Windows for ${dir}. Move ${params.label} to a direct path whose ACLs can be verified.`,
       );
     }
   }
@@ -306,7 +306,7 @@ async function assertSecureCommandPath(params: {
 
   if (process.platform === "win32" && perms.source === "unknown") {
     throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the policy command to a path whose ACLs can be verified.`,
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move ${params.label} to a direct path whose ACLs can be verified.`,
     );
   }
 
