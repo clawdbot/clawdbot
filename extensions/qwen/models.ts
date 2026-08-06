@@ -89,13 +89,22 @@ function buildQwenCatalogModels(rows: readonly QwenCatalogModelRow[]): ModelDefi
 }
 
 // Token Plan is credit-based, so per-token prices do not map to its billing model.
-// This curated picker catalog keeps current recommendations plus one selectable compatibility row.
+// This is the exact chat allowlist; image-generation-only models use separate APIs.
 export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
   buildQwenCatalogModels([
+    [QWEN_37_MAX_MODEL_ID, true, ["text"], 1_000_000, 131_072],
     [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
     [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-    ["qwen3-coder-next", true, ["text"], 262_144, 65_536],
+    [QWEN_36_FLASH_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+    ["deepseek-v4-pro", true, ["text"], 1_000_000, 393_216],
+    ["deepseek-v4-flash", true, ["text"], 1_000_000, 393_216],
+    ["deepseek-v4-flash-0731", true, ["text"], 1_000_000, 393_216],
+    ["deepseek-v3.2", true, ["text"], 131_072, 65_536],
+    ["kimi-k2.7-code", true, ["text", "image"], 262_144, 262_144],
+    ["kimi-k2.6", true, ["text", "image"], 262_144, 262_144],
     ["kimi-k2.5", true, ["text", "image"], 262_144, 98_304],
+    ["glm-5.2", true, ["text"], 1_000_000, 131_072],
+    ["glm-5.1", true, ["text"], 202_752, 131_072],
     ["glm-5", true, ["text"], 202_752, 16_384],
     ["MiniMax-M2.5", true, ["text"], 196_608, 32_768],
   ]);
