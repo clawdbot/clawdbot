@@ -112,8 +112,16 @@ enum GatewayDiscoveryPreferences {
 
     @discardableResult
     static func clearPreferredStableIDIfRouteBindingMismatch(_ currentRouteBinding: String?) -> Bool {
-        guard self.preferredStableID() != nil else {
+        guard let preferredStableID = self.preferredStableID() else {
             UserDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
+            return false
+        }
+        if self.preferredRouteBinding() == nil,
+           let current = self.normalized(currentRouteBinding)
+        {
+            // Releases predating route bindings persisted only the discovery id. Adopt the
+            // current route once so its automatic transport cannot look like a manual choice.
+            self.setPreferredStableID(preferredStableID, routeBinding: current)
             return false
         }
         guard let stored = self.preferredRouteBinding(),

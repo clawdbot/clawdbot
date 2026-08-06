@@ -153,6 +153,27 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `legacy unbound discovery selection adopts its current route`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        state.remoteTransport = .direct
+        state.remoteUrl = "ws://legacy-gateway.local:18789"
+        GatewayDiscoveryPreferences.setPreferredStableID("legacy-gateway")
+
+        #expect(!state._testReconcilePreferredGatewayRouteBinding())
+        #expect(GatewayDiscoveryPreferences.preferredStableID() == "legacy-gateway")
+        #expect(GatewayDiscoveryPreferences.preferredRouteBinding() ==
+            GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: state.connectionMode,
+                remoteTransport: state.remoteTransport,
+                remoteURL: state.remoteUrl,
+                remoteTarget: state.remoteTarget))
+        #expect(GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(state: state))
+    }
+
+    @Test
     func `invalid remote drafts cannot be persisted for a configured gateway probe`() {
         let base = AppState.GatewayConfigSyncDraft(
             connectionMode: .remote,
