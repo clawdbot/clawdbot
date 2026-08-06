@@ -1,18 +1,19 @@
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 
-export type ActivityRouteData = {
-  mode: "live" | "run";
-  runId: string | null;
-};
+export type RunInspectorSelector = { kind: "run" | "execution"; id: string };
+
+export type ActivityRouteData =
+  | { mode: "live"; selector: null }
+  | { mode: "run"; selector: RunInspectorSelector | null };
 
 export type RunInspectorState =
   | { status: "empty" }
-  | { status: "loading"; runId: string; waitingForGateway: boolean }
-  | { status: "disconnected"; runId: string }
-  | { status: "unauthorized"; runId: string }
-  | { status: "unsupported"; runId: string }
-  | { status: "error"; runId: string }
-  | { status: "ready"; runId: string; result: AuditRunInspectResult };
+  | { status: "loading"; waitingForGateway: boolean }
+  | { status: "disconnected" }
+  | { status: "unauthorized" }
+  | { status: "unsupported" }
+  | { status: "error" }
+  | { status: "ready"; result: AuditRunInspectResult };
 
 type RunInspectorDiagnosticKind =
   | "present"

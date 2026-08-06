@@ -25,7 +25,11 @@ import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import type { ActivityRouteData, RunInspectorState } from "./run-inspector-model.ts";
+import type {
+  ActivityRouteData,
+  RunInspectorSelector,
+  RunInspectorState,
+} from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.ts";
 import {
   parseActivityEvent,
@@ -36,6 +40,10 @@ import {
 import { renderActivity } from "./view.ts";
 
 let activityClearBoundary: EventLogEntry | undefined;
+
+function selectorKey(selector: RunInspectorSelector | null): string | null {
+  return selector ? `${selector.kind}:${selector.id}` : null;
+}
 
 class ActivityPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -59,7 +67,7 @@ class ActivityPage extends OpenClawLightDomElement {
   private inspectorAbort: AbortController | null = null;
   private inspectorClient: GatewayBrowserClient | null = null;
   private inspectorEpoch = 0;
-  private inspectorRunId: string | null = null;
+  private inspectorSelectorKey: string | null = null;
   private readonly streamFollow = new StreamAutoFollowController(this, {
     selector: ".activity-stream",
     isEnabled: () => this.autoFollow,
@@ -114,18 +122,19 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   private bindInspectorRoute() {
-    const route = this.routeData ?? { mode: "live", runId: null };
-    const nextRunId = route.mode === "run" ? route.runId : null;
-    if (nextRunId === this.inspectorRunId && route.mode === "run") {
+    const route = this.routeData;
+    const selector = route?.mode === "run" ? route.selector : null;
+    const nextSelectorKey = selectorKey(selector);
+    if (nextSelectorKey === this.inspectorSelectorKey && route?.mode === "run") {
       return;
     }
-    this.inspectorRunId = nextRunId;
+    this.inspectorSelectorKey = nextSelectorKey;
     this.cancelInspectorRequest();
     this.inspectorClient = null;
-    this.runInspector = nextRunId
-      ? { status: "loading", runId: nextRunId, waitingForGateway: true }
+    this.runInspector = selector
+      ? { status: "loading", waitingForGateway: true }
       : { status: "empty" };
-    if (route.mode === "run") {
+    if (route?.mode === "run") {
       this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true);
     }
   }
@@ -141,32 +150,32 @@ class ActivityPage extends OpenClawLightDomElement {
     snapshot: ApplicationGatewaySnapshot,
     force = false,
   ) {
-    const route = this.routeData ?? { mode: "live", runId: null };
-    if (route.mode !== "run") {
+    const route = this.routeData;
+    if (route?.mode !== "run") {
       return;
     }
-    const runId = route.runId;
-    if (!runId) {
+    const selector = route.selector;
+    if (!selector) {
       this.runInspector = { status: "empty" };
       return;
     }
-    this.inspectorRunId = runId;
+    this.inspectorSelectorKey = selectorKey(selector);
     if (snapshot.phase !== "connected" || !snapshot.client) {
       this.cancelInspectorRequest();
       this.inspectorClient = null;
-      this.runInspector = { status: "disconnected", runId };
+      this.runInspector = { status: "disconnected" };
       return;
     }
     if (isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false) {
       this.cancelInspectorRequest();
       this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unsupported", runId };
+      this.runInspector = { status: "unsupported" };
       return;
     }
     if (!canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")) {
       this.cancelInspectorRequest();
       this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unauthorized", runId };
+      this.runInspector = { status: "unauthorized" };
       return;
     }
     if (
@@ -176,7 +185,7 @@ class ActivityPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    void this.loadRunInspector(gateway, snapshot.client, runId);
+    void this.loadRunInspector(gateway, snapshot.client, selector);
   }
 
   private isUnknownInspectMethod(error: unknown): boolean {
@@ -191,39 +200,42 @@ class ActivityPage extends OpenClawLightDomElement {
   private async loadRunInspector(
     gateway: ApplicationContext["gateway"],
     client: GatewayBrowserClient,
-    runId: string,
+    selector: RunInspectorSelector,
   ) {
     this.cancelInspectorRequest();
     const epoch = this.inspectorEpoch;
     const abort = new AbortController();
     this.inspectorAbort = abort;
     this.inspectorClient = client;
-    this.runInspector = { status: "loading", runId, waitingForGateway: false };
+    this.runInspector = { status: "loading", waitingForGateway: false };
+    const requestSelectorKey = selectorKey(selector);
     const isCurrent = () =>
       this.inspectorEpoch === epoch &&
       this.context.gateway === gateway &&
       gateway.snapshot.client === client &&
       gateway.snapshot.phase === "connected" &&
       this.routeData?.mode === "run" &&
-      this.routeData.runId === runId;
+      selectorKey(this.routeData.selector) === requestSelectorKey;
     try {
-      const result = await client.request<AuditRunInspectResult>(
-        "audit.run.inspect",
-        { runId, decisionLimit: 50, executionLimit: 50 },
-        { signal: abort.signal },
-      );
+      const params =
+        selector.kind === "run"
+          ? { runId: selector.id, decisionLimit: 50, executionLimit: 50 }
+          : { executionId: selector.id, decisionLimit: 50 };
+      const result = await client.request<AuditRunInspectResult>("audit.run.inspect", params, {
+        signal: abort.signal,
+      });
       if (isCurrent()) {
-        this.runInspector = { status: "ready", runId, result };
+        this.runInspector = { status: "ready", result };
       }
     } catch (error) {
       if (!isCurrent() || abort.signal.aborted) {
         return;
       }
       this.runInspector = isMissingOperatorReadScopeError(error)
-        ? { status: "unauthorized", runId }
+        ? { status: "unauthorized" }
         : this.isUnknownInspectMethod(error)
-          ? { status: "unsupported", runId }
-          : { status: "error", runId };
+          ? { status: "unsupported" }
+          : { status: "error" };
     } finally {
       if (this.inspectorAbort === abort) {
         this.inspectorAbort = null;
@@ -237,8 +249,8 @@ class ActivityPage extends OpenClawLightDomElement {
       return;
     }
     const search = new URLSearchParams({ view: "run" });
-    if (this.routeData?.runId) {
-      search.set("run", this.routeData.runId);
+    if (this.routeData?.mode === "run" && this.routeData.selector) {
+      search.set(this.routeData.selector.kind, this.routeData.selector.id);
     }
     this.context.navigate("activity", { search: `?${search.toString()}` });
   }

@@ -131,6 +131,11 @@ function runInspectorHref(runId: string, basePath: string): string {
   return `${pathForRoute("activity", basePath)}?${search.toString()}`;
 }
 
+function executionInspectorHref(executionId: string, basePath: string): string {
+  const search = new URLSearchParams({ view: "run", execution: executionId });
+  return `${pathForRoute("activity", basePath)}?${search.toString()}`;
+}
+
 function identityFacts(context: ExecutionIdentityContextV1, basePath: string): IdentityFact[] {
   const representedSubject = context.representedSubject;
   const sponsor = context.sponsor;
@@ -427,7 +432,7 @@ function diagnosticCopy(result: AuditRunInspectResult) {
   return unreachable;
 }
 
-function renderUnavailableResult(result: AuditRunInspectResult) {
+function renderUnavailableResult(result: AuditRunInspectResult, basePath: string) {
   const copy = diagnosticCopy(result);
   if (!copy || result.identity.state === "present") {
     return nothing;
@@ -455,10 +460,10 @@ function renderUnavailableResult(result: AuditRunInspectResult) {
                       date: new Date(candidate.createdAt).toLocaleString(),
                     })}</span
                   >
-                  <span>
+                  <a href=${executionInspectorHref(candidate.executionId, basePath)}>
                     ${t("activity.runInspector.candidates.executionReference")}
                     ${renderSafeRef(candidate.executionId, true)}
-                  </span>
+                  </a>
                 </li>
               `,
             )}
@@ -501,7 +506,7 @@ function renderReady(result: AuditRunInspectResult, basePath: string) {
           </section>
           ${renderMissingEvidence(result.coverage.missingEvidence)} ${renderDecisions(result)}
         `
-      : renderUnavailableResult(result)}
+      : renderUnavailableResult(result, basePath)}
   `;
 }
 

@@ -22,16 +22,16 @@ const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function presentResult(runId: string): AuditRunInspectResult {
+function presentResult(runId: string, executionId = "execution-safe-ref"): AuditRunInspectResult {
   return {
     schemaVersion: 1,
-    run: { runId, executionId: "execution-safe-ref", status: "known" },
+    run: { runId, executionId, status: "known" },
     identity: {
       state: "present",
       context: {
         schemaVersion: 1,
         contextId: "context-safe-ref",
-        executionId: "execution-safe-ref",
+        executionId,
         runId,
         createdAt: 1_786_000_000_000,
         trustDomain: { kind: "gateway-cell", domainRef: hmacRef, state: "present" },
@@ -72,7 +72,7 @@ function presentResult(runId: string): AuditRunInspectResult {
         schemaVersion: 1,
         receiptId: "receipt-safe-ref",
         contextId: "context-safe-ref",
-        executionId: "execution-safe-ref",
+        executionId,
         runId,
         occurredAt: 1_786_000_000_000,
         action: {
@@ -125,6 +125,29 @@ function unavailableResult(params: {
     },
     decisions: [],
     coverage: { state: params.state, missingEvidence: ["identity.context"] },
+  };
+}
+
+function ambiguousResult(runId: string, executionId: string): AuditRunInspectResult {
+  return {
+    schemaVersion: 1,
+    run: { runId, status: "known" },
+    identity: {
+      state: "ambiguous",
+      reasonCode: "execution_selection_required",
+      candidates: [
+        { executionId, contextId: "candidate-context-safe-ref", createdAt: 1_786_000_000_000 },
+      ],
+      missingEvidence: ["execution.selection"],
+      remediation: [
+        {
+          code: "select_exact_execution",
+          text: "Select one exact execution before inspecting identity evidence.",
+        },
+      ],
+    },
+    decisions: [],
+    coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
   };
 }
 
@@ -276,6 +299,14 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
                 reasonCode: "identity_context_corrupt",
               }),
             },
+            {
+              match: { runId: "ambiguous" },
+              response: ambiguousResult("ambiguous", "execution-candidate-1"),
+            },
+            {
+              match: { executionId: "execution-candidate-1" },
+              response: presentResult("ambiguous", "execution-candidate-1"),
+            },
           ],
         },
       },
@@ -296,6 +327,18 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         await page.getByRole("heading", { name: heading }).waitFor();
         await screenshot(page, screenshotName);
       }
+
+      await page.goto(`${server.baseUrl}activity?view=run&run=ambiguous`);
+      await page.getByRole("heading", { name: "Multiple executions match this run" }).waitFor();
+      await screenshot(page, "11-ambiguous.png");
+      await page.getByRole("link", { name: "execution-candidate-1" }).click();
+      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+      expect(new URL(page.url()).searchParams.get("execution")).toBe("execution-candidate-1");
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
+        executionId: "execution-candidate-1",
+        decisionLimit: 50,
+      });
+      await screenshot(page, "12-exact-selection.png");
     } finally {
       await context.close();
     }

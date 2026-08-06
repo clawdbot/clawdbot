@@ -8,10 +8,17 @@ import type { ActivityRouteData } from "./run-inspector-model.ts";
 function resolveActivityRouteData(search: string): ActivityRouteData {
   const params = new URLSearchParams(search);
   if (params.get("view") !== "run") {
-    return { mode: "live", runId: null };
+    return { mode: "live", selector: null };
+  }
+  const executionId = params.get("execution");
+  if (executionId?.trim()) {
+    return { mode: "run", selector: { kind: "execution", id: executionId } };
   }
   const runId = params.get("run");
-  return { mode: "run", runId: runId && runId.trim() ? runId : null };
+  return {
+    mode: "run",
+    selector: runId?.trim() ? { kind: "run", id: runId } : null,
+  };
 }
 
 export const page = definePage({

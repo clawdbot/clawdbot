@@ -121,7 +121,7 @@ describe("renderRunInspector", () => {
   });
 
   it("renders every identity dimension with explicit text states and safe refs", () => {
-    const container = renderState({ status: "ready", runId: "run-1", result: presentResult() });
+    const container = renderState({ status: "ready", result: presentResult() });
 
     expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe(
       "Inspection coverage: Unattributed",
@@ -161,26 +161,17 @@ describe("renderRunInspector", () => {
   it.each([
     [{ status: "empty" } satisfies RunInspectorState, "No run selected"],
     [
-      { status: "loading", runId: "run-1", waitingForGateway: false } satisfies RunInspectorState,
+      { status: "loading", waitingForGateway: false } satisfies RunInspectorState,
       "Loading run inspection",
     ],
     [
-      { status: "loading", runId: "run-1", waitingForGateway: true } satisfies RunInspectorState,
+      { status: "loading", waitingForGateway: true } satisfies RunInspectorState,
       "Waiting for the Gateway",
     ],
-    [
-      { status: "disconnected", runId: "run-1" } satisfies RunInspectorState,
-      "Gateway disconnected",
-    ],
-    [
-      { status: "unauthorized", runId: "run-1" } satisfies RunInspectorState,
-      "Operator read access required",
-    ],
-    [
-      { status: "unsupported", runId: "run-1" } satisfies RunInspectorState,
-      "Run inspection unsupported",
-    ],
-    [{ status: "error", runId: "run-1" } satisfies RunInspectorState, "Run inspection failed"],
+    [{ status: "disconnected" } satisfies RunInspectorState, "Gateway disconnected"],
+    [{ status: "unauthorized" } satisfies RunInspectorState, "Operator read access required"],
+    [{ status: "unsupported" } satisfies RunInspectorState, "Run inspection unsupported"],
+    [{ status: "error" } satisfies RunInspectorState, "Run inspection failed"],
   ])("renders the explicit panel state", (state, expected) => {
     expect(renderState(state).textContent).toContain(expected);
   });
@@ -199,8 +190,32 @@ describe("renderRunInspector", () => {
       "Identity evidence unsupported",
     ],
   ])("renders the Gateway's typed diagnostic state", (result, expected) => {
-    expect(renderState({ status: "ready", runId: "run-1", result }).textContent).toContain(
-      expected,
+    expect(renderState({ status: "ready", result }).textContent).toContain(expected);
+  });
+
+  it("links an ambiguous run candidate to exact execution inspection", () => {
+    const result: AuditRunInspectResult = {
+      schemaVersion: 1,
+      run: { runId: "ambiguous-run", status: "known" },
+      identity: {
+        state: "ambiguous",
+        reasonCode: "execution_selection_required",
+        candidates: [
+          { executionId: "execution:a/b", contextId: "candidate-context", createdAt: 1 },
+        ],
+        missingEvidence: ["execution.selection"],
+        remediation: [],
+      },
+      decisions: [],
+      coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
+    };
+
+    const link = renderState({ status: "ready", result }).querySelector<HTMLAnchorElement>(
+      'a[href*="execution="]',
+    );
+    expect(link?.textContent).toContain("execution:a/b");
+    expect(link?.getAttribute("href")).toBe(
+      "/operator/activity?view=run&execution=execution%3Aa%2Fb",
     );
   });
 });

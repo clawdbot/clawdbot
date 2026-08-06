@@ -3341,7 +3341,7 @@ export const en: TranslationMap = {
       candidates: {
         listLabel: "Matching executions",
         recorded: "Recorded {date}",
-        executionReference: "Execution reference",
+        executionReference: "Inspect execution",
         more: "More matching executions exist beyond this bounded page. Use the audit CLI to continue discovery and select one exact execution.",
       },
       panels: {
