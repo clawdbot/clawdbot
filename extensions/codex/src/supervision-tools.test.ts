@@ -209,6 +209,38 @@ describe("Codex supervision compatibility tools", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("reports redacted endpoint probe failure details", async () => {
+    const token = "super-secret-token-0123456789";
+    const request = createEndpointRequest(async () => {
+      throw new Error(`Codex app-server rejected Bearer ${token}`);
+    });
+    const tools = createCodexSupervisionTools({
+      getPluginConfig: () => ({
+        supervision: {
+          enabled: true,
+          endpoints: [{ id: "broken", transport: "stdio-proxy" }],
+        },
+      }),
+      senderIsOwner: true,
+      request,
+    });
+
+    const result = await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
+
+    expect(result).toMatchObject({
+      details: {
+        health: [
+          {
+            endpointId: "broken",
+            ok: false,
+            detail: "Codex app-server rejected Bearer [redacted]",
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(token);
+  });
+
   it("omits stored transcript metadata and endpoint errors when raw reads are disabled", async () => {
     const privatePreview = "private stored transcript preview";
     const privateName = "private stored thread name";
