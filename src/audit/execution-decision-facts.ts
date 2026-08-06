@@ -277,27 +277,6 @@ function projectDecisionRow(row: ExecutionDecisionRow): DecisionReceiptV1 {
   }
 }
 
-export function countExecutionDecisionFactsForContext(params: {
-  contextId: string;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): number {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "execution_decision_facts")) {
-        return 0;
-      }
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        retainedDecisionFactsForContextQuery(db, params.contextId, params.now ?? Date.now()).select(
-          (eb) => eb.fn.countAll<number>().as("count"),
-        ),
-      );
-      return row ? (normalizeSqliteNumber(row.count) ?? 0) : 0;
-    }, params.database) ?? 0
-  );
-}
-
 /** Summarize all retained owner rows so receipt paging cannot change top-level coverage. */
 export function summarizeExecutionDecisionFactsForContext(params: {
   contextId: string;

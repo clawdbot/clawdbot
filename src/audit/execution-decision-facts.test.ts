@@ -7,7 +7,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
-  countExecutionDecisionFactsForContext,
   listExecutionDecisionFactsForContext,
   pruneExpiredExecutionDecisionFacts,
   recordExecutionDecisionFact,
@@ -75,9 +74,6 @@ describe("execution decision facts", () => {
       ),
     ).toThrow("conflicts with retained state");
 
-    expect(
-      countExecutionDecisionFactsForContext({ contextId: "context-1", now: 100, database }),
-    ).toBe(1);
     expect(
       listExecutionDecisionFactsForContext({
         contextId: "context-1",
