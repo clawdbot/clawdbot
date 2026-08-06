@@ -68,6 +68,20 @@ describe("UsageRefreshPolicy", () => {
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
+  it("gives up retrying when the payload never completes", () => {
+    const { policy, reload } = createPolicy();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      policy.markLoaded({ pendingRefresh: true });
+      vi.advanceTimersByTime(5_000);
+    }
+
+    // Three retries, then the normal TTL takes over instead of polling forever.
+    expect(reload).toHaveBeenCalledTimes(3);
+    policy.request("poll");
+    expect(reload).toHaveBeenCalledTimes(3);
+  });
+
   it("stops retrying once a complete payload lands and after disposal", () => {
     const { policy, reload } = createPolicy();
     policy.markLoaded({ pendingRefresh: true });
