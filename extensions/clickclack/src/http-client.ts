@@ -22,6 +22,9 @@ type ClientOptions = {
 };
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// A gateway event may exceed ws's 1 MiB default after ClickClack wraps a
+// valid payload, but response frames must still have a finite allocation cap.
+const CLICKCLACK_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 // Match Slack relay / Mattermost / Signal channel gateway handshake floors.
 // Without this, gateway.ts waits forever for close/error when TCP accepts but
 // never upgrades, pinning the monitor reconnect loop.
@@ -151,6 +154,7 @@ export function createClickClackClient(options: ClientOptions) {
           Authorization: `Bearer ${options.token}`,
         },
         handshakeTimeout: CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
+        maxPayload: CLICKCLACK_WEBSOCKET_MAX_PAYLOAD_BYTES,
       });
     },
   };
