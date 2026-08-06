@@ -20,6 +20,7 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { resolveHostingProfileSelection } from "../hosting/profiles.js";
 import {
   listDevicePairing,
   resolveEffectiveOperatorDeviceIdentity,
@@ -119,6 +120,10 @@ export async function prepareGatewayServerBootstrap(input: {
       docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     });
   }
+  resolveHostingProfileSelection({
+    env: process.env,
+    override: opts.hostingProfileOverride,
+  });
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 

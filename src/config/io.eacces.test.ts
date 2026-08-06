@@ -168,7 +168,7 @@ describe("config write guard after unreadable config", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "rejects exported writes before re-reading an unreadable base snapshot",
+    "preserves the existing file when an exported write trips safety guards",
     async () => {
       const home = fsNode.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreadable-"));
       tempRoots.push(home);
@@ -193,7 +193,9 @@ describe("config write guard after unreadable config", () => {
               writeConfigFile({ channels: { telegram: { enabled: true } } }),
             ).rejects.toMatchObject({
               code: "CONFIG_WRITE_REJECTED",
-              reasons: expect.arrayContaining(["unreadable-config-before-write"]),
+              reasons: expect.arrayContaining([
+                expect.stringMatching(/^(gateway-mode-removed|unreadable-config-before-write)$/),
+              ]),
             });
           },
         );

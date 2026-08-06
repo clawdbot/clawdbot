@@ -244,6 +244,36 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.command).toContain('bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"');
   });
 
+  it("plans the hosting profile conformance lane", () => {
+    const plan = planFor({ selectedLaneNames: ["hosting-profiles"] });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/hosting-profiles-docker.sh",
+        imageKind: "functional",
+        live: false,
+        name: "hosting-profiles",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        weight: 2,
+      },
+    ]);
+  });
+
+  it("checks workspace readiness by emitted condition type", () => {
+    const client = readFileSync("scripts/e2e/hosting-profiles-client.mjs", "utf8");
+    const script = readFileSync("scripts/e2e/hosting-profiles-docker.sh", "utf8");
+
+    expect(client).toContain('condition("WorkspaceWritable")');
+    expect(client).not.toContain('condition("openclaw.workspace-writable")');
+    expect(client).toContain('scenario === "node-unapproved"');
+    expect(script).toContain(
+      'local runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,uid=1001,gid=1001,mode=0700,size=8m")',
+    );
+    expect(script).toContain('-e "OPENCLAW_WORKSPACE_DIR=/tmp/hosting-profile-workspace"');
+    expect(script).toContain('nodes approve "$request_id" --json');
+  });
+
   it("plans package-backed installer, Compose, and package artifact proofs", () => {
     const plan = planFor({
       selectedLaneNames: ["cli-installer-distribution", "compose-setup", "docker-package-install"],

@@ -20,6 +20,10 @@ import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
+import {
+  buildRuntimeReadiness,
+  buildUnobservedGatewayConditions,
+} from "../readiness/conditions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   listActiveDegradedSecretOwners,
@@ -558,6 +562,11 @@ export async function getStatusSummary(
 
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    readiness: buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "not-checked",
+      coreConditions: buildUnobservedGatewayConditions(),
+    }),
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,
