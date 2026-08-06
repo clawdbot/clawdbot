@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord tests cover transcripts source plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -145,7 +146,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
       ok: false,
       error:
-        "No Discord account is enabled for voice; configure credentials and enable voice for an account.",
+        "No Discord account has available credentials and voice enabled; configure credentials and enable voice for an account.",
     });
     expect(
       discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
@@ -153,6 +154,70 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
         source: { ...source, accountId: "primary" },
       }),
     ).toEqual({ ok: false, error: 'Discord account "primary" is not enabled for voice.' });
+  });
+
+  it("excludes voice accounts whose configured credentials are unavailable", async () => {
+    const primaryJoin = vi.fn(async () => ({ ok: true, message: "joined primary" }));
+    setDiscordTranscriptsVoiceManager({
+      accountId: "primary",
+      manager: { join: primaryJoin } as unknown as DiscordVoiceManager,
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            primary: { token: "available-token", voice: { enabled: true } },
+            work: {
+              token: { source: "env", provider: "default", id: "DISCORD_WORK_TOKEN" },
+              voice: { enabled: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
+
+    expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
+      ok: true,
+      value: "primary",
+    });
+    expect(
+      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+        cfg,
+        source: { ...source, accountId: "work" },
+      }),
+    ).toEqual({
+      ok: false,
+      error:
+        'Discord account "work" has configured credentials that are unavailable in this runtime; resolve its SecretRef before using this account.',
+    });
+    await expect(
+      discordVoiceTranscriptsSourceProvider.start?.({
+        cfg,
+        session: {
+          sessionId: "unavailable-account",
+          startedAt: new Date().toISOString(),
+          source: { ...source, accountId: "work" },
+        },
+        onUtterance: vi.fn(),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error:
+        'Discord account "work" has configured credentials that are unavailable in this runtime; resolve its SecretRef before using this account.',
+    });
+    expect(primaryJoin).not.toHaveBeenCalled();
+
+    const unavailableOnly = {
+      channels: { discord: { accounts: { work: cfg.channels.discord.accounts.work } } },
+    } as unknown as OpenClawConfig;
+    expect(
+      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg: unavailableOnly, source }),
+    ).toEqual({
+      ok: false,
+      error:
+        "No Discord account has available credentials and voice enabled; configure credentials and enable voice for an account.",
+    });
   });
 
   it("bounds account identifiers in resolution errors", () => {

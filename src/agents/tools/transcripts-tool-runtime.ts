@@ -333,6 +333,7 @@ export async function startTranscripts(params: {
       `Transcripts started: ${session.sessionId}${effectiveAccount ? `\nAccount: ${formatAccountIdForToolText(effectiveAccount)}` : ""}`,
       {
         sessionId: session.sessionId,
+        startedAt: session.startedAt,
         providerId: provider.id,
         ...(effectiveAccount ? { accountId: effectiveAccount } : {}),
       },
