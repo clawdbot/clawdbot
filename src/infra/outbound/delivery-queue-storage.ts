@@ -422,6 +422,11 @@ export async function failDelivery(
       retryCount: entry.retryCount + 1,
       lastAttemptAt: Date.now(),
       lastError: error,
+      // The failed attempt has settled. Keep platform evidence for recovery,
+      // but release the live owner so another process can reconcile or retry.
+      availableAt: undefined,
+      producerClaimId: undefined,
+      recoveryState: entry.recoveryState === "producer_claimed" ? undefined : entry.recoveryState,
     }),
     expectedPlatformSendAttemptId,
   );
