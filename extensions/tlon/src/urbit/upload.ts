@@ -20,40 +20,29 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
       return imageUrl;
     }
 
-    // Fetch the image with SSRF protection
-    // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
-    const { response, release } = await fetchWithSsrFGuard({
+    // Keep upload fetches on the same bounded header/body policy as inbound media.
+    const fetched = await readRemoteMediaBuffer({
       url: imageUrl,
       maxBytes: MAX_IMAGE_BYTES,
       ...TLON_MEDIA_FETCH_TIMEOUTS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
     });
+    const contentType = fetched.contentType || "image/png";
+    const blob = new Blob([new Uint8Array(fetched.buffer)], { type: contentType });
 
-    try {
-      if (!response.ok) {
-        console.warn(`[tlon] Failed to fetch image from ${imageUrl}: ${response.status}`);
-        return imageUrl;
-      }
+    // Extract filename from URL or use a default
+    const urlPath = new URL(imageUrl).pathname;
+    const fileName = urlPath.split("/").pop() || `upload-${Date.now()}.png`;
 
-      const contentType = response.headers.get("content-type") || "image/png";
-      const blob = await response.blob();
+    // Upload to Tlon storage
+    const result = await uploadFile({
+      blob,
+      fileName,
+      contentType,
+    });
 
-      // Extract filename from URL or use a default
-      const urlPath = new URL(imageUrl).pathname;
-      const fileName = urlPath.split("/").pop() || `upload-${Date.now()}.png`;
-
-      // Upload to Tlon storage
-      const result = await uploadFile({
-        blob,
-        fileName,
-        contentType,
-      });
-
-      return result.url;
-    } finally {
-      await release();
-    }
+    return result.url;
   } catch (err) {
     console.warn(`[tlon] Failed to upload image, using original URL: ${String(err)}`);
     return imageUrl;

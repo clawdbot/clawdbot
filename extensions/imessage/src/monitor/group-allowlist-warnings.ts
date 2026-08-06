@@ -23,7 +23,7 @@ const perChatWarned = createDedupeCache({
  */
 export function warnGroupAllowlistMisconfigOnce(params: {
   groupPolicy: string;
-  groups: GroupsConfig | undefined;
+  groups: Record<string, unknown> | undefined;
   accountId: string;
   log: (message: string) => void;
 }): boolean {

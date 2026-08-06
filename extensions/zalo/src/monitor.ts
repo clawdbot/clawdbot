@@ -377,12 +377,12 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   if (photo_url) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      // Without header/idle deadlines, a stalled photo_url host can block inbound
-      // image preprocessing indefinitely (idle timeout never starts).
+      // The release-line media contract has one request deadline plus idle read
+      // protection; both prevent a stalled photo URL from blocking preprocessing.
       const saved = await core.channel.media.saveRemoteMedia({
         url: photo_url,
         maxBytes,
-        responseHeaderTimeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+        timeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
         readIdleTimeoutMs: ZALO_MEDIA_READ_IDLE_TIMEOUT_MS,
       });
       mediaPath = saved.path;

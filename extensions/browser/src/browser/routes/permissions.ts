@@ -17,10 +17,8 @@ import type { BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
   getProfileContext,
-  jsonBrowserError,
   jsonError,
   readHttpOrigin,
-  runProfileRouteOperation,
   toStringOrEmpty,
 } from "./utils.js";
 
