@@ -9,6 +9,62 @@ import type { CompactionEntry, ResetEntry, SessionContext, SessionTreeEntry } fr
 
 type ContextBoundary = CompactionEntry | ResetEntry;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+const RESET_TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+/** Extract tool-call ids using the persisted pairing contract's supported block types. */
+function extractResetToolCallIds(message: Extract<AgentMessage, { role: "assistant" }>): string[] {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const ids: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; id?: unknown };
+    if (
+      typeof record.type === "string" &&
+      RESET_TOOL_CALL_TYPES.has(record.type) &&
+      typeof record.id === "string" &&
+      record.id
+    ) {
+      ids.push(record.id);
+    }
+  }
+  return ids;
+}
+
+/** Extract the tool-result id using the persisted pairing contract's accepted aliases. */
+function extractResetToolResultId(
+  message: Extract<AgentMessage, { role: "toolResult" }>,
+): string | null {
+  const record = message as {
+    toolCallId?: unknown;
+    toolUseId?: unknown;
+    tool_call_id?: unknown;
+    tool_use_id?: unknown;
+    callId?: unknown;
+    call_id?: unknown;
+  };
+  for (const value of [
+    record.toolCallId,
+    record.toolUseId,
+    record.tool_call_id,
+    record.tool_use_id,
+    record.callId,
+    record.call_id,
+  ]) {
+    if (typeof value === "string") {
+      const id = value.trim();
+      if (id) {
+        return id;
+      }
+    }
+  }
+  return null;
+}
 
 /** Project persisted session entries into the message shared by replay and summarization. */
 export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessage | undefined {
@@ -60,11 +116,8 @@ export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): Se
 
     const message = entry.message;
     if (message.role === "assistant") {
-      for (const block of message.content) {
-        if (block.type !== "toolCall") {
-          continue;
-        }
-        pendingToolCalls.set(block.id, (pendingToolCalls.get(block.id) ?? 0) + 1);
+      for (const id of extractResetToolCallIds(message)) {
+        pendingToolCalls.set(id, (pendingToolCalls.get(id) ?? 0) + 1);
       }
       retainedEntries.push(entry);
       continue;
@@ -76,14 +129,18 @@ export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): Se
     }
 
     if (message.role === "toolResult") {
-      const pendingCount = pendingToolCalls.get(message.toolCallId) ?? 0;
+      const toolCallId = extractResetToolResultId(message);
+      if (!toolCallId) {
+        continue;
+      }
+      const pendingCount = pendingToolCalls.get(toolCallId) ?? 0;
       if (pendingCount === 0) {
         continue;
       }
       if (pendingCount === 1) {
-        pendingToolCalls.delete(message.toolCallId);
+        pendingToolCalls.delete(toolCallId);
       } else {
-        pendingToolCalls.set(message.toolCallId, pendingCount - 1);
+        pendingToolCalls.set(toolCallId, pendingCount - 1);
       }
       retainedEntries.push(entry);
     }

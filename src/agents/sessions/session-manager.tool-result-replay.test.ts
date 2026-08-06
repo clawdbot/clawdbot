@@ -264,6 +264,123 @@ describe("SessionManager tool-result replay", () => {
     expect(JSON.stringify(messages)).not.toContain("discarded");
   });
 
+  it.each([
+    { blockType: "toolCall", resultField: "toolCallId" },
+    { blockType: "toolCall", resultField: "call_id" },
+    { blockType: "toolUse", resultField: "toolUseId" },
+    { blockType: "toolUse", resultField: "tool_use_id" },
+    { blockType: "functionCall", resultField: "callId" },
+    { blockType: "functionCall", resultField: "call_id" },
+  ] as const)(
+    "replays a reset-retained persisted $blockType assistant with an aliased $resultField result",
+    ({ blockType, resultField }) => {
+      const timestamp = "2026-07-01T00:00:00.000Z";
+      const timestampMs = Date.parse(timestamp);
+      const sessionManager = SessionManager.fromEntries([
+        {
+          type: "session",
+          version: 3,
+          id: "reset-tool-result-session",
+          timestamp,
+          cwd: "/tmp/reset-tool-result-replay",
+        },
+        {
+          type: "message",
+          id: "discarded",
+          parentId: null,
+          timestamp,
+          message: { role: "user", content: "discarded", timestamp: timestampMs },
+        },
+        {
+          type: "message",
+          id: "kept-user",
+          parentId: "discarded",
+          timestamp,
+          message: { role: "user", content: "kept question", timestamp: timestampMs },
+        },
+        {
+          type: "message",
+          id: "kept-assistant-tool",
+          parentId: "kept-user",
+          timestamp,
+          message: {
+            role: "assistant",
+            api: "anthropic-messages",
+            content: [{ type: blockType, id: "call-1", name: "lookup", arguments: {} }],
+            provider: "test-provider",
+            model: "test-model",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: timestampMs,
+          } as unknown as AgentMessage,
+        },
+        {
+          type: "message",
+          id: "kept-tool-result",
+          parentId: "kept-assistant-tool",
+          timestamp,
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            [resultField]: "call-1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "paired result" }],
+            isError: false,
+            timestamp: timestampMs,
+          } as unknown as AgentMessage,
+        },
+        {
+          type: "message",
+          id: "kept-orphan-result",
+          parentId: "kept-tool-result",
+          timestamp,
+          message: {
+            role: "toolResult",
+            toolCallId: "orphan-call",
+            toolName: "lookup",
+            content: [{ type: "text", text: "orphan result" }],
+            isError: false,
+            timestamp: timestampMs,
+          },
+        },
+        {
+          type: "reset",
+          id: "reset",
+          parentId: "kept-orphan-result",
+          timestamp,
+          reason: "new",
+          firstKeptEntryId: "kept-user",
+        },
+        {
+          type: "message",
+          id: "new-user",
+          parentId: "reset",
+          timestamp,
+          message: { role: "user", content: "new turn", timestamp: timestampMs },
+        },
+      ]);
+
+      const messages = sessionManager.buildSessionContext().messages;
+
+      expect(messages.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "toolResult",
+        "user",
+      ]);
+      expect(JSON.stringify(messages)).toContain("paired result");
+      expect(JSON.stringify(messages)).not.toContain("orphan result");
+      expect(JSON.stringify(messages)).not.toContain("discarded");
+    },
+  );
+
   it("normalizes string tool-result content loaded from JSONL", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

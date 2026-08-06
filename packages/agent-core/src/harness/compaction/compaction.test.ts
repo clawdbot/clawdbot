@@ -65,6 +65,18 @@ function createProjectedEntry(
     : { ...common, type, fromId: common.parentId ?? common.id, summary: content };
 }
 
+const RESET_COMPACTION_VARIANTS: Array<{
+  blockType: "toolCall" | "toolUse" | "functionCall";
+  resultField: string;
+}> = [
+  { blockType: "toolCall", resultField: "toolUseId" },
+  { blockType: "toolCall", resultField: "call_id" },
+  { blockType: "toolUse", resultField: "toolUseId" },
+  { blockType: "toolUse", resultField: "tool_use_id" },
+  { blockType: "functionCall", resultField: "callId" },
+  { blockType: "functionCall", resultField: "call_id" },
+];
+
 describe("calculateContextTokens", () => {
   it("prefers the final-iteration context snapshot over aggregate billing usage", () => {
     expect(
@@ -419,6 +431,71 @@ describe("session-entry compaction budgeting", () => {
     expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("orphan tool result");
     expect(["entry-7", "entry-8"]).toContain(result.value.firstKeptEntryId);
   });
+
+  it.each(RESET_COMPACTION_VARIANTS)(
+    "retains paired reset tool rows for $blockType/$resultField in compaction input",
+    ({ blockType, resultField }) => {
+      const entries: SessionTreeEntry[] = [
+        createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
+        createMessageEntry({ role: "user", content: "kept question", timestamp: 2 }, 1),
+        createMessageEntry(
+          {
+            ...createAssistant("", createUsage(2), 3),
+            content: [{ type: blockType, id: "call-1", name: "read", arguments: {} }],
+            stopReason: "toolUse",
+          },
+          2,
+        ),
+        createMessageEntry(
+          {
+            role: "toolResult",
+            [resultField]: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "paired tool result" }],
+            isError: false,
+            timestamp: 4,
+          } as unknown as AgentMessage,
+          3,
+        ),
+        createMessageEntry(
+          {
+            role: "toolResult",
+            toolCallId: "orphan-call",
+            toolName: "read",
+            content: [{ type: "text", text: "orphan tool result" }],
+            isError: false,
+            timestamp: 5,
+          },
+          4,
+        ),
+        createMessageEntry(createAssistant("kept answer", createUsage(2), 6), 5),
+        {
+          type: "reset",
+          id: "entry-6",
+          parentId: "entry-5",
+          timestamp: new Date(7).toISOString(),
+          reason: "new",
+          firstKeptEntryId: "entry-1",
+        },
+        createMessageEntry({ role: "user", content: "post reset", timestamp: 8 }, 7),
+        createMessageEntry(createAssistant("new answer", createUsage(2), 9), 8),
+      ];
+
+      const result = prepareCompaction(entries, {
+        enabled: true,
+        reserveTokens: 0,
+        keepRecentTokens: 1,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok || !result.value) {
+        throw new Error("expected reset transcript to be compactable");
+      }
+      expect(JSON.stringify(result.value.messagesToSummarize)).toContain("paired tool result");
+      expect(JSON.stringify(result.value.messagesToSummarize)).not.toContain("orphan tool result");
+      expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("orphan tool result");
+    },
+  );
 
   it("keeps unpaired reset tool rows out of later compaction input", () => {
     const entries: SessionTreeEntry[] = [
