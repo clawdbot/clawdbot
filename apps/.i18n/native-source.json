@@ -30051,7 +30051,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 399,
+      "line": 406,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "These settings changed outside the app while you were editing: \\(fieldList). Choose which version to keep.",
       "surface": "apple",
@@ -30059,7 +30059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1014,
+      "line": 1022,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host)",
       "surface": "apple",
@@ -30067,7 +30067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1014,
+      "line": 1022,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host):\\(port)",
       "surface": "apple",
