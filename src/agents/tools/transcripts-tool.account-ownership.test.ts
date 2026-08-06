@@ -57,10 +57,14 @@ describe("transcripts tool account ownership", () => {
     const stateDir = await makeStateDir();
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "account-bound" }));
+    const resolveAccountId = vi.fn(
+      ({ source }: { source: { accountId?: string } }) => source.accountId,
+    );
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
       accountBindingChannels: ["discord"],
+      resolveAccountId,
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
@@ -91,6 +95,9 @@ describe("transcripts tool account ownership", () => {
           source: expect.objectContaining({ accountId: "account-a" }),
         }),
       }),
+    );
+    expect(resolveAccountId).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
     );
     await expect(storeFor(stateDir).readSession("account-bound")).resolves.toMatchObject({
       source: { accountId: "account-a" },
@@ -172,6 +179,56 @@ describe("transcripts tool account ownership", () => {
         vi.fn(),
       ),
     ).resolves.toMatchObject({ details: { sessionId: ownerOnlySession.sessionId } });
+  });
+
+  it.each([
+    {
+      name: "rejects a trusted account that the provider cannot use",
+      resolve: () => {
+        throw new Error('Discord account "account-a" is not enabled for voice.');
+      },
+      error: 'Discord account "account-a" is not enabled for voice.',
+    },
+    {
+      name: "rejects provider redirection away from the trusted account",
+      resolve: () => "account-b",
+      error: "transcripts provider discord-voice could not use trusted account account-a",
+    },
+  ])("$name before persistence", async ({ resolve, error }) => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    const resolveAccountId = vi.fn(({ source }: { source: { accountId?: string } }) => {
+      expect(source.accountId).toBe("account-a");
+      return resolve();
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      aliases: ["discord"],
+      accountBindingChannels: ["discord"],
+      resolveAccountId,
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+    });
+
+    await expect(
+      createTool(stateDir, "main", { channel: "discord", accountId: "account-a" }).execute(
+        "call-invalid-owner",
+        {
+          action: "start",
+          providerId: "discord-voice",
+          accountId: "account-b",
+          guildId: "guild-a",
+          channelId: "voice-a",
+          sessionId: "invalid-owner",
+        },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(error);
+    expect(resolveAccountId).toHaveBeenCalledOnce();
+    expect(start).not.toHaveBeenCalled();
+    await expect(storeFor(stateDir).readSession("invalid-owner")).resolves.toBeUndefined();
   });
 
   it("preserves explicit accounts for providers outside the turn channel namespace", async () => {

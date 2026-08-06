@@ -48,13 +48,8 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     );
   });
 
-  it("resolves an omitted source account through the configured default", async () => {
-    const primaryJoin = vi.fn(async () => ({ ok: true, message: "joined primary" }));
+  it("uses the sole voice-capable account instead of a text-only default", async () => {
     const workJoin = vi.fn(async () => ({ ok: true, message: "joined work" }));
-    setDiscordTranscriptsVoiceManager({
-      accountId: "primary",
-      manager: { join: primaryJoin } as unknown as DiscordVoiceManager,
-    });
     setDiscordTranscriptsVoiceManager({
       accountId: "work",
       manager: { join: workJoin } as unknown as DiscordVoiceManager,
@@ -67,8 +62,11 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     const cfg = {
       channels: {
         discord: {
-          defaultAccount: "work",
-          accounts: { work: { token: "token-work" } },
+          defaultAccount: "primary",
+          accounts: {
+            primary: { token: "token-primary", voice: { enabled: false } },
+            work: { token: "token-work", voice: { enabled: true } },
+          },
         },
       },
     };
@@ -87,19 +85,13 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(workJoin).toHaveBeenCalledOnce();
-    expect(primaryJoin).not.toHaveBeenCalled();
   });
 
-  it("resolves an omitted account through the gateway-eligible startup order", async () => {
+  it("requires an explicit account when multiple accounts can provide voice", () => {
     const primaryJoin = vi.fn(async () => ({ ok: true, message: "joined primary" }));
-    const workJoin = vi.fn(async () => ({ ok: true, message: "joined work" }));
     setDiscordTranscriptsVoiceManager({
       accountId: "primary",
       manager: { join: primaryJoin } as unknown as DiscordVoiceManager,
-    });
-    setDiscordTranscriptsVoiceManager({
-      accountId: "work",
-      manager: { join: workJoin } as unknown as DiscordVoiceManager,
     });
     const source = {
       providerId: "discord-voice",
@@ -111,54 +103,65 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
         discord: {
           defaultAccount: "primary",
           accounts: {
-            primary: { enabled: false, token: "a" },
-            work: { token: "b" },
+            primary: { token: "a", voice: { enabled: true } },
+            work: { token: "b", voice: { enabled: true } },
           },
         },
       },
     };
 
-    const accountId = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
-    expect(accountId).toBe("work");
+    expect(() => discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toThrow(
+      "Multiple Discord accounts are enabled for voice (primary, work); specify accountId.",
+    );
     expect(
       discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
-        cfg: {
-          channels: {
-            discord: {
-              defaultAccount: "primary",
-              accounts: { primary: {}, work: { token: "b" } },
-            },
-          },
-        },
-        source,
+        cfg,
+        source: { ...source, accountId: "work" },
       }),
     ).toBe("work");
-    const result = await discordVoiceTranscriptsSourceProvider.start?.({
-      cfg,
-      session: {
-        sessionId: "notes-eligible",
-        startedAt: new Date().toISOString(),
-        source: { ...source, accountId },
-      },
-      onUtterance: vi.fn(),
-    });
-
-    expect(result).toMatchObject({ ok: true });
-    expect(workJoin).toHaveBeenCalledOnce();
     expect(primaryJoin).not.toHaveBeenCalled();
   });
 
-  it("waits for a deferred voice manager during startup", async () => {
+  it("rejects omitted and explicit accounts that cannot provide voice", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            primary: { token: "a", voice: { enabled: false } },
+          },
+        },
+      },
+    };
+    const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
+
+    expect(() => discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toThrow(
+      "No Discord account is enabled for voice; enable voice or specify an account.",
+    );
+    expect(() =>
+      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+        cfg,
+        source: { ...source, accountId: "primary" },
+      }),
+    ).toThrow('Discord account "primary" is not enabled for voice.');
+  });
+
+  it("waits for the sole configured voice account's manager during startup", async () => {
     vi.useFakeTimers();
     const join = vi.fn(async () => ({ ok: true, message: "joined" }));
     const onUtterance = vi.fn();
     const resultPromise = discordVoiceTranscriptsSourceProvider.start?.({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: { delayed: { token: "token-delayed", voice: { enabled: true } } },
+          },
+        },
+      },
       session: {
         sessionId: "notes-2",
         startedAt: new Date().toISOString(),
         source: {
           providerId: "discord-voice",
-          accountId: "delayed",
           guildId: "g1",
           channelId: "c1",
         },

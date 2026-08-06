@@ -226,11 +226,20 @@ export async function startTranscripts(params: {
   const accountBindingChannels = (provider.accountBindingChannels ?? [])
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
-  const resolvedAccountId =
-    boundSource.owner?.ownerAccountId ??
-    provider.resolveAccountId?.({ cfg: params.ctx.config, source: boundSource.source })?.trim();
+  const trustedAccountId = boundSource.owner?.ownerAccountId;
+  const sourceForResolution = trustedAccountId
+    ? { ...boundSource.source, accountId: trustedAccountId }
+    : boundSource.source;
+  const resolvedAccountId = provider.resolveAccountId
+    ? provider.resolveAccountId({ cfg: params.ctx.config, source: sourceForResolution })?.trim()
+    : sourceForResolution.accountId?.trim();
+  if (trustedAccountId && resolvedAccountId !== trustedAccountId) {
+    throw new Error(
+      `transcripts provider ${provider.id} could not use trusted account ${trustedAccountId}`,
+    );
+  }
   const providerSource = {
-    ...boundSource.source,
+    ...sourceForResolution,
     ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
   };
   const configuredOwner = resolveConfiguredLifecycleOwner({

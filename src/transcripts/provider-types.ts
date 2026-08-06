@@ -123,7 +123,7 @@ export type TranscriptSourceProvider = {
   aliases?: readonly string[];
   /** Ingress channel ids whose trusted account owns this provider's account namespace. */
   accountBindingChannels?: readonly string[];
-  /** Resolve the canonical provider account before live source intent is persisted. */
+  /** Resolve and validate the canonical account before persistence; throw when ambiguous/unusable. */
   resolveAccountId?: (params: {
     cfg?: OpenClawConfig;
     source: TranscriptSourceLocator;
