@@ -3,7 +3,7 @@ import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 describe("finalizeEmbeddedAttempt trajectory capture", () => {
-  it("records canonical message snapshots without reprojecting them", () => {
+  it("records the completion stop reason alongside canonical message snapshots", () => {
     const recordEvent = vi.fn();
     const result = {
       terminal: { kind: "ok" },
