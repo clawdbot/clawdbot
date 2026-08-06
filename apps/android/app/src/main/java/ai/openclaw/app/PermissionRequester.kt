@@ -470,6 +470,7 @@ class PermissionRequester internal constructor(
       Manifest.permission.RECORD_AUDIO -> nativeString("Microphone")
       Manifest.permission.SEND_SMS -> nativeString("Send SMS")
       Manifest.permission.READ_SMS -> nativeString("Read SMS")
+      Manifest.permission.READ_PHONE_STATE -> nativeString("Read phone state")
       Manifest.permission.READ_CONTACTS -> nativeString("Read Contacts")
       Manifest.permission.WRITE_CONTACTS -> nativeString("Write Contacts")
       Manifest.permission.READ_CALENDAR -> nativeString("Read Calendar")

@@ -323,7 +323,12 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun splitSmsPermissionCallbacksMergePerPermissionGrantState() {
-    val requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
+    val requiredPermissions =
+      listOf(
+        Manifest.permission.SEND_SMS,
+        Manifest.permission.READ_SMS,
+        Manifest.permission.READ_PHONE_STATE,
+      )
     val afterSendOnly =
       mergedRequiredPermissionGrantState(
         permissions = mapOf(Manifest.permission.SEND_SMS to true),
@@ -338,7 +343,15 @@ class OnboardingFlowLogicTest {
         requiredPermissions = requiredPermissions,
         currentlyGranted = { permission -> permission == Manifest.permission.SEND_SMS },
       )
-    assertTrue(afterReadOnly)
+    assertFalse(afterReadOnly)
+
+    val afterPhoneState =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_PHONE_STATE to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { permission -> permission != Manifest.permission.READ_PHONE_STATE },
+      )
+    assertTrue(afterPhoneState)
 
     val deniedRead =
       mergedRequiredPermissionGrantState(

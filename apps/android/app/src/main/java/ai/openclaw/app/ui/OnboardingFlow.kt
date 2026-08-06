@@ -3173,7 +3173,8 @@ private fun rememberPermissionState(
     !smsAvailable ||
       (
         hasPermission(context, Manifest.permission.SEND_SMS) &&
-          hasPermission(context, Manifest.permission.READ_SMS)
+          hasPermission(context, Manifest.permission.READ_SMS) &&
+          hasPermission(context, Manifest.permission.READ_PHONE_STATE)
       )
   val callLogAvailable = SensitiveFeatureConfig.callLogEnabled
   var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)) }
@@ -3223,7 +3224,12 @@ private fun rememberPermissionState(
       smsGranted =
         mergedRequiredPermissionGrantState(
           permissions = permissions,
-          requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
+          requiredPermissions =
+            listOf(
+              Manifest.permission.SEND_SMS,
+              Manifest.permission.READ_SMS,
+              Manifest.permission.READ_PHONE_STATE,
+            ),
           currentlyGranted = { permission -> hasPermission(context, permission) },
         )
       callLogGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: callLogGranted
@@ -3294,7 +3300,11 @@ private fun rememberPermissionState(
       },
       if (smsAvailable) {
         PermissionRowModel(PermissionRowId.Sms, nativeText("SMS"), nativeText("Device access; Gateway opt-in still required"), Icons.Default.Notifications, smsGranted) {
-          request(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
+          request(
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.READ_SMS,
+            Manifest.permission.READ_PHONE_STATE,
+          )
         }
       } else {
         null
