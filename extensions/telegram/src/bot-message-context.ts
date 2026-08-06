@@ -28,7 +28,7 @@ import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import {
   buildTelegramInboundContextPayload,
   resolveTelegramMessageContextStorePath,
-  updateTelegramSessionLabel,
+  updateTelegramSessionDisplayName,
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
@@ -174,27 +174,30 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const isDirectTopic = !isGroup && dmThreadId != null;
-  const topicThreadId = resolvedThreadId ?? (isDirectTopic ? dmThreadId : undefined);
+  const useDmThreadSession = shouldUseTelegramDmThreadSession({
+    dmThreadId,
+    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
+  });
   let topicName: string | undefined;
-  let directTopicLabel: string | undefined;
-  // Some lightweight callers construct direct-thread contexts before the
-  // Telegram plugin runtime is initialized. Group-topic behavior remains
-  // unchanged; direct topics simply proceed without a cached title until the
-  // runtime is ready.
-  if (topicThreadId != null && (!isDirectTopic || getOptionalTelegramRuntime())) {
+  let directTopicDisplayName: string | undefined;
+
+  const syncCachedTopicName = async (params: {
+    threadId: number;
+    allowReplyCreationFallback: boolean;
+  }): Promise<{ explicitName?: string; name?: string }> => {
     const topicNameCacheScope = resolveTopicNameCacheScope(
       await resolveTelegramMessageContextStorePath({
         cfg,
         agentId: account.accountId,
         sessionRuntime,
       }),
+      account.accountId,
     );
     const ftCreated = msg.forum_topic_created;
     const ftEdited = msg.forum_topic_edited;
     const ftClosed = msg.forum_topic_closed;
     const ftReopened = msg.forum_topic_reopened;
-    const explicitTopicName = ftCreated?.name ?? ftEdited?.name;
-    directTopicLabel = isDirectTopic ? explicitTopicName?.trim() || undefined : undefined;
+    const explicitName = (ftCreated?.name ?? ftEdited?.name)?.trim() || undefined;
     const topicPatch = ftCreated?.name
       ? {
           name: ftCreated.name,
@@ -214,16 +217,16 @@ export const buildTelegramMessageContext = async ({
             : undefined;
 
     if (topicPatch) {
-      await updateTopicName(chatId, topicThreadId, topicPatch, topicNameCacheScope);
+      await updateTopicName(chatId, params.threadId, topicPatch, topicNameCacheScope);
     }
 
-    topicName = await getTopicName(chatId, topicThreadId, topicNameCacheScope);
-    if (!topicName) {
+    let name = await getTopicName(chatId, params.threadId, topicNameCacheScope);
+    if (!name && params.allowReplyCreationFallback) {
       const replyFtCreated = msg.reply_to_message?.forum_topic_created;
       if (replyFtCreated?.name) {
         await updateTopicName(
           chatId,
-          topicThreadId,
+          params.threadId,
           {
             name: replyFtCreated.name,
             iconColor: replyFtCreated.icon_color,
@@ -231,9 +234,21 @@ export const buildTelegramMessageContext = async ({
           },
           topicNameCacheScope,
         );
-        topicName = replyFtCreated.name;
+        name = replyFtCreated.name;
       }
     }
+    return { explicitName, name };
+  };
+
+  // Forum-topic discovery keeps its existing pre-authorization behavior.
+  if (isForum && resolvedThreadId != null) {
+    topicName = (
+      await syncCachedTopicName({
+        threadId: resolvedThreadId,
+        accountId: account.accountId,
+        allowReplyCreationFallback: true,
+      })
+    ).name;
   }
 
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
@@ -374,6 +389,16 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
+  // Rejected direct messages must not mutate or refresh the bounded topic cache.
+  // Lightweight callers without the Telegram runtime proceed without topic metadata.
+  if (isDirectTopic && useDmThreadSession && getOptionalTelegramRuntime() && dmThreadId != null) {
+    const directTopic = await syncCachedTopicName({
+      threadId: dmThreadId,
+      allowReplyCreationFallback: false,
+    });
+    topicName = directTopic.name;
+    directTopicDisplayName = directTopic.explicitName;
+  }
   let initialTypingCueSent = false;
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
     if (bindingMode.kind !== "configured") {
@@ -411,10 +436,6 @@ export const buildTelegramMessageContext = async ({
     isGroup,
     senderId,
   });
-  const useDmThreadSession = shouldUseTelegramDmThreadSession({
-    dmThreadId,
-    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
-  });
   const threadKeys =
     useDmThreadSession && dmThreadId != null
       ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
@@ -428,20 +449,14 @@ export const buildTelegramMessageContext = async ({
       mainSessionKey: route.mainSessionKey,
     }),
   };
-  if (directTopicLabel) {
-    try {
-      await updateTelegramSessionLabel({
-        cfg,
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        label: directTopicLabel,
-        sessionRuntime,
-      });
-    } catch (err) {
-      logVerbose(
-        `telegram: failed to update direct topic session label for ${chatId}: ${String(err)}`,
-      );
-    }
+  if (directTopicDisplayName) {
+    await updateTelegramSessionDisplayName({
+      cfg,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      displayName: directTopicDisplayName,
+      sessionRuntime,
+    });
   }
   const activationOverride = resolveGroupActivation({
     chatId,

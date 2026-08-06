@@ -74,8 +74,8 @@ export function resolveTopicNameCachePath(storePath: string): string {
   return `${storePath}.telegram-topic-names.json`;
 }
 
-export function resolveTopicNameCacheScope(storePath: string): string {
-  return storePath;
+export function resolveTopicNameCacheScope(storePath: string, accountId?: string): string {
+  return accountId ? JSON.stringify([storePath, accountId]) : storePath;
 }
 
 export function resolveTopicNameCacheNamespace(scope: string): string {

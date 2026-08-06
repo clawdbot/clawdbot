@@ -6,7 +6,7 @@ import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createDeferred,
@@ -18,6 +18,13 @@ import {
 } from "./bot-native-commands.fixture-test-support.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest,
+  resetTelegramTopicNameCacheForTest,
+} from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
+import { resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -146,6 +153,42 @@ const conversationStoreMocks = vi.hoisted(() => ({
   readChannelAllowFromStore: vi.fn(async () => []),
   upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
 }));
+
+type TopicNameEntryForTest = {
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+  closed?: boolean;
+  updatedAt: number;
+};
+
+const topicNameStores = new Map<string, Map<string, TopicNameEntryForTest>>();
+
+function installTopicNameStoreForTest() {
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (({ namespace }: { namespace: string }) => {
+        const entries = topicNameStores.get(namespace) ?? new Map();
+        topicNameStores.set(namespace, entries);
+        return {
+          async register(key: string, value: TopicNameEntryForTest) {
+            entries.set(key, value);
+          },
+          async entries() {
+            return Array.from(entries, ([key, value]) => ({ key, value }));
+          },
+          async delete(key: string) {
+            return entries.delete(key);
+          },
+          async clear() {
+            entries.clear();
+          },
+        };
+      }) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
+}
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
@@ -646,6 +689,9 @@ function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.f
 }
 
 function resetSessionMetaMocks() {
+  resetTelegramTopicNameCacheForTest();
+  topicNameStores.clear();
+  installTopicNameStoreForTest();
   persistentBindingMocks.resolveConfiguredBindingRoute.mockClear();
   persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
     createConfiguredBindingRoute(route, null),
@@ -720,6 +766,11 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
   beforeEach(resetSessionMetaMocks);
 
+  afterAll(() => {
+    resetTelegramTopicNameCacheForTest();
+    clearTelegramRuntimeForTest();
+  });
+
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
     const cfg: OpenClawConfig = {};
     const { handler } = registerAndResolveStatusHandler({ cfg });
@@ -736,6 +787,74 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.ctx?.Provider).toBe("telegram");
     expect(call?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
     expect(turnPlan?.record?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
+  });
+
+  it("uses the cached direct-topic name for the first native slash command", async () => {
+    await updateTopicName(
+      100,
+      42,
+      { name: "Fresh topic" },
+      resolveTopicNameCacheScope("/tmp/openclaw-sessions.json", "default"),
+    );
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler({
+      ...createTelegramPrivateCommandContext({ threadId: 42 }),
+      me: { has_topics_enabled: true },
+    });
+
+    const call = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [
+          {
+            sessionKey?: string;
+            ctx?: {
+              ConversationLabel?: string;
+              ThreadLabel?: string;
+              TopicName?: string;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(call?.sessionKey).toBe("agent:main:main:thread:100:42");
+    expect(call?.ctx).toMatchObject({
+      ConversationLabel: "Fresh topic",
+      ThreadLabel: "Fresh topic",
+      TopicName: "Fresh topic",
+    });
+  });
+
+  it("does not apply a cached topic name when direct-topic sessions are disabled", async () => {
+    await updateTopicName(
+      100,
+      42,
+      { name: "Fresh topic" },
+      resolveTopicNameCacheScope("/tmp/openclaw-sessions.json", "default"),
+    );
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler({
+      ...createTelegramPrivateCommandContext({ threadId: 42 }),
+      me: { has_topics_enabled: false },
+    });
+
+    const call = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [
+          {
+            sessionKey?: string;
+            ctx?: {
+              ThreadLabel?: string;
+              TopicName?: string;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(call?.sessionKey).toBe("agent:main:main");
+    expect(call?.ctx?.ThreadLabel).toBeUndefined();
+    expect(call?.ctx?.TopicName).toBeUndefined();
   });
 
   it("leaves native-command outcomes to the update middleware owner", async () => {

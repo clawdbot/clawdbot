@@ -1676,14 +1676,24 @@ export const registerTelegramNativeCommands = ({
           linkPreview: runtimeTelegramCfg.linkPreview,
           richMessages: runtimeTelegramCfg.richMessages,
         });
+        const directTopicThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+        const usesDirectTopicSession = shouldUseTelegramDmThreadSession({
+          dmThreadId: directTopicThreadId,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+        });
+        const topicThreadId = isForum
+          ? resolvedThreadId
+          : usesDirectTopicSession
+            ? directTopicThreadId
+            : undefined;
         let topicName: string | undefined;
-        if (isForum && resolvedThreadId != null) {
+        if (topicThreadId != null) {
           try {
             const storePath = resolveStorePath(runtimeCfg.session?.store, {
               agentId: route.accountId,
             });
-            const scope = resolveTopicNameCacheScope(storePath);
-            topicName = await getTopicName(chatId, resolvedThreadId, scope);
+            const scope = resolveTopicNameCacheScope(storePath, route.accountId);
+            topicName = await getTopicName(chatId, topicThreadId, scope);
           } catch {
             // best-effort: topic name is supplementary metadata
           }
@@ -1692,7 +1702,7 @@ export const registerTelegramNativeCommands = ({
           ? msg.chat.title
             ? `${msg.chat.title} id:${chatId}`
             : `group:${chatId}`
-          : (buildSenderName(msg) ?? String(senderId || chatId));
+          : (topicName ?? buildSenderName(msg) ?? String(senderId || chatId));
         const ctxPayload = nativeCommandRuntime.finalizeInboundContext({
           Body: prompt,
           BodyForAgent: prompt,
@@ -1726,7 +1736,8 @@ export const registerTelegramNativeCommands = ({
           CommandTargetSessionKey: commandTargetSessionKey,
           MessageThreadId: threadSpec.id,
           IsForum: isForum,
-          TopicName: isForum && topicName ? topicName : undefined,
+          TopicName: topicName,
+          ThreadLabel: usesDirectTopicSession ? topicName : undefined,
           // Originating context for sub-agent announce routing
           OriginatingChannel: "telegram" as const,
           OriginatingTo: originatingTo,

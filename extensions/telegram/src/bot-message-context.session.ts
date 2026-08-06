@@ -121,12 +121,12 @@ export async function resolveTelegramMessageContextStorePath(params: {
   });
 }
 
-/** Updates a persisted topic session label without creating or touching a session. */
-export async function updateTelegramSessionLabel(params: {
+/** Updates a persisted topic display name without creating or touching a session. */
+export async function updateTelegramSessionDisplayName(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  label: string;
+  displayName: string;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
 }): Promise<void> {
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
@@ -144,7 +144,7 @@ export async function updateTelegramSessionLabel(params: {
     sessionKey: params.sessionKey,
     storePath,
     preserveActivity: true,
-    update: () => ({ label: params.label }),
+    update: () => ({ displayName: params.displayName }),
   });
 }
 
@@ -472,7 +472,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
-    : buildSenderLabel(msg, senderId || chatId);
+    : (topicName ?? buildSenderLabel(msg, senderId || chatId));
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
   const storePath = await resolveTelegramMessageContextStorePath({
     cfg,

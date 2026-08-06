@@ -81,6 +81,7 @@ export type TelegramMessageContextSessionRuntimeOverrides = Partial<
   Pick<
     typeof import("./bot-message-context.session.runtime.js"),
     | "buildChannelInboundEventContext"
+    | "patchSessionEntry"
     | "readSessionUpdatedAt"
     | "recordInboundSession"
     | "readAmbientTranscriptWatermark"
