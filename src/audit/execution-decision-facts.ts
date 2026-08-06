@@ -284,7 +284,7 @@ export function countExecutionDecisionFactsForContext(params: {
             (params.now ?? Date.now()) - EXECUTION_DECISION_FACT_RETENTION_MS,
           ),
       );
-      return normalizeSqliteNumber(row?.count) ?? 0;
+      return row ? (normalizeSqliteNumber(row.count) ?? 0) : 0;
     }, params.database) ?? 0
   );
 }
@@ -311,7 +311,7 @@ export function countExecutionDecisionFactsForRun(params: {
             (params.now ?? Date.now()) - EXECUTION_DECISION_FACT_RETENTION_MS,
           ),
       );
-      return normalizeSqliteNumber(row?.count) ?? 0;
+      return row ? (normalizeSqliteNumber(row.count) ?? 0) : 0;
     }, params.database) ?? 0
   );
 }
