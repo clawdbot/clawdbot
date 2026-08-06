@@ -39,9 +39,11 @@ import {
   CHAT_SPACE_ACTIVATION_SELECTOR,
   CHAT_TEXT_ENTRY_SELECTOR,
   keyboardEventPathMatches,
+  type ChatNewSessionResult,
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
   NEW_SESSION_CREATE_FAILED_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
+  NEW_SESSION_RENAME_FAILED_MESSAGE,
 } from "./chat-pane-shared.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
@@ -166,10 +168,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     `;
   }
 
-  protected readonly createSession = async (): Promise<boolean> => {
+  protected readonly createSession = async (options?: {
+    label?: string;
+  }): Promise<ChatNewSessionResult> => {
     const state = this.state;
     if (!state || !state.client || !state.connected) {
-      return false;
+      return "cancelled";
     }
     const context = this.context;
     const sessions = context.sessions;
@@ -212,34 +216,34 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     if (!canCreateChatSession(state)) {
       setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
       state.requestUpdate?.();
-      return false;
+      return "cancelled";
     }
     if (state.sessionsLoading) {
       setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
       state.requestUpdate?.();
-      return false;
+      return "cancelled";
     }
     const initialAccess = readCreateAccess();
     if (!initialAccess.allowed) {
       publishCreateAccessError(initialAccess.reason);
-      return false;
+      return "cancelled";
     }
     if (
       !(await this.confirmConversationReset()) ||
       !isCurrent() ||
       !areUiSessionKeysEquivalent(state.sessionKey, previousSessionKey)
     ) {
-      return false;
+      return "cancelled";
     }
     if (!canCreateChatSession(state)) {
       setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
       state.requestUpdate?.();
-      return false;
+      return "cancelled";
     }
     const currentAccess = readCreateAccess();
     if (!currentAccess.allowed) {
       publishCreateAccessError(currentAccess.reason);
-      return false;
+      return "cancelled";
     }
 
     setChatError(state, null);
@@ -260,12 +264,40 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         // Recompute rather than null: the builtin snapshot also carries the
         // swarm card, which must survive an observer-only invalidation.
         this.refreshBuiltinBoardSnapshot();
+        // Only patch on a confirmed-completed reset: an "uncertain" reset may not
+        // have landed a fresh incarnation, so patching the label could rename the
+        // wrong session.
+        if (options?.label && isCurrent() && resetResult === "completed") {
+          const labelAgentId =
+            scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+            resolveAgentIdFromSessionKey(previousSessionKey);
+          let labelPatched: Awaited<ReturnType<typeof sessions.patch>> = null;
+          try {
+            labelPatched = await sessions.patch(
+              previousSessionKey,
+              { label: options.label },
+              labelAgentId ? { agentId: labelAgentId } : undefined,
+            );
+          } catch (error: unknown) {
+            this.publishHeaderError(error);
+            return "consumed-error";
+          }
+          if (!labelPatched) {
+            state.lastError = NEW_SESSION_RENAME_FAILED_MESSAGE;
+            state.chatError = state.lastError;
+            state.requestUpdate?.();
+            return "consumed-error";
+          }
+        }
       }
-      return resetResult !== "failed";
+      return resetResult === "failed" ? "cancelled" : "completed";
     }
-    const nextSessionKey = await sessions.create(createParams);
+    const nextSessionKey = await sessions.create({
+      ...createParams,
+      ...(options?.label ? { label: options.label } : {}),
+    });
     if (!isCurrent()) {
-      return false;
+      return "cancelled";
     }
     if (
       !nextSessionKey ||
@@ -282,11 +314,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         );
         state.requestUpdate?.();
       }
-      return false;
+      return "cancelled";
     }
     this.chatState.captureCreatedSessionComposer(nextSessionKey);
     this.onPaneSessionChange?.(this.paneId, nextSessionKey);
-    return true;
+    return "completed";
   };
 
   protected syncActiveBindings() {

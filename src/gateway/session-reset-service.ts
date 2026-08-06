@@ -402,6 +402,12 @@ async function ensureSessionRuntimeCleanup(params: {
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
   assertCurrent?: () => void;
+  /**
+   * Keep the session's active reply run alive. A chat-initiated delete (for
+   * example `/close`) runs inside that reply run: aborting or awaiting it here
+   * would cancel the turn that still owes the user its confirmation reply.
+   */
+  preserveActiveReplyRun?: boolean;
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
   // commands such as status must not load the embedded-agent barrel.
@@ -520,11 +526,19 @@ async function ensureSessionRuntimeCleanup(params: {
   // Register against the run being stopped before abort or any await allows a
   // later embedded or reply-backed run to replace it in the active registry.
   ensureMcpRetirementWatcher();
-  embeddedAgent.abortEmbeddedAgentRun(sessionId);
+  const preserveActiveReplyRun = params.preserveActiveReplyRun === true;
+  embeddedAgent.abortEmbeddedAgentRun(
+    sessionId,
+    preserveActiveReplyRun ? { preserveReplyRun: true } : undefined,
+  );
   // Mark cleanup before waiting so the timeout path cannot strand MCP children.
   // Active tool/app leases keep in-flight work alive until their final release.
   await retireMcpRuntime(true);
-  const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+  const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(
+    sessionId,
+    15_000,
+    preserveActiveReplyRun ? { preserveReplyRun: true } : undefined,
+  );
   params.assertCurrent?.();
   // A stopping run can create or reuse its runtime while we wait. Retire again
   // after a clean stop; otherwise keep the required marker armed for late work.
@@ -845,6 +859,8 @@ export async function cleanupSessionBeforeMutation(params: {
   reason: "session-reset" | "session-delete";
   onAcpResetMeta?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
   assertCurrent?: () => void;
+  /** See {@link ensureSessionRuntimeCleanup}: keep the initiating reply run alive. */
+  preserveActiveReplyRun?: boolean;
 }) {
   const cleanupError = await ensureSessionRuntimeCleanup({
     cfg: params.cfg,
@@ -852,6 +868,9 @@ export async function cleanupSessionBeforeMutation(params: {
     target: params.target,
     sessionId: params.entry?.sessionId,
     assertCurrent: params.assertCurrent,
+    ...(params.preserveActiveReplyRun !== undefined
+      ? { preserveActiveReplyRun: params.preserveActiveReplyRun }
+      : {}),
   });
   if (cleanupError) {
     return cleanupError;

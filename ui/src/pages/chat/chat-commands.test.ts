@@ -8,7 +8,11 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { dispatchChatSlashCommand, refreshSlashCommands } from "./chat-commands.ts";
+import {
+  dispatchChatSlashCommand,
+  parseNamedNewCommandTitle,
+  refreshSlashCommands,
+} from "./chat-commands.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -291,13 +295,50 @@ describe("conversation reset confirmation", () => {
 
   it("propagates cancelled /new session creation", async () => {
     const result = await dispatchChatSlashCommand(
-      { createChatSession: vi.fn(async () => false) } as never,
+      { createChatSession: vi.fn(async () => "cancelled" as const) } as never,
       "new",
       "",
       { sendResetMessage: vi.fn() },
     );
 
     expect(result).toBe("cancelled");
+  });
+
+  it("consumes /new when the reset landed but a follow-up step failed", async () => {
+    // "consumed-error" means the destructive reset already happened (e.g. only
+    // the label patch failed). Mapping it to "uncertain" keeps the command
+    // consumed: the composer must not restore a retryable /new draft that
+    // would reset the fresh conversation again.
+    const result = await dispatchChatSlashCommand(
+      { createChatSession: vi.fn(async () => "consumed-error" as const) } as never,
+      "new",
+      "--name Planning notes",
+      { sendResetMessage: vi.fn() },
+    );
+
+    expect(result).toBe("uncertain");
+  });
+
+  it("forwards a named /new title to the created session", async () => {
+    const createChatSession = vi.fn(async () => "completed" as const);
+    const result = await dispatchChatSlashCommand(
+      { createChatSession } as never,
+      "new",
+      "--name Planning notes",
+      { sendResetMessage: vi.fn() },
+    );
+
+    expect(result).toBe("completed");
+    expect(createChatSession).toHaveBeenCalledWith({ label: "Planning notes" });
+  });
+
+  it("creates an unnamed /new session when no title is provided", async () => {
+    const createChatSession = vi.fn(async () => "completed" as const);
+    await dispatchChatSlashCommand({ createChatSession } as never, "new", "", {
+      sendResetMessage: vi.fn(),
+    });
+
+    expect(createChatSession).toHaveBeenCalledWith(undefined);
   });
 
   it("cancels /reset before sending when confirmation is rejected", async () => {
@@ -574,5 +615,24 @@ describe("conversation reset confirmation", () => {
     await expect(pending).resolves.toBe("failed");
     expect(reset).not.toHaveBeenCalled();
     expect(host.lastError).toContain("operator.admin");
+  });
+});
+
+describe("parseNamedNewCommandTitle", () => {
+  it("extracts titles from the documented named forms", () => {
+    expect(parseNamedNewCommandTitle("--name Planning notes")).toBe("Planning notes");
+    expect(parseNamedNewCommandTitle("--name=Planning notes")).toBe("Planning notes");
+    expect(parseNamedNewCommandTitle("name:Planning notes")).toBe("Planning notes");
+  });
+
+  it("ignores empty tails and model directives", () => {
+    expect(parseNamedNewCommandTitle("")).toBeUndefined();
+    expect(parseNamedNewCommandTitle("   ")).toBeUndefined();
+    expect(parseNamedNewCommandTitle("--model openai/gpt-5.5")).toBeUndefined();
+    expect(parseNamedNewCommandTitle("model:openai/gpt-5.5")).toBeUndefined();
+  });
+
+  it("does not treat a bare prompt tail as a title", () => {
+    expect(parseNamedNewCommandTitle("summarize this thread")).toBeUndefined();
   });
 });
