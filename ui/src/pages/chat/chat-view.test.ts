@@ -243,7 +243,7 @@ type ChatHeaderTestState = {
   toolsEffectiveError: string | null;
   toolsEffectiveResultKey: string | null;
   toolsEffectiveResult: unknown;
-  applySettings(next: UiSettings): void;
+  applySettings(patch: Partial<UiSettings>): void;
   loadAssistantIdentity(): void;
   onModelChanged(): void | Promise<void>;
   resetChatInputHistoryNavigation(): void;
@@ -474,8 +474,8 @@ function createChatHeaderState(
     toolsEffectiveResultKey: null,
     toolsEffectiveError: null,
     toolsEffectiveResult: null,
-    applySettings(next: UiSettings) {
-      state.settings = next;
+    applySettings(patch: Partial<UiSettings>) {
+      state.settings = { ...state.settings, ...patch };
     },
     setRoute: vi.fn(),
     loadAssistantIdentity: vi.fn(),

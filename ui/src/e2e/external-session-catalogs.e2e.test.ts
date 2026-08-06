@@ -1,39 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const available = canRunPlaywrightChromium(executablePath);
-const allowMissing = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const suite = available || !allowMissing ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "OpenCode and Pi external session catalogs",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-suite("OpenCode and Pi external session catalogs", () => {
-  beforeAll(async () => {
-    if (!available) {
-      throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("shows both paired-node catalogs and opens their view-only transcripts", async () => {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
     const gateway = await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -115,7 +94,7 @@ suite("OpenCode and Pi external session catalogs", () => {
       },
     });
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await expect
       .poll(() =>
         page
@@ -129,7 +108,7 @@ suite("OpenCode and Pi external session catalogs", () => {
       )
       .toBe(1);
     const piIconResponse = await page.request.get(
-      new URL("provider-icons/ProviderIcon-pi.svg", server.baseUrl).toString(),
+      new URL("provider-icons/ProviderIcon-pi.svg", suite.server.baseUrl).toString(),
     );
     expect(piIconResponse.ok()).toBe(true);
 

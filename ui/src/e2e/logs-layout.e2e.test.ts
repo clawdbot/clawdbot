@@ -1,27 +1,21 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI logs native app layout E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
 const proofLabel = process.env.OPENCLAW_UI_E2E_PROOF_LABEL?.trim() || "logs-layout";
 const viewport = { height: 584, width: 863 };
-
-let browser: Browser;
-let server: ControlUiE2eServer;
 
 const logLines = Array.from({ length: 40 }, (_value, index) =>
   JSON.stringify({
@@ -32,111 +26,97 @@ const logLines = Array.from({ length: 40 }, (_value, index) =>
   }),
 );
 
-describeControlUiE2e("Control UI logs native app layout E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("keeps wrapped filters inside their rows in the macOS dashboard viewport", async () => {
     if (artifactDir) {
       await mkdir(path.join(artifactDir, proofLabel, "video"), { recursive: true });
     }
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport,
-      ...(artifactDir
-        ? { recordVideo: { dir: path.join(artifactDir, proofLabel, "video"), size: viewport } }
-        : {}),
-    });
-    const page = await context.newPage();
-    await page.addInitScript((settingsKey) => {
-      localStorage.setItem(settingsKey, JSON.stringify({ textScale: 125, themeMode: "dark" }));
-      const nativeWindow = window as Window & {
-        __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-        __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
-      };
-      nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-      nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
-        canGoBack: false,
-        canGoForward: false,
-      };
-      const stamp = () =>
-        document.documentElement.classList.add(
-          "openclaw-native-macos",
-          "openclaw-native-web-chrome",
-        );
-      if (document.documentElement) {
-        stamp();
-      } else {
-        document.addEventListener("DOMContentLoaded", stamp);
-      }
-    }, controlUiBundledSettingsStorageKey(server.baseUrl));
-    await installMockGateway(page, {
-      methodResponses: {
-        "logs.tail": {
-          cursor: logLines.length,
-          file: "/tmp/openclaw/openclaw-2026-07-21.log",
-          lines: logLines,
-          reset: true,
-        },
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        ...(artifactDir
+          ? { recordVideo: { dir: path.join(artifactDir, proofLabel, "video"), size: viewport } }
+          : {}),
       },
-    });
-
-    try {
-      await page.goto(`${server.baseUrl}settings/general`);
-      await page.locator('.settings-sidebar__item[href="/logs"]').click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/logs");
-      await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
-      if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, proofLabel, "logs-layout.png"),
-          fullPage: true,
+      async ({ page }) => {
+        await page.addInitScript((settingsKey) => {
+          localStorage.setItem(settingsKey, JSON.stringify({ textScale: 125, themeMode: "dark" }));
+          const nativeWindow = window as Window & {
+            __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
+            __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
+          };
+          nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
+          nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
+            canGoBack: false,
+            canGoForward: false,
+          };
+          const stamp = () =>
+            document.documentElement.classList.add(
+              "openclaw-native-macos",
+              "openclaw-native-web-chrome",
+            );
+          if (document.documentElement) {
+            stamp();
+          } else {
+            document.addEventListener("DOMContentLoaded", stamp);
+          }
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
+        await installMockGateway(page, {
+          methodResponses: {
+            "logs.tail": {
+              cursor: logLines.length,
+              file: "/tmp/openclaw/openclaw-2026-07-21.log",
+              lines: logLines,
+              reset: true,
+            },
+          },
         });
-      }
 
-      const metrics = await page.locator(".logs-card").evaluate((card) => {
-        const rows = [...card.querySelectorAll<HTMLElement>(":scope > .settings-row")];
-        const stream = card.querySelector<HTMLElement>(":scope > .log-stream");
-        return {
-          cardDisplay: getComputedStyle(card).display,
-          rows: rows.map((row) => {
-            const bounds = row.getBoundingClientRect();
-            return {
-              bottom: bounds.bottom,
-              clientHeight: row.clientHeight,
-              scrollHeight: row.scrollHeight,
-              top: bounds.top,
-            };
-          }),
-          streamFlexGrow: stream ? getComputedStyle(stream).flexGrow : "",
-          streamTop: stream?.getBoundingClientRect().top ?? Number.NaN,
-        };
-      });
+        await page.goto(`${suite.server.baseUrl}settings/general`);
+        await page.locator('.settings-sidebar__item[href="/logs"]').click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/logs");
+        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, proofLabel, "logs-layout.png"),
+            fullPage: true,
+          });
+        }
 
-      expect(metrics.cardDisplay).toBe("flex");
-      expect(metrics.streamFlexGrow).toBe("1");
-      expect(metrics.rows).toHaveLength(2);
-      const [firstRow, secondRow] = metrics.rows;
-      if (!firstRow || !secondRow) {
-        throw new Error(`Expected two log control rows, received ${metrics.rows.length}.`);
-      }
-      for (const row of metrics.rows) {
-        expect(row.scrollHeight).toBeLessThanOrEqual(row.clientHeight + 1);
-      }
-      expect(firstRow.bottom).toBeLessThanOrEqual(secondRow.top + 1);
-      expect(secondRow.bottom).toBeLessThanOrEqual(metrics.streamTop + 1);
-    } finally {
-      await context.close();
-    }
+        const metrics = await page.locator(".logs-card").evaluate((card) => {
+          const rows = [...card.querySelectorAll<HTMLElement>(":scope > .settings-row")];
+          const stream = card.querySelector<HTMLElement>(":scope > .log-stream");
+          return {
+            cardDisplay: getComputedStyle(card).display,
+            rows: rows.map((row) => {
+              const bounds = row.getBoundingClientRect();
+              return {
+                bottom: bounds.bottom,
+                clientHeight: row.clientHeight,
+                scrollHeight: row.scrollHeight,
+                top: bounds.top,
+              };
+            }),
+            streamFlexGrow: stream ? getComputedStyle(stream).flexGrow : "",
+            streamTop: stream?.getBoundingClientRect().top ?? Number.NaN,
+          };
+        });
+
+        expect(metrics.cardDisplay).toBe("flex");
+        expect(metrics.streamFlexGrow).toBe("1");
+        expect(metrics.rows).toHaveLength(2);
+        const [firstRow, secondRow] = metrics.rows;
+        if (!firstRow || !secondRow) {
+          throw new Error(`Expected two log control rows, received ${metrics.rows.length}.`);
+        }
+        for (const row of metrics.rows) {
+          expect(row.scrollHeight).toBeLessThanOrEqual(row.clientHeight + 1);
+        }
+        expect(firstRow.bottom).toBeLessThanOrEqual(secondRow.top + 1);
+        expect(secondRow.bottom).toBeLessThanOrEqual(metrics.streamTop + 1);
+      },
+    );
   });
 });

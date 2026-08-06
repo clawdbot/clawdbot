@@ -2,6 +2,7 @@
 
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -71,7 +72,7 @@ function clientWithRequest(request: unknown): ChatHost["client"] {
 }
 
 type TestChatHost = Omit<ChatHost, "settings"> & {
-  applySettings: (next: UiSettings) => void;
+  applySettings: (patch: Partial<UiSettings>) => void;
   basePath: string;
   chatAvatarUrl: string | null;
   chatAvatarSource?: string | null;
@@ -241,12 +242,7 @@ type MockCallSource = {
   };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
@@ -409,8 +405,9 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
-    applySettings: vi.fn((next: UiSettings) => {
+    applySettings: vi.fn((patch: Partial<UiSettings>) => {
       // Chat pages own display/layout settings; active-session persistence belongs to pane bindings.
+      const next = { ...settings, ...patch };
       Object.assign(settings, {
         chatShowThinking: next.chatShowThinking,
         chatShowToolCalls: next.chatShowToolCalls,

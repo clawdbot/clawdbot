@@ -1,4 +1,5 @@
 // Tests node capability-surface approvals stored on paired device records.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createDeferred } from "../test-utils/deferred.js";
@@ -61,12 +62,7 @@ async function findPairedNode(nodeId: string, baseDir: string) {
   return pairing.paired.find((node) => node.nodeId === nodeId) ?? null;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function findRecordByField<T extends Record<string, unknown>>(
   records: T[],

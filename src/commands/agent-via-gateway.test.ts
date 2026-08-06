@@ -1,9 +1,10 @@
-// Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+// Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -143,12 +144,7 @@ function requireFirstCallOrder(
   return order;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-short");
 
 function createSignalProcess() {
   type SignalName = "SIGINT" | "SIGTERM";
