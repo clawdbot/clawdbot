@@ -48,17 +48,70 @@ function appendContextMessage(messages: AgentMessage[], entry: SessionTreeEntry)
   }
 }
 
+/** Select reset-tail entries that are safe to replay into model-visible context. */
+export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
+  const pendingToolCalls = new Map<string, number>();
+  const retainedEntries: SessionTreeEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.type !== "message") {
+      continue;
+    }
+
+    const message = entry.message;
+    if (message.role === "assistant") {
+      for (const block of message.content) {
+        if (block.type !== "toolCall") {
+          continue;
+        }
+        pendingToolCalls.set(block.id, (pendingToolCalls.get(block.id) ?? 0) + 1);
+      }
+      retainedEntries.push(entry);
+      continue;
+    }
+
+    if (message.role === "user") {
+      retainedEntries.push(entry);
+      continue;
+    }
+
+    if (message.role === "toolResult") {
+      const pendingCount = pendingToolCalls.get(message.toolCallId) ?? 0;
+      if (pendingCount === 0) {
+        continue;
+      }
+      if (pendingCount === 1) {
+        pendingToolCalls.delete(message.toolCallId);
+      } else {
+        pendingToolCalls.set(message.toolCallId, pendingCount - 1);
+      }
+      retainedEntries.push(entry);
+    }
+  }
+
+  return retainedEntries;
+}
+
 function appendResetKeptMessage(messages: AgentMessage[], entry: SessionTreeEntry): void {
-  if (
-    entry.type === "message" &&
-    (entry.message.role === "user" || entry.message.role === "assistant")
-  ) {
-    const message = { ...entry.message } as AgentMessage & { [SESSION_HISTORY_PRELUDE]?: true };
-    Object.defineProperty(message, SESSION_HISTORY_PRELUDE, {
+  if (entry.type !== "message") {
+    return;
+  }
+
+  const message = entry.message;
+  if (message.role === "user" || message.role === "assistant") {
+    const retainedMessage = { ...message } as AgentMessage & {
+      [SESSION_HISTORY_PRELUDE]?: true;
+    };
+    Object.defineProperty(retainedMessage, SESSION_HISTORY_PRELUDE, {
       configurable: true,
       enumerable: false,
       value: true,
     });
+    messages.push(retainedMessage);
+    return;
+  }
+
+  if (message.role === "toolResult") {
     messages.push(message);
   }
 }
@@ -90,16 +143,27 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
       }
     }
     const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
-    // A reset kept tail mirrors the old cross-log replay contract: only user/assistant
-    // rows survive. Compaction keeps its existing richer retained-tail behavior.
     let foundFirstKept = false;
-    for (const entry of pathEntries.slice(0, boundaryIdx)) {
+    const entriesBeforeBoundary = pathEntries.slice(0, boundaryIdx);
+    const firstKeptEntryIndex = entriesBeforeBoundary.findIndex(
+      (entry) => entry.id === boundary.firstKeptEntryId,
+    );
+    const resetKeptEntries =
+      boundary.type === "reset" && firstKeptEntryIndex >= 0
+        ? selectResetKeptEntries(entriesBeforeBoundary.slice(firstKeptEntryIndex))
+        : undefined;
+    for (const entry of entriesBeforeBoundary) {
       if (entry.id === boundary.firstKeptEntryId) {
         foundFirstKept = true;
       }
       if (foundFirstKept) {
         if (boundary.type === "reset") {
-          appendResetKeptMessage(messages, entry);
+          // A reset kept tail is a model-context projection: retain user/assistant rows and only
+          // tool results paired with retained assistant tool calls. Display/history projections
+          // keep their separate user/assistant-only visibility contract.
+          if (resetKeptEntries?.includes(entry)) {
+            appendResetKeptMessage(messages, entry);
+          }
         } else {
           appendContextMessage(messages, entry);
         }

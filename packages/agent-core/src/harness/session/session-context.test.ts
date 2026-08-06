@@ -57,20 +57,57 @@ describe("buildSessionContext", () => {
     ]);
   });
 
-  it("treats the latest reset as a hard cut with a user/assistant-only kept tail", () => {
+  it("treats the latest reset as a hard cut with pairing-aware kept tool results", () => {
     const entries: SessionTreeEntry[] = [
       userEntry("discarded", null, "discarded"),
       userEntry("kept-user", "discarded", "kept question"),
       {
         type: "message",
-        id: "kept-tool",
+        id: "kept-assistant-tool",
         parentId: "kept-user",
+        timestamp,
+        message: {
+          role: "assistant",
+          api: "openai-responses",
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          provider: "test-provider",
+          model: "test-model",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: Date.parse(timestamp),
+        },
+      },
+      {
+        type: "message",
+        id: "kept-tool",
+        parentId: "kept-assistant-tool",
         timestamp,
         message: {
           role: "toolResult",
           toolCallId: "call-1",
           toolName: "read",
-          content: [{ type: "text", text: "hidden tool result" }],
+          content: [{ type: "text", text: "paired tool result" }],
+          isError: false,
+          timestamp: Date.parse(timestamp),
+        },
+      },
+      {
+        type: "message",
+        id: "kept-orphan-tool",
+        parentId: "kept-tool",
+        timestamp,
+        message: {
+          role: "toolResult",
+          toolCallId: "orphan-call",
+          toolName: "read",
+          content: [{ type: "text", text: "orphan tool result" }],
           isError: false,
           timestamp: Date.parse(timestamp),
         },
@@ -78,7 +115,7 @@ describe("buildSessionContext", () => {
       {
         type: "message",
         id: "kept-assistant",
-        parentId: "kept-tool",
+        parentId: "kept-orphan-tool",
         timestamp,
         message: {
           role: "assistant",
@@ -111,12 +148,19 @@ describe("buildSessionContext", () => {
 
     const context = buildSessionContext(entries);
 
-    expect(context.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(context.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "user",
+    ]);
     expect(JSON.stringify(context.messages)).toContain("kept question");
+    expect(JSON.stringify(context.messages)).toContain("paired tool result");
     expect(JSON.stringify(context.messages)).toContain("kept answer");
     expect(JSON.stringify(context.messages)).toContain("new turn");
     expect(JSON.stringify(context.messages)).not.toContain("discarded");
-    expect(JSON.stringify(context.messages)).not.toContain("hidden tool result");
+    expect(JSON.stringify(context.messages)).not.toContain("orphan tool result");
   });
 
   it("lets the latest compaction shadow an earlier reset boundary", () => {
