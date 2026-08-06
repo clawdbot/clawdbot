@@ -2618,6 +2618,7 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+          "test/scripts/doctor-media-persistence-nul-tail.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -2804,6 +2805,7 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+          "test/scripts/doctor-media-persistence-nul-tail.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
