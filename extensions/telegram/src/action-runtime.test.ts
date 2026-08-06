@@ -301,7 +301,10 @@ describe("handleTelegramAction", () => {
   }
 
   function topicCacheScopeFor(cfg: OpenClawConfig, accountId: string): string {
-    return resolveTopicNameCacheScope(resolveStorePath(cfg.session?.store, { agentId: accountId }));
+    return resolveTopicNameCacheScope(
+      resolveStorePath(cfg.session?.store, { agentId: accountId }),
+      accountId,
+    );
   }
 
   async function sendInlineButtonsMessage(params: {

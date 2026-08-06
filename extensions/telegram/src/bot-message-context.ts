@@ -245,7 +245,6 @@ export const buildTelegramMessageContext = async ({
     topicName = (
       await syncCachedTopicName({
         threadId: resolvedThreadId,
-        accountId: account.accountId,
         allowReplyCreationFallback: true,
       })
     ).name;
