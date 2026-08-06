@@ -11,6 +11,7 @@ import {
   listExecutionDecisionFactsForContext,
   pruneExpiredExecutionDecisionFacts,
   recordExecutionDecisionFact,
+  summarizeExecutionDecisionFactsForContext,
 } from "./execution-decision-facts.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -86,6 +87,9 @@ describe("execution decision facts", () => {
         database,
       }),
     ).toEqual([receipt("receipt-1")]);
+    expect(
+      summarizeExecutionDecisionFactsForContext({ contextId: "context-1", now: 100, database }),
+    ).toEqual({ count: 1, coverageState: "enforced", missingEvidence: [] });
   });
 
   it("rejects approval duplication before creating the generic table", () => {
@@ -176,5 +180,12 @@ describe("execution decision facts", () => {
         missingEvidence: ["decision.fact.valid"],
       }),
     ]);
+    expect(
+      summarizeExecutionDecisionFactsForContext({ contextId: "context-1", now: 100, database }),
+    ).toEqual({
+      count: 1,
+      coverageState: "unknown",
+      missingEvidence: ["decision.fact.valid"],
+    });
   });
 });

@@ -64,6 +64,7 @@ const context = {
   contextId: "context-receipts",
   executionId: "execution-receipts",
   runId: "run-receipts",
+  createdAt: 500,
 };
 
 describe("operator approval decision receipts", () => {
@@ -154,7 +155,7 @@ describe("operator approval decision receipts", () => {
     ).toBe(7);
     expect(
       summarizeOperatorApprovalReceiptsForRun({
-        runId: context.runId,
+        context,
         linkState: "unambiguous",
         nowMs: 3_000,
         databaseOptions: database,

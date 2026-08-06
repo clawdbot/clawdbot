@@ -262,6 +262,21 @@ export function recordExecutionDecisionFact(
   );
 }
 
+function retainedDecisionFactsForContextQuery(db: DatabaseSync, contextId: string, now: number) {
+  return decisionDb(db)
+    .selectFrom("execution_decision_facts")
+    .where("context_id", "=", contextId)
+    .where("occurred_at", ">=", now - EXECUTION_DECISION_FACT_RETENTION_MS);
+}
+
+function projectDecisionRow(row: ExecutionDecisionRow): DecisionReceiptV1 {
+  try {
+    return parseDecisionRow(row);
+  } catch {
+    return corruptDecisionReceipt(row);
+  }
+}
+
 export function countExecutionDecisionFactsForContext(params: {
   contextId: string;
   now?: number;
@@ -274,18 +289,54 @@ export function countExecutionDecisionFactsForContext(params: {
       }
       const row = executeSqliteQueryTakeFirstSync(
         db,
-        decisionDb(db)
-          .selectFrom("execution_decision_facts")
-          .select((eb) => eb.fn.countAll<number>().as("count"))
-          .where("context_id", "=", params.contextId)
-          .where(
-            "occurred_at",
-            ">=",
-            (params.now ?? Date.now()) - EXECUTION_DECISION_FACT_RETENTION_MS,
-          ),
+        retainedDecisionFactsForContextQuery(db, params.contextId, params.now ?? Date.now()).select(
+          (eb) => eb.fn.countAll<number>().as("count"),
+        ),
       );
       return row ? (normalizeSqliteNumber(row.count) ?? 0) : 0;
     }, params.database) ?? 0
+  );
+}
+
+/** Summarize all retained owner rows so receipt paging cannot change top-level coverage. */
+export function summarizeExecutionDecisionFactsForContext(params: {
+  contextId: string;
+  now?: number;
+  database?: OpenClawStateDatabaseOptions;
+}): {
+  count: number;
+  coverageState?: "enforced" | "unknown" | "unsupported";
+  missingEvidence: string[];
+} {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "execution_decision_facts")) {
+        return { count: 0, missingEvidence: [] };
+      }
+      const rows = executeSqliteQuerySync(
+        db,
+        retainedDecisionFactsForContextQuery(
+          db,
+          params.contextId,
+          params.now ?? Date.now(),
+        ).selectAll(),
+      ).rows;
+      const receipts = rows.map(projectDecisionRow);
+      const coverage = new Set(receipts.map((receipt) => receipt.enforcement.coverageState));
+      return {
+        count: rows.length,
+        ...(coverage.has("unsupported")
+          ? { coverageState: "unsupported" as const }
+          : coverage.has("unknown")
+            ? { coverageState: "unknown" as const }
+            : coverage.has("enforced")
+              ? { coverageState: "enforced" as const }
+              : {}),
+        missingEvidence: [
+          ...new Set(receipts.flatMap((receipt) => receipt.missingEvidence)),
+        ].toSorted(),
+      };
+    }, params.database) ?? { count: 0, missingEvidence: [] }
   );
 }
 
@@ -330,27 +381,14 @@ export function listExecutionDecisionFactsForContext(params: {
       }
       const rows = executeSqliteQuerySync(
         db,
-        decisionDb(db)
-          .selectFrom("execution_decision_facts")
+        retainedDecisionFactsForContextQuery(db, params.contextId, params.now ?? Date.now())
           .selectAll()
-          .where("context_id", "=", params.contextId)
-          .where(
-            "occurred_at",
-            ">=",
-            (params.now ?? Date.now()) - EXECUTION_DECISION_FACT_RETENTION_MS,
-          )
           .orderBy("occurred_at", "asc")
           .orderBy("receipt_id", "asc")
           .offset(params.offset)
           .limit(params.limit),
       ).rows;
-      return rows.map((row) => {
-        try {
-          return parseDecisionRow(row);
-        } catch {
-          return corruptDecisionReceipt(row);
-        }
-      });
+      return rows.map(projectDecisionRow);
     }, params.database) ?? []
   );
 }

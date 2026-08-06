@@ -175,6 +175,7 @@ type OperatorApprovalReceiptContext = {
   contextId: string;
   executionId: string;
   runId: string;
+  createdAt: number;
 };
 type OperatorApprovalReceiptLinkState = "unambiguous" | "ambiguous";
 
@@ -780,7 +781,7 @@ export function countOperatorApprovalReceiptsForRun(params: {
 
 /** Summarize all retained owner rows so receipt paging cannot change top-level coverage. */
 export function summarizeOperatorApprovalReceiptsForRun(params: {
-  runId: string;
+  context: OperatorApprovalReceiptContext;
   linkState: OperatorApprovalReceiptLinkState;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
@@ -797,13 +798,16 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
       const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
       const rows = executeSqliteQuerySync(
         db,
-        terminalApprovalsForRunQuery(stateDb, params.runId, params.nowMs ?? Date.now()),
+        terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now()),
       ).rows;
       if (rows.length === 0) {
         return { count: 0, missingEvidence: [] };
       }
-      const hasCorruptRecord = rows.some((row) => decodeOperatorApprovalRow(row) === null);
-      const hasAmbiguousLink = params.linkState === "ambiguous";
+      const records = rows.map((row) => decodeOperatorApprovalRow(row));
+      const hasCorruptRecord = records.some((record) => record === null);
+      const hasAmbiguousLink =
+        params.linkState === "ambiguous" ||
+        records.some((record) => record !== null && record.createdAtMs < params.context.createdAt);
       return {
         count: rows.length,
         coverageState: hasCorruptRecord || hasAmbiguousLink ? "unknown" : "enforced",
@@ -842,7 +846,7 @@ export function listOperatorApprovalReceiptsForRun(params: {
       return rows.map((row) => {
         const record = decodeOperatorApprovalRow(row);
         return record
-          ? params.linkState === "ambiguous"
+          ? params.linkState === "ambiguous" || record.createdAtMs < params.context.createdAt
             ? projectAmbiguousOperatorApprovalReceipt(record, params.context)
             : projectOperatorApprovalReceipt(record, params.context)
           : projectCorruptOperatorApprovalReceipt(row, params.context);

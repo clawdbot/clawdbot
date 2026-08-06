@@ -10,8 +10,8 @@ import {
 } from "../gateway/operator-approval-store.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
-  countExecutionDecisionFactsForContext,
   listExecutionDecisionFactsForContext,
+  summarizeExecutionDecisionFactsForContext,
 } from "./execution-decision-facts.js";
 
 type ExecutionDecisionReadOptions = OpenClawStateDatabaseOptions & { now?: number };
@@ -65,17 +65,23 @@ export function presentExecutionDecisionReceipts(params: {
   const limit = params.decisionLimit ?? 50;
   const now = params.options.now ?? Date.now();
   const approvalSummary = summarizeOperatorApprovalReceiptsForRun({
-    runId: params.context.runId,
+    context: {
+      contextId: params.context.contextId,
+      executionId: params.context.executionId,
+      runId: params.context.runId,
+      createdAt: params.context.createdAt,
+    },
     linkState: params.approvalLinkState,
     nowMs: now,
     databaseOptions: params.options,
   });
   const approvalCount = approvalSummary.count;
-  const genericCount = countExecutionDecisionFactsForContext({
+  const genericSummary = summarizeExecutionDecisionFactsForContext({
     contextId: params.context.contextId,
     now,
     database: params.options,
   });
+  const genericCount = genericSummary.count;
   const totalDecisions = 1 + approvalCount + genericCount;
   const decisions: DecisionReceiptV1[] = [];
   let remainingOffset = offset;
@@ -93,6 +99,7 @@ export function presentExecutionDecisionReceipts(params: {
         contextId: params.context.contextId,
         executionId: params.context.executionId,
         runId: params.context.runId,
+        createdAt: params.context.createdAt,
       },
       linkState: params.approvalLinkState,
       offset: remainingOffset,
@@ -118,19 +125,19 @@ export function presentExecutionDecisionReceipts(params: {
     );
   }
   const nextOffset = offset + decisions.length;
-  const pageCoverage = new Set(decisions.map((receipt) => receipt.enforcement.coverageState));
-  const coverageState = pageCoverage.has("unsupported")
+  const ownerCoverage = new Set([approvalSummary.coverageState, genericSummary.coverageState]);
+  const coverageState = ownerCoverage.has("unsupported")
     ? "unsupported"
-    : approvalSummary.coverageState === "unknown" || pageCoverage.has("unknown")
+    : ownerCoverage.has("unknown")
       ? "unknown"
-      : approvalSummary.coverageState === "enforced" || pageCoverage.has("enforced")
+      : ownerCoverage.has("enforced")
         ? "enforced"
         : params.context.coverageState;
   const missingEvidence = [
     ...new Set([
       ...params.context.missingEvidence,
       ...approvalSummary.missingEvidence,
-      ...decisions.flatMap((receipt) => receipt.missingEvidence),
+      ...genericSummary.missingEvidence,
     ]),
   ].toSorted();
   return {
