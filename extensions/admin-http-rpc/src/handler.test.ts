@@ -133,6 +133,37 @@ describe("admin-http-rpc plugin handler", () => {
     },
   );
 
+  it("allows the deterministic send method through the authenticated plugin request scope", async () => {
+    dispatchGatewayMethod.mockResolvedValueOnce({
+      ok: true,
+      payload: { runId: "abc", messageId: "123", channel: "discord" },
+    });
+
+    const result = await invoke({
+      id: "send-1",
+      method: "send",
+      params: {
+        to: "channel:1534761366391492679",
+        message: "post-mortem card text",
+        channel: "discord",
+        idempotencyKey: "pm-38",
+      },
+    });
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("send", {
+      to: "channel:1534761366391492679",
+      message: "post-mortem card text",
+      channel: "discord",
+      idempotencyKey: "pm-38",
+    });
+    expect(result.captured.statusCode).toBe(200);
+    expect(result.json).toEqual({
+      id: "send-1",
+      ok: true,
+      payload: { runId: "abc", messageId: "123", channel: "discord" },
+    });
+  });
+
   it("rejects methods outside the admin HTTP RPC allowlist", async () => {
     const result = await invoke({ id: "bad", method: "sessions.send" });
 

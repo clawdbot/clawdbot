@@ -21,6 +21,12 @@ const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
     "config.apply",
   ],
   channels: ["channels.status", "channels.start", "channels.stop", "channels.logout"],
+  // `send` is the same deterministic, non-agent-turn outbound delivery path the
+  // Gateway WebSocket RPC client uses (src/gateway/server-methods/send.ts) — a
+  // literal {to, message, channel} send, not an LLM-mediated one. Exposing it
+  // here lets trusted host automation post to a channel by id without opening
+  // an agent session for it.
+  messaging: ["send"],
   web: ["web.login.start", "web.login.wait"],
   models: ["models.list", "models.authStatus"],
   agents: ["agents.list", "agents.create", "agents.update", "agents.delete"],

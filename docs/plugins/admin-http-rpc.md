@@ -108,6 +108,7 @@ Treat this plugin as a full Gateway operator surface.
 - Trusted identity-bearing HTTP modes honor `x-openclaw-scopes` when present.
 - `gateway.auth.mode="none"` means this route is unauthenticated if the plugin is enabled. Use that only behind a private ingress you fully trust.
 - Requests dispatch through the same Gateway method handlers and scope checks as WebSocket RPC after the plugin route auth passes.
+- The `send` method can post to any channel/target the Gateway's configured accounts can reach. Treat it the same as any other `operator.write` capability on this surface — anyone who can reach this route can send messages as the bot.
 - Keep this route on loopback, tailnet, or a private trusted ingress. Do not expose it directly to the public internet.
 - Plugin manifest contracts are not a sandbox. They prevent accidental use of reserved SDK helpers; trusted plugins still run in the Gateway process.
 
@@ -171,6 +172,8 @@ HTTP status follows the Gateway error when possible. For example, `INVALID_REQUE
 - gateway: `health`, `status`, `logs.tail`, `usage.status`, `usage.cost`, `gateway.restart.request`
 - config: `config.get`, `config.schema`, `config.schema.lookup`, `config.set`, `config.patch`, `config.apply`
 - channels: `channels.status`, `channels.start`, `channels.stop`, `channels.logout`
+- messaging: `send`
+  Deterministic outbound delivery — `{to, message, channel}` posted directly through the same non-agent-turn path the Gateway WebSocket RPC client uses. Does not open or use an agent session.
 - web: `web.login.start`, `web.login.wait`
 - models: `models.list`, `models.authStatus`
 - agents: `agents.list`, `agents.create`, `agents.update`, `agents.delete`
