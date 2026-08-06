@@ -30,7 +30,13 @@ const SYNOLOGY_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 const SYNOLOGY_OUTBOUND_MEDIA_PREPARE_TIMEOUT_MS = 60_000;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS = 2;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES = 4;
-const ACTIVE_CONTENT_TYPES = new Set(["image/svg+xml", "text/html", "application/xhtml+xml"]);
+const ACTIVE_CONTENT_TYPES = new Set([
+  "image/svg+xml",
+  "text/html",
+  "application/xhtml+xml",
+  "application/xml",
+  "text/xml",
+]);
 const HTML_ACTIVE_PREFIX_TAGS = [
   "html",
   "head",
@@ -169,13 +175,8 @@ function sniffActiveTextContent(buffer: Buffer): string | undefined {
       .subarray(cursor, Math.min(cursor + 64, buffer.length))
       .toString("ascii")
       .toLowerCase();
-    if (prefix.startsWith("<?xml")) {
-      const end = buffer.indexOf("?>", cursor + 5, "ascii");
-      if (end === -1) {
-        break;
-      }
-      cursor = end + 2;
-      continue;
+    if (prefix.startsWith("<?")) {
+      return "application/xml";
     }
     if (prefix.startsWith("<!--")) {
       const end = buffer.indexOf("-->", cursor + 4, "ascii");
@@ -185,13 +186,16 @@ function sniffActiveTextContent(buffer: Buffer): string | undefined {
       cursor = end + 3;
       continue;
     }
+    if (/^<!doctype\s+svg(?:\s|>)/u.test(prefix)) {
+      return "image/svg+xml";
+    }
+    if (prefix.startsWith("<!doctype")) {
+      return /^<!doctype\s+html(?:\s|>)/u.test(prefix) ? "text/html" : "application/xml";
+    }
     if (startsWithHtmlTag(prefix, "svg")) {
       return "image/svg+xml";
     }
-    if (
-      /^<!doctype\s+html(?:\s|>)/u.test(prefix) ||
-      HTML_ACTIVE_PREFIX_TAGS.some((tag) => startsWithHtmlTag(prefix, tag))
-    ) {
+    if (HTML_ACTIVE_PREFIX_TAGS.some((tag) => startsWithHtmlTag(prefix, tag))) {
       return "text/html";
     }
     break;
@@ -311,22 +315,9 @@ export async function tryHandleSynologyHostedMediaRequest(
     return true;
   }
 
-  const store = getHostedMediaStore(account.accountId);
   const candidate = tokenCandidates[0];
   if (!candidate) {
     return false;
-  }
-  const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
-  const metadata = await store.readMetadata(candidate.id);
-  if (!metadata || metadata.routePath !== routePath) {
-    res.statusCode = 404;
-    res.end("Not Found");
-    return true;
-  }
-  if (!safeEqualSecret(candidate.token, metadata.token)) {
-    res.statusCode = 401;
-    res.end("Unauthorized");
-    return true;
   }
   if (!servingLimiter.tryAcquire(account.accountId)) {
     res.statusCode = 503;
@@ -335,6 +326,19 @@ export async function tryHandleSynologyHostedMediaRequest(
     return true;
   }
   try {
+    const store = getHostedMediaStore(account.accountId);
+    const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
+    const metadata = await store.readMetadata(candidate.id);
+    if (!metadata || metadata.routePath !== routePath) {
+      res.statusCode = 404;
+      res.end("Not Found");
+      return true;
+    }
+    if (!safeEqualSecret(candidate.token, metadata.token)) {
+      res.statusCode = 401;
+      res.end("Unauthorized");
+      return true;
+    }
     let servedMetadata = metadata;
     let body: Buffer | undefined;
     if (method === "GET") {

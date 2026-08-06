@@ -173,7 +173,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 - Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
 - Keep `dangerouslyAllowInheritedWebhookPath` off unless you explicitly accept shared-path routing risk in a multi-account setup.
 - Reverse-proxy access logs can capture attachment capability tokens. Disable query-string logging or redact `__openclaw_synology_media_token_*` parameters, and keep application logs free of full capability URLs.
-- Hosted attachments use `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`. Active HTML and SVG attachments are rejected.
+- Hosted attachments use `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`. HTML, SVG, and XML attachments are rejected.
 
 ## Troubleshooting
 

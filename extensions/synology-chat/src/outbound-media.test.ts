@@ -54,11 +54,17 @@ function createAccount(overrides: Partial<ResolvedSynologyChatAccount> = {}) {
 }
 
 function installRuntime() {
-  const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests("synology-chat", { ...options, env: testStateEnv }),
-  );
+  const openedStores: Array<ReturnType<typeof createPluginStateKeyedStoreForTests>> = [];
+  const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) => {
+    const store = createPluginStateKeyedStoreForTests("synology-chat", {
+      ...options,
+      env: testStateEnv,
+    });
+    openedStores.push(store);
+    return store;
+  });
   setSynologyRuntime({ state: { openKeyedStore } } as unknown as PluginRuntime);
-  return openKeyedStore;
+  return { openKeyedStore, openedStores };
 }
 
 function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology"): string {
@@ -207,6 +213,53 @@ describe("Synology Chat hosted outbound media", () => {
     expect(method.statusCode).toBe(405);
   });
 
+  it("bounds unauthenticated capability lookups before reading persistent state", async () => {
+    const { openedStores } = installRuntime();
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/report.pdf",
+    });
+    const metadataStore = openedStores[0];
+    if (!metadataStore) {
+      throw new Error("expected hosted media metadata store");
+    }
+    const originalLookup = metadataStore.lookup.bind(metadataStore);
+    let releaseReads: (() => void) | undefined;
+    const readGate = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const lookupSpy = vi.spyOn(metadataStore, "lookup").mockImplementation(async (key) => {
+      await readGate;
+      return await originalLookup(key);
+    });
+    const capability = new URL(internalCapabilityUrl(prepared.url), "http://localhost");
+    const tokenKey = [...capability.searchParams.keys()].find((key) =>
+      key.startsWith("__openclaw_synology_media_token_"),
+    );
+    if (!tokenKey) {
+      throw new Error("expected Synology hosted media token");
+    }
+    capability.searchParams.set(tokenKey, "wrong");
+    const requestUrl = `${capability.pathname}${capability.search}`;
+    const responses = Array.from({ length: 5 }, () => makeRes());
+    const requests = responses.map((response) =>
+      tryHandleSynologyHostedMediaRequest(
+        makeReq("GET", "", { url: requestUrl }),
+        response,
+        account,
+      ),
+    );
+
+    await vi.waitFor(() => expect(lookupSpy).toHaveBeenCalledTimes(4));
+    expect(responses.filter((response) => response.statusCode === 503)).toHaveLength(1);
+    releaseReads?.();
+    await expect(Promise.all(requests)).resolves.toEqual([true, true, true, true, true]);
+    expect(responses.map((response) => response.statusCode).toSorted((a, b) => a - b)).toEqual([
+      401, 401, 401, 401, 503,
+    ]);
+  });
+
   it("rejects active content and leaves no live capability", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("<svg onload=alert(1)></svg>"),
@@ -232,6 +285,14 @@ describe("Synology Chat hosted outbound media", () => {
     {
       name: "XML-prefixed SVG bytes with generic metadata",
       buffer: Buffer.from('<?xml version="1.0"?><!--fixture--><svg onload="alert(1)"/>'),
+      contentType: "application/octet-stream",
+      fileName: "diagram.bin",
+    },
+    {
+      name: "SVG doctype bytes with generic metadata",
+      buffer: Buffer.from(
+        '<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+      ),
       contentType: "application/octet-stream",
       fileName: "diagram.bin",
     },
