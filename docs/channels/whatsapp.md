@@ -672,8 +672,8 @@ through immediately because batching attachments can detach their metadata. A
 longer window gives contacts time to send several short text messages before the
 agent sees the batch; `0` disables the wait for that conversation.
 
-```ts
-export default {
+```json5
+{
   messages: {
     inbound: {
       byChannel: {
@@ -704,7 +704,7 @@ export default {
       },
     },
   },
-};
+}
 ```
 
 Within the active `direct` or `groups` map, precedence is:
