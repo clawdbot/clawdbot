@@ -236,7 +236,7 @@ describe("Codex trajectory recorder", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("preserves usage when truncating oversized model completion events", async () => {
+  it("preserves the completion stop reason when truncating oversized model completion events", async () => {
     const attempt = {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -266,6 +266,7 @@ describe("Codex trajectory recorder", () => {
         terminal: { kind: "ok" },
         attemptUsage: usage,
         assistantTexts: ["done"],
+        lastAssistant: { stopReason: "length" },
         messagesSnapshot: Array.from({ length: 20 }, (_value, index) => ({
           role: index % 2 === 0 ? "user" : "assistant",
           content: `message-${index} ${"x".repeat(32_000)}`,
@@ -278,6 +279,7 @@ describe("Codex trajectory recorder", () => {
       truncated: true,
       reason: "trajectory-event-size-limit",
       usage,
+      stopReason: "length",
     });
     expect(events[0]?.data?.messagesSnapshot).toBeUndefined();
     expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");
