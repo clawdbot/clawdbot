@@ -718,6 +718,45 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(textDeltas(events).join("")).toBe(visibleChunks.join(""));
   });
 
+  it("keeps protection work linear when streamed text is bracket-dense", async () => {
+    // Tokenizers emit "[" as its own token, so a bracket-dense answer ends many
+    // deltas exactly at "[". The empty tool name matches every prefix, so each of
+    // those used to re-parse the whole accumulated response.
+    const buildDeltas = (sections: number) => {
+      const deltas = ["```toml\n"];
+      for (let index = 0; index < sections; index += 1) {
+        deltas.push("[", `section-${index}`, "]\n", `key-${index} = "value ${index}"\n`);
+      }
+      deltas.push("```\n");
+      return deltas;
+    };
+    const measure = async (sections: number) => {
+      let charsResolved = 0;
+      const deltas = buildDeltas(sections);
+      const events = await collectNormalizedEvents(
+        deltas.map((delta) => streamTextDelta(delta)),
+        {
+          matcher,
+          createPromotedToolCallEvents: () => [],
+          normalizeTerminalMessage: () => undefined,
+          resolveProtectedRanges: (text) => {
+            charsResolved += text.length;
+            return [];
+          },
+        },
+      );
+      expect(textDeltas(events).join("")).toBe(deltas.join(""));
+      return charsResolved;
+    };
+
+    const small = await measure(150);
+    const large = await measure(600);
+    // Quadratic growth would multiply this by ~16 for a 4x longer response.
+    expect(large).toBeLessThan(small * 8);
+    // And the absolute cost stays proportional to the candidates, not the response.
+    expect(large).toBeLessThan(50_000);
+  });
+
   it("materializes accumulated Markdown only after a candidate-shaped delta", async () => {
     const resolvedLengths: number[] = [];
     const visibleChunks = Array.from({ length: 1_000 }, () => "ordinary prose\n");

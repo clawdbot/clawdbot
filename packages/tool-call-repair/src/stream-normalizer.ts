@@ -445,6 +445,17 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
     : undefined;
 }
 
+/**
+ * An opener with no name characters yet, at the very end of the delta. Every
+ * matcher accepts the empty name as a prefix, so `[` alone is not evidence of a
+ * call — and resolving protection for it costs a re-parse of the whole response.
+ * The next delta carries the name and settles it against the candidate buffer.
+ */
+function isNamelessCallOpener(text: string, start: number): boolean {
+  const opener = text[start];
+  return (opener === "[" || opener === "<") && start + 1 >= text.length;
+}
+
 function findPotentialCallStart(
   text: string,
   atLineStart: boolean,
@@ -1337,7 +1348,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
               overCapSequenceOpen ||
               (lineStarts.get(key) ?? true);
             let callStart = findPotentialCallStart(incoming, atLineStart, options.matcher);
-            if (callStart !== null && options.resolveProtectedRanges) {
+            if (
+              callStart !== null &&
+              options.resolveProtectedRanges &&
+              !isNamelessCallOpener(incoming, skipLineIndentation(incoming, callStart))
+            ) {
               if (protectionContextOverflow) {
                 // Bounded live history no longer proves ownership. Preserve bytes and let the
                 // authoritative terminal snapshot decide instead of deleting literal content.
