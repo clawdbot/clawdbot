@@ -5597,6 +5597,7 @@ class ChatController internal constructor(
           timestampMs = ts,
           idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
           entryId = obj["__openclaw"].asObjectOrNull()?.get("id").asStringOrNull(),
+          senderLabel = obj["senderLabel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
         )
       }
 

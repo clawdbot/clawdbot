@@ -1306,6 +1306,7 @@ private fun ChatMessageList(
               live = false,
               content = item.message.content,
               timestampMs = item.message.timestampMs,
+              senderLabel = item.message.senderLabel,
               onReplyMessage = onReplyMessage,
               sessionActionsEnabled = sessionActionsEnabled,
               onRewindMessage = onRewindMessage,
@@ -1349,6 +1350,7 @@ private fun ChatMessageList(
               live = true,
               content = listOf(ChatMessageContent(text = item.text)),
               timestampMs = null,
+              senderLabel = null,
               onReplyMessage = onReplyMessage,
               sessionActionsEnabled = false,
               onRewindMessage = onRewindMessage,
@@ -1599,6 +1601,7 @@ private fun ChatBubble(
   live: Boolean,
   content: List<ChatMessageContent>,
   timestampMs: Long?,
+  senderLabel: String?,
   onReplyMessage: (String) -> Unit,
   sessionActionsEnabled: Boolean,
   onRewindMessage: (String) -> Unit,
@@ -1662,7 +1665,9 @@ private fun ChatBubble(
             text =
               when {
                 live -> nativeString("OpenClaw · Live")
-                isUser -> nativeString("You")
+                isUser ->
+                  senderLabel?.takeIf { it.isNotBlank() }?.let(::nativeString)
+                    ?: nativeString("You")
                 normalizedRole == "system" -> nativeString("System")
                 else -> nativeString("OpenClaw")
               },
