@@ -19,6 +19,7 @@ import type {
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+import { notifyListeners } from "../shared/listeners.js";
 import {
   connectWorkerConnectionAttempt,
   isRetryableWorkerCloseReason,
@@ -386,16 +387,12 @@ export class WorkerConnection {
     for (const waiter of waiters) {
       waiter.resolve(hello);
     }
-    for (const listener of this.readyListeners) {
-      listener(hello);
-    }
+    notifyListeners(this.readyListeners, hello);
   }
 
   private transition(state: WorkerConnectionState): void {
     this.stateValue = state;
-    for (const listener of this.stateListeners) {
-      listener(state);
-    }
+    notifyListeners(this.stateListeners, state);
   }
 
   private finishFenced(reason: WorkerFencedReason): void {

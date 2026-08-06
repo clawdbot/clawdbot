@@ -99,6 +99,7 @@ describe("anthropic provider replay hooks", () => {
   it("lets native session discovery be disabled without disabling Anthropic", () => {
     const registerCliBackend = vi.fn();
     const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
     const registerProvider = vi.fn();
     const registerSessionCatalog = vi.fn();
     anthropicPlugin.register(
@@ -110,12 +111,14 @@ describe("anthropic provider replay hooks", () => {
         pluginConfig: { sessionCatalog: { enabled: false } },
         registerCliBackend,
         registerNodeHostCommand,
+        registerNodeInvokePolicy,
         registerProvider,
         registerSessionCatalog,
       }),
     );
 
     expect(registerCliBackend).toHaveBeenCalledOnce();
+    expect(registerNodeInvokePolicy).toHaveBeenCalledOnce();
     expect(registerProvider).toHaveBeenCalledOnce();
     expect(registerNodeHostCommand).not.toHaveBeenCalled();
     expect(registerSessionCatalog).not.toHaveBeenCalled();

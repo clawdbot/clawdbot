@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { flushLogger } from "../logging/logger.js";
+import {
+  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -327,6 +331,27 @@ describe("device bootstrap tokens", () => {
       verifyBootstrapToken(baseDir, issued.token, {
         role: "operator",
         scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("requires the exact closed browser-owner profile before binding", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
       }),
     ).resolves.toEqual({ ok: true });
   });

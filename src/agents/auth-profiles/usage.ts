@@ -1150,7 +1150,10 @@ export async function markInlineProviderApiKeyFailure(params: {
   modelId?: string;
 }): Promise<void> {
   const { store, provider, reason, agentDir, runId, modelId } = params;
-  if (isAuthCooldownBypassedForProvider(provider)) {
+  if (
+    (reason !== "auth" && reason !== "auth_permanent" && reason !== "billing") ||
+    isAuthCooldownBypassedForProvider(provider)
+  ) {
     return;
   }
 

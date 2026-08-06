@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -22,14 +23,6 @@ type SkillTreeFile = {
   sha256: string;
   sizeBytes: number;
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized || undefined;
-}
 
 async function collectSkillTreeFiles(skillDir: string, relativeDir = ""): Promise<SkillTreeFile[]> {
   const entries = await fs.readdir(path.join(skillDir, relativeDir), { withFileTypes: true });

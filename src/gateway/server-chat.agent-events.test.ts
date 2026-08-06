@@ -24,6 +24,7 @@ import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const logErrorMock = vi.fn();
 const normalizeLiveAssistantBufferedTextMock = vi.hoisted(() => vi.fn());
+const loadGatewaySessionRow = vi.hoisted(() => vi.fn());
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
@@ -58,7 +59,7 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
 }));
 
 vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
-  loadGatewaySessionRow: vi.fn(),
+  loadGatewaySessionLifecycleSnapshot: vi.fn(),
 }));
 
 vi.mock("./session-utils.js", () => {
@@ -96,7 +97,7 @@ import {
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
-import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -127,6 +128,13 @@ describe("agent event handler", () => {
         legacyKey: undefined,
       });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
+    vi.mocked(loadGatewaySessionLifecycleSnapshot)
+      .mockReset()
+      .mockImplementation((sessionKey, options) => ({
+        row: options
+          ? loadGatewaySessionRow(sessionKey, options)
+          : loadGatewaySessionRow(sessionKey),
+      }));
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     logErrorMock.mockReset();
     normalizeLiveAssistantBufferedTextMock.mockReset();
@@ -174,7 +182,7 @@ describe("agent event handler", () => {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
+      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshot,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
@@ -1233,6 +1241,101 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("flushes buffered text as delta before the error terminal", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    registerNamedChatRun(chatRunState, "err-flush");
+
+    emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello" });
+
+    now = 10_100;
+    emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello world" });
+
+    emitAgentEvent(
+      handler,
+      "run-err-flush",
+      "lifecycle",
+      { phase: "error", error: "provider failed" },
+      { seq: 2 },
+    );
+
+    const chatPayloads = chatBroadcastCalls(broadcast).map(
+      ([, payload]) => payload as { state?: string; deltaText?: string },
+    );
+    expect(
+      chatPayloads
+        .filter((payload) => payload.state === "delta")
+        .map((payload) => payload.deltaText)
+        .join(""),
+    ).toBe("Hello world");
+    expect(chatPayloads.at(-1)?.state).toBe("error");
+    nowSpy.mockRestore();
+  });
+
+  it("flushes buffered text as delta before deferring a retryable error terminal", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness({
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerNamedChatRun(chatRunState, "err-grace");
+
+    emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello" });
+
+    now = 10_100;
+    emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello world" });
+
+    emitAgentEvent(
+      handler,
+      "run-err-grace",
+      "lifecycle",
+      { phase: "error", error: "retryable provider failure" },
+      { seq: 2 },
+    );
+
+    // The terminal is still deferred behind the retry grace, but the tail the
+    // throttle withheld has already been delivered.
+    expect(vi.getTimerCount()).toBe(1);
+    expect(
+      chatBroadcastCalls(broadcast)
+        .map(([, payload]) => payload as { state?: string; deltaText?: string })
+        .filter((payload) => payload.state === "delta")
+        .map((payload) => payload.deltaText)
+        .join(""),
+    ).toBe("Hello world");
+    nowSpy.mockRestore();
+  });
+
+  it("carries buffered text in the terminal message when an error classifies as cancellation", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    registerNamedChatRun(chatRunState, "err-cancel");
+
+    emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello" });
+
+    now = 10_100;
+    emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello world" });
+
+    emitAgentEvent(
+      handler,
+      "run-err-cancel",
+      "lifecycle",
+      { phase: "error", aborted: true },
+      { seq: 2 },
+    );
+
+    const terminal = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(terminal?.state).toBe("aborted");
+    expect(terminal?.message?.content?.[0]?.text).toBe("Hello world");
+    nowSpy.mockRestore();
+  });
+
   it("preserves pre-tool assistant text when later segments stream as non-prefix snapshots", () => {
     let now = 10_500;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -2116,6 +2219,52 @@ describe("agent event handler", () => {
       });
     }
   });
+
+  it.each([
+    { eventRunId: "run-current", expectedStartedAt: 1_900 },
+    { eventRunId: "run-older", expectedStartedAt: 2_000 },
+  ])(
+    "projects older lifecycle timestamps only for the owning run ($eventRunId)",
+    async ({ eventRunId, expectedStartedAt }) => {
+      vi.mocked(loadGatewaySessionLifecycleSnapshot).mockReturnValue({
+        lifecycleRunId: "run-current",
+        row: {
+          key: "session-owned",
+          kind: "direct",
+          sessionId: "session-id",
+          updatedAt: 2_000,
+          status: "running",
+          startedAt: 2_000,
+        },
+      });
+      const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+        lifecycleErrorRetryGraceMs: 0,
+      });
+      sessionEventSubscribers.subscribe("conn-session");
+
+      emitAgentEvent(
+        handler,
+        eventRunId,
+        "lifecycle",
+        { phase: "start", startedAt: 1_900 },
+        { sessionKey: "session-owned", sessionId: "session-id", ts: 2_200 },
+      );
+
+      await waitForFast(() => {
+        expect(
+          broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+        ).toHaveLength(1);
+      });
+      const payload = broadcastToConnIds.mock.calls.find(
+        ([event]) => event === "sessions.changed",
+      )?.[1];
+      expectPayloadFields(payload, {
+        sessionKey: "session-owned",
+        status: "running",
+        startedAt: expectedStartedAt,
+      });
+    },
+  );
 
   it("suppresses late interrupted pre-restart lifecycle events from live projections", () => {
     mockSessionEntry(

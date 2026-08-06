@@ -87,6 +87,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
     },
     read: runtime.read,
+    readStartup: runtime.readStartup,
     refresh: runtime.refresh,
   };
 }

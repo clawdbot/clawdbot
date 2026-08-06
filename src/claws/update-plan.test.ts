@@ -166,7 +166,7 @@ describe("buildClawUpdatePlan", () => {
       blockers: [],
     });
     expect(current.config).toEqual(beforeConfig);
-    expect(await readFile(databasePath)).toEqual(beforeBytes);
+    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
     expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
   });
 
@@ -728,6 +728,7 @@ describe("buildClawUpdatePlan", () => {
             ok: true as const,
             plan: {
               workspaceDir: current.addPlan.agent.workspace,
+              requestedRef: "triage",
               slug: "triage",
               version: "1.0.0",
               installedAt: 0,

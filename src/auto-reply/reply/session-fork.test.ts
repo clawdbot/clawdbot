@@ -9,6 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forkSessionEntryFromParent,
@@ -165,10 +166,15 @@ describe("forkSessionEntryFromParent", () => {
       ],
     );
 
+    const fallbackEntry: InternalSessionEntry = {
+      lifecycleRunId: "pre-fork-run",
+      sessionId: "",
+      updatedAt: 2,
+    };
     const result = await forkSessionEntryFromParent({
       agentId: "main",
       config: { session: { store: configStorePath } } as OpenClawConfig,
-      fallbackEntry: { sessionId: "", updatedAt: 2 },
+      fallbackEntry,
       parentSessionKey,
       parentStoreKeys: [parentSessionKey],
       sessionKey,
@@ -196,6 +202,7 @@ describe("forkSessionEntryFromParent", () => {
       sessionId: result.fork.sessionId,
       updatedAt: expect.any(Number),
     });
+    expect((stored as InternalSessionEntry | undefined)?.lifecycleRunId).toBeUndefined();
     expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
       undefined,
     );

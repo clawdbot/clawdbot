@@ -66,8 +66,10 @@ import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
-import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
-import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
+import {
+  createClaudeSessionNodeInvokePolicies,
+  registerClaudeSessionDiscovery,
+} from "./session-catalog-registration.js";
 import { isAnthropicOAuthApiKey, wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 

@@ -26,6 +26,7 @@ import {
   createTelegramPollExtraToolSchemas,
   createTelegramRichSendExtraToolSchemas,
 } from "./message-tool-schema.js";
+import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
@@ -75,6 +76,7 @@ function prepareTelegramSendPayload({
   ctx,
   payload,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
+  rejectTelegramNativeButtonParams(ctx.params);
   if (
     ctx.action !== "send" ||
     (!payload.presentation && !payload.location && payload.videoAsNote !== true)

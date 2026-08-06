@@ -30,6 +30,7 @@ export function resolveQaRuntimePairLaneScenarioIds(params: {
   scenarios?: QaSeedScenarioWithSource[];
   runtimePairLanes: readonly QaRuntimePairLane[];
   runtimePair: boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }): {
   scenarioIds: string[];
   excludedLaneScenarios: QaSeedScenarioWithSource[];
@@ -62,6 +63,9 @@ export function resolveQaRuntimePairLaneScenarioIds(params: {
       channelDriver: params.channelDriver,
       channel: params.channel ?? scenario.execution.channel ?? params.defaultChannel,
       claudeCliAuthMode: params.claudeCliAuthMode,
+      supportsModuleFlows: params.resolveModuleFlowSupport?.(
+        params.channel ?? scenario.execution.channel ?? params.defaultChannel,
+      ),
     }),
   );
   const excludedLaneScenarios = compatibleScenarios.filter(

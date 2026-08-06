@@ -77,6 +77,10 @@
       "destination": "/plugins/reference/qa-lab"
     },
     {
+      "source": "/plugins/reference/fish-audio",
+      "destination": "/plugins/reference/fish-audio-speech"
+    },
+    {
       "source": "/concepts/openclaw-sdk",
       "destination": "/gateway/external-apps"
     },

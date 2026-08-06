@@ -513,13 +513,18 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   channel: "telegram",
   to: "123456789",
   message: "Choose an option:",
-  buttons: [
-    [
-      { text: "Yes", callback_data: "yes" },
-      { text: "No", callback_data: "no" },
+  presentation: {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          { label: "Yes", action: { type: "callback", value: "yes" }, style: "success" },
+          { label: "No", action: { type: "callback", value: "no" }, style: "danger" },
+          { label: "Cancel", action: { type: "callback", value: "cancel" } },
+        ],
+      },
     ],
-    [{ text: "Cancel", callback_data: "cancel" }],
-  ],
+  },
 }
 ```
 
@@ -535,16 +540,21 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     blocks: [
       {
         type: "buttons",
-        buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
+        buttons: [
+          {
+            label: "Launch",
+            action: { type: "web-app", url: "https://example.com/app" },
+          },
+        ],
       },
     ],
   },
 }
 ```
 
-    `web_app` buttons only work in private chats between a user and the bot.
+    Mini App buttons only work in private chats between a user and the bot.
 
-    Callback clicks not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
+    Callback action values not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
 
   </Accordion>
 

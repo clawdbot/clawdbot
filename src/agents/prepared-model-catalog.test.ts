@@ -58,6 +58,7 @@ vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
 
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import {
+  getPublishedPreparedModelCatalogOwnerSnapshot,
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalogSnapshot,
   loadResolvedPublishedModelCatalogOwner,
@@ -103,6 +104,26 @@ describe("prepared model catalog access", () => {
     expect(mocks.getSnapshot).toHaveBeenLastCalledWith(
       expect.objectContaining({ config: mocks.config, readOnly: true }),
     );
+  });
+
+  it("returns the published owner without config matching or catalog materialization", () => {
+    const committedSnapshot = {
+      ...fullSnapshot,
+      config: { agents: { defaults: { model: "openai/committed" } } },
+      loadFullModelCatalog: vi.fn(),
+    };
+    mocks.getSnapshot.mockReturnValue(committedSnapshot);
+
+    expect(
+      getPublishedPreparedModelCatalogOwnerSnapshot({
+        config: { agents: { defaults: { model: "openai/requested" } } },
+        allowGatewaySubagentBinding: true,
+      }),
+    ).toBe(committedSnapshot);
+    expect(mocks.getSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.getSnapshot.mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
+    expect(committedSnapshot.loadFullModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.prepareSnapshot).not.toHaveBeenCalled();
   });
 
   it("prefers the full lifecycle generation for read-only catalog loads", async () => {
