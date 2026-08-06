@@ -272,6 +272,105 @@ describe("skill_workshop tool", () => {
     expect(proposalMutationBudget.remaining).toBe(0);
   });
 
+  it("composes patch proposals by replacing the quoted span of the live body", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-extend-");
+    const fullTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    const created = await fullTool.execute("seed-create", {
+      action: "create",
+      name: "weather-planner",
+      description: "Plan around the weather forecast",
+      proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    });
+    await fullTool.execute("seed-apply", {
+      action: "apply",
+      proposal_id: (created.details as { id: string }).id,
+      reason: "seed live skill",
+    });
+
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+    });
+    expect(
+      (reviewTool.parameters as { properties: { action: { enum: string[] } } }).properties.action
+        .enum,
+    ).toEqual(["create", "patch", "update", "read", "revise", "list", "inspect"]);
+
+    await expect(
+      reviewTool.execute("patch-no-match", {
+        action: "patch",
+        skill_name: "weather-planner",
+        old_string: "Text that is not in the skill.",
+        new_string: "Replacement.",
+      }),
+    ).rejects.toThrow("not found in the live skill body");
+
+    const extended = await reviewTool.execute("review-patch", {
+      action: "patch",
+      skill_name: "weather-planner",
+      old_string: "Check weather before outdoor recommendations.",
+      new_string:
+        "Check weather before outdoor recommendations.\nCheck alerts and timing before recommending.",
+    });
+
+    expect(extended.details).toMatchObject({
+      status: "pending",
+      kind: "update",
+      skillKey: "weather-planner",
+    });
+    expect(proposalMutationBudget.patchProposalIds?.size).toBe(1);
+    const inspected = await createSkillWorkshopTool({ workspaceDir }).execute("inspect-extend", {
+      action: "inspect",
+      proposal_id: (extended.details as { id: string }).id,
+    });
+    const content = (inspected as { details: { content?: string } }).details.content ?? "";
+    const inspectText = (inspected.content[0] as { text: string }).text;
+    const proposalBody = content || inspectText;
+    expect(proposalBody).toContain("Check weather before outdoor recommendations.");
+    expect(proposalBody).toContain("Check alerts and timing before recommending.");
+  });
+
+  it("caps reviewer live-skill reads at the read budget", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-read-cap-");
+    const fullTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    const bigBody = `# Big Skill\n\n${"A detailed operational line.\n".repeat(1200)}`;
+    const created = await fullTool.execute("seed-create", {
+      action: "create",
+      name: "big-skill",
+      description: "A very large operator skill",
+      proposal_content: bigBody,
+    });
+    await fullTool.execute("seed-apply", {
+      action: "apply",
+      proposal_id: (created.details as { id: string }).id,
+      reason: "seed live skill",
+    });
+
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget: { remaining: 1 },
+    });
+    const read = await reviewTool.execute("review-read", {
+      action: "read",
+      skill_name: "big-skill",
+    });
+    const text = (read.content[0] as { text: string }).text;
+    expect(read.details).toMatchObject({ skillKey: "big-skill", truncated: true });
+    expect(text.length).toBeLessThanOrEqual(20_000 + 100);
+    expect(text).toContain("[truncated: skill exceeds the reviewer read budget]");
+  });
+
   it("does not refund the review mutation budget after a failed mutation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-failure-");
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };

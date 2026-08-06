@@ -73,6 +73,8 @@ export type SkillWorkshopProposalMutationBudget = {
   failedMutations?: number;
   /** Run-local identity set used to keep idea counts distinct. */
   mutatedProposalIds?: Set<string>;
+  /** Proposals composed mechanically by patching the live body with a reviewer edit. */
+  patchProposalIds?: Set<string>;
 };
 
 export type SkillWorkshopProposalReviewProgress = {
@@ -226,7 +228,13 @@ export type SkillProposalUpdateInput = {
   env?: NodeJS.ProcessEnv;
   skillName: string;
   description?: string;
-  content: string;
+  /** Complete replacement body. Exactly one of content or composePatch is required. */
+  content?: string;
+  /**
+   * Targeted find-and-replace composed onto the live body inside the same read that
+   * hash-binds the proposal. An empty oldString appends newString to the end.
+   */
+  composePatch?: { oldString: string; newString: string };
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
   autonomousCapture?: boolean;
