@@ -480,6 +480,38 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
   });
 
+  it("clears a malformed pending open without scheduling a transient retry", async () => {
+    const harness = createHarness({ label: "Malformed pending retry" });
+    const sessionKey = "agent::malformed-pending";
+    const credentialFingerprint = discussionCredentialFingerprint("test-token");
+    const generation = reserveDiscussionBindingGeneration({
+      runtime: harness.runtime,
+      sessionKey,
+      accountId: "default",
+      credentialFingerprint,
+      destinationIdentity: TEST_DESTINATION_IDENTITY,
+      createGeneration: () => "malformed-pending-generation",
+    });
+    recordPendingDiscussionOpen({
+      runtime: harness.runtime,
+      sessionKey,
+      generation,
+      pending: {
+        accountId: "default",
+        serverBaseUrl: "https://clickclack.example",
+        workspaceId: "wsp_team",
+        sessionId: "session-id",
+        externalRef: testExternalRef(sessionKey),
+        credentialFingerprint,
+      },
+    });
+
+    await expect(harness.service.reconcile(sessionKey)).resolves.toBeUndefined();
+
+    expect(harness.createChannel).not.toHaveBeenCalled();
+    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+  });
+
   it("stops honoring an existing binding when a second discussion account is enabled", async () => {
     const harness = createHarness({ label: "Previously unambiguous" });
     const sessionKey = "agent:main:became-ambiguous";

@@ -9,14 +9,30 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { getSessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
+import { classifySessionKeyShape } from "../../routing/session-key.js";
 import { hasExplicitSessionName, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import { readSessionTitleFieldsFromTranscript } from "../session-transcript-title-reader.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DISCUSSION_TITLE_TIMEOUT_MS = 10_000;
+
+function rejectMalformedSessionKey(sessionKey: string, respond: RespondFn): boolean {
+  if (classifySessionKeyShape(sessionKey) !== "malformed_agent") {
+    return false;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Malformed agent session key; refusing default-agent resolution.",
+    ),
+  );
+  return true;
+}
 
 async function maybeGenerateTitleBeforeDiscussionOpen(params: {
   context: GatewayRequestContext;
@@ -111,6 +127,9 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    if (rejectMalformedSessionKey(params.sessionKey, respond)) {
+      return;
+    }
     const provider = getSessionDiscussionProvider();
     if (!provider) {
       respond(true, { state: "none" }, undefined);
@@ -153,6 +172,9 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
         respond,
       )
     ) {
+      return;
+    }
+    if (rejectMalformedSessionKey(params.sessionKey, respond)) {
       return;
     }
     const provider = getSessionDiscussionProvider();

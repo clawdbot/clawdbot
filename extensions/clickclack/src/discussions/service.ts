@@ -540,10 +540,20 @@ export class ClickClackDiscussionService {
       sessionKey: pending.sessionKey,
       readConsistency: "latest",
     });
-    const activeAccounts = discussionAccountsForAgent(
-      cfg,
-      resolveDiscussionAgentId(cfg, pending.sessionKey),
-    );
+    let activeAccounts: ResolvedClickClackAccount[] = [];
+    try {
+      activeAccounts = discussionAccountsForAgent(
+        cfg,
+        resolveDiscussionAgentId(cfg, pending.sessionKey),
+      );
+    } catch (error) {
+      // A malformed or legacy pending key cannot select a retry account. Keep
+      // reconciliation moving so a permanent routing error does not enter the
+      // scheduler's transient retry loop.
+      this.#logger().warn(
+        `skipping ClickClack pending-open retry for ${pending.sessionKey}: ${String(error)}`,
+      );
+    }
     const retryAccount = activeAccounts.length === 1 ? activeAccounts[0] : undefined;
     if (
       options.allowRetry !== false &&
