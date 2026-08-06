@@ -12,7 +12,7 @@ export * from "../../packages/markdown-core/src/ir.js";
 export * from "../../packages/markdown-core/src/render-aware-chunking.js";
 export * from "../../packages/markdown-core/src/render.js";
 export * from "../../packages/markdown-core/src/tables.js";
-export * from "../shared/global-singleton.js";
+export { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 export * from "../../packages/normalization-core/src/record-coerce.js";
 export * from "../shared/scoped-expiring-id-cache.js";
 export * from "../../packages/normalization-core/src/string-coerce.js";

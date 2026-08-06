@@ -1095,7 +1095,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
+          name: release-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
@@ -1175,18 +1175,65 @@ jobs:
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Resolve parity lane artifacts
+        id: resolve_parity_lane_artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/parity-lanes.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh resolve \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT" \
+            --target-sha "$RELEASE_CHECK_TARGET_SHA" \
+            --pair "qa_lab_parity_lane_release_checks|candidate|release-check-status-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}" \
+            --pair "qa_lab_parity_lane_release_checks|baseline|release-check-status-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}" \
+            --selection-file "$selection_file" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Download parity lane statuses
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_parity_lane_artifacts.outputs.status_ids }}
+          path: .artifacts/release-check-status/
+          merge-multiple: true
+
       - name: Download parity lane artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: release-qa-parity-*-${{ needs.resolve_target.outputs.revision }}
+          artifact-ids: ${{ steps.resolve_parity_lane_artifacts.outputs.payload_ids }}
           path: .artifacts/qa-e2e/
           merge-multiple: true
+
+      - name: Verify parity lane statuses
+        shell: bash
+        run: |
+          set -euo pipefail
+          validated_file=".artifacts/release-check-selection/parity-lanes-validated.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_parity_lane_artifacts.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file "$validated_file"
+          jq -e 'length == 2 and all(.[]; .status == "success")' "$validated_file" >/dev/null
 
       - name: Build private QA runtime
         env:
@@ -1209,7 +1256,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-parity-${{ needs.resolve_target.outputs.revision }}
+          name: release-qa-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
@@ -1420,7 +1467,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-runtime-pair-lane-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
+          name: release-qa-runtime-pair-lane-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
@@ -1454,23 +1501,62 @@ jobs:
     timeout-minutes: 15
     permissions:
       actions: read
+      contents: read
     steps:
-      - name: Download runtime-pair lane artifacts
-        id: download_runtime_parity_artifacts
-        if: always()
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          pattern: release-qa-runtime-pair-lane-*-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/qa-e2e/
-          merge-multiple: true
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Resolve runtime-pair lane artifacts
+        id: resolve_runtime_pair_artifacts
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RUN_RELEASE_SOAK: ${{ needs.resolve_target.outputs.run_release_soak }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/runtime-pair-lanes.json"
+          args=(
+            resolve
+            --repository "$GITHUB_REPOSITORY"
+            --run-id "$GITHUB_RUN_ID"
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+            --pair "qa_lab_runtime_pair_lane_release_checks|core|release-internal-status-qa-runtime-pair-lane-core-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-pair-lane-core-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            --selection-file "$selection_file"
+            --github-output "$GITHUB_OUTPUT"
+          )
+          if [[ "$RUN_RELEASE_SOAK" == "true" ]]; then
+            args+=(
+              --pair "qa_lab_runtime_pair_lane_release_checks|soak|release-internal-status-qa-runtime-pair-lane-soak-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-pair-lane-soak-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh "${args[@]}"
 
       - name: Download runtime-pair lane statuses
-        id: download_runtime_parity_statuses
-        if: always()
+        id: download_runtime_pair_statuses
+        if: always() && steps.resolve_runtime_pair_artifacts.outcome == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: release-internal-status-qa-runtime-pair-lane-*-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ steps.resolve_runtime_pair_artifacts.outputs.status_ids }}
           path: .artifacts/release-check-status/
+          merge-multiple: true
+
+      - name: Download runtime-pair lane artifacts
+        id: download_runtime_pair_artifacts
+        if: always() && steps.resolve_runtime_pair_artifacts.outcome == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_runtime_pair_artifacts.outputs.payload_ids }}
+          path: .artifacts/qa-e2e/
           merge-multiple: true
 
       - name: Verify runtime-pair lane statuses
@@ -1478,55 +1564,28 @@ jobs:
         if: always()
         shell: bash
         env:
-          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           RUN_RELEASE_SOAK: ${{ needs.resolve_target.outputs.run_release_soak }}
         run: |
           set -euo pipefail
-          lanes=(core)
+          validated_file=".artifacts/release-check-selection/runtime-pair-lanes-validated.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_runtime_pair_artifacts.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file "$validated_file"
+          expected_count=1
           if [[ "$RUN_RELEASE_SOAK" == "true" ]]; then
-            lanes+=(soak)
+            expected_count=2
           fi
-          status_field() {
-            local file="$1"
-            local key="$2"
-            awk -v key="$key" '
-              index($0, key "=") == 1 {
-                count += 1
-                value = substr($0, length(key) + 2)
-              }
-              END {
-                if (count != 1) {
-                  exit 1
-                }
-                print value
-              }
-            ' "$file"
-          }
-          for lane in "${lanes[@]}"; do
-            status_path=".artifacts/release-check-status/qa_lab_runtime_pair_lane_release_checks-${lane}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
-            run_id="$(status_field "$status_path" run_id)"
-            run_attempt="$(status_field "$status_path" run_attempt)"
-            target_sha="$(status_field "$status_path" target_sha)"
-            job_name="$(status_field "$status_path" job)"
-            variant="$(status_field "$status_path" variant)"
-            status="$(status_field "$status_path" status)"
-            if [[ "$run_id" != "$GITHUB_RUN_ID" ||
-                  "$run_attempt" != "$GITHUB_RUN_ATTEMPT" ||
-                  "$target_sha" != "$RELEASE_CHECK_TARGET_SHA" ||
-                  "$job_name" != "qa_lab_runtime_pair_lane_release_checks" ||
-                  "$variant" != "$lane" ||
-                  "$status" != "success" ]]; then
-              echo "Runtime-pair lane ${lane} did not produce matching successful evidence." >&2
-              exit 1
-            fi
-          done
+          jq -e --argjson expected_count "$expected_count" \
+            'length == $expected_count and all(.[]; .status == "success")' \
+            "$validated_file" >/dev/null
 
       - name: Upload runtime parity artifacts
         id: upload_runtime_parity_artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
@@ -1538,7 +1597,7 @@ jobs:
           RELEASE_CHECK_JOB: qa_lab_runtime_parity_release_checks
           RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.download_runtime_parity_artifacts.outcome }} ${{ steps.download_runtime_parity_statuses.outcome }} ${{ steps.verify_runtime_parity_statuses.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.resolve_runtime_pair_artifacts.outcome }} ${{ steps.download_runtime_pair_statuses.outcome }} ${{ steps.download_runtime_pair_artifacts.outcome }} ${{ steps.verify_runtime_parity_statuses.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
         run: *record_release_check_advisory_status
 
       - name: Upload advisory status
@@ -1570,55 +1629,61 @@ jobs:
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Resolve runtime parity artifacts
+        id: resolve_runtime_parity_artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/runtime-parity.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh resolve \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT" \
+            --target-sha "$RELEASE_CHECK_TARGET_SHA" \
+            --pair "qa_lab_runtime_parity_release_checks||release-check-status-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}" \
+            --selection-file "$selection_file" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Download runtime parity status
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ steps.resolve_runtime_parity_artifacts.outputs.status_ids }}
           path: .artifacts/release-check-status/
 
       - name: Verify runtime parity producer status
         id: verify_runtime_parity_status
         shell: bash
-        env:
-          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         run: |
           set -euo pipefail
-          status_path=".artifacts/release-check-status/qa_lab_runtime_parity_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
-          status_field() {
-            local key="$1"
-            awk -v key="$key" '
-              index($0, key "=") == 1 {
-                count += 1
-                value = substr($0, length(key) + 2)
-              }
-              END {
-                if (count != 1) {
-                  exit 1
-                }
-                print value
-              }
-            ' "$status_path"
-          }
-          run_id="$(status_field run_id)"
-          run_attempt="$(status_field run_attempt)"
-          target_sha="$(status_field target_sha)"
-          job_name="$(status_field job)"
-          variant="$(status_field variant)"
-          if [[ "$run_id" != "$GITHUB_RUN_ID" ||
-                "$run_attempt" != "$GITHUB_RUN_ATTEMPT" ||
-                "$target_sha" != "$RELEASE_CHECK_TARGET_SHA" ||
-                "$job_name" != "qa_lab_runtime_parity_release_checks" ||
-                -n "$variant" ]]; then
-            echo "Runtime parity producer status does not match the current run, attempt, target, job, and variant." >&2
+          validated_file=".artifacts/release-check-selection/runtime-parity-validated.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_runtime_parity_artifacts.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file "$validated_file"
+          status="$(jq -r 'if length == 1 then .[0].status else empty end' "$validated_file")"
+          [[ -n "$status" ]] || {
+            echo "Runtime parity producer status selection is incomplete." >&2
             exit 1
-          fi
-          status="$(sed -n 's/^status=//p' "$status_path" | tail -n 1)"
+          }
           if [[ "$status" != "success" ]]; then
             echo "Runtime parity producer status is ${status:-missing}; skipping coverage artifact consumer."
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -1630,7 +1695,7 @@ jobs:
         if: steps.verify_runtime_parity_status.outputs.ready == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          artifact-ids: ${{ steps.resolve_runtime_parity_artifacts.outputs.payload_ids }}
           path: .artifacts/qa-e2e/
 
       - name: Enforce core runtime tool coverage
@@ -1906,7 +1971,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
+          name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
@@ -2005,7 +2070,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
+          name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
@@ -2101,7 +2166,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
+          name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
@@ -2150,20 +2215,108 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
+      contents: read
     timeout-minutes: 5
     steps:
-      - name: Download advisory status artifacts
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Resolve advisory evidence artifacts
+        id: resolve_advisory_evidence
         if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_lane_release_checks.result }}
+          QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
+          QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_runtime_parity_release_checks.result }}
+          QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
+          QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
+          QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/advisory-evidence.json"
+          args=(
+            resolve
+            --repository "$GITHUB_REPOSITORY"
+            --run-id "$GITHUB_RUN_ID"
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+          )
+          if [[ "$QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_lab_parity_lane_release_checks|candidate|release-check-status-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+              --pair "qa_lab_parity_lane_release_checks|baseline|release-check-status-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_lab_parity_report_release_checks||release-check-status-qa-parity-report-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_lab_runtime_parity_release_checks||release-check-status-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_live_discord_release_checks||release-check-status-qa-live-discord-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-live-discord-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_live_whatsapp_release_checks||release-check-status-qa-live-whatsapp-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-live-whatsapp-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LIVE_SLACK_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_live_slack_release_checks||release-check-status-qa-live-slack-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-live-slack-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          args+=(
+            --selection-file "$selection_file"
+            --github-output "$GITHUB_OUTPUT"
+          )
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh "${args[@]}"
+
+      - name: Download advisory status artifacts
+        id: download_advisory_statuses
+        if: steps.resolve_advisory_evidence.outcome == 'success' && steps.resolve_advisory_evidence.outputs.status_ids != ''
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: release-check-status-*-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ steps.resolve_advisory_evidence.outputs.status_ids }}
           path: .artifacts/release-check-status
           merge-multiple: true
+
+      - name: Validate advisory status artifacts
+        id: validate_advisory_statuses
+        if: steps.resolve_advisory_evidence.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/release-check-status
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_advisory_evidence.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file .artifacts/release-check-selection/advisory-evidence-validated.json
 
       - name: Verify release check results
         shell: bash
         env:
+          RESOLVE_ADVISORY_EVIDENCE_OUTCOME: ${{ steps.resolve_advisory_evidence.outcome }}
+          VALIDATE_ADVISORY_STATUSES_OUTCOME: ${{ steps.validate_advisory_statuses.outcome }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
           INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
@@ -2210,106 +2363,37 @@ jobs:
             "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
             "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
           )
-          advisory_status_items=(
-            "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
-            "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
-            "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
-            "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
-            "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
-            "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
-          )
           tideclaw_alpha=false
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha=true
           fi
-          status_field() {
-            local file="$1"
-            local key="$2"
-            awk -v key="$key" '
-              index($0, key "=") == 1 {
-                count += 1
-                value = substr($0, length(key) + 2)
-              }
-              END {
-                if (count != 1) {
-                  exit 1
-                }
-                print value
-              }
-            ' "$file"
-          }
-          validate_status_file() {
-            local file="$1"
-            local expected_job="$2"
-            local expected_variant="$3"
-            local actual_run_id actual_run_attempt actual_target_sha actual_job actual_variant
-            if [[ ! -f "$file" ]]; then
-              echo "::error::Missing advisory status file: ${file}" >&2
-              return 1
-            fi
-            actual_run_id="$(status_field "$file" run_id)" || {
-              echo "::error::Advisory status file ${file} has invalid run_id metadata." >&2
-              return 1
-            }
-            actual_run_attempt="$(status_field "$file" run_attempt)" || {
-              echo "::error::Advisory status file ${file} has invalid run_attempt metadata." >&2
-              return 1
-            }
-            actual_target_sha="$(status_field "$file" target_sha)" || {
-              echo "::error::Advisory status file ${file} has invalid target_sha metadata." >&2
-              return 1
-            }
-            actual_job="$(status_field "$file" job)" || {
-              echo "::error::Advisory status file ${file} has invalid job metadata." >&2
-              return 1
-            }
-            actual_variant="$(status_field "$file" variant)" || {
-              echo "::error::Advisory status file ${file} has invalid variant metadata." >&2
-              return 1
-            }
-            if [[ "$actual_run_id" != "$RELEASE_CHECK_RUN_ID" ||
-                  "$actual_run_attempt" != "$RELEASE_CHECK_RUN_ATTEMPT" ||
-                  "$actual_target_sha" != "$RELEASE_CHECK_TARGET_SHA" ||
-                  "$actual_job" != "$expected_job" ||
-                  "$actual_variant" != "$expected_variant" ]]; then
-              echo "::error::Advisory status file ${file} does not match the current run, attempt, target, job, and variant." >&2
-              return 1
-            fi
-          }
-          expected_status_artifact_count() {
-            local name="$1"
-            local fallback="$2"
-            if [[ "$fallback" == "skipped" ]]; then
-              printf '0\n'
-              return
-            fi
-            if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
-              printf '2\n'
-            else
-              printf '1\n'
-            fi
-          }
-          expected_status_count=0
-          for item in "${advisory_status_items[@]}"; do
-            name="${item%%=*}"
-            raw_result="${item#*=}"
-            expected_count="$(expected_status_artifact_count "$name" "$raw_result")"
-            expected_status_count=$((expected_status_count + expected_count))
-          done
-          status_dir=".artifacts/release-check-status"
-          actual_status_count=0
-          if [[ -d "$status_dir" ]]; then
-            actual_status_count="$(find "$status_dir" -maxdepth 1 -type f -name '*.env' | wc -l | tr -d '[:space:]')"
-          fi
-          if [[ "$actual_status_count" != "$expected_status_count" ]]; then
-            status_count_message="Expected ${expected_status_count} advisory status artifacts for run ${RELEASE_CHECK_RUN_ID} attempt ${RELEASE_CHECK_RUN_ATTEMPT}, found ${actual_status_count}."
+          validated_status_file=".artifacts/release-check-selection/advisory-evidence-validated.json"
+          if [[ "$RESOLVE_ADVISORY_EVIDENCE_OUTCOME" != "success" ||
+                "$VALIDATE_ADVISORY_STATUSES_OUTCOME" != "success" ]]; then
+            status_resolution_message="Advisory evidence resolution or validation failed for run ${RELEASE_CHECK_RUN_ID} through attempt ${RELEASE_CHECK_RUN_ATTEMPT}."
             if [[ "$tideclaw_alpha" == "true" ]]; then
-              echo "::warning::${status_count_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory."
+              echo "::warning::${status_resolution_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory."
             else
-              echo "::error::${status_count_message}"
+              echo "::error::${status_resolution_message}"
               failed=1
             fi
           fi
+          validated_status() {
+            local expected_job="$1"
+            local expected_variant="$2"
+            [[ -f "$validated_status_file" ]] || return 1
+            jq -er \
+              --arg job "$expected_job" \
+              --arg variant "$expected_variant" \
+              '
+                [.[] | select(.job == $job and .variant == $variant)] as $matches |
+                if ($matches | length) == 1 and
+                   ($matches[0].status | type) == "string"
+                then $matches[0].status
+                else error("missing or duplicate validated status")
+                end
+              ' "$validated_status_file"
+          }
           release_check_result() {
             local name="$1"
             local fallback="$2"
@@ -2328,17 +2412,11 @@ jobs:
               variants=(candidate baseline)
             fi
             for variant in "${variants[@]}"; do
-              suffix=""
-              if [[ -n "$variant" ]]; then
-                suffix="-${variant}"
-              fi
-              file="${status_dir}/${name}${suffix}-${RELEASE_CHECK_RUN_ID}-${RELEASE_CHECK_RUN_ATTEMPT}.env"
-              if ! validate_status_file "$file" "$name" "$variant"; then
+              if ! status="$(validated_status "$name" "$variant")"; then
                 saw_failure=1
                 continue
               fi
               saw=1
-              status="$(status_field "$file" status)" || status=""
               case "$status" in
                 success) ;;
                 skipped) saw_skipped=1 ;;

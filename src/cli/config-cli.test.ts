@@ -35,6 +35,31 @@ const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
 );
+const mockLoadChannelSecretContractApi = vi.hoisted(() =>
+  vi.fn(({ channelId }: { channelId: string }) => {
+    const fields: Record<string, readonly string[]> = {
+      discord: ["token"],
+      slack: ["appToken", "botToken"],
+      telegram: ["botToken"],
+    };
+    return {
+      secretTargetRegistryEntries: (fields[channelId] ?? []).map((field) => {
+        const pathPattern = `channels.${channelId}.${field}`;
+        return {
+          id: pathPattern,
+          targetType: pathPattern,
+          configFile: "openclaw.json" as const,
+          pathPattern,
+          secretShape: "secret_input" as const,
+          expectedResolvedValue: "string" as const,
+          includeInPlan: true,
+          includeInConfigure: true,
+          includeInAudit: true,
+        };
+      }),
+    };
+  }),
+);
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
@@ -109,6 +134,15 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
   resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
     mockLoadPluginMetadataSnapshot(params.config),
+}));
+
+vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
+  listBundledPluginMetadata: () => [],
+}));
+
+vi.mock("../secrets/channel-contract-api.js", () => ({
+  loadChannelSecretContractApi: mockLoadChannelSecretContractApi,
+  loadChannelSecretContractApiForRecord: () => undefined,
 }));
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -465,8 +499,6 @@ let ExitError: new (code: number, message?: string) => Error;
 describe("config cli", () => {
   beforeAll(async () => {
     ({ parseConfigSetPath, registerConfigCli } = await import("./config-cli.js"));
-    const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
-    resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerConfigCli(sharedProgram);
@@ -1277,6 +1309,24 @@ describe("config cli", () => {
       expect(mockWriteStdout).toHaveBeenCalledWith("__OPENCLAW_REDACTED__\n");
     });
 
+    it("redacts sensitive values in JSON output", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            token: "super-secret-token",
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "get", "gateway.auth.token", "--json"]);
+
+      expect(parseLastLogPayload()).toBe("__OPENCLAW_REDACTED__");
+      expect(mockWriteStdout).not.toHaveBeenCalledWith(
+        expect.stringContaining("super-secret-token"),
+      );
+    });
+
     it("prints materialized subagent archive default", async () => {
       const resolved: OpenClawConfig = {};
       const config: OpenClawConfig = {
@@ -1573,7 +1623,7 @@ describe("config cli", () => {
         }),
       );
 
-      await runConfigCommand(["config", "schema"]);
+      await runConfigCommand(["config", "schema", "--json"]);
 
       expect(mockExit).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
@@ -1715,6 +1765,8 @@ describe("config cli", () => {
       expect(helpText).toContain("Strict JSON parsing (error instead of");
       expect(helpText).toContain("--ref-provider");
       expect(helpText).toContain("--provider-source");
+      expect(helpText).not.toContain("--provider-allow-insecure-path");
+      expect(helpText).not.toContain("--provider-allow-symlink-command");
       expect(helpText).toContain("--batch-json");
       expect(helpText).toContain("--dry-run");
       expect(helpText).toContain("--allow-exec");
@@ -1893,6 +1945,27 @@ describe("config cli", () => {
         mode: "json",
       });
     });
+
+    it.each(["--provider-allow-insecure-path", "--provider-allow-symlink-command"])(
+      "rejects retired provider builder option %s",
+      async (option) => {
+        await expect(
+          runConfigCommand([
+            "config",
+            "set",
+            "secrets.providers.vaultfile",
+            "--provider-source",
+            "file",
+            "--provider-path",
+            "/tmp/vault.json",
+            option,
+          ]),
+        ).rejects.toThrow(`unknown option '${option}'`);
+
+        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      },
+    );
 
     it("rejects exponent-style provider builder integer options", async () => {
       await expect(
@@ -4419,6 +4492,22 @@ describe("config cli", () => {
       } finally {
         vi.unstubAllEnvs();
         fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("emits the active path as a JSON object", async () => {
+      const configPath = path.join(os.tmpdir(), "openclaw-json-config", "openclaw.json");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+
+      try {
+        await runConfigCommand(["config", "file", "--json"]);
+
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ path: configPath }, 2);
+        expect(structuredClone(lastMockArg(defaultRuntime.writeJson))).toEqual({
+          path: configPath,
+        });
+      } finally {
+        vi.unstubAllEnvs();
       }
     });
   });

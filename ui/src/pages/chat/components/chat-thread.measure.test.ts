@@ -173,6 +173,103 @@ describe("chat transcript row measurement", () => {
     }
   });
 
+  it("loads a truncated assistant message once across inline collapse and re-expansion", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const loadFullAssistantMessage = vi.fn().mockResolvedValue({
+      ok: true,
+      message: { role: "assistant", content: "Complete assistant content." },
+    });
+    function rerender() {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    }
+    const props = {
+      ...threadProps("pane-assistant-expand", "agent:work:main", [
+        {
+          role: "assistant",
+          content: "Preview\n...(truncated)...",
+          __openclaw: { id: "assistant-full-1" },
+          timestamp: 1_000,
+        },
+      ]),
+      fullMessageAgentId: "work",
+      loadFullAssistantMessage,
+      onRequestUpdate: rerender,
+    };
+    rerender();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+
+    const showMore = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
+    expect(showMore?.textContent?.trim()).toBe("Show more");
+    showMore?.click();
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Complete assistant content."));
+    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
+    expect(loadFullAssistantMessage).toHaveBeenCalledWith({
+      sessionKey: "agent:work:main",
+      agentId: "work",
+      messageId: "assistant-full-1",
+      kind: "assistant_message",
+    });
+
+    const showLess = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
+    expect(showLess?.textContent?.trim()).toBe("Show less");
+    showLess?.click();
+    expect(container.textContent).toContain("...(truncated)...");
+    expect(container.textContent).not.toContain("Complete assistant content.");
+
+    container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.click();
+    expect(container.textContent).toContain("Complete assistant content.");
+    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
+    transcript.hostDisconnected();
+  });
+
+  it("shows a retryable inline error when full assistant content cannot be loaded", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const loadFullAssistantMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        ok: true,
+        message: { role: "assistant", content: "Recovered full content." },
+      });
+    function rerender() {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    }
+    const props = {
+      ...threadProps("pane-assistant-retry", "agent:main:main", [
+        {
+          role: "assistant",
+          content: "Preview\n...(truncated)...",
+          __openclaw: { id: "assistant-retry-1" },
+          timestamp: 1_000,
+        },
+      ]),
+      loadFullAssistantMessage,
+      onRequestUpdate: rerender,
+    };
+    rerender();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+
+    container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.click();
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Could not load the full message."),
+    );
+    const retry = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
+    expect(retry?.textContent?.trim()).toBe("Show more");
+    expect(retry?.disabled).toBe(false);
+
+    retry?.click();
+    await vi.waitFor(() => expect(container.textContent).toContain("Recovered full content."));
+    expect(loadFullAssistantMessage).toHaveBeenCalledTimes(2);
+    transcript.hostDisconnected();
+  });
+
   it.each(["Enter", " "])("opens focused transcript file links with %j", async (key) => {
     const transcript = createTestTranscript();
     const onOpenWorkspaceFile = vi.fn();

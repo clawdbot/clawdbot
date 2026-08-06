@@ -1571,6 +1571,44 @@ describe("launchd install", () => {
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
   });
 
+  it("retains custom Node CA trust when reinstalling a generated owner-only LaunchAgent", async () => {
+    const env = createDefaultLaunchdEnv();
+    const extraCaCerts = "/Users/test/certs/corporate-ca.pem";
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { NODE_EXTRA_CA_CERTS: extraCaCerts },
+    });
+
+    const installedCommand = await readLaunchAgentProgramArguments(env);
+    expect(installedCommand?.environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
+    expect(installedCommand?.environmentValueSources?.NODE_EXTRA_CA_CERTS).toBe("file");
+    const initialEnvWrites = countMatching(state.fileWrites, ({ path }) => path === envFilePath);
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: installedCommand?.environment,
+    });
+
+    const refreshedCommand = await readLaunchAgentProgramArguments(env);
+    expect(refreshedCommand?.environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
+    expect(refreshedCommand?.environmentValueSources?.NODE_EXTRA_CA_CERTS).toBe("file");
+    expect(countMatching(state.fileWrites, ({ path }) => path === envFilePath)).toBeGreaterThan(
+      initialEnvWrites,
+    );
+    expect(state.files.get(envFilePath)).toContain(`export NODE_EXTRA_CA_CERTS='${extraCaCerts}'`);
+    expect(state.files.get(resolveLaunchAgentPlistPath(env))).not.toContain(extraCaCerts);
+    expect(state.fileModes.get(envFilePath)).toBe(0o600);
+    expect(state.fileModes.get(wrapperPath)).toBe(0o700);
+    expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
+  });
+
   it("warns before overwriting a customized generated LaunchAgent env wrapper", async () => {
     const env = createDefaultLaunchdEnv();
     const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";

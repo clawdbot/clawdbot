@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveProjectKey } from "./project-memory-scope.js";
 
 const execFileAsync = promisify(execFile);
@@ -94,4 +95,36 @@ describe("project memory scope", () => {
       Promise.all([resolveProjectKey(repo), resolveProjectKey(worktree)]),
     ).resolves.toEqual(["github.com/OpenClaw/OpenClaw", "github.com/OpenClaw/OpenClaw"]);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to the path key when the git lookup hangs",
+    async () => {
+      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-project-hang-"));
+      cleanup.push(parent);
+      const fakeBinDir = path.join(parent, "fake-bin");
+      await fs.mkdir(fakeBinDir);
+      const fakeGitPath = path.join(fakeBinDir, "git");
+      await fs.writeFile(
+        fakeGitPath,
+        `#!${process.execPath}\nsetInterval(() => {}, 1000);\n`,
+        "utf-8",
+      );
+      await fs.chmod(fakeGitPath, 0o755);
+      const repo = path.join(parent, "repo");
+      await fs.mkdir(repo);
+      await git(repo, "init");
+      await git(repo, "remote", "add", "origin", "https://github.com/OpenClaw/OpenClaw.git");
+
+      const started = Date.now();
+      const key = await withEnvAsync(
+        { PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}` },
+        () => resolveProjectKey(repo),
+      );
+      const elapsed = Date.now() - started;
+
+      expect(key).toBe(`path:${repo}`);
+      expect(elapsed).toBeLessThan(15_000);
+    },
+    20_000,
+  );
 });

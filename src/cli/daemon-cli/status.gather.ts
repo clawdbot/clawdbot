@@ -8,6 +8,7 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
+import { isDefaultInstallIdentity } from "../../config/paths.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
@@ -31,6 +32,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
+import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
@@ -290,6 +292,7 @@ export type DaemonStatus = {
     loaded: boolean;
     loadedText: string;
     notLoadedText: string;
+    targetRole?: "target" | "diagnostic-only";
     command?: {
       programArguments: string[];
       workingDirectory?: string;
@@ -585,6 +588,11 @@ export async function gatherDaemonStatus(
     timeoutMs,
   });
   const { command, env: serviceEnv, loaded, runtime } = serviceState;
+  // A non-default or externally supervised process does not own the host's
+  // native service. Keep that service visible, but do not let it retarget probes.
+  const useNativeServiceTargetContext =
+    isDefaultInstallIdentity(process.env) && !isGatewayExternallySupervised(process.env);
+  const targetServiceCommand = useNativeServiceTargetContext ? command : null;
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit: ServiceConfigAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
@@ -601,14 +609,15 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(command?.environment, { deep: opts.deep });
+  } = await loadDaemonConfigContext(targetServiceCommand?.environment, { deep: opts.deep });
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
     mergedDaemonEnv,
-    commandProgramArguments: command?.programArguments,
+    commandProgramArguments: targetServiceCommand?.programArguments,
     rpcUrlOverride: opts.rpc.url,
   });
+  const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
   const shouldInspectLocalGateway = daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
@@ -716,7 +725,7 @@ export async function gatherDaemonStatus(
     rpcAuthWarning = undefined;
   }
   const health =
-    opts.probe && loaded && rpc?.ok !== true
+    opts.probe && serviceTargetsProbe && loaded && rpc?.ok !== true
       ? await loadRestartHealthModule()
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({
@@ -780,6 +789,7 @@ export async function gatherDaemonStatus(
       loaded,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
+      targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
       command,
       runtime,
       configAudit,

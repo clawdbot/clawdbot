@@ -62,8 +62,8 @@ describe("custodian panel", () => {
     store.connect(context, "caretaker");
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     store.messages = [
-      { id: 1, role: "assistant", text: "Ready.", at: 1, question: null },
-      { id: 2, role: "user", text: "Check this system", at: 2, question: null },
+      { id: 1, role: "assistant", text: "Ready.", at: 1, question: null, step: null },
+      { id: 2, role: "user", text: "Check this system", at: 2, question: null, step: null },
     ];
 
     panel.suppressed = false;
@@ -110,7 +110,9 @@ describe("custodian panel", () => {
     const { context, panel, request, store } = await mountPanel();
     store.connect(context, "caretaker");
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    store.messages = [{ id: 1, role: "user", text: "Check this system", at: 1, question: null }];
+    store.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
     panel.available = false;
     panel.suppressed = false;
     panel.minimizeRequestId = 1;
@@ -127,8 +129,15 @@ describe("custodian panel", () => {
     store.connect(context, "onboarding");
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     store.messages = [
-      { id: 1, role: "assistant", text: "Set up your system", at: 1, question: null },
-      { id: 2, role: "user", text: "Continue setup", at: 2, question: null },
+      {
+        id: 1,
+        role: "assistant",
+        text: "Set up your system",
+        at: 1,
+        question: null,
+        step: null,
+      },
+      { id: 2, role: "user", text: "Continue setup", at: 2, question: null, step: null },
     ];
 
     panel.suppressed = false;

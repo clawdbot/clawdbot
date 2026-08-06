@@ -81,7 +81,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   };
 }
 
-export function runPluginRegisterSync(
+function runPluginRegisterSync(
   register: NonNullable<OpenClawPluginDefinition["register"]>,
   api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
 ): void {

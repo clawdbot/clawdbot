@@ -108,11 +108,21 @@ function dispatchRealtimeEvent(peer: FakePeerConnection | undefined, event: unkn
 
 function dispatchConsultToolCall(peer: FakePeerConnection | undefined): void {
   dispatchRealtimeEvent(peer, {
-    type: "response.function_call_arguments.done",
-    item_id: "item-1",
-    call_id: "call-1",
-    name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    arguments: JSON.stringify({ question: "status?" }),
+    type: "response.done",
+    response: {
+      id: "response-1",
+      status: "completed",
+      output: [
+        {
+          type: "function_call",
+          id: "item-1",
+          status: "completed",
+          call_id: "call-1",
+          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          arguments: JSON.stringify({ question: "status?" }),
+        },
+      ],
+    },
   });
 }
 
@@ -135,13 +145,13 @@ async function startActiveConsult(
 
   await transport.start();
   const peer = FakePeerConnection.instances[0];
-  if (options.responseAlreadyActive) {
-    dispatchRealtimeEvent(peer, { type: "response.created" });
-  }
   dispatchConsultToolCall(peer);
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
   );
+  if (options.responseAlreadyActive) {
+    dispatchRealtimeEvent(peer, { type: "response.created" });
+  }
 
   return { transport, peer };
 }
@@ -830,17 +840,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-1",
-          call_id: "call-1",
-          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-          arguments: JSON.stringify({ question: "status?" }),
-        }),
-      }),
-    );
+    dispatchConsultToolCall(peer);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
     expect(request).toHaveBeenCalledWith("talk.client.toolCall", {
       sessionKey: "main",
@@ -1037,17 +1037,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-1",
-          call_id: "call-1",
-          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-          arguments: JSON.stringify({ question: "status?" }),
-        }),
-      }),
-    );
+    dispatchConsultToolCall(peer);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );

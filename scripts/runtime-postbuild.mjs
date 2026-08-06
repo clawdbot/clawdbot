@@ -4,11 +4,12 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -21,7 +22,7 @@ import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mj
 /** @internal Shared repository-script contract. */
 export { listStaticExtensionAssetOutputs };
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =

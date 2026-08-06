@@ -301,10 +301,10 @@ describe("handleBuzzInbound", () => {
     await dispatch.delivery.deliver({ text: "  " }, { kind: "final" });
     expect(bus.sendText).not.toHaveBeenCalled();
 
-    await dispatch.delivery.deliver({ text: "threaded reply" }, { kind: "final" });
+    await dispatch.delivery.deliver({ text: "threaded reply to @Alice" }, { kind: "final" });
     expect(bus.sendText).toHaveBeenCalledWith({
       channelId: ROOM_ID,
-      text: "threaded reply",
+      text: "threaded reply to @Alice",
       threadId: "event-root",
       replyToId: "event-reply",
     });

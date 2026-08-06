@@ -32,7 +32,6 @@ const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
   runEmbeddedAgentEntryMock: vi.fn(),
   runCliAgentMock: vi.fn(),
-  runCliAgentActual: undefined as RunCliAgent | undefined,
   runWithModelFallbackMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
@@ -79,16 +78,9 @@ vi.mock("../../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: (params: unknown) => state.peekSessionMcpRuntimeMock(params),
 }));
 
-vi.mock("../../agents/cli-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/cli-runner.js")>(
-    "../../agents/cli-runner.js",
-  );
-  state.runCliAgentActual = actual.runCliAgent;
-  return {
-    ...actual,
-    runCliAgent: (params: unknown) => state.runCliAgentMock(params),
-  };
-});
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
+}));
 
 vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
@@ -173,6 +165,16 @@ vi.mock("../../infra/agent-events.js", async () => {
     ...actual,
     clearAgentRunContext: vi.fn(),
     emitAgentEvent,
+    registerAgentRunContext: vi.fn(),
+  };
+});
+vi.mock("../../infra/agent-run-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+    "../../infra/agent-run-registry.js",
+  );
+  return {
+    ...actual,
+    clearAgentRunContext: vi.fn(),
     registerAgentRunContext: vi.fn(),
   };
 });
@@ -299,6 +301,12 @@ export async function getExecuteAgentTurnForTest() {
     }
     return { kind: "final" as const, payload: { text: "NO_REPLY" } };
   };
+}
+
+export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
+  return (
+    await vi.importActual<typeof import("../../agents/cli-runner.js")>("../../agents/cli-runner.js")
+  ).runCliAgent;
 }
 
 export type FallbackRunnerParams = {

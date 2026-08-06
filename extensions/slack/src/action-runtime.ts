@@ -42,6 +42,7 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const SLACK_REACTION_USER_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 
@@ -108,6 +109,7 @@ export type SlackActionContext = {
   hasRepliedRef?: { value: boolean };
   /** True when same-channel root posting would leak a thread-originated reply. */
   sameChannelThreadRequired?: boolean;
+  mediaAccess?: ChannelMessageActionContext["mediaAccess"];
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -547,10 +549,23 @@ export async function handleSlackAction(
       return jsonResult({ ok: true, added: emoji });
     }
     await assertReadTargetAllowed(channelId);
+    const limit = Math.min(
+      readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      }) ?? SLACK_REACTION_USER_LIMIT,
+      SLACK_REACTION_USER_LIMIT,
+    );
     const reactions = readOpts
       ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
       : await slackActionRuntime.listSlackReactions(channelId, messageId);
-    return jsonResult({ ok: true, reactions });
+    return jsonResult({
+      ok: true,
+      reactions: reactions?.map((reaction) =>
+        reaction.users
+          ? Object.assign({}, reaction, { users: reaction.users.slice(0, limit) })
+          : reaction,
+      ),
+    });
   }
 
   if (messagingActions.has(action)) {
@@ -603,6 +618,7 @@ export async function handleSlackAction(
         );
         const baseSendOpts = {
           ...writeOpts,
+          mediaAccess: context?.mediaAccess,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
@@ -716,6 +732,7 @@ export async function handleSlackAction(
         const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
           ...writeOpts,
           mediaUrl: filePath,
+          mediaAccess: context?.mediaAccess,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,

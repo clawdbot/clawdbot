@@ -1,5 +1,6 @@
 // Flows command tests cover task creation, task execution, and runtime command output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
@@ -184,6 +185,27 @@ describe("flows commands", () => {
     });
   });
 
+  it("counts pending cancellation intent in TaskFlow pressure", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Cancel pending work",
+        status: "running",
+        cancelRequestedAt: 200,
+        createdAt: 100,
+        updatedAt: 200,
+      });
+
+      const runtime = createRuntime();
+      await flowsListCommand({}, runtime);
+
+      expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
+        "TaskFlow pressure: 1 active · 0 blocked · 1 cancel-requested · 1 total",
+      );
+    });
+  });
+
   it("keeps truncated text rows UTF-16 well-formed", async () => {
     await withTaskFlowCommandStateDir(async () => {
       createManagedTaskFlow({
@@ -204,6 +226,38 @@ describe("flows commands", () => {
         .join("\n");
       expect(output).toContain(`${"x".repeat(18)}…`);
       expect(output).not.toContain("\uD83D");
+    });
+  });
+
+  it("keeps TaskFlow columns aligned for wide controller ids", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const controllers = [
+        { controllerId: "plain-controller", goal: "Plain controller" },
+        { controllerId: "控制器🚀", goal: "Wide controller" },
+        { controllerId: "控制器".repeat(8), goal: "Long wide controller" },
+      ];
+      for (const [index, entry] of controllers.entries()) {
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: entry.controllerId,
+          goal: entry.goal,
+          status: "running",
+          createdAt: 100 + index,
+          updatedAt: 100 + index,
+        });
+      }
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      const countColumnWidths = controllers.map((entry) => {
+        const line = lines.find((candidate) => candidate.endsWith(entry.goal));
+        expect(line).toBeDefined();
+        return visibleWidth((line ?? "").slice(0, (line ?? "").indexOf("0 active/0 total")));
+      });
+      expect(new Set(countColumnWidths).size).toBe(1);
+      expect(lines.find((line) => line.endsWith("Long wide controller"))).toContain("…");
     });
   });
 
@@ -605,6 +659,24 @@ describe("flows commands", () => {
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toEqual([
         `Cancelled ${flow.flowId} (managed) with status cancelled.`,
       ]);
+
+      const listRuntime = createRuntime();
+      await flowsListCommand({}, listRuntime);
+      expect(vi.mocked(listRuntime.log).mock.calls.map(([line]) => String(line))).toContain(
+        "TaskFlow pressure: 0 active · 0 blocked · 0 cancel-requested · 1 total",
+      );
+
+      const jsonRuntime = createRuntime();
+      await flowsListCommand({ json: true }, jsonRuntime);
+      expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        flows: [
+          expect.objectContaining({
+            flowId: flow.flowId,
+            status: "cancelled",
+            cancelRequestedAt: expect.any(Number),
+          }),
+        ],
+      });
     });
   });
 });

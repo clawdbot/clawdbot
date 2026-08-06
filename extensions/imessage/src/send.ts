@@ -17,6 +17,7 @@ import {
   extractOriginalFilename,
   kindFromMime,
   resolveOutboundAttachmentFromUrl,
+  type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
@@ -71,6 +72,7 @@ type IMessageSendOpts = {
   conversationReadOrigin?: "delegated" | "direct-operator";
   replyToId?: string;
   mediaUrl?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   audioAsVoice?: boolean;
@@ -84,10 +86,7 @@ type IMessageSendOpts = {
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
-    options?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    },
+    options?: Parameters<typeof resolveOutboundAttachmentFromUrl>[2],
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
   runCliJson?: (args: readonly string[]) => Promise<Record<string, unknown>>;
@@ -792,6 +791,7 @@ export async function sendMessageIMessage(
   if (opts.mediaUrl?.trim()) {
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
+      mediaAccess: opts.mediaAccess,
       localRoots: opts.mediaLocalRoots,
       readFile: opts.mediaReadFile,
     });

@@ -217,6 +217,71 @@ describe("line outbound sendPayload", () => {
     expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "title", title: " ", address: "1 Main Street" },
+    { name: "address", title: "Meet here", address: " " },
+  ])("skips a direct location with a blank $name while delivering text", async (location) => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:U123",
+      text: "Meet me there.",
+      payload: {
+        text: "Meet me there.",
+        channelData: {
+          line: {
+            location: { ...location, latitude: 35.6895, longitude: 139.6917 },
+          },
+        },
+      },
+      accountId: "default",
+      cfg: { channels: { line: {} } } as OpenClawConfig,
+    });
+
+    expect(mocks.pushLocationMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      "Meet me there.",
+      expect.any(Object),
+    );
+  });
+
+  it("omits an invalid direct location from the quick-reply inline batch", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:U123",
+      text: "",
+      payload: {
+        text: "",
+        channelData: {
+          line: {
+            quickReplies: ["Continue"],
+            location: {
+              title: "Meet here",
+              address: " ",
+              latitude: 35.6895,
+              longitude: 139.6917,
+            },
+          },
+        },
+      },
+      accountId: "default",
+      cfg: { channels: { line: {} } } as OpenClawConfig,
+    });
+
+    expect(mocks.pushLocationMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
+    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+      "line:user:U123",
+      expect.stringContaining("Continue"),
+      ["Continue"],
+      expect.any(Object),
+    );
+  });
+
   it("preserves the finalized receipt when its delivery observer rejects", async () => {
     const { runtime } = createRuntime();
     setLineRuntime(runtime);

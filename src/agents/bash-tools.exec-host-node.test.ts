@@ -456,32 +456,51 @@ function expectSystemRunInvoke(params: {
   expect(Number.isFinite(params.invokeWaitMs)).toBe(true);
 }
 
+function createNodeGatewayHandler(params: {
+  approvals: Record<string, unknown> | Error;
+  allowApprovalResolve?: boolean;
+  execPolicy?: { security: string; ask: string };
+  stderr?: string;
+  stdout?: string;
+}) {
+  return async (method: string, _options: unknown, invoke: MockNodeInvokeParams | undefined) => {
+    if (method === "exec.approvals.node.get") {
+      if (params.approvals instanceof Error) {
+        throw params.approvals;
+      }
+      return { file: params.approvals };
+    }
+    if (method === "exec.approval.resolve" && params.allowApprovalResolve) {
+      return { payload: {} };
+    }
+    if (method !== "node.invoke") {
+      throw new Error(`unexpected gateway method: ${method}`);
+    }
+    if (invoke?.command === "system.run.prepare") {
+      return {
+        payload: {
+          plan: preparedPlan,
+          ...(params.execPolicy ? { execPolicy: params.execPolicy } : {}),
+        },
+      };
+    }
+    if (invoke?.command === "system.run") {
+      return {
+        payload: {
+          success: true,
+          stdout: params.stdout ?? "ok",
+          stderr: params.stderr ?? "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      };
+    }
+    throw new Error(`unexpected node invoke command: ${String(invoke?.command)}`);
+  };
+}
+
 function mockGatewayInvokesWithNodeApprovals(file: Record<string, unknown>) {
-  callGatewayToolMock.mockImplementation(
-    async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-      if (method === "exec.approvals.node.get") {
-        return { file };
-      }
-      if (method !== "node.invoke") {
-        throw new Error(`unexpected gateway method: ${method}`);
-      }
-      if (params?.command === "system.run.prepare") {
-        return { payload: { plan: preparedPlan } };
-      }
-      if (params?.command === "system.run") {
-        return {
-          payload: {
-            success: true,
-            stdout: "ok",
-            stderr: "",
-            exitCode: 0,
-            timedOut: false,
-          },
-        };
-      }
-      throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
-    },
-  );
+  callGatewayToolMock.mockImplementation(createNodeGatewayHandler({ approvals: file }));
 }
 
 function usePolicyApprovalRequirementMock() {
@@ -544,32 +563,10 @@ describe("executeNodeHostCommand", () => {
   beforeEach(() => {
     callGatewayToolMock.mockReset();
     callGatewayToolMock.mockImplementation(
-      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-        if (method === "exec.approvals.node.get") {
-          return { file: { version: 1, agents: {} } };
-        }
-        if (method === "exec.approval.resolve") {
-          return { payload: {} };
-        }
-        if (method !== "node.invoke") {
-          throw new Error(`unexpected gateway method: ${method}`);
-        }
-        if (params?.command === "system.run.prepare") {
-          return { payload: { plan: preparedPlan } };
-        }
-        if (params?.command === "system.run") {
-          return {
-            payload: {
-              success: true,
-              stdout: "ok",
-              stderr: "",
-              exitCode: 0,
-              timedOut: false,
-            },
-          };
-        }
-        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
-      },
+      createNodeGatewayHandler({
+        approvals: { version: 1, agents: {} },
+        allowApprovalResolve: true,
+      }),
     );
     listNodesMock.mockReset();
     listNodesMock.mockResolvedValue([
@@ -1686,29 +1683,7 @@ describe("executeNodeHostCommand", () => {
     const tailHead = "b".repeat(999);
     const stdout = `${prefix}🎉${tailHead}`;
     callGatewayToolMock.mockImplementation(
-      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-        if (method === "exec.approvals.node.get") {
-          return { file: { version: 1, agents: {} } };
-        }
-        if (method !== "node.invoke") {
-          throw new Error(`unexpected gateway method: ${method}`);
-        }
-        if (params?.command === "system.run.prepare") {
-          return { payload: { plan: preparedPlan } };
-        }
-        if (params?.command === "system.run") {
-          return {
-            payload: {
-              success: true,
-              stdout,
-              stderr: "",
-              exitCode: 0,
-              timedOut: false,
-            },
-          };
-        }
-        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
-      },
+      createNodeGatewayHandler({ approvals: { version: 1, agents: {} }, stdout }),
     );
 
     const result = await executeNodeHostCommand(createNodeHostRequest({}));
@@ -1741,23 +1716,7 @@ describe("executeNodeHostCommand", () => {
     const stdout = "first line\r\n\tindented\n\nlast line  \t\n";
     const stderr = "warning: something\n";
     callGatewayToolMock.mockImplementation(
-      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-        if (method === "exec.approvals.node.get") {
-          return { file: { version: 1, agents: {} } };
-        }
-        if (method !== "node.invoke") {
-          throw new Error(`unexpected gateway method: ${method}`);
-        }
-        if (params?.command === "system.run.prepare") {
-          return { payload: { plan: preparedPlan } };
-        }
-        if (params?.command === "system.run") {
-          return {
-            payload: { success: true, stdout, stderr, exitCode: 0, timedOut: false },
-          };
-        }
-        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
-      },
+      createNodeGatewayHandler({ approvals: { version: 1, agents: {} }, stdout, stderr }),
     );
 
     const result = await executeNodeHostCommand(createNodeHostRequest({}));
@@ -2556,37 +2515,11 @@ describe("executeNodeHostCommand", () => {
         },
       });
       callGatewayToolMock.mockImplementation(
-        async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-          if (method === "exec.approvals.node.get") {
-            return { file: { version: 1, agents: {} } };
-          }
-          if (method === "exec.approval.resolve") {
-            return { payload: {} };
-          }
-          if (method !== "node.invoke") {
-            throw new Error(`unexpected gateway method: ${method}`);
-          }
-          if (params?.command === "system.run.prepare") {
-            return {
-              payload: {
-                plan: preparedPlan,
-                execPolicy: { security: nodeSecurity, ask: nodeAsk },
-              },
-            };
-          }
-          if (params?.command === "system.run") {
-            return {
-              payload: {
-                success: true,
-                stdout: "ok",
-                stderr: "",
-                exitCode: 0,
-                timedOut: false,
-              },
-            };
-          }
-          throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
-        },
+        createNodeGatewayHandler({
+          approvals: { version: 1, agents: {} },
+          allowApprovalResolve: true,
+          execPolicy: { security: nodeSecurity, ask: nodeAsk },
+        }),
       );
 
       const result = await executeNodeHostCommand(
@@ -2620,32 +2553,10 @@ describe("executeNodeHostCommand", () => {
       askFallback: "deny",
     });
     callGatewayToolMock.mockImplementation(
-      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-        if (method === "exec.approvals.node.get") {
-          throw new Error("node approvals unavailable");
-        }
-        if (method === "exec.approval.resolve") {
-          return { payload: {} };
-        }
-        if (method !== "node.invoke") {
-          throw new Error(`unexpected gateway method: ${method}`);
-        }
-        if (params?.command === "system.run.prepare") {
-          return { payload: { plan: preparedPlan } };
-        }
-        if (params?.command === "system.run") {
-          return {
-            payload: {
-              success: true,
-              stdout: "ok",
-              stderr: "",
-              exitCode: 0,
-              timedOut: false,
-            },
-          };
-        }
-        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
-      },
+      createNodeGatewayHandler({
+        approvals: new Error("node approvals unavailable"),
+        allowApprovalResolve: true,
+      }),
     );
 
     const result = await executeNodeHostCommand(
@@ -2678,29 +2589,10 @@ describe("executeNodeHostCommand", () => {
       askFallback: "full",
     });
     callGatewayToolMock.mockImplementation(
-      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-        if (method === "exec.approvals.node.get") {
-          throw new Error("node approvals unavailable");
-        }
-        if (method !== "node.invoke") {
-          throw new Error(`unexpected gateway method: ${method}`);
-        }
-        if (params?.command === "system.run.prepare") {
-          return { payload: { plan: preparedPlan } };
-        }
-        if (params?.command === "system.run") {
-          return {
-            payload: {
-              success: true,
-              stdout: "should-not-run",
-              stderr: "",
-              exitCode: 0,
-              timedOut: false,
-            },
-          };
-        }
-        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
-      },
+      createNodeGatewayHandler({
+        approvals: new Error("node approvals unavailable"),
+        stdout: "should-not-run",
+      }),
     );
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
     createExecApprovalDecisionStateMock.mockReturnValue({

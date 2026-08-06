@@ -17,11 +17,12 @@ import {
   runtimeLogs,
   setInstalledPluginIndexInstallRecords,
   writeConfigFile,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
   applyPluginUninstallDirectoryRemoval,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 
 function requireMockCallArg(
   mockFn: { mock: { calls: unknown[][] } },
@@ -37,6 +38,26 @@ function requireMockCallArg(
 
 function expectRuntimeLogIncludes(fragment: string) {
   expect(runtimeLogs.join("\n")).toContain(fragment);
+}
+
+function createManifestRecord(
+  id: string,
+  overrides: Partial<PluginManifestRecord> = {},
+): PluginManifestRecord {
+  const rootDir = path.join(os.tmpdir(), "openclaw-plugin-fixtures", id);
+  return {
+    id,
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "config",
+    rootDir,
+    source: path.join(rootDir, "index.ts"),
+    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+    ...overrides,
+  };
 }
 
 const installWriteOptions = {
@@ -109,8 +130,8 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(enabledConfig);
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecords,
-      "writePersistedInstalledPluginIndexInstallRecords",
+      writePersistedInstalledPluginIndexInstallRecordsWithLease,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
     );
     expect(persistedRecords.alpha).toEqual({
       source: "npm",
@@ -646,7 +667,7 @@ describe("persistPluginInstall", () => {
     } as OpenClawConfig;
     enablePluginInConfig.mockReturnValue({ config: enabledConfig });
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "legacy-memory" }],
+      plugins: [createManifestRecord("legacy-memory")],
       diagnostics: [],
     });
     buildPluginDiagnosticsReport.mockReturnValueOnce({
@@ -723,7 +744,7 @@ describe("persistPluginInstall", () => {
     } as OpenClawConfig;
     enablePluginInConfig.mockReturnValue({ config: enabledConfig });
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "memory-b", kind: "memory" }],
+      plugins: [createManifestRecord("memory-b", { kind: "memory" })],
       diagnostics: [],
     });
     applyExclusiveSlotSelection.mockImplementation(((params: {
@@ -789,7 +810,7 @@ describe("persistPluginInstall", () => {
     } as OpenClawConfig;
     enablePluginInConfig.mockReturnValue({ config: enabledConfig });
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "plain" }],
+      plugins: [createManifestRecord("plain")],
       diagnostics: [],
     });
     buildPluginDiagnosticsReport.mockReturnValue({
@@ -881,8 +902,8 @@ describe("persistPluginInstall", () => {
       'Installed plugin "needs-config" without enabling it because it requires configuration first.',
     );
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecords,
-      "writePersistedInstalledPluginIndexInstallRecords",
+      writePersistedInstalledPluginIndexInstallRecordsWithLease,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
     );
     expect(persistedRecords["needs-config"]).toMatchObject({
       source: "npm",
@@ -937,7 +958,7 @@ describe("persistPluginInstall", () => {
     ).rejects.toThrow("has invalid configured settings");
 
     expect(enablePluginInConfig).not.toHaveBeenCalled();
-    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -969,8 +990,8 @@ describe("persistPluginInstall", () => {
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecords,
-      "writePersistedInstalledPluginIndexInstallRecords",
+      writePersistedInstalledPluginIndexInstallRecordsWithLease,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
     );
     expect(persistedRecords["memory-lancedb"]).toEqual({
       source: "path",

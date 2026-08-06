@@ -1,4 +1,5 @@
 // Control UI chat module implements realtime talk webrtc behavior.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
@@ -24,12 +25,18 @@ import {
   type RealtimeServerEvent,
 } from "./realtime-talk-webrtc-support.ts";
 
-type ToolBuffer = {
+type CompletedToolCall = {
+  itemId?: string;
   name: string;
   callId: string;
   args: string;
 };
 
+const MAX_REALTIME_TOOL_ARGUMENT_BYTES = 256_000;
+// Realtime defines no replay window, so evicting terminal IDs could execute a
+// very late duplicate. End an extreme session instead of weakening dedupe.
+const MAX_COMPLETED_TOOL_CALL_IDS = 1_024;
+const utf8Encoder = new TextEncoder();
 const cancelledSetup = Symbol("cancelledSetup");
 
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
@@ -42,7 +49,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private responseActive = false;
   private responseCreateInFlight = false;
   private responseCreatePending = false;
-  private toolBuffers = new Map<string, ToolBuffer>();
+  private readonly completedToolCallIds = new Set<string>();
   private readonly offerExchange = new RealtimeTalkWebRtcOfferExchange();
   private mediaSetupController: AbortController | null = null;
   private readonly camera: RealtimeTalkCameraController;
@@ -267,7 +274,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       controller.abort();
     }
     this.consultAbortControllers.clear();
-    this.toolBuffers.clear();
+    this.completedToolCallIds.clear();
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCreatePending = false;
@@ -368,15 +375,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       case "response.audio_transcript.done":
       case "response.output_audio_transcript.done":
         this.emitAssistantTranscript(event, true);
-        return;
+        break;
       case "response.function_call_arguments.delta":
-        this.bufferToolDelta(event);
-        return;
       case "response.function_call_arguments.done":
-        void this.handleToolCall(event).catch((error: unknown) => {
-          this.reportToolResultSubmissionError(error);
-        });
-        return;
+        // Tool argument events are provisional and can also arrive for interrupted
+        // responses. Only the completed response owns executable calls.
+        break;
       case "input_audio_buffer.speech_started":
         this.ctx.callbacks.onStatus?.("listening", "Speech detected");
         this.emitTalkEvent({ type: "turn.started", payload: { source: event.type } });
@@ -392,6 +396,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       case "response.cancelled":
       case "response.done":
+        if (event.type === "response.done") {
+          this.handleCompletedResponse(event);
+          if (this.closed) {
+            return;
+          }
+        }
         this.responseActive = false;
         this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("listening", this.extractResponseStatus(event));
@@ -485,41 +495,73 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     return message || code || type || "Realtime provider error";
   }
 
-  private bufferToolDelta(event: RealtimeServerEvent): void {
-    const key = event.item_id ?? "unknown";
-    const existing = this.toolBuffers.get(key);
-    if (existing) {
-      existing.args += event.delta ?? "";
+  private handleCompletedResponse(event: RealtimeServerEvent): void {
+    const response: unknown = event.response;
+    if (!isRecord(response) || response.status !== "completed" || !Array.isArray(response.output)) {
       return;
     }
-    this.toolBuffers.set(key, {
-      name: event.name ?? "",
-      callId: event.call_id ?? "",
-      args: event.delta ?? "",
-    });
+    for (const output of response.output) {
+      if (
+        !isRecord(output) ||
+        output.type !== "function_call" ||
+        (output.status !== undefined && output.status !== "completed")
+      ) {
+        continue;
+      }
+      const itemId = typeof output.id === "string" ? output.id.trim() || undefined : undefined;
+      const callId = typeof output.call_id === "string" ? output.call_id.trim() : "";
+      const name = typeof output.name === "string" ? output.name.trim() : "";
+      const args = typeof output.arguments === "string" ? output.arguments : "";
+      if (!callId || !name || !args.trim()) {
+        continue;
+      }
+      if (
+        name !== REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME &&
+        name !== REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME &&
+        name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+      ) {
+        continue;
+      }
+      if (this.completedToolCallIds.has(callId)) {
+        continue;
+      }
+      if (this.completedToolCallIds.size >= MAX_COMPLETED_TOOL_CALL_IDS) {
+        this.failConnection("Realtime tool-call session limit exceeded");
+        return;
+      }
+      this.completedToolCallIds.add(callId);
+      if (utf8Encoder.encode(args).byteLength > MAX_REALTIME_TOOL_ARGUMENT_BYTES) {
+        const message = "Realtime tool arguments exceed the 256000-byte UTF-8 limit";
+        this.submitToolResult(callId, { error: message });
+        this.emitTalkEvent({
+          type: "tool.error",
+          callId,
+          itemId,
+          final: true,
+          payload: { name, message },
+        });
+        continue;
+      }
+      void this.handleToolCall({ itemId, callId, name, args }).catch((error: unknown) => {
+        this.reportToolResultSubmissionError(error);
+      });
+    }
   }
 
-  private async handleToolCall(event: RealtimeServerEvent): Promise<void> {
-    const key = event.item_id ?? "unknown";
-    const buffered = this.toolBuffers.get(key);
-    this.toolBuffers.delete(key);
-    const name = buffered?.name || event.name || "";
-    const callId = buffered?.callId || event.call_id || "";
-    if (!callId) {
-      return;
-    }
+  private async handleToolCall(call: CompletedToolCall): Promise<void> {
+    const { itemId, callId, name, args } = call;
     if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
       await submitRealtimeTalkAgentControl({
         ctx: this.ctx,
         callId,
-        args: buffered?.args || event.arguments || "{}",
+        args,
         emitTalkEvent: this.emitTalkEvent,
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
       return;
     }
     if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
-      await this.handleDescribeViewToolCall(callId, key);
+      await this.handleDescribeViewToolCall(callId, itemId);
       return;
     }
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -528,8 +570,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.emitTalkEvent({
       type: "tool.call",
       callId,
-      itemId: key,
-      payload: { name, args: buffered?.args || event.arguments || "{}" },
+      itemId,
+      payload: { name, args },
     });
     const abortController = new AbortController();
     this.consultAbortControllers.add(abortController);
@@ -537,7 +579,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       await submitRealtimeTalkConsult({
         ctx: this.ctx,
         callId,
-        args: buffered?.args || event.arguments || "{}",
+        args,
         signal: abortController.signal,
         emitTalkEvent: this.emitTalkEvent,
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
@@ -547,7 +589,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     }
   }
 
-  private async handleDescribeViewToolCall(callId: string, itemId: string): Promise<void> {
+  private async handleDescribeViewToolCall(callId: string, itemId?: string): Promise<void> {
     this.emitTalkEvent({
       type: "tool.call",
       callId,
@@ -594,6 +636,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private submitToolResult(callId: string, result: unknown): void {
+    if (this.closed) {
+      return;
+    }
     this.send({
       type: "conversation.item.create",
       item: {

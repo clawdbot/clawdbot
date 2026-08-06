@@ -24,7 +24,11 @@ import {
   readQaBootstrapScenarioCatalog,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
-import { resolveQaScenarioLaneChannel, resolveQaScenarioLaneChannels } from "./scenario-lane.js";
+import {
+  resolveQaScenarioLaneChannel,
+  resolveQaScenarioLaneChannels,
+  resolveQaScenarioRequiredProviderMode,
+} from "./scenario-lane.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -675,6 +679,18 @@ async function runUnifiedQaSuite(params: {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
+  // Only an explicitly selected single flow may replace the unified suite's mock default.
+  const [selectedScenario] = params.plan.scenarios;
+  const selectedProviderMode =
+    params.runParams?.providerMode === undefined &&
+    params.runParams?.scenarioIds?.length === 1 &&
+    params.plan.scenarios.length === 1 &&
+    selectedScenario?.execution.kind === "flow"
+      ? resolveQaScenarioRequiredProviderMode(selectedScenario)
+      : undefined;
+  const providerMode = normalizeQaProviderMode(
+    params.runParams?.providerMode ?? selectedProviderMode ?? DEFAULT_QA_PROVIDER_MODE,
+  );
   const progress = params.runParams?.lab
     ? createQaSuiteProgressController({
         lab: params.runParams.lab,
@@ -683,9 +699,6 @@ async function runUnifiedQaSuite(params: {
       })
     : undefined;
   progress?.start();
-  const providerMode = normalizeQaProviderMode(
-    params.runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE,
-  );
   const primaryModel =
     params.runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel =

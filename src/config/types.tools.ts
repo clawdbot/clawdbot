@@ -5,6 +5,7 @@ import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+import type { SsrFPolicyConfig } from "./types.ssrf.js";
 export type { MemorySearchConfig } from "./types.memory.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -474,12 +475,7 @@ export type ToolsConfig = {
       /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
       useTrustedEnvProxy?: boolean;
       /** SSRF policy configuration for web_fetch. */
-      ssrfPolicy?: {
-        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
-        allowRfc2544BenchmarkRange?: boolean;
-        /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
-        allowIpv6UniqueLocalRange?: boolean;
-      };
+      ssrfPolicy?: SsrFPolicyConfig;
     };
   };
   media?: MediaToolsConfig;

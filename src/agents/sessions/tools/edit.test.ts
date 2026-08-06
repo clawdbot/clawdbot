@@ -34,6 +34,22 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  async function statEditFile(absolutePath: string) {
+    try {
+      const stat = await fs.stat(absolutePath);
+      return {
+        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      } as const;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   it("preserves a valid UTF-8 BOM when editing a real file", async () => {
     const filePath = await createTempFile(Buffer.from("\uFEFFheading\nprice: 5\n", "utf-8"));
     const tool = createEditTool(tmpDir);
@@ -107,6 +123,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile: async () => Buffer.from(original),
+      statFile: async () => null,
       writeFile,
     };
     const tool = createEditTool("/remote/workspace", { operations });
@@ -167,6 +184,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -202,6 +220,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("Simulated write failure");
       },
@@ -220,6 +239,31 @@ describe("edit tool", () => {
     ).rejects.toThrow("Simulated write failure");
   });
 
+  it("rejects false success when a delegated write resolves without persisting", async () => {
+    const filePath = await createTempFile("old\n");
+    const operations: EditOperations = {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "old", newText: "new" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("Edit verification failed");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("old\n");
+  });
+
   it("recovers multi-edit post-write failures", async () => {
     const filePath = await createTempFile("alpha beta gamma delta\n");
     const operations: EditOperations = {
@@ -227,6 +271,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -352,6 +397,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -392,6 +438,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -431,6 +478,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -472,6 +520,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -529,6 +578,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -564,6 +614,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -617,6 +668,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("No changes made to the disk because it is full");
       },

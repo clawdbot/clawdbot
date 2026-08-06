@@ -377,6 +377,13 @@ function parseJudgeReply(reply: string | null, allowedModels: Set<string>) {
   if (rankings.length === 0) {
     throw new Error("judge reply did not contain valid rankings");
   }
+  if (
+    rankings.length !== allowedModels.size ||
+    new Set(rankings.map(({ model }) => model)).size !== allowedModels.size ||
+    rankings.some(({ rank }, index) => rank !== index + 1)
+  ) {
+    throw new Error("judge reply must rank every candidate exactly once with consecutive ranks");
+  }
   return rankings;
 }
 

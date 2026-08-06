@@ -1,6 +1,9 @@
 import { once } from "node:events";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -341,6 +344,78 @@ describe("Microsoft Teams SharePoint attachment thread routing", () => {
       });
     },
   );
+
+  it("delivers a workspace-relative attachment through the real Teams SDK and Bot Framework", async () => {
+    const workspaceDir = await realpath(
+      await mkdtemp(join(tmpdir(), "openclaw-msteams-sdk-media-")),
+    );
+    const filePath = join(workspaceDir, "report.pdf");
+    const fileContents = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+    const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
+    const conflictingReader = vi.fn(async () => Buffer.from("forged Teams attachment"));
+    const mediaAccess = { localRoots: [workspaceDir], workspaceDir, readFile: approvedReader };
+
+    try {
+      await writeFile(filePath, fileContents);
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+        "openclaw/plugin-sdk/outbound-media",
+      );
+      mockState.loadOutboundMediaFromUrl.mockImplementation(actual.loadOutboundMediaFromUrl);
+
+      await withRealTeamsSdkHttp(async ({ api, requests }) => {
+        mockState.resolveMSTeamsSendContext.mockResolvedValue({
+          app: { api },
+          appId: "app-id",
+          conversationId,
+          ref: {
+            serviceUrl,
+            agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
+            user: { id: "29:user" },
+            conversation: { id: conversationId, conversationType: "channel" },
+            threadId: "workspace-thread-root",
+          },
+          conversationType: "channel",
+          replyStyle: "thread",
+          threadActivityId: "workspace-thread-root",
+          sdkCloudOptions: { cloud: "Public" },
+          tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+          sharePointSiteId: "sharepoint-site-1",
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+
+        await sendMessageMSTeams({
+          cfg: {} as OpenClawConfig,
+          to: conversationId,
+          text: "Workspace report",
+          mediaUrl: "report.pdf",
+          mediaAccess,
+          mediaLocalRoots: [join(workspaceDir, "unapproved")],
+          mediaReadFile: conflictingReader,
+        });
+
+        expect(approvedReader).toHaveBeenCalledWith(filePath);
+        expect(conflictingReader).not.toHaveBeenCalled();
+        expect(mockState.loadOutboundMediaFromUrl.mock.calls[0]?.[1]?.mediaAccess).toBe(
+          mediaAccess,
+        );
+        expect(mockState.uploadAndShareSharePoint).toHaveBeenCalledWith(
+          expect.objectContaining({ buffer: fileContents, filename: "report.pdf" }),
+        );
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          path: `${new URL(serviceUrl).pathname}/v3/conversations/${conversationId};messageid=workspace-thread-root/activities`,
+          body: {
+            text: "Workspace report",
+            attachments: [
+              { contentType: "application/vnd.microsoft.teams.card.file.info", name: "report.pdf" },
+            ],
+          },
+        });
+      });
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 
   it("keeps personal image delivery on the existing non-SharePoint path", async () => {
     await withRealTeamsSdkHttp(async ({ api, requests }) => {

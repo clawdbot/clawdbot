@@ -3,10 +3,10 @@
 import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { channelDocsUrl, channelHubMeta, renderChannelArt } from "./hub-meta.ts";
 import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.ts";
 
@@ -16,6 +16,10 @@ type ChannelWizardViewProps = {
   // Pending multiselect toggles live in page state so re-renders keep them.
   multiselectValues: readonly unknown[];
   onToggleMultiselect: (value: unknown) => void;
+  textValue: string;
+  secretVisible: boolean;
+  onTextInput: (value: string) => void;
+  onToggleSecretVisibility: () => void;
   onAnswer: (value: unknown) => void;
   onClose: () => void;
   // WhatsApp QR linking phase (wizard done + channel === whatsapp).
@@ -33,7 +37,22 @@ function stepIsBusy(props: ChannelWizardViewProps): boolean {
 
 function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
   const message = step.message?.trim() ?? "";
+  if (step.executor === "gateway") {
+    return html`
+      ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
+      <div class="channels-wizard__spinner" role="status" aria-live="polite">
+        ${message || t("channels.setup.working")}
+      </div>
+      <div class="channels-wizard__footer">
+        <button type="button" class="btn" @click=${() => props.onClose()}>
+          ${t("common.cancel")}
+        </button>
+      </div>
+    `;
+  }
   const looksLikeCode = message.includes("{") || message.includes("  ");
+  const copyLabel = t("channels.setup.copyText");
+  const onCopy = (event: Event) => void handleCopyButton(event, message, copyLabel);
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
     ${message
@@ -46,8 +65,8 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     ${message
       ? html`
           <div class="channels-wizard__links">
-            <button type="button" class="btn btn--sm" @click=${() => void copyToClipboard(message)}>
-              ${t("channels.setup.copyText")}
+            <button type="button" class="btn btn--sm" @click=${onCopy}>
+              <span data-copy-label>${copyLabel}</span>
             </button>
           </div>
         `
@@ -71,13 +90,23 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
   }
   return renderWizardStepControls({
     step,
-    value: step.type === "multiselect" ? props.multiselectValues : step.initialValue,
+    value:
+      step.type === "multiselect"
+        ? props.multiselectValues
+        : step.type === "text"
+          ? props.textValue
+          : step.initialValue,
     busy: stepIsBusy(props),
     inputId: "channel-wizard-text-input",
     presentation: "channels",
     answerLabel: t("channels.setup.continue"),
-    onValueChange: props.onToggleMultiselect,
+    sensitiveRevealed: props.secretVisible,
+    onValueChange:
+      step.type === "text"
+        ? (value) => props.onTextInput(typeof value === "string" ? value : "")
+        : props.onToggleMultiselect,
     onAnswer: props.onAnswer,
+    onToggleSensitiveVisibility: props.onToggleSecretVisibility,
   });
 }
 
@@ -218,7 +247,7 @@ export function renderChannelWizard(
         ? html`<div class="channels-wizard__error">${wizard.validationError}</div>`
         : nothing}
       ${renderStepBody(step, props)}
-      ${wizard.phase === "step" && wizard.busy
+      ${wizard.phase === "step" && wizard.busy && step.executor !== "gateway"
         ? html`<div class="channels-wizard__spinner">${t("channels.setup.working")}</div>`
         : nothing}
     `;

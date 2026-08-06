@@ -1,5 +1,12 @@
 // Model list status tests cover status column construction and auth/probe summaries.
 import { describe, expect, it, type Mock, vi } from "vitest";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
@@ -151,6 +158,7 @@ const mocks = vi.hoisted(() => {
       models: { providers: {} },
       env: { shellEnv: { enabled: true } },
     }),
+    loadModelsConfigArgs: vi.fn(),
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
@@ -268,7 +276,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   createConfigIO: mocks.createConfigIO,
 }));
 vi.mock("./load-config.js", () => ({
-  loadModelsConfig: vi.fn(async () => mocks.loadConfig()),
+  loadModelsConfig: vi.fn(async (...args: unknown[]) => {
+    mocks.loadModelsConfigArgs(...args);
+    return mocks.loadConfig();
+  }),
 }));
 vi.mock("../../infra/provider-usage.js", () => ({
   formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
@@ -543,6 +554,57 @@ async function withOpenAIStatusFixture<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
+  it("does not restore over plugin metadata published while status is running", async () => {
+    const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
+    const config = mocks.loadConfig();
+    const workspaceDir = "/tmp/openclaw-agent/workspace";
+    const catalogStarted = createDeferred();
+    const releaseCatalog = createDeferred();
+    let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
+    clearCurrentPluginMetadataSnapshot();
+    mocks.loadModelCatalog.mockImplementationOnce(async () => {
+      replacement = getCurrentPluginMetadataSnapshot({
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      catalogStarted.resolve();
+      await releaseCatalog.promise;
+      return [];
+    });
+    const commandPromise = modelsStatusCommand({ json: true }, createRuntime() as never);
+
+    try {
+      await catalogStarted.promise;
+      expect(replacement).toBeDefined();
+      clearPluginMetadataLifecycleCaches();
+      setCurrentPluginMetadataSnapshot(replacement!, {
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      releaseCatalog.resolve();
+      await commandPromise;
+
+      expect(
+        getCurrentPluginMetadataSnapshot({
+          config,
+          workspaceDir,
+          env: process.env,
+        }),
+      ).toBe(replacement);
+    } finally {
+      releaseCatalog.resolve();
+      await commandPromise.catch(() => {});
+      clearCurrentPluginMetadataSnapshot();
+      if (originalLoadModelCatalog) {
+        mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
+      } else {
+        mocks.loadModelCatalog.mockResolvedValue([]);
+      }
+    }
+  });
+
   it.each([
     [{ probeTimeout: "5000ms" }, "--probe-timeout"],
     [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
@@ -556,6 +618,17 @@ describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = parseFirstJsonLog(runtime);
+
+    expect(mocks.loadModelsConfigArgs.mock.calls.at(-1)?.[0]).toMatchObject({
+      commandName: "models status",
+      skipPluginValidation: true,
+    });
+    expect(mocks.loadModelCatalog.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        providerDiscoveryProviderIds: expect.arrayContaining(["anthropic", "openai"]),
+        readOnly: true,
+      }),
+    );
 
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();

@@ -275,8 +275,8 @@ import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
 export default defineSetupPluginEntry(myChannelPlugin);
 ```
 
-OpenClaw loads this instead of the full entry when a channel is disabled,
-unconfigured, or when deferred loading is enabled. See
+OpenClaw loads this instead of the full entry when a channel is disabled or
+unconfigured. See
 [Setup and Config](/plugins/sdk-setup#setup-entry) for when this matters.
 
 Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
@@ -326,10 +326,9 @@ export default defineBundledChannelSetupEntry({
 ```
 
 Use this only when a setup flow truly needs a lightweight runtime setter or
-setup-safe gateway surface before the full channel entry loads.
+setup-safe gateway surface for an unconfigured channel.
 `registerSetupRuntime` runs only for `"setup-runtime"` loads; keep it
-limited to config-only routes or methods that must exist before deferred
-full activation.
+limited to config-only routes or methods required by that setup flow.
 
 ## Registration mode
 
@@ -341,7 +340,7 @@ full activation.
 | `"discovery"`      | Read-only capability discovery                     | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
 | `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                        |
 | `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                       |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed before the full entry loads                       |
+| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed during setup                                      |
 | `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                            |
 
 `defineChannelPluginEntry` handles this split automatically. If you use
@@ -421,6 +420,6 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 - [SDK Overview](/plugins/sdk-overview) - registration API and subpath reference
 - [Runtime Helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
-- [Setup and Config](/plugins/sdk-setup) - manifest, setup entry, deferred loading
+- [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
 - [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks

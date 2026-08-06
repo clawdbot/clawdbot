@@ -481,6 +481,9 @@ describe("secret provider integration presets", () => {
 
     await withSecureTestNodeExecPath(async () => {
       const registry = loadTestRegistry(rootDir, "vault-secrets", "global");
+      expect(registry.plugins[0]?.secretProviderIntegrations?.vault).not.toHaveProperty(
+        "allowInsecurePath",
+      );
       const [preset] = listSecretProviderIntegrationPresets({ manifestRegistry: registry });
       if (!preset) {
         throw new Error("Expected vault preset");

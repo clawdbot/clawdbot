@@ -9,7 +9,7 @@ import {
   clearPluginRuntimeArtifactResolutionMemo,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
-import { getActivePluginChannelRegistry, pinActivePluginChannelRegistry } from "./runtime.js";
+import { getActivePluginChannelRegistry } from "./runtime.js";
 
 const tempDirs: string[] = [];
 
@@ -182,7 +182,6 @@ describe("resolvePluginRuntimeArtifact", () => {
           onlyPluginIds: ["fixture"],
           preferBuiltPluginArtifacts: false,
         });
-        pinActivePluginChannelRegistry(sourceRegistry);
         const builtPreferredRegistry = loadOpenClawPlugins({
           cache: false,
           config,
@@ -199,7 +198,7 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect([...second.pluginRuntimeArtifacts.values()].map((entry) => entry.source)).toEqual([
       fixture.builtSource,
     ]);
-    expect(getActivePluginChannelRegistry()).toBe(first);
+    expect(getActivePluginChannelRegistry()).toBe(second);
   });
 
   it("leaves dist-only installs unchanged because both preferences resolve the built entry", () => {

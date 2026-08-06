@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   getAgentToolResultMiddlewareMatcherScope,
   listAgentToolResultMiddlewares,
@@ -12,7 +13,6 @@ import {
   hasBeforeToolCallPolicy,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { stableStringify } from "../stable-stringify.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { payloadTextResult } from "../tools/common.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
@@ -80,8 +80,7 @@ export function nativeHookRelayEventToolMatcher(
     if (nativePreToolUseMayRunLoopDetection(registration)) {
       return undefined;
     }
-    // Relay selection and policy execution must read the same composed registry
-    // so active, pinned, and isolated plugin sources cannot diverge.
+    // Relay selection and policy execution must read the same scoped/root registry.
     const policyRegistry = getGlobalHookRunnerRegistry();
     const scope = mergePluginToolMatcherScopes([
       getGlobalToolHookMatcherScope("before_tool_call"),

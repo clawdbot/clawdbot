@@ -43,6 +43,7 @@ import {
   buildClaudeLiveRunContext,
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
+  createClaudeInputStartedEvent,
   createCancelableLiveRunLifecycle,
   expectPathMissing,
   expectRejectsWithFields,
@@ -118,6 +119,14 @@ const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
+
+function emitClaudeInputStarted(stdout: ((chunk: string) => void) | undefined, data: string): void {
+  const event = createClaudeInputStartedEvent(data);
+  if (event) {
+    stdout?.(`${JSON.stringify(event)}\n`);
+  }
+}
+
 type ClaudeControlPolicyTestCase = {
   name: string;
   requestId: string;
@@ -1981,6 +1990,7 @@ describe("runCliAgent spawn path", () => {
     const stdin = {
       write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
         writes.push(data);
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(interimChunk);
         cb?.();
       }),
@@ -2037,12 +2047,21 @@ describe("runCliAgent spawn path", () => {
       });
       expectModelCallTypes(diagnostics, ["model.call.started", "model.call.completed"]);
       const completed = diagnostics.events[1];
+      const inputUuid = (JSON.parse(writes[0] ?? "{}") as { uuid?: string }).uuid;
+      const lifecycleChunk = `${JSON.stringify({
+        type: "command_lifecycle",
+        command_uuid: inputUuid,
+        state: "started",
+      })}\n`;
       expect(completed?.event).toMatchObject({
         api: "claude-code",
         transport: "stdio-live",
         observationUnit: "turn",
         requestPayloadBytes: Buffer.byteLength(writes[0] ?? ""),
-        responseStreamBytes: Buffer.byteLength(interimChunk) + Buffer.byteLength(finalChunk),
+        responseStreamBytes:
+          Buffer.byteLength(lifecycleChunk) +
+          Buffer.byteLength(interimChunk) +
+          Buffer.byteLength(finalChunk),
         usage: {
           input: 10,
           output: 3,
@@ -2336,7 +2355,8 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const cancel = vi.fn();
     const stdin = {
-      write: vi.fn((_data: string, callback?: (error?: Error | null) => void) => {
+      write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-quiet-tool" }),
@@ -2607,6 +2627,160 @@ describe("runCliAgent spawn path", () => {
 
     expect(result.text).toHaveLength(largeText.length);
     expect(result.text).toBe(largeText);
+  });
+
+  it("frames coalesced Claude live image and PDF records before omitting retained bytes", async () => {
+    const toolResults: unknown[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.stream === "tool" && event.data.phase === "result") {
+        toolResults.push(event.data.result);
+      }
+    });
+    const base64 = "a".repeat(4_300_000);
+    mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: ({ emit }) => {
+        const events: Record<string, unknown>[] = [
+          { type: "system", subtype: "init", session_id: "live-binary-results" },
+        ];
+        for (const [type, mediaType] of [
+          ["image", "image/png"],
+          ["document", "application/pdf"],
+        ] as const) {
+          events.push(
+            {
+              type: "assistant",
+              session_id: "live-binary-results",
+              message: {
+                role: "assistant",
+                content: [{ type: "tool_use", id: `read-${type}`, name: "Read", input: {} }],
+              },
+            },
+            {
+              type: "user",
+              session_id: "live-binary-results",
+              message: {
+                role: "user",
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: `read-${type}`,
+                    content: [
+                      { type: "text", text: `Read ${type}` },
+                      { type, source: { type: "base64", media_type: mediaType, data: base64 } },
+                    ],
+                  },
+                ],
+              },
+            },
+          );
+        }
+        events.push({
+          type: "result",
+          session_id: "live-binary-results",
+          result: "both files read",
+        });
+        emit(events);
+      },
+    });
+
+    try {
+      const result = await executePreparedCliRun(buildClaudeLiveRunContext());
+
+      expect(result.text).toBe("both files read");
+      expect(toolResults).toEqual([
+        [
+          { type: "text", text: "Read image" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png" },
+            omitted: true,
+            bytes: 3_225_000,
+          },
+        ],
+        [
+          { type: "text", text: "Read document" },
+          {
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf" },
+            omitted: true,
+            bytes: 3_225_000,
+          },
+        ],
+      ]);
+    } finally {
+      stop();
+    }
+  });
+
+  it.each([
+    {
+      name: "an oversized complete line",
+      chunks: () => [`${"a".repeat(8 * 1024 * 1024 + 1)}\n`],
+    },
+    {
+      name: "an oversized growing unterminated line",
+      chunks: () => ["a".repeat(4_300_000), "a".repeat(4_300_000)],
+    },
+  ])("rejects $name from Claude live stdout", async ({ chunks }) => {
+    const live: ReturnType<typeof mockClaudeLiveRun> = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: () => {
+        for (const chunk of chunks()) {
+          live.spawnInput.onStdout?.(chunk);
+        }
+      },
+    });
+
+    await expect(executePreparedCliRun(buildClaudeLiveRunContext())).rejects.toThrow(
+      "Claude CLI JSONL line exceeded output limit.",
+    );
+  });
+
+  it.each([
+    {
+      name: "a coalesced blank-frame flood",
+      createChunk: () => "\n".repeat(20_001),
+    },
+    {
+      name: "whitespace-only records exceeding the raw budget",
+      createChunk: () => `${" ".repeat(4_300_000)}\n${" ".repeat(4_300_000)}\n`,
+    },
+    {
+      name: "valid JSON padded beyond the raw budget",
+      createChunk: () => `${" ".repeat(4_300_000)}{}\n${" ".repeat(4_300_000)}{}\n`,
+    },
+    {
+      name: "internal formatting around compacted Claude media",
+      createChunk: () => {
+        const line = JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "padded-live-image",
+                content: [
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: "YQ==" },
+                  },
+                ],
+              },
+            ],
+          },
+        }).replace('"message":', `"message":${" ".repeat(4_300_000)}`);
+        return `${line}\n${line}\n`;
+      },
+    },
+  ])("rejects $name from the managed Claude live session", async ({ createChunk }) => {
+    const live: ReturnType<typeof mockClaudeLiveRun> = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: () => {
+        live.spawnInput.onStdout?.(createChunk());
+      },
+    });
+
+    await expect(executePreparedCliRun(buildClaudeLiveRunContext())).rejects.toThrow(
+      "Claude CLI turn output exceeded limit.",
+    );
   });
 
   it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
@@ -3144,7 +3318,8 @@ describe("runCliAgent spawn path", () => {
     });
     let turn = 0;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         turn += 1;
         stdoutListener?.(
           [
@@ -3255,6 +3430,7 @@ describe("runCliAgent spawn path", () => {
       await spawnReady;
       const stdin = {
         write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(input.onStdout, dataValue);
           input.onStdout?.(
             [
               JSON.stringify({
@@ -3397,6 +3573,44 @@ describe("runCliAgent spawn path", () => {
       toolUseId: "tool-allow-1",
       updatedInput: { command: "ls" },
     });
+  });
+
+  it("preserves image and PDF bytes inside approved Claude live control inputs", async () => {
+    const input = {
+      command: "process media",
+      image: {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" },
+      },
+      document: {
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: "JVBERi0=" },
+      },
+    };
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId: "req-allow-media",
+        toolUseId: "tool-allow-media",
+        input,
+        sessionId: "live-control-allow-media",
+      }),
+    });
+
+    const result = await executePreparedCliRun(
+      buildClaudeLiveRunContext({
+        prompt: "hello",
+        config: { tools: { exec: { security: "full", ask: "off" } } },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    const response = expectClaudeControlDecision(live, {
+      behavior: "allow",
+      requestId: "req-allow-media",
+      toolUseId: "tool-allow-media",
+      updatedInput: input,
+    });
+    expect(JSON.stringify(response.response.response.updatedInput)).toBe(JSON.stringify(input));
   });
 
   it("honors allow-once from a Claude native tool Gateway approval", async () => {
@@ -3562,6 +3776,7 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
       write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(
           [
             JSON.stringify({
@@ -3729,7 +3944,8 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let captureKey = "";
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         const captureHandle = markMcpLoopbackToolCallStarted({
           captureKey,
           toolName: "message",
@@ -3842,7 +4058,8 @@ describe("runCliAgent spawn path", () => {
     let captureKey = "";
     const toolArgs = { action: "react", emoji: "same" };
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-identical" }),
@@ -3995,7 +4212,8 @@ describe("runCliAgent spawn path", () => {
       });
       let stdoutListener: ((chunk: string) => void) | undefined;
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(stdoutListener, data);
           stdoutListener?.(
             [
               JSON.stringify({ type: "system", subtype: "init", session_id: "live-timeout" }),
@@ -4554,6 +4772,7 @@ describe("runCliAgent spawn path", () => {
         startedAtMs: Date.now(),
         stdin: {
           write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+            emitClaudeInputStarted(input.onStdout, dataValue);
             const result = turnResults[turnIndex] ?? "ok";
             turnIndex += 1;
             input.onStdout?.(
@@ -4752,6 +4971,7 @@ describe("runCliAgent spawn path", () => {
   ])("$name", async (testCase) => {
     mockClaudeLiveRun(supervisorSpawnMock, {
       events: testCase.events,
+      inputLifecycle: testCase.events.length > 0,
       exitOnWrite: {
         reason: "exit",
         exitCode: testCase.exitCode,
@@ -4803,6 +5023,7 @@ describe("runCliAgent spawn path", () => {
       cancels.push(cancel);
       const stdin = {
         write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(stdoutListener, dataValue);
           if (spawnIndex === 2) {
             stdoutListener?.(
               [
@@ -4956,6 +5177,7 @@ describe("runCliAgent spawn path", () => {
       cancels.push(cancel);
       const stdin = {
         write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(input.onStdout, dataValue);
           const text = spawnIndex === 1 ? "weather-ok" : "git-ok";
           input.onStdout?.(
             [
@@ -5109,6 +5331,7 @@ describe("runCliAgent spawn path", () => {
     let writeCount = 0;
     const stdin = {
       write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, dataValue);
         writeCount += 1;
         if (writeCount === 1) {
           stderrListener?.("stale stderr from first turn");

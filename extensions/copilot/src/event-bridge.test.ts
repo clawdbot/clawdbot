@@ -129,6 +129,7 @@ function createFakeSession(
     },
     off,
     on,
+    send: vi.fn().mockResolvedValue("sdk-user"),
     sendAndWait: vi.fn().mockResolvedValue(undefined),
     sessionId: "sdk-session-id",
   };

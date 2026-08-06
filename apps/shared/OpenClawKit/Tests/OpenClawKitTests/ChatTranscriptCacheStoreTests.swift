@@ -12,7 +12,7 @@ private func makeDatabaseDirectory() throws -> URL {
     return directory
 }
 
-private func cacheMessage(
+func cacheMessage(
     role: String,
     text: String,
     timestamp: Double,
@@ -32,7 +32,7 @@ private func cacheMessage(
         idempotencyKey: idempotencyKey)
 }
 
-private func cacheSessionEntry(key: String, updatedAt: Double) -> OpenClawChatSessionEntry {
+func cacheSessionEntry(key: String, updatedAt: Double) -> OpenClawChatSessionEntry {
     OpenClawChatSessionEntry(
         key: key,
         kind: nil,
@@ -144,13 +144,79 @@ private func createLegacyV2Database(
     }
 }
 
-struct ChatTranscriptCacheStoreTests {
-    @Test func `one installation owns exactly the two named databases`() throws {
+class TemporaryDatabaseTestSuite {
+    let directory: URL
+
+    required init() throws {
+        self.directory = try makeDatabaseDirectory()
+    }
+
+    fileprivate init(directory: URL) {
+        self.directory = directory
+    }
+
+    deinit { try? FileManager.default.removeItem(at: self.directory) }
+}
+
+class ClientDatabaseTestSuite: TemporaryDatabaseTestSuite {
+    let databases: OpenClawClientDatabases
+    let store: OpenClawChatSQLiteTranscriptCache
+
+    required init() throws {
         let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let databases: OpenClawClientDatabases
+        do {
+            databases = try OpenClawClientDatabases(directoryURL: directory)
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+        self.databases = databases
+        self.store = databases.store(gatewayID: "gw-a")
+        super.init(directory: directory)
+    }
 
-        _ = try OpenClawClientDatabases(directoryURL: directory)
+    deinit { try? self.databases.close() }
+}
 
+private func retryExpectation(_ command: OpenClawChatOutboxCommand) -> OpenClawChatOutboxRetryExpectation {
+    OpenClawChatOutboxRetryExpectation(
+        attemptVersion: command.attemptVersion,
+        retryCount: command.retryCount,
+        lastError: command.lastError)
+}
+
+private func forgottenGatewayProbe(
+    in databases: OpenClawClientDatabases,
+    identity: String) async throws -> (hash: String?, gatewayID: String?, cleanupPhase: Int?)
+{
+    try await databases.stateQueue.read { db in
+        let row = try Row.fetchOne(
+            db,
+            sql: "SELECT gateway_hash, gateway_id, cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
+            arguments: [OpenClawClientDatabases.gatewayIdentityHash(identity)])
+        return (row?["gateway_hash"], row?["gateway_id"], row?["cleanup_phase"])
+    }
+}
+
+extension OpenClawChatSQLiteTranscriptCache {
+    fileprivate func reconcileForTest(
+        _ scope: OpenClawChatOutboxScope,
+        previousState: OpenClawChatOutboxBranchState,
+        activeLeafEntryID: String? = "leaf-b",
+        branchLeafEntryIDs: Set<String> = ["leaf-b"]) async -> [OpenClawChatOutboxCommand]?
+    {
+        await self.reconcileBranchScope(
+            scope,
+            previousState: previousState,
+            activeLeafEntryID: activeLeafEntryID,
+            branchLeafEntryIDs: branchLeafEntryIDs,
+            lastError: "branch changed")
+    }
+}
+
+final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked Sendable {
+    @Test func `one installation owns exactly the two named databases`() throws {
         let sqliteFiles = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasSuffix(".sqlite") }
             .sorted()
@@ -158,9 +224,6 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `full removal deletes both databases legacy files and sidecars`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
         await databases.store(gatewayID: "gw-a").storeSessions([
             cacheSessionEntry(key: "main", updatedAt: 1),
         ])
@@ -186,10 +249,6 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `transcript and sessions round trip as row JSON`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
         let messages = [
             cacheMessage(role: "user", text: "hello", timestamp: 1000, idempotencyKey: "run-1:user"),
             cacheMessage(role: "assistant", text: "hi", timestamp: 2000, idempotencyKey: "run-1"),
@@ -219,17 +278,12 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `cache format mismatch rebuilds without touching client state`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let stateIdentity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "main",
             defaultAgentID: "main"))
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            let store = databases.store(gatewayID: "gw-a")
-            await store.storeSessionRoutingIdentity(stateIdentity)
-        }
+        await store.storeSessionRoutingIdentity(stateIdentity)
+        try databases.close()
         let cacheURL = directory.appendingPathComponent("gateway-cache.sqlite")
         try withRawDatabase(at: cacheURL) { raw in
             execute(raw, "UPDATE cache_metadata SET format_version = 999 WHERE id = 1")
@@ -264,10 +318,7 @@ struct ChatTranscriptCacheStoreTests {
         #expect(try Data(contentsOf: stateURL) == bytes)
     }
 
-    @Test func `transcripts are scoped by gateway and agent in one cache`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
+    @Test func `transcripts are scoped by gateway and agent in one cache`() async {
         let storeA = databases.store(gatewayID: "gw-a")
         let storeB = databases.store(gatewayID: "gw-b")
 
@@ -292,11 +343,7 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await storeA.loadTranscript(sessionKey: "global").isEmpty)
     }
 
-    @Test func `cache bounds sessions messages and transcript partitions`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
-
+    @Test func `cache bounds sessions messages and transcript partitions`() async {
         let sessions = (0..<(OpenClawChatSQLiteTranscriptCache.maxCachedSessions + 10)).map {
             cacheSessionEntry(key: "s\($0)", updatedAt: Double($0))
         }
@@ -323,10 +370,6 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `empty transcript deletes its partition`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
         await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "user", text: "old", timestamp: 1)])
@@ -338,11 +381,7 @@ struct ChatTranscriptCacheStoreTests {
         } == 0)
     }
 
-    @Test func `canonical cache excludes optimistic outbox rows`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
+    @Test func `canonical cache excludes optimistic outbox rows`() async {
         #expect(await store.enqueueCommand(outboxCommand(id: "queued", text: "local")))
         let snapshot = [
             cacheMessage(role: "user", text: "local", timestamp: 1, idempotencyKey: "queued:user"),
@@ -365,10 +404,7 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await messageTexts(store.loadTranscript(sessionKey: "main")) == ["local", "canonical"])
     }
 
-    @Test func `canceled optimistic row cannot reenter cache from a stale snapshot`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+    @Test func `canceled optimistic row cannot reenter cache from a stale snapshot`() async {
         #expect(await store.enqueueCommand(outboxCommand(id: "canceled", text: "local")))
         let capturedBeforeCancellation = [
             cacheMessage(role: "user", text: "local", timestamp: 1, idempotencyKey: "canceled:user"),
@@ -385,10 +421,6 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `malformed cache partitions are discarded atomically`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
         await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
         await store.storeTestTranscript(
             sessionKey: "main",
@@ -410,10 +442,7 @@ struct ChatTranscriptCacheStoreTests {
         } == 0)
     }
 
-    @Test func `canonical merge preserves newer cache rows`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+    @Test func `canonical merge preserves newer cache rows`() async {
         await store.storeTestTranscript(sessionKey: "main", messages: [
             cacheMessage(role: "assistant", text: "newer", timestamp: 2, idempotencyKey: "newer"),
         ])
@@ -425,16 +454,12 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await messageTexts(store.loadTranscript(sessionKey: "main")) == ["confirmed", "newer"])
     }
 
-    @Test func `concurrent canonical merges do not lose messages`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
-
+    @Test func `concurrent canonical merges do not lose messages`() async {
         await withTaskGroup(of: Void.self) { group in
             for index in 0..<20 {
                 group.addTask {
                     let key = "merge-\(index)"
-                    await store.mergeCanonicalTranscriptMessage(
+                    await self.store.mergeCanonicalTranscriptMessage(
                         sessionKey: "main",
                         agentID: nil,
                         message: cacheMessage(
@@ -481,9 +506,6 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `gateway removal deletes only that gateways cache and state`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
         let storeA = databases.store(gatewayID: "gw-a")
         let storeB = databases.store(gatewayID: "gw-b")
         await storeA.storeSessions([cacheSessionEntry(key: "a", updatedAt: 1)])
@@ -500,154 +522,101 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `staged gateway removal reconciles against the pairing registry`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            let store = databases.store(gatewayID: "gw-a")
-            await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
-            #expect(await store.enqueueCommand(outboxCommand(id: "keep", text: "pending")))
-            try databases.stageGatewayRemoval(gatewayID: "gw-a")
-            #expect(await store.loadSessions().map(\.key) == ["main"])
-            #expect(await store.loadCommands().map(\.id) == ["keep"])
-            try databases.close()
-        }
+        await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
+        #expect(await store.enqueueCommand(outboxCommand(id: "keep", text: "pending")))
+        try databases.stageGatewayRemoval(gatewayID: "gw-a")
+        #expect(await store.loadSessions().map(\.key) == ["main"])
+        #expect(await store.loadCommands().map(\.id) == ["keep"])
+        try databases.close()
 
-        do {
-            let registered = try OpenClawClientDatabases(
-                directoryURL: directory,
-                registeredGatewayIDs: ["gw-a"])
-            #expect(await registered.store(gatewayID: "gw-a").loadCommands().map(\.id) == ["keep"])
-            try registered.stageGatewayRemoval(gatewayID: "gw-a")
-            try registered.close()
-        }
+        let registered = try OpenClawClientDatabases(
+            directoryURL: directory,
+            registeredGatewayIDs: ["gw-a"])
+        #expect(await registered.store(gatewayID: "gw-a").loadCommands().map(\.id) == ["keep"])
+        try registered.stageGatewayRemoval(gatewayID: "gw-a")
+        try registered.close()
 
         let forgotten = try OpenClawClientDatabases(
             directoryURL: directory,
             registeredGatewayIDs: [])
         #expect(await forgotten.store(gatewayID: "gw-a").loadSessions().isEmpty)
         #expect(await forgotten.store(gatewayID: "gw-a").loadCommands().isEmpty)
-        #expect(try await forgotten.stateQueue.read { db in
-            try String.fetchOne(
-                db,
-                sql: "SELECT gateway_hash FROM forgotten_gateways WHERE gateway_id IS NULL")
-        } == OpenClawClientDatabases.gatewayIdentityHash("gw-a"))
+        let probe = try await forgottenGatewayProbe(in: forgotten, identity: "gw-a")
+        #expect(probe.hash == OpenClawClientDatabases.gatewayIdentityHash("gw-a") && probe.gatewayID == nil)
     }
 
     @Test func `staged gateway removal uses exact registry identifier bytes`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let composedGatewayID = "gateway-\u{00E9}"
         let decomposedGatewayID = "gateway-e\u{0301}"
         #expect(composedGatewayID == decomposedGatewayID)
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            let store = databases.store(gatewayID: composedGatewayID)
-            #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
-            try databases.stageGatewayRemoval(gatewayID: composedGatewayID)
-            try databases.close()
-        }
+        let store = databases.store(gatewayID: composedGatewayID)
+        #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
+        try databases.stageGatewayRemoval(gatewayID: composedGatewayID)
+        try databases.close()
 
         let recovered = try OpenClawClientDatabases(
             directoryURL: directory,
             registeredGatewayIDs: [decomposedGatewayID])
 
         #expect(await recovered.store(gatewayID: composedGatewayID).loadCommands().isEmpty)
-        #expect(try await recovered.stateQueue.read { db in
-            try String.fetchOne(
-                db,
-                sql: "SELECT gateway_hash FROM forgotten_gateways WHERE gateway_id IS NULL")
-        } == OpenClawClientDatabases.gatewayIdentityHash(composedGatewayID))
+        let probe = try await forgottenGatewayProbe(in: recovered, identity: composedGatewayID)
+        #expect(probe.hash == OpenClawClientDatabases.gatewayIdentityHash(composedGatewayID) && probe.gatewayID == nil)
     }
 
     @Test func `commit started recovery finishes even while gateway remains registered`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            let store = databases.store(gatewayID: "gw-a")
-            await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
-            #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
-            try databases.stageGatewayRemoval(gatewayID: "gw-a")
-            // Simulate termination immediately after the irreversible state
-            // transaction but before cache cleanup and tombstone finalization.
-            try await databases.stateQueue.write { db in
-                try db.execute(
-                    sql: "UPDATE forgotten_gateways SET cleanup_phase = 2 WHERE gateway_id = ?",
-                    arguments: ["gw-a"])
-                try db.execute(
-                    sql: "DELETE FROM outbox_commands WHERE gateway_id = ?",
-                    arguments: ["gw-a"])
-            }
-            try databases.close()
+        await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
+        #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
+        try databases.stageGatewayRemoval(gatewayID: "gw-a")
+        // Simulate termination after the irreversible transaction, before cache cleanup and tombstone finalization.
+        try await databases.stateQueue.write { db in
+            try db.execute(
+                sql: "UPDATE forgotten_gateways SET cleanup_phase = 2 WHERE gateway_id = ?",
+                arguments: ["gw-a"])
+            try db.execute(
+                sql: "DELETE FROM outbox_commands WHERE gateway_id = ?",
+                arguments: ["gw-a"])
         }
+        try databases.close()
 
         let recovered = try OpenClawClientDatabases(
             directoryURL: directory,
             registeredGatewayIDs: ["gw-a"])
         #expect(await recovered.store(gatewayID: "gw-a").loadSessions().isEmpty)
         #expect(await recovered.store(gatewayID: "gw-a").loadCommands().isEmpty)
-        #expect(try await recovered.stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [OpenClawClientDatabases.gatewayIdentityHash("gw-a")])
-        } == 0)
+        let probe = try await forgottenGatewayProbe(in: recovered, identity: "gw-a")
+        #expect(probe.cleanupPhase == 0)
     }
 
     @Test func `hash only scrub marker remains recoverable`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            try databases.stageGatewayRemoval(gatewayID: "gw-a")
-            try await databases.stateQueue.write { db in
-                try db.execute(
-                    sql: """
-                    UPDATE forgotten_gateways
-                    SET gateway_id = NULL, cleanup_phase = 3, restore_finalized = 0
-                    WHERE gateway_id = ?
-                    """,
-                    arguments: ["gw-a"])
-            }
-            try databases.close()
+        try databases.stageGatewayRemoval(gatewayID: "gw-a")
+        try await databases.stateQueue.write { db in
+            try db.execute(
+                sql: """
+                UPDATE forgotten_gateways
+                SET gateway_id = NULL, cleanup_phase = 3, restore_finalized = 0
+                WHERE gateway_id = ?
+                """,
+                arguments: ["gw-a"])
         }
+        try databases.close()
 
         let recovered = try OpenClawClientDatabases(directoryURL: directory)
-        #expect(try await recovered.stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [OpenClawClientDatabases.gatewayIdentityHash("gw-a")])
-        } == 0)
+        let probe = try await forgottenGatewayProbe(in: recovered, identity: "gw-a")
+        #expect(probe.cleanupPhase == 0)
     }
 
     @Test func `unknown registry preserves a cancelable staged removal`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            let store = databases.store(gatewayID: "gw-a")
-            #expect(await store.enqueueCommand(outboxCommand(id: "keep", text: "pending")))
-            try databases.stageGatewayRemoval(gatewayID: "gw-a")
-            try databases.close()
-        }
+        #expect(await store.enqueueCommand(outboxCommand(id: "keep", text: "pending")))
+        try databases.stageGatewayRemoval(gatewayID: "gw-a")
+        try databases.close()
 
         let reopened = try OpenClawClientDatabases(directoryURL: directory)
         #expect(await reopened.store(gatewayID: "gw-a").loadCommands().map(\.id) == ["keep"])
-        #expect(try await reopened.stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [OpenClawClientDatabases.gatewayIdentityHash("gw-a")])
-        } == 1)
+        let probe = try await forgottenGatewayProbe(in: reopened, identity: "gw-a")
+        #expect(probe.cleanupPhase == 1)
     }
 
     @Test func `pending removal marker gates writable facade recreation`() throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-
         #expect(!databases.hasPendingGatewayRemoval(gatewayID: "gw-a"))
         try databases.stageGatewayRemoval(gatewayID: "gw-a")
         #expect(databases.hasPendingGatewayRemoval(gatewayID: "gw-a"))
@@ -656,9 +625,6 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `cancelable stage does not suppress legacy state import`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
         try databases.stageGatewayRemoval(gatewayID: "gw-a")
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
         try createLegacyV2Database(at: legacyURL, gatewayID: "gw-a", commandID: "restore-on-cancel")
@@ -670,28 +636,23 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `one broken pending removal does not block another gateway`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            let store = databases.store(gatewayID: "z-good")
-            await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
-            #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
-            try databases.stageGatewayRemoval(gatewayID: "z-good")
-            try await databases.stateQueue.write { db in
-                try db.execute(
-                    sql: "UPDATE forgotten_gateways SET cleanup_phase = 2 WHERE gateway_id = ?",
-                    arguments: ["z-good"])
-                try db.execute(
-                    sql: """
-                    INSERT INTO forgotten_gateways(
-                        gateway_hash, gateway_id, forgotten_at, cleanup_phase, restore_finalized
-                    ) VALUES (?, ?, 0, 2, 0)
-                    """,
-                    arguments: [String(repeating: "0", count: 64), "a-broken"])
-            }
-            try databases.close()
+        let store = databases.store(gatewayID: "z-good")
+        await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
+        #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
+        try databases.stageGatewayRemoval(gatewayID: "z-good")
+        try await databases.stateQueue.write { db in
+            try db.execute(
+                sql: "UPDATE forgotten_gateways SET cleanup_phase = 2 WHERE gateway_id = ?",
+                arguments: ["z-good"])
+            try db.execute(
+                sql: """
+                INSERT INTO forgotten_gateways(
+                    gateway_hash, gateway_id, forgotten_at, cleanup_phase, restore_finalized
+                ) VALUES (?, ?, 0, 2, 0)
+                """,
+                arguments: [String(repeating: "0", count: 64), "a-broken"])
         }
+        try databases.close()
 
         let recovered = try OpenClawClientDatabases(
             directoryURL: directory,
@@ -707,31 +668,14 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `canceling a repeated forget preserves the finalized tombstone`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
         try databases.removeGatewayData(gatewayID: "gw-a")
 
         try databases.stageGatewayRemoval(gatewayID: "gw-a")
         try databases.cancelGatewayRemoval(gatewayID: "gw-a")
 
-        let tombstoneGatewayID: String? = try await databases.stateQueue.read { db in
-            try String.fetchOne(
-                db,
-                sql: """
-                SELECT gateway_id FROM forgotten_gateways
-                WHERE gateway_hash = ?
-                """,
-                arguments: [OpenClawClientDatabases.gatewayIdentityHash("gw-a")])
-        }
-        let tombstonePhase = try await databases.stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [OpenClawClientDatabases.gatewayIdentityHash("gw-a")])
-        }
-        #expect(tombstoneGatewayID == nil)
-        #expect(tombstonePhase == 0)
+        let probe = try await forgottenGatewayProbe(in: databases, identity: "gw-a")
+        #expect(probe.gatewayID == nil)
+        #expect(probe.cleanupPhase == 0)
 
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
         try createLegacyV2Database(at: legacyURL, gatewayID: "gw-a", commandID: "must-not-return")
@@ -741,9 +685,6 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `gateway removal scrubs its payloads from shared database files`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
         let storeA = databases.store(gatewayID: "gw-a")
         let storeB = databases.store(gatewayID: "gw-b")
         let sensitiveText = "forgotten-sensitive-\(UUID().uuidString)"
@@ -776,16 +717,12 @@ struct ChatTranscriptCacheStoreTests {
     }
 
     @Test func `routing identity survives a cold container reopen`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: " Per-Sender ",
             mainSessionKey: " Work ",
             defaultAgentID: " Main "))
-        do {
-            let databases = try OpenClawClientDatabases(directoryURL: directory)
-            await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
-        }
+        await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
+        try databases.close()
 
         let reopened = try OpenClawClientDatabases(directoryURL: directory)
         #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == identity)
@@ -803,10 +740,8 @@ struct ChatTranscriptCacheStoreTests {
     }
 }
 
-struct ClientDatabaseLegacyImportTests {
+final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchecked Sendable {
     @Test func `legacy v1 cache is discarded`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
         try withRawDatabase(at: legacyURL) { raw in
             execute(raw, """
@@ -826,8 +761,6 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `legacy v2 outbox imports parked into client state`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let legacyURL = directory.appendingPathComponent(
             String(repeating: "a", count: 64) + ".sqlite")
         try createLegacyV2Database(at: legacyURL, gatewayID: "gw-a", commandID: "legacy-v2")
@@ -844,8 +777,6 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `foreground retry imports a legacy database discovered after startup`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let databases = try OpenClawClientDatabases(directoryURL: directory)
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
         try createLegacyV2Database(at: legacyURL, gatewayID: "gw-a", commandID: "late-legacy")
@@ -857,8 +788,6 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `forgotten gateway is never resurrected by a late legacy import`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let databases = try OpenClawClientDatabases(directoryURL: directory)
         try databases.removeGatewayData(gatewayID: "gw-forgotten")
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
@@ -872,12 +801,8 @@ struct ClientDatabaseLegacyImportTests {
         #expect(!FileManager.default.fileExists(atPath: legacyURL.path))
         let store = databases.store(gatewayID: "gw-forgotten")
         #expect(await store.loadCommands().isEmpty)
-        #expect(try await databases.stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [OpenClawClientDatabases.gatewayIdentityHash("gw-forgotten")])
-        } == 0)
+        let probe = try await forgottenGatewayProbe(in: databases, identity: "gw-forgotten")
+        #expect(probe.cleanupPhase == 0)
 
         #expect(await store.enqueueCommand(outboxCommand(id: "after-repair", text: "new pairing")))
         databases.retryLegacyImport()
@@ -885,10 +810,8 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `forget removes an unreadable per gateway legacy database and sidecars`() throws {
-        let root = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let databaseDirectory = root.appendingPathComponent("databases", isDirectory: true)
-        let legacyDirectory = root.appendingPathComponent("chat-cache", isDirectory: true)
+        let databaseDirectory = directory.appendingPathComponent("databases", isDirectory: true)
+        let legacyDirectory = directory.appendingPathComponent("chat-cache", isDirectory: true)
         try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
         let gatewayID = "manual|forgotten-secret.example|443"
         let legacyURL = OpenClawClientDatabases.legacyPerGatewayDatabaseURL(
@@ -926,8 +849,6 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `legacy import accepts only gateways in the pairing registry`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let keptURL = OpenClawClientDatabases.legacyPerGatewayDatabaseURL(
             gatewayID: "gw-kept",
             directoryURL: directory)
@@ -948,8 +869,6 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `legacy import uses exact registry identifier bytes`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let composedGatewayID = "gateway-\u{00E9}"
         let decomposedGatewayID = "gateway-e\u{0301}"
         #expect(composedGatewayID == decomposedGatewayID)
@@ -970,10 +889,8 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `preserved shared legacy database blocks targeted forget`() async throws {
-        let root = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let databaseDirectory = root.appendingPathComponent("databases", isDirectory: true)
-        let legacyDirectory = root.appendingPathComponent("legacy", isDirectory: true)
+        let databaseDirectory = directory.appendingPathComponent("databases", isDirectory: true)
+        let legacyDirectory = directory.appendingPathComponent("legacy", isDirectory: true)
         try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
         let legacyURL = legacyDirectory.appendingPathComponent("chat-cache.sqlite")
         try withRawDatabase(at: legacyURL) { raw in
@@ -994,8 +911,6 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `legacy v6 imports attachments and routing identity`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
         let attachment = OpenClawChatOutboxAttachment(
             type: "image",
@@ -1066,13 +981,11 @@ struct ClientDatabaseLegacyImportTests {
     }
 
     @Test func `unknown or corrupt legacy files remain untouched`() async throws {
-        let unknownDirectory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: unknownDirectory) }
-        let unknownURL = unknownDirectory.appendingPathComponent("chat-cache.sqlite")
+        let unknownURL = directory.appendingPathComponent("chat-cache.sqlite")
         try withRawDatabase(at: unknownURL) { raw in
             execute(raw, "PRAGMA user_version = 999")
         }
-        _ = try OpenClawClientDatabases(directoryURL: unknownDirectory)
+        _ = try OpenClawClientDatabases(directoryURL: directory)
         #expect(FileManager.default.fileExists(atPath: unknownURL.path))
 
         let corruptDirectory = try makeDatabaseDirectory()
@@ -1086,11 +999,8 @@ struct ClientDatabaseLegacyImportTests {
     }
 }
 
-struct ChatCommandOutboxStoreTests {
+final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sendable {
     @Test func `nil agent rows use the canonical empty scope owner`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
         #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
@@ -1104,24 +1014,16 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `parked accepted rows mint retry identity while queued rows keep it`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         let sendingScope = OpenClawChatOutboxScope(sessionKey: "sending", agentID: "main")
         #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: sendingScope))
         let sendingState = try #require(await store.branchState(for: sendingScope))
         #expect(await store.enqueueCommand(outboxCommand(id: "sending", sessionKey: "sending", text: "maybe accepted")))
         let sending = try #require(await store.claimNextCommand())
-        _ = try #require(await store.reconcileBranchScope(
-            sendingScope, previousState: sendingState, activeLeafEntryID: "leaf-b",
-            branchLeafEntryIDs: ["leaf-b"], lastError: "branch changed"))
+        _ = try #require(await store.reconcileForTest(sendingScope, previousState: sendingState))
         let parkedSending = try #require(await store.loadCommands().first(where: { $0.id == sending.id }))
         #expect(await store.markCommandRetriedIfPresent(
             id: parkedSending.id,
-            expectation: OpenClawChatOutboxRetryExpectation(
-                attemptVersion: parkedSending.attemptVersion,
-                retryCount: parkedSending.retryCount,
-                lastError: parkedSending.lastError),
+            expectation: retryExpectation(parkedSending),
             agentID: "main", deliverySessionKey: "sending", routingContract: "per-sender|sending|main",
             replacementID: "sending-retry") == .updated)
         let retriedSending = try #require(await store.loadCommands().first(where: { $0.id == "sending-retry" }))
@@ -1131,56 +1033,43 @@ struct ChatCommandOutboxStoreTests {
         #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: queuedScope))
         let queuedState = try #require(await store.branchState(for: queuedScope))
         #expect(await store.enqueueCommand(outboxCommand(id: "queued", sessionKey: "queued", text: "not sent")))
-        _ = try #require(await store.reconcileBranchScope(
-            queuedScope, previousState: queuedState, activeLeafEntryID: "leaf-b",
-            branchLeafEntryIDs: ["leaf-b"], lastError: "branch changed"))
+        _ = try #require(await store.reconcileForTest(queuedScope, previousState: queuedState))
         let parkedQueued = try #require(await store.loadCommands().first(where: { $0.id == "queued" }))
         #expect(await store.markCommandRetriedIfPresent(
             id: parkedQueued.id,
-            expectation: OpenClawChatOutboxRetryExpectation(
-                attemptVersion: parkedQueued.attemptVersion,
-                retryCount: parkedQueued.retryCount,
-                lastError: parkedQueued.lastError),
+            expectation: retryExpectation(parkedQueued),
             agentID: "main", deliverySessionKey: "queued", routingContract: "per-sender|queued|main",
             replacementID: "unused") == .updated)
         #expect(await store.loadCommands().contains(where: { $0.id == "queued" && $0.attemptVersion == 2 }))
 
-        let stickyDirectory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: stickyDirectory) }
-        let stickyStore = try OpenClawClientDatabases(directoryURL: stickyDirectory).store(gatewayID: "gw-a")
+        let stickyFixture = try ClientDatabaseTestSuite()
+        defer { withExtendedLifetime(stickyFixture) {} }
         let requeuedScope = OpenClawChatOutboxScope(sessionKey: "requeued", agentID: "main")
-        #expect(await stickyStore.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: requeuedScope))
-        let requeuedState = try #require(await stickyStore.branchState(for: requeuedScope))
-        #expect(await stickyStore.enqueueCommand(outboxCommand(
+        #expect(await stickyFixture.store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: requeuedScope))
+        let requeuedState = try #require(await stickyFixture.store.branchState(for: requeuedScope))
+        #expect(await stickyFixture.store.enqueueCommand(outboxCommand(
             id: "requeued",
             sessionKey: "requeued",
             text: "uncertain")))
-        let claimed = try #require(await stickyStore.claimNextCommand())
-        #expect(await stickyStore.markCommandQueued(
+        let claimed = try #require(await stickyFixture.store.claimNextCommand())
+        #expect(await stickyFixture.store.markCommandQueued(
             id: claimed.id,
             attemptVersion: claimed.attemptVersion,
             retryCount: 1,
             lastError: "transport") == .updated)
-        _ = try #require(await stickyStore.reconcileBranchScope(
-            requeuedScope, previousState: requeuedState, activeLeafEntryID: "leaf-b",
-            branchLeafEntryIDs: ["leaf-b"], activeTranscriptEntryIDs: [], lastError: "branch changed"))
-        let parkedRequeued = try #require(await stickyStore.loadCommands().first(where: { $0.id == "requeued" }))
-        #expect(await stickyStore.markCommandRetriedIfPresent(
+        _ = try #require(await stickyFixture.store.reconcileForTest(requeuedScope, previousState: requeuedState))
+        let parkedRequeued = try #require(await stickyFixture.store.loadCommands()
+            .first(where: { $0.id == "requeued" }))
+        #expect(await stickyFixture.store.markCommandRetriedIfPresent(
             id: parkedRequeued.id,
-            expectation: OpenClawChatOutboxRetryExpectation(
-                attemptVersion: parkedRequeued.attemptVersion,
-                retryCount: parkedRequeued.retryCount,
-                lastError: parkedRequeued.lastError),
+            expectation: retryExpectation(parkedRequeued),
             agentID: "main", deliverySessionKey: "requeued", routingContract: "per-sender|requeued|main",
             replacementID: "requeued-retry") == .updated)
-        #expect(await stickyStore.loadCommands()
+        #expect(await stickyFixture.store.loadCommands()
             .contains(where: { $0.id == "requeued-retry" && $0.attemptVersion == 1 }))
     }
 
     @Test func `parked accepted attachment follows the fresh retry identity`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
         let attachment = OpenClawChatOutboxAttachment(
             type: "audio",
@@ -1195,20 +1084,12 @@ struct ChatCommandOutboxStoreTests {
             text: "maybe accepted",
             attachments: [attachment])))
         _ = try #require(await store.claimNextCommand())
-        _ = try #require(await store.reconcileBranchScope(
-            scope,
-            previousState: state,
-            activeLeafEntryID: "leaf-b",
-            branchLeafEntryIDs: ["leaf-b"],
-            lastError: "branch changed"))
+        _ = try #require(await store.reconcileForTest(scope, previousState: state))
         let parked = try #require(await store.loadCommands().first)
 
         #expect(await store.markCommandRetriedIfPresent(
             id: parked.id,
-            expectation: OpenClawChatOutboxRetryExpectation(
-                attemptVersion: parked.attemptVersion,
-                retryCount: parked.retryCount,
-                lastError: parked.lastError),
+            expectation: retryExpectation(parked),
             agentID: "main",
             deliverySessionKey: "main",
             routingContract: "per-sender|main|main",
@@ -1219,14 +1100,13 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `empty root reconcile permits first row and parks a wiped scope`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         let root = OpenClawChatOutboxScope(sessionKey: "root", agentID: "main")
         let rootState = try #require(await store.branchState(for: root))
-        _ = try #require(await store.reconcileBranchScope(
-            root, previousState: rootState, activeLeafEntryID: nil,
-            branchLeafEntryIDs: [], lastError: "branch changed"))
+        _ = try #require(await store.reconcileForTest(
+            root,
+            previousState: rootState,
+            activeLeafEntryID: nil,
+            branchLeafEntryIDs: []))
         #expect(await store.branchState(for: root)?.lastActiveLeafEntryID == nil)
         #expect(await store.enqueueCommand(outboxCommand(id: "first", sessionKey: "root", text: "first")))
         #expect(await store.claimNextCommand()?.id == "first")
@@ -1235,17 +1115,15 @@ struct ChatCommandOutboxStoreTests {
         #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: wiped))
         let wipedState = try #require(await store.branchState(for: wiped))
         #expect(await store.enqueueCommand(outboxCommand(id: "wiped", sessionKey: "wiped", text: "park")))
-        _ = try #require(await store.reconcileBranchScope(
-            wiped, previousState: wipedState, activeLeafEntryID: nil,
-            branchLeafEntryIDs: [], lastError: "branch changed"))
+        _ = try #require(await store.reconcileForTest(
+            wiped,
+            previousState: wipedState,
+            activeLeafEntryID: nil,
+            branchLeafEntryIDs: []))
         #expect(await store.loadCommands().first(where: { $0.id == "wiped" })?.status == .failed)
     }
 
     @Test func `nonancestral parking gives failed uncertain rows a fresh retry identity`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
         #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
         let state = try #require(await store.branchState(for: scope))
@@ -1258,26 +1136,17 @@ struct ChatCommandOutboxStoreTests {
                 sql: "UPDATE outbox_commands SET had_unacknowledged_send = 1 WHERE client_uuid = ?",
                 arguments: ["failed"])
         }
-        _ = try #require(await store.reconcileBranchScope(
-            scope, previousState: state, activeLeafEntryID: "leaf-b",
-            branchLeafEntryIDs: ["leaf-b"], activeTranscriptEntryIDs: [], lastError: "branch changed"))
+        _ = try #require(await store.reconcileForTest(scope, previousState: state))
         let parked = try #require(await store.loadCommands().first)
         #expect(await store.markCommandRetriedIfPresent(
             id: parked.id,
-            expectation: OpenClawChatOutboxRetryExpectation(
-                attemptVersion: parked.attemptVersion,
-                retryCount: parked.retryCount,
-                lastError: parked.lastError),
+            expectation: retryExpectation(parked),
             agentID: "main", deliverySessionKey: "main", routingContract: "per-sender|main|main",
             replacementID: "failed-retry") == .updated)
         #expect(await store.loadCommands().first?.id == "failed-retry")
     }
 
     @Test func `bulk branch parking invalidates sibling subscribers`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
         let sibling = databases.store(gatewayID: "gw-a")
         let otherGateway = databases.store(gatewayID: "gw-b")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
@@ -1307,9 +1176,6 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `retiring a store ends only its forwarded change streams`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
         let retired = databases.store(gatewayID: "gw-a")
         let sibling = databases.store(gatewayID: "gw-a")
         var retiredIterator = retired.changes().makeAsyncIterator()
@@ -1327,10 +1193,6 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `commands and attachment blobs round trip in order`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
         let attachment = OpenClawChatOutboxAttachment(
             type: "audio",
             mimeType: "audio/m4a",
@@ -1350,9 +1212,6 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `claims are insertion FIFO when timestamps tie and exclusive`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         let now = Date().timeIntervalSince1970
         #expect(await store.enqueueCommand(outboxCommand(id: "z-first", text: "one", createdAt: now)))
         #expect(await store.enqueueCommand(outboxCommand(id: "a-second", text: "two", createdAt: now)))
@@ -1365,10 +1224,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(await store.claimNextCommand()?.id == "a-second")
     }
 
-    @Test func `cancellation stops only unclaimed client state`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+    @Test func `cancellation stops only unclaimed client state`() async {
         #expect(await store.enqueueCommand(outboxCommand(id: "queued", text: "delete")))
         #expect(await store.cancelCommand(id: "queued") == .updated)
         #expect(await store.loadCommands().isEmpty)
@@ -1379,10 +1235,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(await store.loadCommands().map(\.status) == [.sending])
     }
 
-    @Test func `canonical proof wins a cancellation race`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+    @Test func `canonical proof wins a cancellation race`() async {
         #expect(await store.enqueueCommand(outboxCommand(id: "landed", text: "sent")))
         store.observeCanonicalMessageIdempotencyKeys(["landed:user"])
 
@@ -1391,9 +1244,6 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `interrupted sends fail closed once`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         #expect(await store.enqueueCommand(outboxCommand(id: "interrupted", text: "maybe sent")))
         #expect(await store.claimNextCommand()?.status == .sending)
         #expect(await store.recoverInterruptedSends())
@@ -1403,10 +1253,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(await store.recoverInterruptedSends())
     }
 
-    @Test func `retired facade cannot recover a replacement facades sends`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
+    @Test func `retired facade cannot recover a replacement facades sends`() async {
         let retired = databases.store(gatewayID: "gw-a")
         #expect(await retired.enqueueCommand(outboxCommand(id: "live", text: "sending")))
         #expect(await retired.claimNextCommand()?.status == .sending)
@@ -1418,18 +1265,12 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `retry adopts a fresh verified route`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         #expect(await store.enqueueCommand(outboxCommand(id: "retry", text: "again", status: .failed)))
 
         let failed = try #require(await store.loadCommands().first)
         #expect(await store.markCommandRetriedIfPresent(
             id: "retry",
-            expectation: OpenClawChatOutboxRetryExpectation(
-                attemptVersion: failed.attemptVersion,
-                retryCount: failed.retryCount,
-                lastError: failed.lastError),
+            expectation: retryExpectation(failed),
             agentID: "Agent-B",
             deliverySessionKey: "agent:agent-b:main",
             routingContract: "per-sender|main|agent-b",
@@ -1442,10 +1283,6 @@ struct ChatCommandOutboxStoreTests {
     }
 
     @Test func `stale queued and acknowledged commands require user action`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
-        let store = databases.store(gatewayID: "gw-a")
         let old = Date().timeIntervalSince1970 - OpenClawChatSQLiteTranscriptCache.outboxCommandMaxAge - 1
         #expect(await store.enqueueCommand(outboxCommand(id: "old-queued", text: "old", createdAt: old)))
         #expect(await store.enqueueCommand(outboxCommand(id: "old-ack", text: "old ack")))
@@ -1468,10 +1305,7 @@ struct ChatCommandOutboxStoreTests {
         #expect(commandsByID["old-ack"]?.lastError == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
     }
 
-    @Test func `queue and attachment budgets are gateway scoped`() async throws {
-        let directory = try makeDatabaseDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databases = try OpenClawClientDatabases(directoryURL: directory)
+    @Test func `queue and attachment budgets are gateway scoped`() async {
         let storeA = databases.store(gatewayID: "gw-a")
         let storeB = databases.store(gatewayID: "gw-b")
         for index in 0..<OpenClawChatSQLiteTranscriptCache.maxQueuedCommands {

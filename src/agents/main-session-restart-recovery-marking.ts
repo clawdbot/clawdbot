@@ -9,10 +9,8 @@ import {
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
-import {
-  getAgentEventLifecycleGeneration,
-  listAgentRunsForSession,
-} from "../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { listAgentRunsForSession } from "../infra/agent-run-registry.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,

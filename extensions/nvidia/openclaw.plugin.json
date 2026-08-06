@@ -5,18 +5,12 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": [
-    "nvidia"
-  ],
+  "providers": ["nvidia"],
   "providerEndpoints": [
     {
       "endpointClass": "nvidia-native",
-      "hosts": [
-        "integrate.api.nvidia.com"
-      ],
-      "baseUrls": [
-        "https://integrate.api.nvidia.com/v1"
-      ]
+      "hosts": ["integrate.api.nvidia.com"],
+      "baseUrls": ["https://integrate.api.nvidia.com/v1"]
     }
   ],
   "modelIdNormalization": {
@@ -35,9 +29,7 @@
           {
             "id": "nvidia/nemotron-3-ultra-550b-a55b",
             "name": "Nemotron 3 Ultra 550B",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "reasoning": true,
             "contextWindow": 1048576,
             "maxTokens": 8192,
@@ -54,9 +46,7 @@
           {
             "id": "nvidia/nemotron-3-super-120b-a12b",
             "name": "Nemotron 3 Super 120B",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "reasoning": true,
             "contextWindow": 1000000,
             "maxTokens": 8192,
@@ -73,9 +63,7 @@
           {
             "id": "z-ai/glm-5.2",
             "name": "GLM 5.2",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "reasoning": true,
             "contextWindow": 202752,
             "maxTokens": 8192,
@@ -93,10 +81,7 @@
           {
             "id": "moonshotai/kimi-k2.6",
             "name": "Kimi K2.6",
-            "input": [
-              "text",
-              "image"
-            ],
+            "input": ["text", "image"],
             "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 65536,
@@ -113,10 +98,7 @@
           {
             "id": "minimaxai/minimax-m3",
             "name": "Minimax M3",
-            "input": [
-              "text",
-              "image"
-            ],
+            "input": ["text", "image"],
             "reasoning": true,
             "contextWindow": 196608,
             "maxTokens": 8192,
@@ -133,9 +115,7 @@
           {
             "id": "deepseek-ai/deepseek-v4-pro",
             "name": "DeepSeek V4 Pro",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 16384,
@@ -153,10 +133,7 @@
           {
             "id": "qwen/qwen3.5-397b-a17b",
             "name": "Qwen3.5 397B A17B",
-            "input": [
-              "text",
-              "image"
-            ],
+            "input": ["text", "image"],
             "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 32768,
@@ -168,15 +145,14 @@
             },
             "compat": {
               "requiresStringContent": true
-            }
+            },
+            "status": "deprecated",
+            "statusReason": "NVIDIA retired this model and no longer lists it in its model catalog."
           },
           {
             "id": "moonshotai/kimi-k2.5",
             "name": "Kimi K2.5",
-            "input": [
-              "text",
-              "image"
-            ],
+            "input": ["text", "image"],
             "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 32768,
@@ -196,9 +172,7 @@
           {
             "id": "z-ai/glm-5.1",
             "name": "GLM 5.1",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "contextWindow": 202752,
             "maxTokens": 8192,
             "cost": {
@@ -218,9 +192,7 @@
           {
             "id": "z-ai/glm5",
             "name": "GLM-5",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "contextWindow": 202752,
             "maxTokens": 8192,
             "cost": {
@@ -239,9 +211,7 @@
           {
             "id": "minimaxai/minimax-m2.7",
             "name": "Minimax M2.7",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "reasoning": true,
             "contextWindow": 204800,
             "maxTokens": 16384,
@@ -269,9 +239,7 @@
     "providers": [
       {
         "id": "nvidia",
-        "envVars": [
-          "NVIDIA_API_KEY"
-        ]
+        "envVars": ["NVIDIA_API_KEY"]
       }
     ]
   },

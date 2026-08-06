@@ -18,7 +18,6 @@ import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { callGateway } from "./call.js";
 import { startGatewayServer } from "./server.js";
@@ -177,7 +176,6 @@ function resetGatewayTestState(): void {
   clearConfigCache();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
-  clearGatewaySubagentRuntime();
 }
 
 describe("gateway e2e", () => {

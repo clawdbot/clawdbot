@@ -130,7 +130,7 @@ internal fun sidebarRecentSessions(
       compareByDescending<ChatSessionEntry> { it.pinned == true }
         .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
         .thenBy { it.key },
-    ).take(limit.coerceAtLeast(0))
+    ).let { if (normalizedQuery.isEmpty()) it.take(limit.coerceAtLeast(0)) else it }
     .toList()
 }
 

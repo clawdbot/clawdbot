@@ -3,7 +3,7 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 // Implements docs link/search output for `openclaw docs`.
 import { readResponseWithLimit } from "../infra/http-body.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 const SEARCH_API = "https://docs.openclaw.ai/api/search";
 const SEARCH_TIMEOUT_MS = 30_000;
@@ -119,9 +119,21 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
 }
 
 /** Search hosted docs, or print the docs homepage when no query is provided. */
-export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEnv) {
+export async function docsSearchCommand(
+  queryParts: string[],
+  runtime: RuntimeEnv,
+  options: { json?: boolean } = {},
+) {
   const query = queryParts.join(" ").trim();
   if (!query) {
+    if (options.json) {
+      writeRuntimeJson(runtime, {
+        query: null,
+        url: "https://docs.openclaw.ai/",
+        results: [],
+      });
+      return;
+    }
     const docs = formatDocsLink("/", "docs.openclaw.ai");
     if (isRich()) {
       runtime.log(`${theme.muted("Docs:")} ${docs}`);
@@ -140,6 +152,11 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
     const message = error instanceof Error ? error.message : String(error);
     runtime.error(`Docs search failed: ${message}`);
     runtime.exit(1);
+    return;
+  }
+
+  if (options.json) {
+    writeRuntimeJson(runtime, { query, results });
     return;
   }
 

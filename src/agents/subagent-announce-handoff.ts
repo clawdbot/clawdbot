@@ -20,7 +20,7 @@ export type SubagentCompletionToolHandoffRegistration = {
   idempotencyKey: string;
 };
 
-function resolveExactSubagentCompletionEvent(params: {
+export function resolveExactSubagentCompletionEvent(params: {
   inputProvenance?: InputProvenance;
   internalEvents?: AgentInternalEvent[];
 }) {

@@ -259,10 +259,7 @@ export function loadRuntimePluginCandidate(params: {
     manifestRecord,
     cfg: context.cfg,
     env: context.env,
-    preferSetupRuntimeForChannelPlugins: context.forceFullRuntimeForChannelPlugins
-      ? false
-      : context.preferSetupRuntimeForChannelPlugins,
-    forceFullRuntimeForChannelPlugins: context.forceFullRuntimeForChannelPlugins,
+    channelPluginLoadIntent: context.channelPluginLoadIntent,
     toolDiscovery: params.options.toolDiscovery === true,
   });
   if (!registrationPlan) {
@@ -436,8 +433,6 @@ export function loadRuntimePluginCandidate(params: {
       registryBuilder: params.registryBuilder,
       cfg: context.cfg,
       entry,
-      env: context.env,
-      preferSetupRuntimeForChannelPlugins: context.preferSetupRuntimeForChannelPlugins,
       seenIds: state.seenIds,
       candidateOrigin: candidate.origin,
       logger: params.logger,

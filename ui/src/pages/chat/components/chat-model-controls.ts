@@ -37,11 +37,13 @@ export type ChatModelControlsProps = {
   gatewayAvailable: boolean;
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
+  modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionRuntimeId?: string;
   modelSwitching: boolean;
   modelsLoading?: boolean;
+  mutationDisabledReason?: string;
   showFastMode?: boolean;
   sending: boolean;
   sessionKey: string;
@@ -53,6 +55,12 @@ export type ChatModelControlsProps = {
   onModelSelect?: (value: string, sessionKey: string) => unknown;
   onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
+};
+
+export type ChatModelCatalogState = {
+  hasSnapshot: boolean;
+  onRetry?: () => void;
+  status: "idle" | "loading" | "refreshing" | "ready" | "error";
 };
 
 type ChatModelProviderOption = ChatModelSelectOption & {
@@ -163,6 +171,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
+    restrictOptionsToCatalog: props.modelCatalogState !== undefined,
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
   });
@@ -247,24 +256,47 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ? thinking.defaultLabel
       : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
         thinking.currentOverride);
+  const managedCatalog = props.modelCatalogState;
+  const catalogLoadingWithoutSnapshot =
+    managedCatalog !== undefined &&
+    !managedCatalog.hasSnapshot &&
+    (managedCatalog.status === "idle" ||
+      managedCatalog.status === "loading" ||
+      managedCatalog.status === "refreshing");
+  const catalogErrorWithoutSnapshot =
+    managedCatalog?.status === "error" && !managedCatalog.hasSnapshot;
+  const catalogSnapshotEmpty = managedCatalog?.hasSnapshot === true && modelOptions.length === 0;
+  const catalogTriggerStatus = catalogLoadingWithoutSnapshot
+    ? t("chat.modelControls.loadingModels")
+    : catalogErrorWithoutSnapshot
+      ? t("chat.modelControls.modelsUnavailable")
+      : catalogSnapshotEmpty
+        ? t("chat.modelControls.noModelsAvailable")
+        : undefined;
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const disabled =
     !props.connected ||
     busy ||
     props.modelSwitching ||
-    (props.modelsLoading && selectOptions.length === 0) ||
-    !props.gatewayAvailable;
+    catalogLoadingWithoutSnapshot ||
+    (managedCatalog === undefined && props.modelsLoading && selectOptions.length === 0) ||
+    !props.gatewayAvailable ||
+    Boolean(props.mutationDisabledReason);
   const thinkingDisabled =
     !props.connected ||
     busy ||
     props.modelSwitching ||
     !props.gatewayAvailable ||
-    (thinking.options.length === 0 && thinking.currentOverride === "");
+    (managedCatalog !== undefined && !managedCatalog.hasSnapshot) ||
+    (thinking.options.length === 0 && thinking.currentOverride === "") ||
+    Boolean(props.mutationDisabledReason);
   return renderChatModelReasoningSelect({
     defaultModelLabel: formatCombinedPickerModelLabel(pickerDefaultLabel),
     disabled,
-    fastMode,
+    disabledReason: props.mutationDisabledReason,
+    fastMode: { ...fastMode, disabled: fastMode.disabled || disabled },
+    modelCatalogState: managedCatalog,
     modelSelectionLocked: props.modelSelectionLocked === true,
     modelOptions,
     onRequestUpdate: props.onRequestUpdate,
@@ -276,6 +308,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     thinkingDisabled,
     thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
     triggerModelLabel: committedModelLabel,
+    triggerStatusLabel: catalogTriggerStatus,
     triggerThinkingLabel: committedThinkingLabel,
     onFastModeSelect: async (next, targetSessionKey) =>
       props.onFastModeSelect?.(next, targetSessionKey),
@@ -369,6 +402,8 @@ function renderChatModelReasoningSelect(params: {
   defaultModelLabel: string;
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
+  disabledReason?: string;
+  modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelProviderOption[];
   selectedModelValue: string;
@@ -379,6 +414,7 @@ function renderChatModelReasoningSelect(params: {
   thinkingDisabled: boolean;
   thinkingOptions: ChatModelSelectOption[];
   triggerModelLabel: string;
+  triggerStatusLabel?: string;
   triggerThinkingLabel: string;
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
   onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
@@ -388,7 +424,9 @@ function renderChatModelReasoningSelect(params: {
   const {
     defaultModelLabel,
     disabled,
+    disabledReason,
     fastMode,
+    modelCatalogState,
     modelSelectionLocked,
     modelOptions,
     selectedModelValue,
@@ -399,6 +437,7 @@ function renderChatModelReasoningSelect(params: {
     thinkingDisabled,
     thinkingOptions,
     triggerModelLabel,
+    triggerStatusLabel,
     triggerThinkingLabel,
     onFastModeSelect,
     onModelSelect,
@@ -415,13 +454,13 @@ function renderChatModelReasoningSelect(params: {
   const selectedModelOption = activeModelOption ?? modelOptions[0];
   const modelToolsUnavailable = activeModelOption?.supportsTools === false;
   const triggerTitle = [
-    triggerModel,
-    triggerThinking,
+    triggerStatusLabel ?? triggerModel,
+    triggerStatusLabel ? "" : triggerThinking,
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
   ]
     .filter(Boolean)
     .join(" · ");
-  const triggerLabel = `${triggerModel} · ${triggerThinking}`;
+  const triggerLabel = triggerStatusLabel ?? `${triggerModel} · ${triggerThinking}`;
   const sliderStops = thinkingOptions.filter((option) => option.value !== "");
   const defaultStopIndex = sliderStops.findIndex((option) => option.value === thinkingDefaultValue);
   const hasThinkingOverride = selectedThinkingValue !== "";
@@ -537,7 +576,10 @@ function renderChatModelReasoningSelect(params: {
   const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
   const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
-  const showReasoningPanel = showReasoning || showFastMode;
+  const catalogHasNoUsableSnapshot =
+    modelCatalogState !== undefined &&
+    (!modelCatalogState.hasSnapshot || modelOptions.length === 0);
+  const showReasoningPanel = (showReasoning || showFastMode) && !catalogHasNoUsableSnapshot;
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -559,6 +601,56 @@ function renderChatModelReasoningSelect(params: {
   }
   const selectedProvider =
     selectedModelOption?.provider ?? orderedProviderGroups[0]?.[0] ?? "other";
+  const renderCatalogState = () => {
+    if (!modelCatalogState) {
+      return nothing;
+    }
+    const hasOptions = modelOptions.length > 0;
+    const status = modelCatalogState.status;
+    if (status === "ready" && hasOptions) {
+      return nothing;
+    }
+    const label =
+      status === "refreshing"
+        ? t("chat.modelControls.refreshingModels")
+        : status === "error"
+          ? modelCatalogState.hasSnapshot
+            ? t("chat.modelControls.modelsRefreshFailed")
+            : t("chat.modelControls.modelsUnavailable")
+          : status === "ready"
+            ? t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
+    return html`
+      <div
+        class="chat-controls__model-catalog-state ${hasOptions
+          ? ""
+          : "chat-controls__model-catalog-state--empty"}"
+        data-chat-model-catalog-state=${status}
+        aria-live="polite"
+      >
+        <span class="chat-controls__model-catalog-state-label">
+          ${status === "error" ? icons.alertTriangle : nothing}
+          <span>${label}</span>
+        </span>
+        ${status === "error" && modelCatalogState.onRetry
+          ? html`
+              <button
+                class="chat-controls__model-catalog-retry"
+                data-chat-model-catalog-retry="true"
+                type="button"
+                @click=${(event: MouseEvent) => {
+                  event.stopPropagation();
+                  modelCatalogState.onRetry?.();
+                }}
+              >
+                ${icons.refresh}
+                <span>${t("common.retry")}</span>
+              </button>
+            `
+          : nothing}
+      </div>
+    `;
+  };
   const renderModelOption = (entry: ChatModelProviderOption) => {
     const selected =
       entry.value === selectedModelValue || (entry.isDefault && selectedModelValue === "");
@@ -641,6 +733,7 @@ function renderChatModelReasoningSelect(params: {
           "chat.selectors.thinkingLevel",
         )}: ${triggerTitle}"
         aria-disabled=${disabled ? "true" : "false"}
+        title=${disabledReason ?? triggerTitle}
         @click=${(event: MouseEvent) => {
           if (disabled) {
             event.preventDefault();
@@ -682,97 +775,109 @@ function renderChatModelReasoningSelect(params: {
               </div>
             `
           : html`
-              ${renderModelProvenanceRow({
-                defaultModelLabel,
-                disabled,
-                hasModelOverride: selectedModelValue !== "",
-                onReset: () => commitModel(""),
-              })}
-              <div
-                class="chat-controls__model-browser"
-                @mouseleave=${(event: MouseEvent) => {
-                  const browser = event.currentTarget as HTMLElement;
-                  if (browser.contains(document.activeElement)) {
-                    return;
-                  }
-                  selectChatModelProvider(event, selectedProvider);
-                }}
-                @focusout=${(event: FocusEvent) => {
-                  const browser = event.currentTarget as HTMLElement;
-                  if (
-                    event.relatedTarget instanceof Node &&
-                    browser.contains(event.relatedTarget)
-                  ) {
-                    return;
-                  }
-                  selectChatModelProvider(event, selectedProvider);
-                }}
-              >
-                <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
-                  <div class="chat-controls__inline-select-section-label">
-                    ${t("sessionsView.provider")}
-                  </div>
-                  ${repeat(
-                    orderedProviderGroups,
-                    ([provider]) => provider,
-                    ([provider]) => {
-                      const active = provider === selectedProvider;
-                      return html`
-                        <button
-                          class="chat-controls__provider-option"
-                          data-chat-model-provider=${provider}
-                          type="button"
-                          aria-pressed=${active ? "true" : "false"}
-                          tabindex=${active ? "0" : "-1"}
-                          @click=${(event: MouseEvent) => selectChatModelProvider(event, provider)}
-                          @mouseenter=${(event: MouseEvent) => {
-                            const browser = (event.currentTarget as HTMLElement).closest(
-                              ".chat-controls__model-browser",
-                            );
-                            // Keyboard focus owns the active tab until it leaves; hover must
-                            // not hide the panel containing the focused model option.
-                            if (browser?.contains(document.activeElement)) {
-                              return;
-                            }
-                            selectChatModelProvider(event, provider);
-                          }}
-                          @focus=${(event: FocusEvent) => selectChatModelProvider(event, provider)}
-                          @keydown=${moveChatModelProviderFocus}
-                        >
-                          ${renderChatModelProviderIcon(provider)}
-                          <span>${providerDisplayLabel(provider)}</span>
-                        </button>
-                      `;
-                    },
-                  )}
-                </div>
-                <div
-                  class="chat-controls__provider-models"
-                  role="listbox"
-                  aria-label=${t("chat.selectors.model")}
-                >
-                  ${repeat(
-                    orderedProviderGroups,
-                    ([provider]) => provider,
-                    ([provider, options]) => html`
+              ${modelOptions.length > 0
+                ? renderModelProvenanceRow({
+                    defaultModelLabel,
+                    disabled,
+                    hasModelOverride: selectedModelValue !== "",
+                    onReset: () => commitModel(""),
+                  })
+                : nothing}
+              ${renderCatalogState()}
+              ${modelOptions.length > 0
+                ? html`
+                    <div
+                      class="chat-controls__model-browser"
+                      @mouseleave=${(event: MouseEvent) => {
+                        const browser = event.currentTarget as HTMLElement;
+                        if (browser.contains(document.activeElement)) {
+                          return;
+                        }
+                        selectChatModelProvider(event, selectedProvider);
+                      }}
+                      @focusout=${(event: FocusEvent) => {
+                        const browser = event.currentTarget as HTMLElement;
+                        if (
+                          event.relatedTarget instanceof Node &&
+                          browser.contains(event.relatedTarget)
+                        ) {
+                          return;
+                        }
+                        selectChatModelProvider(event, selectedProvider);
+                      }}
+                    >
                       <div
-                        class="chat-controls__provider-model-group"
-                        data-chat-model-provider-group=${provider}
-                        aria-label=${t("chat.modelControls.providerModels", {
-                          provider: providerDisplayLabel(provider),
-                        })}
-                        ?hidden=${provider !== selectedProvider}
+                        class="chat-controls__provider-list"
+                        aria-label=${t("sessionsView.provider")}
                       >
+                        <div class="chat-controls__inline-select-section-label">
+                          ${t("sessionsView.provider")}
+                        </div>
                         ${repeat(
-                          options,
-                          (entry) => entry.value,
-                          (entry) => renderModelOption(entry),
+                          orderedProviderGroups,
+                          ([provider]) => provider,
+                          ([provider]) => {
+                            const active = provider === selectedProvider;
+                            return html`
+                              <button
+                                class="chat-controls__provider-option"
+                                data-chat-model-provider=${provider}
+                                type="button"
+                                aria-pressed=${active ? "true" : "false"}
+                                tabindex=${active ? "0" : "-1"}
+                                @click=${(event: MouseEvent) =>
+                                  selectChatModelProvider(event, provider)}
+                                @mouseenter=${(event: MouseEvent) => {
+                                  const browser = (event.currentTarget as HTMLElement).closest(
+                                    ".chat-controls__model-browser",
+                                  );
+                                  // Keyboard focus owns the active tab until it leaves; hover must
+                                  // not hide the panel containing the focused model option.
+                                  if (browser?.contains(document.activeElement)) {
+                                    return;
+                                  }
+                                  selectChatModelProvider(event, provider);
+                                }}
+                                @focus=${(event: FocusEvent) =>
+                                  selectChatModelProvider(event, provider)}
+                                @keydown=${moveChatModelProviderFocus}
+                              >
+                                ${renderChatModelProviderIcon(provider)}
+                                <span>${providerDisplayLabel(provider)}</span>
+                              </button>
+                            `;
+                          },
                         )}
                       </div>
-                    `,
-                  )}
-                </div>
-              </div>
+                      <div
+                        class="chat-controls__provider-models"
+                        role="listbox"
+                        aria-label=${t("chat.selectors.model")}
+                      >
+                        ${repeat(
+                          orderedProviderGroups,
+                          ([provider]) => provider,
+                          ([provider, options]) => html`
+                            <div
+                              class="chat-controls__provider-model-group"
+                              data-chat-model-provider-group=${provider}
+                              aria-label=${t("chat.modelControls.providerModels", {
+                                provider: providerDisplayLabel(provider),
+                              })}
+                              ?hidden=${provider !== selectedProvider}
+                            >
+                              ${repeat(
+                                options,
+                                (entry) => entry.value,
+                                (entry) => renderModelOption(entry),
+                              )}
+                            </div>
+                          `,
+                        )}
+                      </div>
+                    </div>
+                  `
+                : nothing}
             `}
         ${showReasoningPanel
           ? html`

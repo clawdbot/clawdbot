@@ -12,7 +12,6 @@ import {
   ensureCliExecutionBootstrap,
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
-import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
@@ -125,7 +124,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       jsonOutputMode,
       env: process.env,
     });
-    const bypassConfigGuard = shouldBypassConfigGuardForCommandPath(commandPath, argv);
     await applyCliExecutionStartupPresentation({
       startupPolicy,
       version: programVersion,
@@ -139,11 +137,18 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (
-      bypassConfigGuard ||
-      isGuidedConfigAction(actionCommand) ||
-      isGuidedConfigCommandPath(commandPath)
-    ) {
+    if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
+      return;
+    }
+    if (startupPolicy.skipConfigGuard) {
+      // Config validation and plugin activation are independent startup policies.
+      // A cold config read must not suppress a plugin runtime explicitly required by the command.
+      await ensureCliExecutionBootstrap({
+        runtime: defaultRuntime,
+        commandPath,
+        startupPolicy,
+        skipConfigGuard: true,
+      });
       return;
     }
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
@@ -185,7 +190,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-      skipConfigGuard: bypassConfigGuard,
     });
     if (beforeStateMigrations) {
       const { reloadTrustedGatewayRunEnvironment } =

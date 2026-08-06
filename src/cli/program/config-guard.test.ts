@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
@@ -201,6 +202,7 @@ describe("ensureConfigReady", () => {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        requireStateMigrationCheckpoint: true,
       });
     }
   });
@@ -237,6 +239,7 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -272,6 +275,7 @@ describe("ensureConfigReady", () => {
         migrateLegacyConfig: false,
         invalidConfigNote: false,
         observe: false,
+        requireStateMigrationCheckpoint: true,
       });
     },
   );
@@ -287,6 +291,7 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -322,13 +327,14 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).toHaveBeenCalledWith(78);
   });
 
-  it("does not require a startup migration checkpoint for gateway probes", async () => {
+  it("uses only the state migration checkpoint for gateway probes", async () => {
     await runEnsureConfigReady(["gateway", "health"]);
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -352,6 +358,21 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
+    });
+  });
+
+  it("checkpoints migration discovery for established canonical agent state", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "agents/main/sessions/sessions.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
     });
   });
 
@@ -376,6 +397,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      requireStateMigrationCheckpoint: true,
     });
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       migratedSnapshot.runtimeConfig,
@@ -502,6 +524,53 @@ describe("ensureConfigReady", () => {
       snapshot.runtimeConfig,
       snapshot.sourceConfig,
     );
+  });
+
+  it("forwards config snapshot phase measurement", async () => {
+    const snapshot = makeSnapshot();
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
+      measuredStages.push(stage);
+      return await run();
+    };
+    readConfigFileSnapshotMock.mockImplementationOnce(
+      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+        return snapshot;
+      },
+    );
+
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["health"],
+      measure,
+    });
+
+    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
+  });
+
+  it("forwards config snapshot phase measurement through doctor preflight", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
+      measuredStages.push(stage);
+      return await run();
+    };
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementationOnce(
+      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+        return { snapshot: makeSnapshot(), baseConfig: {} };
+      },
+    );
+
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["agent"],
+      measure,
+    });
+
+    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
   });
 
   it("pins plugin listing config without loading state migration runtime", async () => {

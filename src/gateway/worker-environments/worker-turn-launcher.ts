@@ -572,7 +572,7 @@ export function createWorkerSessionTurnPlacementProvider(
       }
       return await executeLocalTurn({ claim, placements: options.placements, runLocal });
     },
-    async executeTurn(claim, turn, runLocal) {
+    async executeTurn(claim, turn, runLocal, onAdmitted) {
       const current = options.placements.get(claim.sessionId);
       if (
         !current &&
@@ -613,6 +613,8 @@ export function createWorkerSessionTurnPlacementProvider(
       const turnClaim = admitted.turnClaim;
       let handedOff = false;
       try {
+        // Remote turns never invoke runLocal; release queue protection only after their claim.
+        onAdmitted?.();
         const result = await executeWorkerTurn({
           environments: options.environments,
           onHandoff: () => {

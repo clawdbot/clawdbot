@@ -23,6 +23,7 @@ const loaderState = vi.hoisted(() => ({
 vi.mock("./loader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./loader.js")>()),
   loadOpenClawPlugins: () => loaderState.registry,
+  loadPluginRegistryHandle: () => loaderState.registry,
 }));
 
 vi.mock("./runtime/metadata-registry-loader.js", async (importOriginal) => ({

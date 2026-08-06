@@ -9,18 +9,21 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
-  claimAgentRunContext,
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
   onAgentRuntimeEvent,
-  registerAgentRunContext,
-  releaseAgentRunContext,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const logErrorMock = vi.fn();
+const normalizeLiveAssistantBufferedTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
@@ -30,6 +33,17 @@ vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
 vi.mock("../logger.js", () => ({
   logError: (...args: unknown[]) => logErrorMock(...args),
 }));
+
+vi.mock("./live-chat-projector.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./live-chat-projector.js")>();
+  return {
+    ...actual,
+    normalizeLiveAssistantBufferedText: (text: string) => {
+      normalizeLiveAssistantBufferedTextMock(text);
+      return actual.normalizeLiveAssistantBufferedText(text);
+    },
+  };
+});
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -115,6 +129,7 @@ describe("agent event handler", () => {
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     logErrorMock.mockReset();
+    normalizeLiveAssistantBufferedTextMock.mockReset();
   });
 
   afterEach(() => {
@@ -566,6 +581,43 @@ describe("agent event handler", () => {
     expect(finalPayload.state).toBe("final");
     expect(finalPayload.message?.content?.[0]?.text).toBe("Visible\n\nAfter");
     nowSpy?.mockRestore();
+  });
+
+  it("sanitizes only broadcasted assistant buffers while preserving cross-frame tags", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "lazy-sanitize");
+
+    const deltas = [
+      "Visible",
+      `\n${INTERNAL_RUNTIME_CONTEXT_BEGIN.slice(0, 20)}`,
+      `${INTERNAL_RUNTIME_CONTEXT_BEGIN.slice(20)}\nprivate runtime detail\n`,
+      ...Array.from({ length: 16 }, (_, index) => `private fragment ${index}\n`),
+      INTERNAL_RUNTIME_CONTEXT_END.slice(0, 18),
+      `${INTERNAL_RUNTIME_CONTEXT_END.slice(18)}\nAfter [[reply_`,
+      "to_current]] done",
+    ];
+    deltas.forEach((delta, index) => {
+      now = 10_000 + index;
+      emitAgentEvent(handler, "run-lazy-sanitize", "assistant", { delta }, { seq: index + 1 });
+    });
+
+    expect(normalizeLiveAssistantBufferedTextMock).toHaveBeenCalledTimes(1);
+    emitLifecycleEnd(handler, "run-lazy-sanitize", deltas.length + 1);
+    expect(normalizeLiveAssistantBufferedTextMock).toHaveBeenCalledTimes(2);
+
+    const payloads = chatBroadcastCalls(broadcast).map(([, payload]) => payload) as Array<{
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    }>;
+    expect(payloads.map((payload) => payload.message?.content?.[0]?.text)).toEqual([
+      "Visible",
+      "Visible\n\nAfter  done",
+      "Visible\n\nAfter  done",
+    ]);
+    expect(JSON.stringify(payloads)).not.toContain("private runtime detail");
+    nowSpy.mockRestore();
   });
 
   it("emits the first assistant chat.send timing event to the originating Control UI", () => {
@@ -1178,6 +1230,101 @@ describe("agent event handler", () => {
     expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
     expect(thirdPayload.state).toBe("final");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("flushes buffered text as delta before the error terminal", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    registerNamedChatRun(chatRunState, "err-flush");
+
+    emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello" });
+
+    now = 10_100;
+    emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello world" });
+
+    emitAgentEvent(
+      handler,
+      "run-err-flush",
+      "lifecycle",
+      { phase: "error", error: "provider failed" },
+      { seq: 2 },
+    );
+
+    const chatPayloads = chatBroadcastCalls(broadcast).map(
+      ([, payload]) => payload as { state?: string; deltaText?: string },
+    );
+    expect(
+      chatPayloads
+        .filter((payload) => payload.state === "delta")
+        .map((payload) => payload.deltaText)
+        .join(""),
+    ).toBe("Hello world");
+    expect(chatPayloads.at(-1)?.state).toBe("error");
+    nowSpy.mockRestore();
+  });
+
+  it("flushes buffered text as delta before deferring a retryable error terminal", () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness({
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerNamedChatRun(chatRunState, "err-grace");
+
+    emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello" });
+
+    now = 10_100;
+    emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello world" });
+
+    emitAgentEvent(
+      handler,
+      "run-err-grace",
+      "lifecycle",
+      { phase: "error", error: "retryable provider failure" },
+      { seq: 2 },
+    );
+
+    // The terminal is still deferred behind the retry grace, but the tail the
+    // throttle withheld has already been delivered.
+    expect(vi.getTimerCount()).toBe(1);
+    expect(
+      chatBroadcastCalls(broadcast)
+        .map(([, payload]) => payload as { state?: string; deltaText?: string })
+        .filter((payload) => payload.state === "delta")
+        .map((payload) => payload.deltaText)
+        .join(""),
+    ).toBe("Hello world");
+    nowSpy.mockRestore();
+  });
+
+  it("carries buffered text in the terminal message when an error classifies as cancellation", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    registerNamedChatRun(chatRunState, "err-cancel");
+
+    emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello" });
+
+    now = 10_100;
+    emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello world" });
+
+    emitAgentEvent(
+      handler,
+      "run-err-cancel",
+      "lifecycle",
+      { phase: "error", aborted: true },
+      { seq: 2 },
+    );
+
+    const terminal = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(terminal?.state).toBe("aborted");
+    expect(terminal?.message?.content?.[0]?.text).toBe("Hello world");
     nowSpy.mockRestore();
   });
 
@@ -4237,6 +4384,26 @@ describe("agent event handler", () => {
       );
     });
 
+    it("includes spawnedBy in chat broadcasts for spawn-owned dashboard sessions", () => {
+      mockSessionLineage("agent:main:dashboard:visible-child", "agent:main:discord:direct:alice");
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:main:dashboard:visible-child",
+      });
+      registerChatRun(
+        chatRunState,
+        "run-dashboard-child",
+        "agent:main:dashboard:visible-child",
+        "client-dashboard-child",
+      );
+
+      emitAgentEvent(handler, "run-dashboard-child", "assistant", { text: "visible child" });
+
+      expectPayloadFields(chatBroadcastCalls(broadcast)[0]?.[1], {
+        sessionKey: "agent:main:dashboard:visible-child",
+        spawnedBy: "agent:main:discord:direct:alice",
+      });
+    });
+
     it("skips session row load entirely for session keys that cannot carry lineage", () => {
       const { broadcast, handler, chatRunState } = createHarness({
         resolveSessionKeyForRun: () => "agent:main:main",
@@ -4254,10 +4421,9 @@ describe("agent event handler", () => {
         );
       }
 
-      // The chat delta path invokes resolveSpawnedBy only. Non-subagent,
-      // non-acp keys cannot carry spawnedBy (see supportsSpawnLineage in
-      // sessions-patch.ts), so resolveSpawnedBy must short-circuit without
-      // ever calling loadGatewaySessionRow on this hot path.
+      // The chat delta path invokes resolveSpawnedBy only. Main/channel keys
+      // cannot carry spawn lineage, so resolveSpawnedBy must short-circuit
+      // without calling loadGatewaySessionRow on this hot path.
       expect(loadGatewaySessionRow).not.toHaveBeenCalled();
 
       const chatCalls = chatBroadcastCalls(broadcast);

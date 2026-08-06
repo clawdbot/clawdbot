@@ -1,4 +1,9 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { renderTelegramHtmlText } from "./format.js";
@@ -15,6 +20,7 @@ import {
   buildTelegramThreadReplyParams,
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
+import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
   createRequestWithChatNotFound,
   createTelegramNonIdempotentRequestWithDiag,
@@ -223,6 +229,7 @@ async function sendMessageTelegramWithContext(
       mediaUrl,
       buildOutboundMediaLoadOptions({
         maxBytes: mediaMaxBytes,
+        mediaAccess: opts.mediaAccess,
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
         optimizeImages: opts.forceDocument ? false : undefined,
@@ -249,7 +256,7 @@ async function sendMessageTelegramWithContext(
       asVoice: opts.asVoice,
       sendImageAsPhoto,
     });
-    const { caption, htmlCaption, plainCaption, followUpText } = mediaPlan;
+    const { htmlCaption, plainCaption, followUpText } = mediaPlan;
     // If text exceeds Telegram's caption limit, send media without caption
     // then send text as a separate follow-up message.
     const needsSeparateText = Boolean(followUpText);
@@ -296,15 +303,17 @@ async function sendMessageTelegramWithContext(
       });
     };
 
-    let mediaDelivery: Awaited<ReturnType<typeof sendMedia>>;
+    let mediaDelivery: Awaited<ReturnType<typeof sendMedia>>["result"];
     let deliveredMediaSender: typeof mediaSender;
+    let deliveredCaption: string | undefined;
     try {
       const delivery = await sendTelegramOutboundMediaWithPhotoFallback({
         sender: mediaSender,
         documentSender,
         send: (sender) => sendMedia(sender.label, sender.send),
       });
-      mediaDelivery = delivery.result;
+      mediaDelivery = delivery.result.result;
+      deliveredCaption = delivery.result.deliveredCaption;
       deliveredMediaSender = delivery.sender;
     } catch (error) {
       opts.promptContextProjectionPlan?.cursor.invalidate();
@@ -315,21 +324,34 @@ async function sendMessageTelegramWithContext(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
-    await reportDelivery(mediaMessageId, resolvedChatId, {
-      ...(caption ? { telegramDeliveredText: caption } : {}),
-      telegramHasInlineKeyboard: !needsSeparateText && Boolean(replyMarkup),
-    });
-    await recordDeliveredPromptContext(
-      {
-        message: result,
-        messageId: mediaMessageId,
-        ...(caption ? { text: caption } : {}),
-        ...(acceptedMediaParams?.message_thread_id !== undefined
-          ? { messageThreadId: acceptedMediaParams.message_thread_id }
-          : {}),
-      },
-      !needsSeparateText,
-    );
+    let mediaReported = false;
+    let mediaPromptRecorded = false;
+    const recordMediaDelivery = async (finalPart: boolean, hasInlineKeyboard: boolean) => {
+      if (!mediaReported) {
+        await reportDelivery(mediaMessageId, resolvedChatId, {
+          ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
+          telegramHasInlineKeyboard: hasInlineKeyboard,
+        });
+        mediaReported = true;
+      }
+      if (!mediaPromptRecorded) {
+        await recordDeliveredPromptContext(
+          {
+            message: result,
+            messageId: mediaMessageId,
+            ...(deliveredCaption ? { text: deliveredCaption } : {}),
+            ...(acceptedMediaParams?.message_thread_id !== undefined
+              ? { messageThreadId: acceptedMediaParams.message_thread_id }
+              : {}),
+          },
+          finalPart,
+        );
+        mediaPromptRecorded = true;
+      }
+    };
+    if (!needsSeparateText) {
+      await recordMediaDelivery(true, Boolean(replyMarkup));
+    }
     logTelegramOutboundSendOk({
       accountId: account.accountId,
       chatId: resolvedChatId,
@@ -349,12 +371,68 @@ async function sendMessageTelegramWithContext(
     // If text was too long for a caption, send it as a separate follow-up message.
     // Use HTML conversion so markdown renders like captions.
     if (needsSeparateText && followUpText) {
-      const textResult = await sendChunkedText(followUpText, "text follow-up send", {
-        replyToAlreadyUsed: singleUseReplyTo && mediaUsedReplyTo,
+      let textResult: TelegramSendResult;
+      try {
+        textResult = await sendChunkedText(followUpText, "text follow-up send", {
+          replyToAlreadyUsed: singleUseReplyTo && mediaUsedReplyTo,
+          beforeFirstAccepted: () => recordMediaDelivery(false, false),
+        });
+      } catch (error) {
+        if (isTelegramEmptyContentError(error)) {
+          let hasInlineKeyboard = false;
+          let keyboardError: unknown;
+          if (replyMarkup) {
+            try {
+              await api.editMessageReplyMarkup(resolvedChatId, mediaMessageId, {
+                reply_markup: replyMarkup,
+              });
+              hasInlineKeyboard = true;
+            } catch (editError) {
+              keyboardError = editError;
+            }
+          }
+          await recordMediaDelivery(true, hasInlineKeyboard);
+          if (keyboardError !== undefined) {
+            throw createChannelPartialDeliveryError(keyboardError, {
+              messageIds: [String(mediaMessageId)],
+              visibleReplySent: true,
+            });
+          }
+          return { messageId: String(mediaMessageId), chatId: resolvedChatId };
+        }
+        await recordMediaDelivery(false, false);
+        const textMessageIds = isChannelPartialDeliveryError(error)
+          ? (error.deliveryResult.messageIds ?? [])
+          : [];
+        throw createChannelPartialDeliveryError(error, {
+          messageIds: [String(mediaMessageId), ...textMessageIds],
+          visibleReplySent: true,
+        });
+      }
+      const mediaReplyToId = resolveAcceptedReplyToMessageId(acceptedMediaParams)?.toString();
+      const receipt = createMessageReceiptFromOutboundResults({
+        results: [{ messageId: String(mediaMessageId), chatId: resolvedChatId }, textResult],
+        kind: "text",
+        ...(acceptedMediaParams?.message_thread_id !== undefined
+          ? { threadId: String(acceptedMediaParams.message_thread_id) }
+          : {}),
       });
+      if (mediaReplyToId) {
+        receipt.replyToId = mediaReplyToId;
+      }
+      // Text receipts restart indices; a single follow-up has no nested reply metadata.
+      receipt.parts = receipt.parts.map((part, index) => ({
+        ...part,
+        index,
+        ...(index === 0 ? { kind: "media" } : {}),
+        ...(mediaReplyToId && (index === 0 || (!textResult.receipt && !singleUseReplyTo))
+          ? { replyToId: mediaReplyToId }
+          : {}),
+      }));
       return {
         ...textResult,
         chatId: resolvedChatId,
+        receipt,
       };
     }
 

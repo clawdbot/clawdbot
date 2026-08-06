@@ -517,9 +517,6 @@ describe("stageBundledPluginRuntime", () => {
           openclaw: {
             extensions: ["./main.js"],
             setupEntry: "./setup.js",
-            startup: {
-              deferConfiguredChannelFullLoadUntilAfterListen: true,
-            },
           },
         },
         null,
@@ -567,9 +564,6 @@ describe("stageBundledPluginRuntime", () => {
     );
     expect(fs.realpathSync(manifestRegistry.plugins[0]?.setupSource ?? "")).toBe(
       expectedRuntimeSetupPath,
-    );
-    expect(manifestRegistry.plugins[0]?.startupDeferConfiguredChannelFullLoadUntilAfterListen).toBe(
-      true,
     );
   });
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -352,10 +353,6 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
   }
   starts.push(path.dirname(normalized));
   return dedupeResolvedPaths(starts);
-}
-
-function formatResolutionError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveDevSourceRootParam(params: { devSourceRoot?: string | null }): string | null {
@@ -1564,7 +1561,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       packageRoot,
       candidates: dedupeResolvedPaths(candidates),
       resolvedPath: null,
-      error: formatResolutionError(error),
+      error: formatErrorMessage(error),
     };
   }
   return {

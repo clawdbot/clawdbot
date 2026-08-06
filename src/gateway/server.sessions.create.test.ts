@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
@@ -57,10 +57,34 @@ import {
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
+type EnsureSessionDiffBaseline =
+  (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
+
+const sessionDiffBaselineMocks = vi.hoisted(() => ({
+  ensure: vi.fn<EnsureSessionDiffBaseline>(),
+  useReal: false,
+}));
+
+vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
+  sessionDiffBaselineMocks.ensure.mockImplementation(async (params) =>
+    sessionDiffBaselineMocks.useReal
+      ? await actual.ensureSessionDiffBaseline(params)
+      : params.entry,
+  );
+  return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
+});
+
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => {
+  sessionDiffBaselineMocks.ensure.mockClear();
+  // Baseline capture has dedicated owner coverage and one authenticated integration below.
+  sessionDiffBaselineMocks.useReal = false;
+});
 
 async function makeNonGitTempDir(prefix: string): Promise<string> {
   let root = await fs.realpath(os.tmpdir());
@@ -694,6 +718,51 @@ async function initializeGitWorkspace(root: string): Promise<string> {
   ]);
   return await fs.realpath(workspace);
 }
+
+test("sessions.create captures and persists the initial workspace diff baseline", async () => {
+  const root = tempDirs.make("openclaw-session-diff-baseline-");
+  const workspace = await initializeGitWorkspace(root);
+  await fs.appendFile(path.join(workspace, "README.md"), "dirty at session start\n");
+  const { storePath } = await createSessionStoreDir();
+  sessionDiffBaselineMocks.useReal = true;
+  const { ws } = await openClient({
+    browserOrigin: "http://127.0.0.1",
+    client: {
+      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      version: "dev",
+      platform: "web",
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    },
+  });
+  try {
+    const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
+      agentId: "main",
+      cwd: workspace,
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(sessionDiffBaselineMocks.ensure).toHaveBeenCalledTimes(1);
+    const sessionKey = requireNonEmptyString(created.payload?.key, "baseline session key");
+    const sessionId = requireNonEmptyString(created.payload?.sessionId, "baseline session id");
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId,
+      spawnedCwd: workspace,
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId,
+        root: workspace,
+        files: [
+          {
+            path: "README.md",
+            fingerprint: expect.any(String),
+          },
+        ],
+      },
+    });
+  } finally {
+    sessionDiffBaselineMocks.useReal = false;
+    ws.close();
+  }
+});
 
 function requireNonEmptyString(value: string | undefined, label: string): string {
   if (!value) {
@@ -1564,6 +1633,175 @@ test("sessions.create persists declared spawn lineage for spawn-owned creations"
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
   expect(created.payload?.entry?.spawnDepth).toBe(2);
+});
+
+test("sessions.create atomically persists trusted visible-spawn tool policy", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("sess-visible-spawn-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      label?: string;
+      spawnedBy?: string;
+      completionOwnerSessionKey?: string;
+      parentSessionKey?: string;
+      spawnDepth?: number;
+      inheritedToolPolicyVersion?: number;
+      inheritedToolAllow?: string[];
+      inheritedToolDeny?: string[];
+    };
+  }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Restricted visible child",
+      parentSessionKey,
+      spawnDepth: 1,
+    },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          syntheticClient: true,
+          sessionCreation: {
+            via: "spawn",
+            actor: { type: "agent", id: parentSessionKey },
+            completionOwnerSessionKey: "agent:main:discord:direct:alice",
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["read", "sessions_spawn"],
+              deny: ["exec"],
+            },
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.entry).toMatchObject({
+    label: "Restricted visible child",
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
+    parentSessionKey,
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+  const key = requireNonEmptyString(created.payload?.key, "visible child key");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+});
+
+test("sessions.create accepts a signed agent-runtime visible-spawn policy", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("sess-runtime-spawn-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      createdVia?: string;
+      createdActor?: unknown;
+      spawnedBy?: string;
+      completionOwnerSessionKey?: string;
+      inheritedToolAllow?: string[];
+      inheritedToolDeny?: string[];
+    };
+  }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Runtime visible child",
+      parentSessionKey,
+      spawnDepth: 1,
+    },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: parentSessionKey,
+            sessionSpawnContext: {
+              completionOwnerSessionKey: "agent:main:discord:direct:bob",
+              inheritedToolPolicy: {
+                version: 1,
+                allow: ["read", "sessions_spawn"],
+                deny: ["exec"],
+              },
+            },
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.entry).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: parentSessionKey },
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+  const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
+    inheritedToolPolicyVersion: 1,
+  });
+});
+
+test("sessions.create rejects a trusted spawn whose parent differs from its agent caller", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq(
+    "sessions.create",
+    {
+      agentId: "main",
+      parentSessionKey: "agent:main:other",
+      spawnDepth: 1,
+    },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionSpawnContext: {
+              inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] },
+            },
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok).toBe(false);
+  expect(created.error?.message).toContain("spawn parent must match the trusted agent caller");
 });
 
 test("sessions.create rejects spawnDepth without parentSessionKey", async () => {

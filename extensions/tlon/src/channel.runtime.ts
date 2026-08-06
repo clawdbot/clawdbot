@@ -239,11 +239,6 @@ export async function probeTlonAccount(account: ConfiguredTlonAccount, timeoutMs
         }
         return { ok: true };
       } finally {
-        // Guard release does not settle unread response streams; cancel first so
-        // the probe cannot leave its pinned connection open.
-        if (!response.bodyUsed) {
-          await response.body?.cancel().catch(() => undefined);
-        }
         await release();
       }
     },

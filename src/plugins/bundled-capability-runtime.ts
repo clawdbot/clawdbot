@@ -48,9 +48,14 @@ function buildVitestCapabilityShimAliasMap(): Record<string, string> {
 function buildBundledCapabilityRuntimeConfig(
   pluginIds: readonly string[],
   env?: PluginLoadOptions["env"],
+  config?: PluginLoadOptions["config"],
 ): NonNullable<PluginLoadOptions["config"]> {
+  // Only the speech owner may opt into legacy global-disable compatibility before capture.
+  if (config?.plugins?.enabled === false) {
+    return config;
+  }
   const enablementCompat = withBundledPluginEnablementCompat({
-    config: undefined,
+    config,
     pluginIds,
   });
   return (
@@ -81,11 +86,12 @@ function createCapabilityRegistrationRuntime(
 export function loadBundledCapabilityRuntimeRegistry(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
+  config?: PluginLoadOptions["config"];
   pluginSdkResolution?: PluginSdkResolutionPreference;
   discovery?: PluginDiscoveryResult;
 }) {
   const env = params.env ?? process.env;
-  const config = buildBundledCapabilityRuntimeConfig(params.pluginIds, env);
+  const config = buildBundledCapabilityRuntimeConfig(params.pluginIds, env, params.config);
   const discovery = params.discovery ?? discoverOpenClawPlugins({ env });
   const pluginIds = new Set(params.pluginIds);
   const manifestRegistry = loadPluginManifestRegistry({
@@ -111,7 +117,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       cache: false,
       activate: false,
       // Channel setup entries cannot register providers; keep their runtime entry in discovery mode.
-      forceFullRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "full",
       preferBuiltPluginArtifacts: useVitestShims,
       manifestRegistry: scopedManifestRegistry,
       logger: {

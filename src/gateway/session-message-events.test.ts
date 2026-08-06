@@ -22,11 +22,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  emitAgentEvent,
-} from "../infra/agent-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";

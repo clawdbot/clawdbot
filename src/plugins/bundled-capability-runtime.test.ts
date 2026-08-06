@@ -13,7 +13,6 @@ import {
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
-  collectLivePluginRegistries,
   getActivePluginRegistry,
   getPluginRegistrationContext,
   listImportedRuntimePluginIds,
@@ -152,7 +151,6 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     const active = createEmptyPluginRegistry();
     setActivePluginRegistry(active, "existing-registry");
     const activeSnapshotBefore = captureActivePluginRegistrySnapshot();
-    const liveRegistriesBefore = collectLivePluginRegistries();
     const registrationContextBefore = getPluginRegistrationContext();
 
     const registry = loadBundledCapabilityRuntimeRegistry({
@@ -165,9 +163,37 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual([target.id]);
     expect(getActivePluginRegistry()).toBe(active);
     expect(captureActivePluginRegistrySnapshot()).toEqual(activeSnapshotBefore);
-    expect(collectLivePluginRegistries()).toEqual(liveRegistriesBefore);
     expect(getPluginRegistrationContext()).toBe(registrationContextBefore);
     expect(listImportedRuntimePluginIds()).toContain(target.id);
+  });
+
+  it.each([
+    {
+      name: "explicitly disabled",
+      plugins: { entries: { "blocked-capability": { enabled: false } } },
+    },
+    { name: "denylisted", plugins: { deny: ["blocked-capability"] } },
+    { name: "outside the restrictive allowlist", plugins: { allow: ["allowed-capability"] } },
+    { name: "blocked by global plugin disablement", plugins: { enabled: false } },
+  ])("never imports a $name plugin through bundled capability capture", ({ plugins }) => {
+    const blocked = writePlugin({
+      id: "blocked-capability",
+      body: `module.exports = {
+        id: "blocked-capability",
+        register(api) {
+          api.registerProvider({ id: "blocked-capability", label: "Blocked", auth: [] });
+        },
+      };`,
+    });
+
+    const registry = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: [blocked.id],
+      config: { plugins },
+      discovery: discoveryFor(blocked),
+    });
+
+    expect(registry.providers).toEqual([]);
+    expect(listImportedRuntimePluginIds()).not.toContain(blocked.id);
   });
 
   it.each(["source", "built"] as const)(

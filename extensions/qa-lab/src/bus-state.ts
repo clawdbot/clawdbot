@@ -135,6 +135,7 @@ export function createQaBusState() {
   const createMessage = (params: {
     direction: QaBusMessage["direction"];
     accountId: string;
+    messageId?: string;
     conversation: QaBusConversation;
     senderId: string;
     senderName?: string;
@@ -161,7 +162,8 @@ export function createQaBusState() {
     const storedConversation = ensureConversation(params.accountId, params.conversation);
     const toolCalls = sanitizeQaBusToolCalls(params.toolCalls);
     const message: QaBusMessage = {
-      id: randomUUID(),
+      // Adopt native identity before indexing or publishing any message clone.
+      id: params.messageId ?? randomUUID(),
       accountId: params.accountId,
       direction: params.direction,
       conversation: {
@@ -181,7 +183,9 @@ export function createQaBusState() {
       ...(toolCalls ? { toolCalls } : {}),
       reactions: [],
     };
-    messages.set(message.id, message);
+    // Provider IDs are conversation-local and must never replace another chat's message.
+    const { accountId, conversation, id } = message;
+    messages.set(JSON.stringify([accountId, conversation.kind, conversation.id, id]), message);
     return message;
   };
 
@@ -204,11 +208,12 @@ export function createQaBusState() {
         events,
       });
     },
-    addInboundMessage(input: QaBusInboundMessageInput) {
+    addInboundMessage(input: QaBusInboundMessageInput, messageId?: string) {
       const accountId = normalizeAccountId(input.accountId);
       const message = createMessage({
         direction: "inbound",
         accountId,
+        messageId,
         // `dm:` is the canonical target spelling and is also used by manual
         // QA-bus clients. Normalize its matching ingress alias before routing
         // so a DM can never silently acquire group/channel privacy semantics.

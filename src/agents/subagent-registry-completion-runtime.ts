@@ -13,19 +13,12 @@ export function createSubagentRegistryCompletionRuntime(config: {
   resumed: Set<string>;
   retryTimers: Set<ReturnType<typeof setTimeout>>;
   completeSubagentRun: (params: SubagentCompletionRequest) => Promise<void>;
-  scheduleOrphanRecovery: (params?: { delayMs?: number; maxRetries?: number }) => void;
+  scheduleSweep: (params?: { delayMs?: number }) => void;
   resumeRun: (runId: string) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const {
-    runs,
-    resumed,
-    retryTimers,
-    completeSubagentRun,
-    scheduleOrphanRecovery,
-    resumeRun,
-    warn,
-  } = config;
+  const { runs, resumed, retryTimers, completeSubagentRun, scheduleSweep, resumeRun, warn } =
+    config;
 
   async function completeSubagentRunWithRecoveryAttempt(
     params: SubagentCompletionRequest,
@@ -65,7 +58,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     if (latest && typeof latest.execution.endedAt !== "number") {
       // The durable write rolled the in-memory entry back. Preserve the original
       // completion through the normal persisted-session recovery path.
-      scheduleOrphanRecovery({ delayMs: 1_000 });
+      scheduleSweep({ delayMs: 1_000 });
       return;
     }
     if (
@@ -152,8 +145,10 @@ export function createSubagentRegistryCompletionRuntime(config: {
 
   async function finalizeInterruptedSubagentRun(params: {
     runId: string;
+    expectedEntry?: SubagentRunRecord;
     error: string;
     endedAt?: number;
+    suppressSessionEffects?: boolean;
   }): Promise<number> {
     const runId = params.runId.trim();
     if (!runId) {
@@ -164,11 +159,11 @@ export function createSubagentRegistryCompletionRuntime(config: {
       typeof params.endedAt === "number" && Number.isFinite(params.endedAt)
         ? params.endedAt
         : Date.now();
-    pendingLifecycle.clear(runId);
     const entry = runs.get(runId);
-    if (!entry) {
+    if (!entry || (params.expectedEntry && entry !== params.expectedEntry)) {
       return 0;
     }
+    pendingLifecycle.clear(runId);
     if (
       typeof entry.cleanupCompletedAt === "number" &&
       entry.terminalOwner !== "interrupted-recovery"
@@ -177,6 +172,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const completionParams: SubagentCompletionRequest = {
       runId,
+      expectedEntry: entry,
       endedAt,
       outcome: {
         status: "error",
@@ -187,6 +183,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
       recoverInterrupted: true,
+      suppressSessionEffects: params.suppressSessionEffects,
     };
     try {
       await completeSubagentRun(completionParams);

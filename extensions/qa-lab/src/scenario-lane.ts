@@ -1,5 +1,6 @@
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
+import { isQaProviderModeInput } from "./providers/index.js";
 import type { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
@@ -7,6 +8,22 @@ type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenari
 
 function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveQaScenarioRequiredProviderMode(scenario: QaSeedScenario) {
+  const configuredMode = normalizeQaConfigString(scenario.execution.config?.requiredProviderMode);
+  const executionMode =
+    scenario.execution.kind === "flow" ? scenario.execution.providerMode : undefined;
+  if (configuredMode && executionMode && configuredMode !== executionMode) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares conflicting provider modes: execution.providerMode=${executionMode}, execution.config.requiredProviderMode=${configuredMode}`,
+    );
+  }
+  const providerMode = configuredMode ?? executionMode;
+  if (providerMode !== undefined && !isQaProviderModeInput(providerMode)) {
+    throw new Error(`QA scenario ${scenario.id} declares unknown provider mode: ${providerMode}`);
+  }
+  return providerMode;
 }
 
 export function resolveQaScenarioLaneChannels(params: {
@@ -61,7 +78,7 @@ export function describeQaProviderLaneMismatches(params: {
 }) {
   const mismatches: string[] = [];
   const config = params.scenario.execution.config ?? {};
-  const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
+  const requiredProviderMode = resolveQaScenarioRequiredProviderMode(params.scenario);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     mismatches.push(`providerMode=${requiredProviderMode}`);
   }

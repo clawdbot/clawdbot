@@ -16,6 +16,7 @@ type PluginCliRegistrationMode = "eager" | "lazy";
 type RegisterPluginCliOptions = {
   mode?: PluginCliRegistrationMode;
   primary?: string | null;
+  skipPluginValidation?: boolean;
 };
 
 type PluginCliRegistrationEntries = Awaited<
@@ -75,14 +76,17 @@ function loaderOptionsKey(loaderOptions: PluginCliLoaderOptions | undefined): st
   return String(id);
 }
 
-export const loadValidatedConfigForPluginRegistration =
-  async (): Promise<OpenClawConfig | null> => {
-    const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.valid) {
-      return null;
-    }
-    return getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
-  };
+export const loadValidatedConfigForPluginRegistration = async (options?: {
+  skipPluginValidation?: boolean;
+}): Promise<OpenClawConfig | null> => {
+  const snapshot = await readConfigFileSnapshot({
+    skipPluginValidation: options?.skipPluginValidation,
+  });
+  if (!snapshot.valid) {
+    return null;
+  }
+  return getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
+};
 
 export async function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
@@ -136,7 +140,9 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   loaderOptions?: PluginCliLoaderOptions,
   options?: RegisterPluginCliOptions,
 ): Promise<OpenClawConfig | null> {
-  const config = await loadValidatedConfigForPluginRegistration();
+  const config = await loadValidatedConfigForPluginRegistration({
+    skipPluginValidation: options?.skipPluginValidation,
+  });
   if (!config) {
     return null;
   }

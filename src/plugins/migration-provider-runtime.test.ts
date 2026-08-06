@@ -43,13 +43,14 @@ const mocks = vi.hoisted(() => ({
     snapshot: params?.index ?? createMockPluginIndex([]),
     diagnostics: [],
   })),
-  loadRuntimePluginRegistryHandle: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
   listBundledPluginMetadata: vi.fn(() => []),
 }));
 
 vi.mock("./loader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./loader.js")>()),
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
+  loadPluginRegistryHandle: mocks.loadPluginRegistryHandle,
 }));
 
 vi.mock("./active-runtime-registry.js", () => ({
@@ -71,10 +72,6 @@ vi.mock("./plugin-registry-snapshot.js", () => ({
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
-}));
-
-vi.mock("./runtime/standalone-runtime-registry-loader.js", () => ({
-  loadRuntimePluginRegistryHandle: mocks.loadRuntimePluginRegistryHandle,
 }));
 
 vi.mock("./bundled-plugin-metadata.js", () => ({
@@ -113,7 +110,7 @@ describe("migration provider runtime", () => {
     mocks.resolveRuntimePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
     mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.loadPluginRegistrySnapshot.mockReturnValue(createMockPluginIndex([]));
-    mocks.loadRuntimePluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+    mocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
     mocks.listBundledPluginMetadata.mockReturnValue([]);
     mocks.loadPluginRegistrySnapshotWithMetadata.mockImplementation(
       (params?: { index?: MockPluginIndex }) => ({
@@ -155,22 +152,17 @@ describe("migration provider runtime", () => {
     });
 
     const standaloneParams = requireMockCallArg(
-      mocks.loadRuntimePluginRegistryHandle,
-      "loadRuntimePluginRegistryHandle",
+      mocks.loadPluginRegistryHandle,
+      "loadPluginRegistryHandle",
     ) as {
-      surface?: unknown;
-      requiredPluginIds?: unknown;
-      loadOptions?: {
-        activate?: unknown;
-        onlyPluginIds?: unknown;
-        config?: OpenClawConfig;
-      };
+      activate?: unknown;
+      onlyPluginIds?: unknown;
+      config?: OpenClawConfig;
     };
-    expect(standaloneParams.surface).toBe("active");
-    expect(standaloneParams.requiredPluginIds).toEqual(["migrate-hermes"]);
-    expect(standaloneParams.loadOptions?.onlyPluginIds).toEqual(["migrate-hermes"]);
-    expect(standaloneParams.loadOptions?.config?.plugins?.enabled).toBe(true);
-    expect(standaloneParams.loadOptions?.config?.plugins?.entries).toEqual({
+    expect(standaloneParams.activate).toBe(false);
+    expect(standaloneParams.onlyPluginIds).toEqual(["migrate-hermes"]);
+    expect(standaloneParams.config?.plugins?.enabled).toBe(true);
+    expect(standaloneParams.config?.plugins?.entries).toEqual({
       "migrate-hermes": { enabled: true },
     });
   });
@@ -188,13 +180,10 @@ describe("migration provider runtime", () => {
     ensureStandaloneMigrationProviderRegistryLoaded({ providerId: "hermes" });
 
     const standaloneParams = requireMockCallArg(
-      mocks.loadRuntimePluginRegistryHandle,
-      "loadRuntimePluginRegistryHandle",
+      mocks.loadPluginRegistryHandle,
+      "loadPluginRegistryHandle",
     );
-    expect(standaloneParams.requiredPluginIds).toEqual(["migrate-hermes"]);
-    expect(
-      (standaloneParams.loadOptions as { onlyPluginIds?: unknown } | undefined)?.onlyPluginIds,
-    ).toEqual(["migrate-hermes"]);
+    expect(standaloneParams.onlyPluginIds).toEqual(["migrate-hermes"]);
   });
 
   it("loads configured external migration-provider plugins from manifest contracts", async () => {
@@ -329,7 +318,7 @@ describe("migration provider runtime", () => {
       source: "test",
       provider,
     } as never);
-    mocks.loadRuntimePluginRegistryHandle.mockReturnValue(loadedA);
+    mocks.loadPluginRegistryHandle.mockReturnValue(loadedA);
     mocks.listBundledPluginMetadata.mockReturnValue([
       {
         manifest: {

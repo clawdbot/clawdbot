@@ -73,7 +73,7 @@ type CodexAppServerToolTelemetry = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
-};
+} & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
 
 export class CodexAppServerEventProjector {
   private readonly assistantProjection: CodexAssistantProjection;
@@ -403,7 +403,7 @@ export class CodexAppServerEventProjector {
     const toolMetas = this.toolProgressProjection.toolMetas;
     const hadPotentialSideEffects =
       toolTelemetry.didSendViaMessagingTool ||
-      (toolTelemetry.successfulCronAdds ?? 0) > 0 ||
+      Boolean(toolTelemetry.successfulCronAdds || toolTelemetry.acceptedSessionSpawns?.length) ||
       this.generatedMediaProjection.hasGeneratedMedia() ||
       this.toolProgressProjection.hasPotentialSideEffects;
     return {
@@ -439,6 +439,7 @@ export class CodexAppServerEventProjector {
       hostOwnedToolMediaUrls: this.generatedMediaProjection.buildHostOwnedMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
+      acceptedSessionSpawns: toolTelemetry.acceptedSessionSpawns,
       cloudCodeAssistFormatError: false,
       attemptUsage: projectedUsage,
       ...(this.completedCompactionCount > 0

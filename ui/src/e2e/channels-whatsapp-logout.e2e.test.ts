@@ -228,22 +228,21 @@ describeControlUiE2e("Control UI WhatsApp logout mocked Gateway E2E", () => {
       await expect.poll(() => beta.getAttribute("aria-pressed")).toBe("true");
       await wizard.getByRole("button", { name: "Continue" }).click();
       await wizard.getByRole("button", { name: "Yes" }).click();
-      await wizard.getByRole("button", { name: "Continue" }).click();
       await wizard.getByRole("button", { name: "Finish" }).waitFor();
 
-      const answers = [
+      const userAnswers = [
         ["account", "work"],
         ["token", "123456:proof-secret"],
         ["features", ["alpha", "beta"]],
         ["confirm", true],
-        ["progress", null],
       ] as const;
-      expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual(
-        answers.map(([stepId, value]) => ({
+      expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual([
+        ...userAnswers.map(([stepId, value]) => ({
           sessionId: "channel-standard-proof",
           answer: { stepId, value },
         })),
-      );
+        { sessionId: "channel-standard-proof" },
+      ]);
     } finally {
       await context.close();
     }

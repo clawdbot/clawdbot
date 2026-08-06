@@ -40,6 +40,7 @@ import {
   extractAssistantThinking,
   extractAssistantCommentaryText,
   extractAssistantVisibleText,
+  createThinkingTagStreamState,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   promoteThinkingTagsToBlocks,
@@ -209,8 +210,11 @@ function resolveAssistantStreamItemId(params: {
       ? (indexedBlock as { type?: unknown })
       : undefined;
   const hasIndexedTextBlock = indexedRecord?.type === "text";
-  const candidateBlocks = hasIndexedTextBlock ? [indexedBlock] : content.toReversed();
-  for (const block of candidateBlocks) {
+  const candidateStart =
+    hasIndexedTextBlock && contentIndex !== undefined ? contentIndex : content.length - 1;
+  const candidateEnd = hasIndexedTextBlock ? candidateStart : 0;
+  for (let index = candidateStart; index >= candidateEnd; index -= 1) {
+    const block = content[index];
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -218,7 +222,7 @@ function resolveAssistantStreamItemId(params: {
     if (record.type !== "text") {
       continue;
     }
-    const signature = parseAssistantTextSignature(record.textSignature);
+    const signature = parseAssistantTextSignature(record);
     if (signature?.id) {
       return signature.id;
     }
@@ -239,17 +243,24 @@ function scopeAssistantMessageToStreamBlock(
     return message;
   }
   const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
-  const block =
+  let block =
     indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text"
       ? indexedBlock
-      : itemId
-        ? message.content.toReversed().find((candidate) => {
-            if (!candidate || typeof candidate !== "object" || candidate.type !== "text") {
-              return false;
-            }
-            return parseAssistantTextSignature(candidate.textSignature)?.id === itemId;
-          })
-        : undefined;
+      : undefined;
+  if (!block && itemId) {
+    for (let index = message.content.length - 1; index >= 0; index -= 1) {
+      const candidate = message.content[index];
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        candidate.type === "text" &&
+        parseAssistantTextSignature(candidate)?.id === itemId
+      ) {
+        block = candidate;
+        break;
+      }
+    }
+  }
   if (!block) {
     return message;
   }
@@ -433,23 +444,6 @@ function copyPartialBlockState(
   target.finalFence = copyFenceState(source.finalFence);
   target.pendingFenceFragment = source.pendingFenceFragment;
   target.pendingTagFragment = source.pendingTagFragment;
-}
-
-/** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-function resolveSilentReplyFallbackText(params: {
-  text: unknown;
-  messagingToolSentTexts: string[];
-}): string {
-  const text = coerceChatContentText(params.text);
-  const trimmed = text.trim();
-  if (trimmed !== SILENT_REPLY_TOKEN) {
-    return text;
-  }
-  const fallback = coerceChatContentText(params.messagingToolSentTexts.at(-1)).trim();
-  if (!fallback) {
-    return text;
-  }
-  return fallback;
 }
 
 function clearPendingToolMedia(
@@ -1035,7 +1029,9 @@ export function handleMessageUpdate(
   // Handle partial <think> tags: stream whatever reasoning is visible so far.
   // Emit-always: emitReasoningStream reaches the bus/archive; rendering +
   // message_tool_only suppression are gated downstream (#92738).
-  ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
+  ctx.emitReasoningStream(
+    extractThinkingFromTaggedStream(ctx.state.deltaBuffer, ctx.state.thinkingTagStream),
+  );
   const wasThinking = ctx.state.partialBlockState.thinking;
   let visibleDelta = "";
   // A text_start partial may already contain text that the following text_delta replays.
@@ -1244,7 +1240,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     buildAssistantStreamData,
     recordPendingAssistantReplyDirectives,
     resolveCurrentSourceMessagingToolPartial,
-    resolveSilentReplyFallbackText,
   };
 }
 
@@ -1344,10 +1339,10 @@ export function handleMessageEnd(
     ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
     : visibleText;
 
-  const text = resolveSilentReplyFallbackText({
-    text: finalVisibleText,
-    messagingToolSentTexts: ctx.state.messagingToolSentTexts,
-  });
+  // Exact NO_REPLY stays silent. The legacy rewrite (silentReplyRewrite) was
+  // removed by contract; global messaging-tool send evidence is not a
+  // user-route reply and must never be mirrored into the final payload.
+  const text = finalVisibleText;
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
@@ -1360,6 +1355,7 @@ export function handleMessageEnd(
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
+    ctx.state.thinkingTagStream = createThinkingTagStreamState();
     ctx.state.blockBuffer = "";
     ctx.blockChunker?.reset();
     ctx.state.blockState.thinking = false;

@@ -112,26 +112,31 @@ async function resolveGeneratedImagePath(params: {
       }
     }
 
-    const mediaDir = path.join(
-      params.env.gateway.tempRoot,
-      "state",
-      "media",
-      "tool-image-generation",
+    // Generated media may deliver directly from tool storage or be staged outbound;
+    // either fresh owner artifact proves this run without depending on one delivery path.
+    const mediaDirs = ["outbound", "tool-image-generation"].map((subdir) =>
+      path.join(params.env.gateway.tempRoot, "state", "media", subdir),
     );
-    const entries = await fs.readdir(mediaDir).catch(() => []);
-    const candidates = await Promise.all(
-      entries.map(async (entry) => {
-        const fullPath = path.join(mediaDir, entry);
-        const stat = await fs.stat(fullPath).catch(() => null);
-        if (!stat?.isFile() || stat.size === 0) {
-          return null;
-        }
-        return {
-          fullPath,
-          mtimeMs: stat.mtimeMs,
-        };
-      }),
-    );
+    const candidates = (
+      await Promise.all(
+        mediaDirs.map(async (mediaDir) => {
+          const entries = await fs.readdir(mediaDir).catch(() => []);
+          return Promise.all(
+            entries.map(async (entry) => {
+              const fullPath = path.join(mediaDir, entry);
+              const stat = await fs.stat(fullPath).catch(() => null);
+              if (!stat?.isFile() || stat.size === 0) {
+                return null;
+              }
+              return {
+                fullPath,
+                mtimeMs: stat.mtimeMs,
+              };
+            }),
+          );
+        }),
+      )
+    ).flat();
     const match = candidates
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .filter((entry) => entry.mtimeMs >= params.startedAtMs - 1_000)

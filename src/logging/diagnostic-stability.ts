@@ -189,13 +189,11 @@ function resolveDiagnosticLivenessRecordLevel(
   const hasBlockingWork = event.waiting > 0 || event.queued > 0;
   const hasSustainedEventLoopDelay =
     (event.eventLoopDelayP99Ms ?? 0) >= LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
-  return hasBlockingWork || (event.active > 0 && hasSustainedEventLoopDelay) ? "warning" : "info";
-}
-
-function isRecord(
-  record: DiagnosticStabilityEventRecord | undefined,
-): record is DiagnosticStabilityEventRecord {
-  return record !== undefined;
+  return event.degradedSinceMs !== undefined ||
+    hasBlockingWork ||
+    (event.active > 0 && hasSustainedEventLoopDelay)
+    ? "warning"
+    : "info";
 }
 
 function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabilityEventRecord {
@@ -366,7 +364,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "diagnostic.liveness.warning":
       record.level = resolveDiagnosticLivenessRecordLevel(event);
-      record.durationMs = event.intervalMs;
+      record.durationMs = event.degradedSinceMs ?? event.intervalMs;
       record.count = event.reasons.length;
       assignReasonCode(record, event.reasons[0]);
       record.eventLoopDelayP99Ms = event.eventLoopDelayP99Ms;
@@ -585,12 +583,14 @@ function listRecords(): DiagnosticStabilityEventRecord[] {
     return [];
   }
   if (state.count < state.capacity) {
-    return state.records.slice(0, state.count).filter(isRecord);
+    return state.records
+      .slice(0, state.count)
+      .filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
   }
   return [
     ...state.records.slice(state.nextIndex),
     ...state.records.slice(0, state.nextIndex),
-  ].filter(isRecord);
+  ].filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
 }
 
 function summarizeRecords(

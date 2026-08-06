@@ -9,17 +9,12 @@ const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
   resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw.sqlite"),
-  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../commitments/store.js", () => ({
   listCommitments: mocks.listCommitments,
   markCommitmentsStatus: mocks.markCommitmentsStatus,
   resolveCommitmentDatabasePath: mocks.resolveCommitmentDatabasePath,
-}));
-
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 function createRuntime(): { runtime: OutputRuntimeEnv; logs: string[]; stdout: string[] } {
@@ -267,7 +262,6 @@ describe("commitments command", () => {
     expect(logs).toEqual([]);
     expect(stdout).toEqual([JSON.stringify({ dismissed: ["cm_escape"] }, null, 2)]);
     expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
-      cfg: {},
       ids: ["cm_escape"],
       status: "dismissed",
       nowMs: expect.any(Number),
@@ -284,7 +278,6 @@ describe("commitments command", () => {
     );
 
     expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
-      cfg: {},
       ids: ["cm_valid", "cm_missing", "cm_terminal"],
       status: "dismissed",
       nowMs: expect.any(Number),

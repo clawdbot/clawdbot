@@ -2,7 +2,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
-import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
+import {
+  isTestDefaultMemorySlotDisabled,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
   loadPluginRegistrySnapshot,
@@ -45,6 +48,10 @@ function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
   workspaceDir: string;
 }): string[] {
+  // Honor config-owned test defaults before discovery forces an implicit memory owner.
+  if (isTestDefaultMemorySlotDisabled(params.config ?? {})) {
+    return [];
+  }
   const registry = loadPluginRegistrySnapshot(params);
   const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   const memorySlot = plugins.slots.memory;
@@ -134,7 +141,10 @@ function withRuntimePluginIdsAllowed(
   };
 }
 
-function resolveSelectedRuntime(selection: AgentHarnessPluginSelection, config?: OpenClawConfig) {
+export function resolveSelectedAgentHarnessRuntime(
+  selection: AgentHarnessPluginSelection,
+  config?: OpenClawConfig,
+) {
   const requestedRuntime = normalizeOptionalAgentRuntimeId(selection.runtime);
   return requestedRuntime && !isDefaultAgentRuntimeId(requestedRuntime)
     ? requestedRuntime
@@ -151,10 +161,14 @@ export function requiresAgentHarnessPluginSelection(
   selection: AgentHarnessPluginSelection,
   config?: OpenClawConfig,
 ): boolean {
-  const runtime = resolveSelectedRuntime(selection, config);
+  const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
+  if (isDefaultAgentRuntimeId(runtime) || runtime === OPENCLAW_AGENT_RUNTIME_ID) {
+    return false;
+  }
+  // Codex is a native plugin harness, never a CLI backend alias. Keep this hot-path decision
+  // independent of setup-registry discovery for every model candidate on every turn.
   return (
-    !isDefaultAgentRuntimeId(runtime) &&
-    runtime !== OPENCLAW_AGENT_RUNTIME_ID &&
+    runtime === "codex" ||
     !isCliRuntimeAliasForProvider({ runtime, provider: selection.provider, cfg: config })
   );
 }
@@ -177,7 +191,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   const pluginIds = [...basePluginIds, ...memoryPluginIds];
   const forceActivatedPluginIds = [...memoryPluginIds];
   for (const selection of params.selections) {
-    const runtime = resolveSelectedRuntime(selection, config);
+    const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     if (!requiresAgentHarnessPluginSelection(selection, config)) {
       continue;
     }

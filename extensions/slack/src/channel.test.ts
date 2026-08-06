@@ -461,6 +461,101 @@ describe("slackPlugin actions", () => {
       mediaReadFile,
     });
   });
+
+  it.each([
+    {
+      action: "send",
+      params: {
+        to: "channel:C123",
+        message: "render",
+        media: "renders/file.wav",
+      },
+      runtimeAction: "sendMessage",
+    },
+    {
+      action: "upload-file",
+      params: {
+        to: "channel:C123",
+        filePath: "renders/file.wav",
+        initialComment: "render",
+      },
+      runtimeAction: "uploadFile",
+    },
+  ] as const)("keeps host-owned media access authoritative for $action", async (testCase) => {
+    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+    const handleAction = requireSlackHandleAction();
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted"));
+    const mediaAccess = {
+      localRoots: ["/tmp/workspace-agent"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/workspace-agent",
+    };
+    const forgedReadFile = vi.fn(async () => Buffer.from("forged"));
+
+    await handleAction({
+      action: testCase.action,
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      params: testCase.params,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      conversationReadOrigin: "delegated",
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+      toolContext: {
+        currentChannelId: "C123",
+        mediaAccess: { localRoots: ["/tmp/forged"], readFile: forgedReadFile },
+        mediaLocalRoots: ["/tmp/forged"],
+        mediaReadFile: forgedReadFile,
+        conversationReadOrigin: "direct-operator",
+        requesterAccountId: "forged",
+        requesterSenderId: "forged",
+      },
+    } as never);
+
+    expect(requireMockCallArg(handleSlackActionMock, 0, 0).action).toBe(testCase.runtimeAction);
+    const actionContext = requireMockCallArg(handleSlackActionMock, 0, 2);
+    expect(actionContext.mediaAccess).toBe(mediaAccess);
+    expect(actionContext.mediaLocalRoots).toEqual(mediaAccess.localRoots);
+    expect(actionContext.mediaReadFile).toBeUndefined();
+    expect(actionContext.conversationReadOrigin).toBe("delegated");
+    expect(actionContext.requesterAccountId).toBe("default");
+    expect(actionContext.requesterSenderId).toBe("U123");
+    expect(actionContext.currentChannelId).toBe("C123");
+  });
+
+  it("does not inherit forged media capabilities from generic Slack tool context", async () => {
+    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+    const handleAction = requireSlackHandleAction();
+    const forgedReadFile = vi.fn(async () => Buffer.from("forged"));
+
+    await handleAction({
+      action: "upload-file",
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      params: { to: "channel:C123", filePath: "renders/file.wav" },
+      toolContext: {
+        currentChannelId: "C123",
+        mediaAccess: { localRoots: ["/tmp/forged"], readFile: forgedReadFile },
+        mediaLocalRoots: ["/tmp/forged"],
+        mediaReadFile: forgedReadFile,
+        conversationReadOrigin: "direct-operator",
+        requesterAccountId: "forged",
+        requesterSenderId: "forged",
+      },
+    } as never);
+
+    const actionContext = requireMockCallArg(handleSlackActionMock, 0, 2);
+    expect(actionContext.mediaAccess).toBeUndefined();
+    expect(actionContext.mediaLocalRoots).toBeUndefined();
+    expect(actionContext.mediaReadFile).toBeUndefined();
+    expect(actionContext.conversationReadOrigin).toBeUndefined();
+    expect(actionContext.requesterAccountId).toBeUndefined();
+    expect(actionContext.requesterSenderId).toBeUndefined();
+    expect(actionContext.currentChannelId).toBe("C123");
+  });
 });
 
 describe("slackPlugin status", () => {
@@ -767,6 +862,12 @@ describe("slackPlugin messaging targets", () => {
     expect(messaging?.resolveDeliveryTarget?.({ conversationId: "c08gqh53ejm" })).toEqual({
       to: "channel:c08gqh53ejm",
     });
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "G08GQH53EJM" })).toEqual({
+      to: "channel:g08gqh53ejm",
+    });
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "user:U08GQH53EJM" })).toEqual({
+      to: "user:u08gqh53ejm",
+    });
     expect(
       messaging?.resolveDeliveryTarget?.({
         conversationId: "1712345678.123456",
@@ -775,6 +876,24 @@ describe("slackPlugin messaging targets", () => {
     ).toEqual({
       to: "channel:c08gqh53ejm",
       threadId: "1712345678.123456",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.654321",
+        parentConversationId: "user:U08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "user:u08gqh53ejm",
+      threadId: "1712345678.654321",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.777777",
+        parentConversationId: "G08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "channel:g08gqh53ejm",
+      threadId: "1712345678.777777",
     });
     expect(messaging?.resolveSessionTarget?.({ kind: "channel", id: "C08GQH53EJM" })).toBe(
       "channel:c08gqh53ejm",

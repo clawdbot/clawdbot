@@ -255,6 +255,37 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("preserves host-owned workspace media access for direct attachments", async () => {
+    const readFile = vi.fn(async () => Buffer.from("approved attachment"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      readFile,
+      workspaceDir: "/approved/workspace",
+    };
+    const conflictingReader = vi.fn(async () => Buffer.from("unapproved attachment"));
+
+    await requireSendMedia()({
+      cfg,
+      to: "conversation:abc",
+      text: "photo",
+      mediaUrl: "reports/photo.png",
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
+      mediaReadFile: conflictingReader,
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:abc",
+      text: "photo",
+      mediaUrl: "reports/photo.png",
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
+      mediaReadFile: conflictingReader,
+    });
+    expect(mocks.sendMessageMSTeams.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
+  });
+
   it("renders and sends presentation payloads as Adaptive Cards", async () => {
     const presentation = {
       title: "Deploy",
@@ -511,6 +542,39 @@ describe("msteamsOutbound cfg threading", () => {
       messageId: "msg-media-2",
       conversationId: "conv-media",
     });
+  });
+
+  it("preserves host media authority for every workspace-relative payload attachment", async () => {
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+    };
+    mocks.sendMessageMSTeams
+      .mockResolvedValueOnce({ messageId: "msg-media-1", conversationId: "conv-media" })
+      .mockResolvedValueOnce({ messageId: "msg-media-2", conversationId: "conv-media" });
+
+    await requireSendPayload()({
+      cfg,
+      to: "conversation:abc",
+      text: "album",
+      payload: { text: "album", mediaUrls: ["one.png", "reports/two.png"] },
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
+    for (const [index, mediaUrl] of ["one.png", "reports/two.png"].entries()) {
+      expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(index + 1, {
+        cfg,
+        to: "conversation:abc",
+        text: index === 0 ? "album" : "",
+        mediaUrl,
+        mediaAccess,
+        mediaLocalRoots: ["/unapproved/workspace"],
+        mediaReadFile: undefined,
+      });
+      expect(mocks.sendMessageMSTeams.mock.calls[index]?.[0]?.mediaAccess).toBe(mediaAccess);
+    }
   });
 
   it("lets media payloads use text fallback instead of card rendering", async () => {

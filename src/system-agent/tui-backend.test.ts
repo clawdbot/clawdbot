@@ -1,5 +1,5 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -8,18 +8,34 @@ import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.
 import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
+import { resolveSystemAgentVerifiedInferenceRoute } from "./verified-inference.js";
+
+const verifiedInferenceMocks = vi.hoisted(() => ({
+  preparedBindings: new WeakSet<object>(),
+}));
 
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
 
-vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
+vi.mock("../agents/prepared-model-catalog.js", () => ({
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
   getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
   loadPreparedModelCatalog: vi.fn(async () => []),
 }));
+
+vi.mock("./verified-inference.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./verified-inference.js")>();
+  return {
+    ...original,
+    resolveSystemAgentVerifiedInferenceRoute: vi.fn(async (binding, deps) =>
+      verifiedInferenceMocks.preparedBindings.has(binding)
+        ? binding.execution
+        : await original.resolveSystemAgentVerifiedInferenceRoute(binding, deps),
+    ),
+  };
+});
 
 const overview: SystemAgentOverview = {
   defaultAgentId: "main",
@@ -71,11 +87,26 @@ function configSnapshot(config: OpenClawConfig) {
   };
 }
 
+let sharedVerifiedFixture: Awaited<
+  ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>
+>;
+
+beforeAll(async () => {
+  sharedVerifiedFixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+});
+
 async function createVerifiedTuiOptions(
   deps: SystemAgentCommandDeps = {},
   config: OpenClawConfig = verifiedConfig,
+  useRealVerification = false,
 ) {
-  const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
+  const fixture =
+    config === verifiedConfig
+      ? sharedVerifiedFixture
+      : await createSystemAgentVerifiedInferenceTestFixture(config);
+  if (!useRealVerification) {
+    verifiedInferenceMocks.preparedBindings.add(fixture.binding);
+  }
   return {
     verifiedInference: fixture.binding,
     deps: {
@@ -102,7 +133,7 @@ describe("runSystemAgentTui", () => {
     const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
     const runChannelsAdd = vi.fn(async () => undefined);
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+    const fixture = sharedVerifiedFixture;
     const options: SystemAgentTuiOptions = {
       verifiedInference: fixture.binding,
       deps: { loadOverview },
@@ -125,21 +156,38 @@ describe("runSystemAgentTui", () => {
   it("runs OpenClaw inside the shared TUI shell", async () => {
     let runTuiCalls = 0;
     let runTuiOptions: unknown;
-    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+    const verified = await createVerifiedTuiOptions(
+      { loadOverview: async () => overview },
+      verifiedConfig,
+      true,
+    );
+    const resolveVerifiedRoute = vi.mocked(resolveSystemAgentVerifiedInferenceRoute);
+    resolveVerifiedRoute.mockClear();
+    const runTui = vi.fn(
+      async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
+        runTuiCalls += 1;
+        runTuiOptions = opts;
+        return { exitReason: "exit" as const };
+      },
+    );
 
     await runSystemAgentTui(
       {
         ...verified,
-        runTui: async (opts) => {
-          runTuiCalls += 1;
-          runTuiOptions = opts;
-          return { exitReason: "exit" };
-        },
+        runTui,
       },
       createRuntime(),
     );
 
     expect(runTuiCalls).toBe(1);
+    expect(resolveVerifiedRoute).toHaveBeenCalledOnce();
+    expect(resolveVerifiedRoute).toHaveBeenCalledWith(verified.verifiedInference, verified.deps);
+    const [resolveOrder] = resolveVerifiedRoute.mock.invocationCallOrder;
+    const [runTuiOrder] = runTui.mock.invocationCallOrder;
+    if (resolveOrder === undefined || runTuiOrder === undefined) {
+      throw new Error("expected verified route resolution before TUI startup");
+    }
+    expect(resolveOrder).toBeLessThan(runTuiOrder);
     const options = runTuiOptions as {
       local?: boolean;
       session?: string;

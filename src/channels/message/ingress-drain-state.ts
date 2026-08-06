@@ -47,8 +47,25 @@ export function activeClaimKey<TPayload, TMetadata>(
 export function resolveLaneKey<TPayload, TMetadata>(
   record: ChannelIngressQueueRecord<TPayload, TMetadata>,
   deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined,
+  reconcileStoredLaneKey?: (
+    record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+    storedLaneKey: string,
+    derivedLaneKey: string,
+  ) => boolean,
 ): string {
-  return deriveLaneKey?.(record) ?? record.laneKey ?? record.id;
+  const derivedLaneKey = deriveLaneKey?.(record);
+  const storedLaneKey = record.laneKey;
+  if (
+    !reconcileStoredLaneKey ||
+    storedLaneKey === undefined ||
+    derivedLaneKey === undefined ||
+    storedLaneKey === derivedLaneKey
+  ) {
+    return derivedLaneKey ?? storedLaneKey ?? record.id;
+  }
+  return reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey)
+    ? derivedLaneKey
+    : storedLaneKey;
 }
 
 export function sortedKeys(keys: Iterable<string>): string[] {

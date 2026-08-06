@@ -26,6 +26,7 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -50,6 +51,7 @@ import {
   renderChatModelControls,
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
+import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
 import {
   resetChatThreadPresentationState,
   resetChatThreadSessionPresentationState,
@@ -1849,6 +1851,131 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("session rail open requests", () => {
+  it("does not replay the pane's retained generation after an A-B-A round trip", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+    const container = document.createElement("div");
+    document.body.append(container);
+    let consumedOpenRequest = 0;
+    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
+      consumedOpenRequest = openRequest;
+    });
+    const onObserverVisibilityChange = vi.fn();
+    const companion = {
+      exchanges: [],
+      pendingQuestion: null,
+      failedQuestion: null,
+      hint: null,
+      draft: "What changed?",
+    };
+    const renderSession = async (sessionKey: string, sessionRailOpenRequest: number) => {
+      render(
+        renderChat(
+          createChatProps({
+            sessionKey,
+            sessionRailReady: true,
+            sessionRailOpenRequest,
+            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCompanion: companion,
+            onSessionRailOpenRequestConsumed,
+            onObserverVisibilityChange,
+          }),
+        ),
+        container,
+      );
+      const rail = container.querySelector(
+        "openclaw-chat-session-rail",
+      ) as ChatSessionRailElement | null;
+      expect(rail).not.toBeNull();
+      await rail?.updateComplete;
+      return rail;
+    };
+
+    try {
+      let rail = await renderSession("agent:main:a", 1);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(consumedOpenRequest).toBe(1);
+
+      rail = await renderSession("agent:main:b", 0);
+      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
+
+      rail = await renderSession("agent:main:a", 1);
+      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
+      expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
+
+      rail = await renderSession("agent:main:a", 2);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
+      expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("does not replay a consumed generation after the rail unmounts and remounts", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+    const container = document.createElement("div");
+    document.body.append(container);
+    let consumedOpenRequest = 0;
+    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
+      consumedOpenRequest = openRequest;
+    });
+    const onObserverVisibilityChange = vi.fn();
+    const renderRail = async (sessionRailReady: boolean, sessionRailOpenRequest: number) => {
+      render(
+        renderChat(
+          createChatProps({
+            sessionKey: "agent:main:a",
+            sessionRailReady,
+            sessionRailOpenRequest,
+            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCompanion: {
+              exchanges: [],
+              pendingQuestion: null,
+              failedQuestion: null,
+              hint: null,
+              draft: "What changed?",
+            },
+            onSessionRailOpenRequestConsumed,
+            onObserverVisibilityChange,
+          }),
+        ),
+        container,
+      );
+      const rail = container.querySelector(
+        "openclaw-chat-session-rail",
+      ) as ChatSessionRailElement | null;
+      await rail?.updateComplete;
+      return rail;
+    };
+
+    try {
+      let rail = await renderRail(true, 1);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(consumedOpenRequest).toBe(1);
+
+      rail = await renderRail(false, 1);
+      expect(rail).toBeNull();
+
+      rail = await renderRail(true, 1);
+      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
+      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledOnce();
+      expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
+
+      rail = await renderRail(true, 2);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
+      expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
+    } finally {
+      container.remove();
+    }
+  });
 });
 
 describe("per-pane chat presentation state", () => {
@@ -5023,6 +5150,38 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it("disables runtime overrides with the exact mutation reason", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const onFastModeSelect = vi.fn(async () => true);
+    const onModelSelect = vi.fn(async () => true);
+    const onThinkingSelect = vi.fn(async () => true);
+    const reason = "Operator admin access is required.";
+    const container = renderModelControls(state, {
+      mutationDisabledReason: reason,
+      onFastModeSelect,
+      onModelSelect,
+      onThinkingSelect,
+    });
+
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
+    expect(modelSelect.getAttribute("title")).toBe(reason);
+    modelSelect.click();
+    container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")?.click();
+    getThinkingSlider(container)?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onFastModeSelect).not.toHaveBeenCalled();
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(onThinkingSelect).not.toHaveBeenCalled();
+  });
+
   it("marks the inherited default muted and resets an override from the provenance row", () => {
     const { state } = createChatHeaderState({
       model: null,
@@ -5872,6 +6031,72 @@ describe("chat model controls", () => {
     expect(host.chatThinkingLevel).toBe("high");
   });
 
+  it.each([
+    { sessionKey: "global", mainKey: "main" },
+    { sessionKey: "agent:work:main", mainKey: "main" },
+    { sessionKey: "agent:work:home", mainKey: "home" },
+  ])(
+    "does not report a failed selected-global model switch after the selected agent changes for $sessionKey",
+    async ({ sessionKey, mainKey }) => {
+      const modelPatch = createDeferred<unknown>();
+      const modelOverrides: Record<string, string | null> = {
+        [sessionKey]: "openai/gpt-agent-a-old",
+      };
+      let patchOptions: SessionPatchOptions | undefined;
+      const sessions = {
+        state: { modelOverrides },
+        patch: vi.fn(
+          async (_key: string, _patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+            patchOptions = options;
+            return await modelPatch.promise;
+          },
+        ),
+        refresh: async () => {},
+        setModelOverride: vi.fn((key: string, value: string | null | undefined) => {
+          if (value === undefined) {
+            delete modelOverrides[key];
+          } else {
+            modelOverrides[key] = value;
+          }
+        }),
+        patchRowLocal: vi.fn(),
+      };
+      const host = {
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main", mainKey, scope: "global" },
+        client: {},
+        connected: true,
+        sessionKey,
+        chatModelCatalog: [],
+        chatModelSwitchPromises: {},
+        chatThinkingLevel: null,
+        sessions,
+        sessionsResult: createSessionsResultFromRows([
+          {
+            key: sessionKey,
+            kind: "direct",
+            updatedAt: 1,
+            model: "gpt-agent-a-old",
+            modelProvider: "openai",
+          },
+        ]),
+      } as unknown as Parameters<typeof switchChatModel>[0];
+
+      const switching = switchChatModel(host, "openai/gpt-agent-a-new");
+      await waitForFast(() => expect(patchOptions).toBeDefined());
+      expect(patchOptions?.ownsModelOverride?.()).toBe(true);
+
+      host.assistantAgentId = "main";
+      modelPatch.reject(new Error("agent A patch failed"));
+
+      await expect(switching).resolves.toBe(false);
+      expect(patchOptions?.ownsModelOverride?.()).toBe(false);
+      expect(modelOverrides[sessionKey]).toBe("openai/gpt-agent-a-old");
+      expect(host.lastError ?? null).toBeNull();
+      expect(host.chatError ?? null).toBeNull();
+    },
+  );
+
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
     // Minimal host: the factory's mock gateway rebuilds session rows on every
@@ -6210,12 +6435,10 @@ describe("right-click Reply", () => {
   it("keeps inline actions in the context menu alongside user rewind and fork", () => {
     const onRewindMessage = vi.fn().mockResolvedValue(true);
     const onForkMessage = vi.fn();
-    const onOpenSidebar = vi.fn();
     const onCopy = vi.fn();
     const container = renderChatView({
       onRewindMessage,
       onForkMessage,
-      onOpenSidebar,
       onSetReply: vi.fn(),
     });
     const { bubble, group } = appendChatBubble(container, {
@@ -6236,38 +6459,24 @@ describe("right-click Reply", () => {
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
-    const onSiblingExpand = vi.fn();
     const siblingActionOwner = document.createElement("div");
     siblingActionOwner.dataset.messageActionsFor = "message-0";
-    const siblingExpandButton = document.createElement("button");
-    siblingExpandButton.className = "chat-expand-btn";
-    siblingExpandButton.addEventListener("click", onSiblingExpand);
-    siblingActionOwner.append(siblingExpandButton);
-    const expandButton = document.createElement("button");
-    expandButton.className = "chat-expand-btn";
-    expandButton.addEventListener("click", () =>
-      onOpenSidebar({ kind: "markdown", content: "hello" }),
-    );
     const copyButton = document.createElement("button");
     copyButton.className = "chat-copy-btn";
     copyButton.addEventListener("click", onCopy);
     const actionOwner = document.createElement("div");
     actionOwner.dataset.messageActionsFor = "message-1";
-    actionOwner.append(expandButton, copyButton);
+    actionOwner.append(copyButton);
     group.append(siblingActionOwner, actionOwner);
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     expect(
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply", "Hide message", "Open in canvas", "Copy as markdown"]);
+    ).toEqual(["Reply", "Hide message", "Copy as markdown"]);
     expect(
       document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
     ).toBeNull();
-
-    document.querySelector<HTMLButtonElement>('[aria-label="Open in canvas"]')!.click();
-    expect(onOpenSidebar).toHaveBeenCalledWith({ kind: "markdown", content: "hello" });
-    expect(onSiblingExpand).not.toHaveBeenCalled();
 
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();

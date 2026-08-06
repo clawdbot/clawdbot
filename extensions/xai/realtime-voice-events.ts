@@ -1,4 +1,5 @@
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import type { RealtimeVoiceSessionConnection } from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
@@ -6,7 +7,6 @@ import {
   readXaiRealtimeErrorDetail,
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";
-import type { XaiRealtimeVoiceConnection } from "./realtime-voice-lifecycle.js";
 import { XaiRealtimeVoiceProtocol } from "./realtime-voice-protocol.js";
 
 export class XaiRealtimeMalformedAudioError extends Error {}
@@ -16,10 +16,10 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptFinalized = false;
   private inputTranscriptReplacements = new Map<string, string>();
 
-  protected abstract acceptsEvent(connection: XaiRealtimeVoiceConnection): boolean;
-  protected abstract onSessionUpdated(connection: XaiRealtimeVoiceConnection): void;
+  protected abstract acceptsEvent(connection: RealtimeVoiceSessionConnection): boolean;
+  protected abstract onSessionUpdated(connection: RealtimeVoiceSessionConnection): void;
 
-  protected handleEvent(event: XaiRealtimeEvent, connection: XaiRealtimeVoiceConnection): void {
+  protected handleEvent(event: XaiRealtimeEvent, connection: RealtimeVoiceSessionConnection): void {
     this.config.onEvent?.({
       direction: "server",
       type: event.type,
@@ -77,7 +77,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
             "xAI realtime voice stream returned malformed base64 audio data",
           );
         }
-        this.config.onAudio(Buffer.from(canonicalAudio, "base64"));
+        this.emitAudioWithPlaybackMark(Buffer.from(canonicalAudio, "base64"));
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
           this.responseStartTimestamp = this.latestMediaTimestamp;
@@ -85,7 +85,6 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           this.responseStartTimestamp = this.latestMediaTimestamp;
         }
         this.responseActive = true;
-        this.sendMark();
         return;
       }
       case "input_audio_buffer.speech_started":

@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isOffsetInProtectedRanges,
   type PlainTextToolCallNameMatcher,
@@ -103,10 +104,6 @@ type SuppressingPendingState = {
 
 type PendingState = CandidatePendingState | SuppressingPendingState;
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function eventContentIndex(event: Record<string, unknown>): number {
   const index = event.contentIndex;
   return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
@@ -120,7 +117,7 @@ function extractStandaloneCandidate(
   message: unknown,
   requireAssistantRole = false,
 ): StandalonePlainTextToolCallCandidate | undefined {
-  const record = asRecord(message);
+  const record = asOptionalObjectRecord(message);
   if (!record || (requireAssistantRole && record.role !== "assistant")) {
     return undefined;
   }
@@ -132,7 +129,7 @@ function extractStandaloneCandidate(
   }
   const candidate: StandalonePlainTextToolCallCandidate = { text: "", parts: [] };
   for (const [contentIndex, block] of record.content.entries()) {
-    const value = asRecord(block);
+    const value = asOptionalObjectRecord(block);
     if (!value) {
       return undefined;
     }
@@ -397,7 +394,7 @@ function projectRangesOntoMessage(
   const sourceToProjectedContentIndex = new Map<number, number>();
   for (const [index, block] of record.content.entries()) {
     const part = parts.get(index);
-    const blockRecord = asRecord(block);
+    const blockRecord = asOptionalObjectRecord(block);
     if (!part || blockRecord?.type !== "text" || typeof blockRecord.text !== "string") {
       sourceToProjectedContentIndex.set(index, content.length);
       content.push(block);
@@ -422,7 +419,7 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
   resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   requireAssistantRole?: boolean;
 }): PlainTextToolCallMessageProjection | undefined {
-  const record = asRecord(params.message);
+  const record = asOptionalObjectRecord(params.message);
   const candidate = extractStandaloneCandidate(
     params.message,
     params.requireAssistantRole === true,
@@ -486,7 +483,7 @@ function resolvePartialProtectionCheck(params: {
   resolveProtectedRanges: PlainTextToolCallProtectedRangeResolver;
 }): ((offset: number) => boolean) | undefined {
   const candidate = extractStandaloneCandidate(params.partial);
-  const record = asRecord(params.partial);
+  const record = asOptionalObjectRecord(params.partial);
   if (!candidate || !record) {
     return undefined;
   }
@@ -500,7 +497,7 @@ function resolvePartialProtectionCheck(params: {
   } else {
     const part = candidate.parts.find((entry) => entry.contentIndex === params.contentIndex);
     const block = Array.isArray(record.content)
-      ? asRecord(record.content[params.contentIndex])
+      ? asOptionalObjectRecord(record.content[params.contentIndex])
       : undefined;
     if (!part || block?.type !== "text" || typeof block.text !== "string") {
       return undefined;
@@ -711,14 +708,14 @@ function projectedTextForEvent(
   event: Record<string, unknown>,
   projection: PlainTextToolCallMessageProjection,
 ): string | undefined {
-  const content = asRecord(projection.message)?.content;
+  const content = asOptionalObjectRecord(projection.message)?.content;
   if (typeof content === "string") {
     return content;
   }
   const projectedIndex = projection.sourceToProjectedContentIndex.get(eventContentIndex(event));
   const block =
     Array.isArray(content) && projectedIndex !== undefined
-      ? asRecord(content[projectedIndex])
+      ? asOptionalObjectRecord(content[projectedIndex])
       : undefined;
   return block?.type === "text" && typeof block.text === "string" ? block.text : undefined;
 }
@@ -1088,7 +1085,7 @@ function orderByContentIndex(
 ): unknown[] {
   const contentLength = Array.isArray(message.content) ? message.content.length : 0;
   const order = (event: unknown) => {
-    const index = asRecord(event)?.contentIndex;
+    const index = asOptionalObjectRecord(event)?.contentIndex;
     return typeof index === "number" &&
       Number.isInteger(index) &&
       index >= 0 &&
@@ -1223,7 +1220,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
 
   async function* normalizeEvents() {
     for await (const sourceEvent of source) {
-      let record = asRecord(sourceEvent);
+      let record = asOptionalObjectRecord(sourceEvent);
       if (!record) {
         yield sourceEvent;
         continue;
@@ -1411,7 +1408,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 yield createSyntheticTextDelta(
                   visibleTemplate,
                   novelVisiblePrefix,
-                  asRecord(visibleProjection?.message),
+                  asOptionalObjectRecord(visibleProjection?.message),
                 );
               }
             }
@@ -1456,7 +1453,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   createSyntheticTextDelta(
                     pending.template,
                     candidateText,
-                    asRecord(record.partial),
+                    asOptionalObjectRecord(record.partial),
                   ),
                   { ...incomingRecord, content: incoming },
                 ];
@@ -1823,7 +1820,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
   }
   for await (const event of normalizeEvents()) {
-    const record = asRecord(event);
+    const record = asOptionalObjectRecord(event);
     if (record?.type === "text_delta" && typeof record.delta === "string") {
       const key = eventKey(record);
       const previous = emittedTextUnits.get(key) ?? 0;

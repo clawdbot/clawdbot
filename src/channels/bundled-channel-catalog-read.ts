@@ -157,3 +157,16 @@ export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[]
     (left, right) => left.order - right.order || left.id.localeCompare(right.id),
   );
 }
+
+/** Finds bundled or generated channel metadata by id or alias. */
+export function findBundledChannelCatalogMetadata(
+  channelId: string,
+): PluginPackageChannel | undefined {
+  const normalized = normalizeOptionalLowercaseString(channelId);
+  if (!normalized) {
+    return undefined;
+  }
+  return listBundledChannelCatalogEntries().find(
+    (entry) => entry.id === normalized || entry.aliases.includes(normalized),
+  )?.channel;
+}

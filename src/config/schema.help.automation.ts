@@ -81,7 +81,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.resetArchiveRetention":
     "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
-    "Per-agent sessions-directory disk budget (for example `500mb`). Defaults to `10gb`; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup (archived transcripts before live sessions). Set `false` to disable.",
+    'Per-agent sessions-directory disk budget (for example `500mb`). Defaults to `10gb`; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup (archived transcripts before live sessions). Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
@@ -89,6 +89,16 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
   "cron.webhookToken":
     "Bearer token attached to automation webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
+  "cron.webhookSsrfPolicy":
+    "SSRF policy applied to every outbound automation webhook. Private, loopback, link-local, and internal targets stay blocked unless this policy explicitly allows them. Keep unset for strict delivery.",
+  "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allows automation webhooks to private and internal network targets. Keep disabled unless every configured webhook destination is trusted.",
+  "cron.webhookSsrfPolicy.allowedHostnames":
+    "Exact hostnames or IP literals allowed for automation webhook delivery, including otherwise blocked targets. Keep the list minimal.",
+  "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
+    "Allows automation webhooks to RFC 2544 benchmark-range IPs (198.18.0.0/15). Use only with trusted fake-IP proxy environments.",
+  "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
+    "Allows automation webhooks to IPv6 Unique Local Addresses (fc00::/7). Use only with trusted fake-IP proxy environments.",
   "cron.sessionRetention":
     "Controls how long completed automation run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
   transcripts:

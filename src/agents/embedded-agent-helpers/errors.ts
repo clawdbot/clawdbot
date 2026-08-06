@@ -332,6 +332,7 @@ const TIMEOUT_ERROR_CODES = new Set([
   "ENETRESET",
   "EPIPE",
   "EAI_AGAIN",
+  "ERR_STREAM_PREMATURE_CLOSE",
 ]);
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;

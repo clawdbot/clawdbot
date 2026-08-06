@@ -1,6 +1,7 @@
 import type { Event } from "nostr-tools";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/directory-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { BuzzMentionMember } from "./mentions.js";
 import type { BuzzRoomMembership } from "./room-membership.js";
 import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
 
@@ -328,6 +329,23 @@ export class BuzzDirectoryState {
       })
       .toSorted(compareDirectoryEntries);
     return applyQueryAndLimit(entries, { limit: params.limit });
+  }
+
+  mentionMembers(roomId: string): BuzzMentionMember[] | undefined {
+    const normalized = parseBuzzTarget(roomId);
+    if (this.#rooms.get(normalized)?.archived) {
+      return undefined;
+    }
+    const membership = this.#memberships.get(normalized);
+    if (!membership) {
+      return undefined;
+    }
+    return [...membership.members]
+      .map((publicKey) => ({
+        publicKey,
+        displayName: this.#profiles.get(publicKey)?.displayName,
+      }))
+      .toSorted((left, right) => left.publicKey.localeCompare(right.publicKey));
   }
 
   #buildUserEntry(publicKey: string): ChannelDirectoryEntry {

@@ -32,11 +32,10 @@ function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number): number
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
-type MSTeamsMediaSendOptions = {
-  mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-};
+type MSTeamsMediaSendOptions = Pick<
+  Parameters<typeof sendMessageMSTeams>[0],
+  "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
+>;
 type MSTeamsTextSendFn = (to: string, text: string) => Promise<MSTeamsSendResult>;
 type MSTeamsMediaSendFn = (
   to: string,
@@ -76,15 +75,7 @@ function resolveMSTeamsMediaSend(params: {
 }): MSTeamsMediaSendFn {
   return (
     resolveOutboundSendDep<MSTeamsMediaSendFn>(params.deps, "msteams") ??
-    ((to, text, opts) =>
-      sendMessageMSTeams({
-        cfg: params.cfg,
-        to,
-        text,
-        mediaUrl: opts?.mediaUrl,
-        mediaLocalRoots: opts?.mediaLocalRoots,
-        mediaReadFile: opts?.mediaReadFile,
-      }))
+    ((to, text, opts) => sendMessageMSTeams({ cfg: params.cfg, to, text, ...opts }))
   );
 }
 
@@ -130,6 +121,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     to,
     text,
     mediaUrl,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     payload,
@@ -169,6 +161,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
           await send(deliveryTarget, textLocal, {
             mediaUrl: mediaUrlLocal,
+            mediaAccess,
             mediaLocalRoots,
             mediaReadFile,
           }),
@@ -206,6 +199,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       to,
       text,
       mediaUrl,
+      mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
       deps,
@@ -214,6 +208,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const send = resolveMSTeamsMediaSend({ cfg, deps });
       return await send(resolveMSTeamsThreadTarget(to, threadId), text, {
         mediaUrl,
+        mediaAccess,
         mediaLocalRoots,
         mediaReadFile,
       });
