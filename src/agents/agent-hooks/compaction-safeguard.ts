@@ -630,19 +630,13 @@ function capSummaryBodyPreservingSections(body: string, maxChars: number): strin
     rescued.push(`${heading}\n${truncateUtf16Safe(content, MAX_RESCUED_SECTION_CHARS)}`);
   }
   const tail = rescued.join("\n");
-  const separator = "\n";
-  // The separator is part of the returned value, so it has to come out of the
-  // budget. Trimming it afterwards instead would cut the last code unit of the
-  // rescued tail — the end of the identifiers this rescue exists to keep, and
-  // potentially half a surrogate pair.
-  const overhead = SUMMARY_TRUNCATED_MARKER.length + separator.length;
-  const prefixBudget = maxChars - tail.length - overhead;
-  if (!tail || prefixBudget <= 0) {
+  if (!tail || tail.length + SUMMARY_TRUNCATED_MARKER.length >= maxChars) {
     // No room to rescue anything; a plain marked cut is the best available.
     return capCompactionSummary(body, maxChars);
   }
+  const prefixBudget = maxChars - tail.length - SUMMARY_TRUNCATED_MARKER.length;
   const prefix = truncateUtf16Safe(body, prefixBudget);
-  return `${prefix}${SUMMARY_TRUNCATED_MARKER}${separator}${tail}`;
+  return `${prefix}${SUMMARY_TRUNCATED_MARKER}\n${tail}`.slice(0, maxChars);
 }
 
 function capCompactionSummaryPreservingSuffix(
