@@ -93,13 +93,21 @@ function isStaleConfigPatchError(error: unknown) {
 }
 
 async function patchGatewayConfig(params: {
+  deadlineMs: number;
   gateway: FlowPreparationInput["gateway"];
   patch: Record<string, unknown>;
   replacePaths?: string[];
   restartDelayMs?: number;
 }) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const snapshot = (await params.gateway.call("config.get", {}, { timeoutMs: 60_000 })) as {
+    const snapshot = (await params.gateway.call(
+      "config.get",
+      {},
+      {
+        deadlineMs: params.deadlineMs,
+        timeoutMs: 60_000,
+      },
+    )) as {
       hash?: string;
     };
     if (!snapshot.hash) {
@@ -114,7 +122,7 @@ async function patchGatewayConfig(params: {
           ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
           restartDelayMs: params.restartDelayMs ?? 0,
         },
-        { timeoutMs: 60_000 },
+        { deadlineMs: params.deadlineMs, timeoutMs: 60_000 },
       )) as MatrixQaConfigPatchResult;
       return result.noop === true ? { ...result, hash: snapshot.hash } : result;
     } catch (error) {
@@ -138,7 +146,11 @@ async function waitForMatrixAccountReady(params: {
   let remainingMs: number;
   while ((remainingMs = deadline - Date.now()) > 0) {
     try {
-      const accounts = await readMatrixAccountStatuses(params.gateway, remainingMs);
+      const accounts = await readMatrixAccountStatuses(
+        params.gateway,
+        remainingMs,
+        params.deadline,
+      );
       lastAccounts = accounts;
       const account = accounts.find((entry) => entry.accountId === params.accountId);
       if (
@@ -174,7 +186,7 @@ async function waitForGatewayConfigApplied(params: {
       const status = (await params.gateway.call(
         "config.get",
         {},
-        { timeoutMs: Math.min(5_000, remainingMs) },
+        { deadlineMs: params.deadline, timeoutMs: Math.min(5_000, remainingMs) },
       )) as MatrixQaConfigApplyStatus;
       lastStatus = status;
       if (
@@ -203,11 +215,18 @@ type MatrixAccountStatus = {
   running?: boolean;
 };
 
-async function readMatrixAccountStatuses(gateway: MatrixQaGateway, timeoutMs = 5_000) {
+async function readMatrixAccountStatuses(
+  gateway: MatrixQaGateway,
+  timeoutMs = 5_000,
+  deadlineMs?: number,
+) {
   const payload = (await gateway.call(
     "channels.status",
     { probe: false, timeoutMs: Math.min(2_000, timeoutMs) },
-    { timeoutMs: Math.min(5_000, timeoutMs) },
+    {
+      ...(deadlineMs === undefined ? {} : { deadlineMs }),
+      timeoutMs: Math.min(5_000, timeoutMs),
+    },
   )) as { channelAccounts?: Record<string, MatrixAccountStatus[]> };
   return payload.channelAccounts?.matrix ?? [];
 }
@@ -221,7 +240,14 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     const preparationDeadline =
       Date.now() + Math.max(input.timeoutMs, MATRIX_QA_PREPARATION_TIMEOUT_MS);
     const configOverrides = readMatrixConfigOverrides(input.config);
-    const configSnapshot = (await input.gateway.call("config.get", {}, { timeoutMs: 60_000 })) as {
+    const configSnapshot = (await input.gateway.call(
+      "config.get",
+      {},
+      {
+        deadlineMs: preparationDeadline,
+        timeoutMs: 60_000,
+      },
+    )) as {
       config?: OpenClawConfig;
     };
     if (!configSnapshot.config) {
@@ -246,9 +272,10 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     );
     const patchStartedAt = Date.now();
     const accountStartAtBeforePatch = (
-      await readMatrixAccountStatuses(input.gateway).catch(() => [])
+      await readMatrixAccountStatuses(input.gateway, 5_000, preparationDeadline).catch(() => [])
     ).find((account) => account.accountId === params.accountId)?.lastStartAt;
     const patchResult = await patchGatewayConfig({
+      deadlineMs: preparationDeadline,
       gateway: input.gateway,
       patch: gatewayConfig as Record<string, unknown>,
       replacePaths: resolveMatrixQaReplacePaths({
@@ -375,6 +402,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         opts?: { replacePaths?: string[]; restartDelayMs?: number },
       ) => {
         await patchGatewayConfig({
+          deadlineMs: preparationDeadline,
           gateway: input.gateway,
           patch,
           replacePaths: opts?.replacePaths,

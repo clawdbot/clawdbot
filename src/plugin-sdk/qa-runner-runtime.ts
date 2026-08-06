@@ -93,7 +93,7 @@ type QaRunnerTransportFlowPreparationInput = {
     call: (
       method: string,
       params?: unknown,
-      options?: { expectFinal?: boolean; timeoutMs?: number },
+      options?: { deadlineMs?: number; expectFinal?: boolean; timeoutMs?: number },
     ) => Promise<unknown>;
     restartAfterStateMutation?: (
       mutateState: (context: {
