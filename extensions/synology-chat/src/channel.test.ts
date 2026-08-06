@@ -208,6 +208,31 @@ describe("createSynologyChatPlugin", () => {
     expect(snapshot).not.toHaveProperty("webhookUrl");
   });
 
+  it.each([
+    "http://gateway.example.com/webhook/synology",
+    "https://gateway.example.com/webhook/synology#fragment",
+    "https://gateway.example.com/webhook/synology?__openclaw_synology_media_token_fixture=value",
+  ])("reports attachments unready when webhookUrl is invalid: %s", async (webhookUrl) => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          token: "test-token",
+          incomingUrl: "https://nas/incoming",
+          webhookUrl,
+        },
+      },
+    };
+    const account = synologyChatPlugin.config.resolveAccount(cfg, "default");
+
+    const snapshot = await synologyChatPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: { accountId: "default", lifecycle: "ready" },
+    });
+
+    expect(snapshot).toMatchObject({ configured: true, attachmentsReady: false });
+  });
+
   describe("config", () => {
     it("listAccountIds includes default and named accounts when configured", () => {
       const plugin = synologyChatPlugin;

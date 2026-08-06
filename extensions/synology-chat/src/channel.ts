@@ -60,6 +60,7 @@ import {
   registerSynologyWebhookRoute,
   validateSynologyGatewayAccountStartup,
 } from "./gateway-runtime.js";
+import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
 import { prepareSynologyHostedMedia } from "./outbound-media.js";
 import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
 import { buildSynologyChatOutboundSessionKey } from "./session-key.js";
@@ -69,6 +70,15 @@ import type { ResolvedSynologyChatAccount } from "./types.js";
 const CHANNEL_ID = "synology-chat";
 const SYNOLOGY_MARKDOWN_LINK_RE =
   /(?<!!)\[((?:\\[^\n]|[^\\\]\n])+)\]\((https?:\/\/(?:\\[^\n]|[^()\s<>\\])+(?:\((?:\\[^\n]|[^()\s<>\\])*\)(?:\\[^\n]|[^()\s<>\\])*)*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)/g;
+
+function areSynologyAttachmentsReady(account: ResolvedSynologyChatAccount): boolean {
+  try {
+    resolveSynologyHostedMediaRoute(account);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -428,7 +438,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           configured: Boolean(account.token && account.incomingUrl),
           extra: {
             webhookPath: account.webhookPath,
-            attachmentsReady: Boolean(account.webhookUrl),
+            attachmentsReady: areSynologyAttachmentsReady(account),
           },
         }),
       }),
