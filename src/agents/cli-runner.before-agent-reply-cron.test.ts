@@ -12,6 +12,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { HookRunner } from "../plugins/hooks.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -49,7 +50,7 @@ const {
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
     async () => undefined,
   ),
-  runBeforeAgentRunMock: vi.fn(async () => undefined),
+  runBeforeAgentRunMock: vi.fn<HookRunner["runBeforeAgentRun"]>(async () => undefined),
   executePreparedCliRunMock: vi.fn<
     (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
   >(async () => ({ text: "" })),
@@ -350,7 +351,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_run");
     runBeforeAgentRunMock.mockResolvedValueOnce({
       pluginId: "policy-plugin",
-      decision: { outcome: "block", message: "Blocked by policy." },
+      decision: { outcome: "block", reason: "test policy", message: "Blocked by policy." },
     });
 
     await expect(
