@@ -25,6 +25,7 @@ import {
 } from "../agent-settings.js";
 import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
 import {
+  AUTOMATIC_COMPACTION_OWNED_REASON,
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
 } from "../embedded-agent-runner/compact-reasons.js";
@@ -49,8 +50,6 @@ import {
   clearCliSessionInStore as clearCliSessionInStoreImpl,
   recordCliCompactionInStore as recordCliCompactionInStoreImpl,
 } from "./session-store.js";
-
-const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SettingsManagerLike = {
@@ -219,9 +218,7 @@ function isIntentionalNativeAutoCompactionSkip(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return (
-    result?.ok === true &&
-    !result.compacted &&
-    result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON
+    result?.ok === true && !result.compacted && result.reason === AUTOMATIC_COMPACTION_OWNED_REASON
   );
 }
 
@@ -545,7 +542,7 @@ async function compactNativeHarnessCliTranscript(params: {
       // turns); falling back to context-engine compaction here fought that
       // ownership and failed OAuth-only sessions with "No API key found".
       log.info(
-        `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON}`,
+        `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${AUTOMATIC_COMPACTION_OWNED_REASON}`,
       );
       return { compacted: false };
     }

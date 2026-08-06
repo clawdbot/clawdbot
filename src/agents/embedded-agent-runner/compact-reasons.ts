@@ -6,6 +6,8 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 
 const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 
+export const AUTOMATIC_COMPACTION_OWNED_REASON = "codex app-server owns automatic compaction";
+
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
 
@@ -41,6 +43,9 @@ export function classifyCompactionReason(reason?: string): string {
   }
   if (text.includes("already compacted") || text.includes("already_compacted")) {
     return "already_compacted";
+  }
+  if (text === AUTOMATIC_COMPACTION_OWNED_REASON) {
+    return "automatic_compaction_owned";
   }
   if (text.includes("deferred to background")) {
     return "deferred_background";
@@ -94,6 +99,17 @@ export function isBenignCompactionSkipResult(result: {
   return (
     isBenignCompactionSkipReason(result.reason) ||
     (result.ok && classifyCompactionReason(result.reason) === "no_compactable_entries")
+  );
+}
+
+/** Return whether a native runtime handed automatic compaction back to its owner. */
+export function isAutomaticCompactionOwnershipResult(
+  result: { ok: boolean; compacted: boolean; reason?: string } | undefined,
+): boolean {
+  return (
+    result?.ok === true &&
+    !result.compacted &&
+    classifyCompactionReason(result.reason) === "automatic_compaction_owned"
   );
 }
 

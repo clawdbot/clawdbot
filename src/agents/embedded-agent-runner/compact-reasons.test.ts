@@ -1,8 +1,10 @@
 // Classification coverage for compaction failure and skip reason telemetry.
 import { describe, expect, it } from "vitest";
 import {
+  AUTOMATIC_COMPACTION_OWNED_REASON,
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
+  isAutomaticCompactionOwnershipResult,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
   resolveCompactionFailureReason,
@@ -47,6 +49,12 @@ describe("classifyCompactionReason", () => {
     expect(classifyCompactionReason("already compacted")).toBe("already_compacted");
   });
 
+  it("classifies native automatic-compaction ownership", () => {
+    expect(classifyCompactionReason(AUTOMATIC_COMPACTION_OWNED_REASON)).toBe(
+      "automatic_compaction_owned",
+    );
+  });
+
   it("classifies deferred background maintenance as a skip-like reason", () => {
     expect(classifyCompactionReason("deferred to background context-engine maintenance")).toBe(
       "deferred_background",
@@ -88,6 +96,25 @@ describe("isBenignCompactionSkipReason", () => {
       expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
     },
   );
+});
+
+describe("isAutomaticCompactionOwnershipResult", () => {
+  it("requires the successful native ownership handoff result", () => {
+    expect(
+      isAutomaticCompactionOwnershipResult({
+        ok: true,
+        compacted: false,
+        reason: AUTOMATIC_COMPACTION_OWNED_REASON,
+      }),
+    ).toBe(true);
+    expect(
+      isAutomaticCompactionOwnershipResult({
+        ok: false,
+        compacted: false,
+        reason: AUTOMATIC_COMPACTION_OWNED_REASON,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("formatUnknownCompactionReasonDetail", () => {

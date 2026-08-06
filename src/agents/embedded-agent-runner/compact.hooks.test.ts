@@ -3709,6 +3709,52 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("routes required model-locked Codex byte preflight through semantic and native compaction", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
+    maybeCompactAgentHarnessSessionMock
+      .mockResolvedValueOnce({
+        ok: true,
+        compacted: false,
+        reason: "codex app-server owns automatic compaction",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "",
+          firstKeptEntryId: "",
+          tokensBefore: 333,
+        },
+      });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        currentTokenCount: 333,
+        trigger: "budget",
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: "transcript_bytes",
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(2);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+      }),
+      { nativeCompactionRequest: "after_context_engine" },
+    );
+  });
+
   it.each([
     ["missing_thread_binding", "no codex app-server thread binding"],
     ["stale_thread_binding", "thread not found"],
