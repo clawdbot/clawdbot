@@ -8,11 +8,17 @@ import {
   resolveMatrixMessageAttachment,
   resolveMatrixMessageBody,
 } from "../media-text.js";
-import { formatPollAsText, isPollStartType, parsePollStartContent } from "../poll-types.js";
+import {
+  formatPollAsText,
+  isPollEventType,
+  isPollStartType,
+  parsePollStartContent,
+} from "../poll-types.js";
+import type { LocationMessageEventContent } from "../sdk.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { isMatrixAudioContent } from "./preflight-audio.js";
 import type { RoomMessageEventContent, MatrixRawEvent } from "./types.js";
-import { RelationType } from "./types.js";
+import { EventType, RelationType } from "./types.js";
 
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
@@ -44,6 +50,38 @@ export function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
     return false;
   }
   return relations[RelationType.Replace] !== undefined;
+}
+
+/**
+ * Single dispatchability gate for inbound room events. The sync listener
+ * journals only dispatchable events (an undeliverable state event would sit
+ * in the queue until replay drops it, and a failed append would stick the
+ * sync-cursor admission gate for nothing); the handler re-checks the same
+ * gate after replay so the two paths can never disagree about what was
+ * admitted.
+ */
+export function isMatrixDispatchableRoomEvent(event: MatrixRawEvent): boolean {
+  const eventType = event.type;
+  if (eventType === EventType.RoomMessageEncrypted) {
+    // Encrypted payloads are emitted separately after decryption.
+    return false;
+  }
+  const locationContent = event.content as LocationMessageEventContent | undefined;
+  const isLocationEvent =
+    eventType === EventType.Location ||
+    (eventType === EventType.RoomMessage && locationContent?.msgtype === EventType.Location);
+  if (
+    eventType !== EventType.RoomMessage &&
+    !isPollEventType(eventType) &&
+    !isLocationEvent &&
+    eventType !== EventType.Reaction
+  ) {
+    return false;
+  }
+  if (event.unsigned?.redacted_because) {
+    return false;
+  }
+  return typeof event.sender === "string" && event.sender.length > 0;
 }
 
 export function resolveMatrixInboundBodyText(params: {

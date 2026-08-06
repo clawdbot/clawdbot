@@ -6,6 +6,7 @@ import type { MatrixAuth } from "../client.js";
 import { formatMatrixEncryptedEventDisabledWarning } from "../encryption-guidance.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
+import { isMatrixDispatchableRoomEvent } from "./handler-helpers.js";
 import type { MatrixIngressMonitor } from "./ingress.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
@@ -244,6 +245,13 @@ export function registerMatrixMonitorEvents(params: {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
+    // Journal only dispatchable events: the bridge re-emits every unencrypted
+    // timeline event here (member/topic state included), and an event the
+    // handler cannot dispatch would occupy the journal until replay drops it —
+    // a failed append would also stick the sync-cursor admission gate.
+    if (!isMatrixDispatchableRoomEvent(event)) {
+      return;
+    }
     // Durable-before-dispatch: the journal append commits synchronously inside
     // this listener, and the sync store's admission gate additionally holds
     // the debounced sync-token persist until every accepted event is
@@ -392,7 +400,9 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
     if (eventType === EventType.Reaction) {
-      void ingress.accept(roomId, event);
+      if (isMatrixDispatchableRoomEvent(event)) {
+        void ingress.accept(roomId, event);
+      }
       return;
     }
 

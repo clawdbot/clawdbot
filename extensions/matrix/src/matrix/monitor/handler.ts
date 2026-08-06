@@ -11,12 +11,12 @@ import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isPollEventType } from "../poll-types.js";
-import type { LocationMessageEventContent } from "../sdk.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
 import { resolveMatrixInboundContext } from "./handler-context.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
+  isMatrixDispatchableRoomEvent,
   markTrackedRoomIfFirst,
   shouldDeferMatrixAudioPreflightForRoomIngress,
 } from "./handler-helpers.js";
@@ -128,31 +128,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
       const eventType = event.type;
-      if (eventType === EventType.RoomMessageEncrypted) {
-        // Encrypted payloads are emitted separately after decryption.
+      if (!isMatrixDispatchableRoomEvent(event)) {
         return;
       }
-
       const isPollEvent = isPollEventType(eventType);
       const isReactionEvent = eventType === EventType.Reaction;
-      const locationContent = event.content as LocationMessageEventContent;
-      const isLocationEvent =
-        eventType === EventType.Location ||
-        (eventType === EventType.RoomMessage && locationContent.msgtype === EventType.Location);
-      if (
-        eventType !== EventType.RoomMessage &&
-        !isPollEvent &&
-        !isLocationEvent &&
-        !isReactionEvent
-      ) {
-        return;
-      }
       logVerboseMessage(
         `matrix: inbound event room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
       );
-      if (event.unsigned?.redacted_because) {
-        return;
-      }
       const senderId = event.sender;
       if (!senderId) {
         return;
