@@ -6,15 +6,15 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
-import {
-  getActivePluginRegistry,
-  setActivePluginRegistry,
-} from "../../../../src/plugins/runtime.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
