@@ -239,7 +239,6 @@ export function createTelegramTextSender(config: {
       plainText: string;
       reportChatId: string | number;
       hasInlineKeyboard: boolean;
-      reported: boolean;
     };
 
     let lastMessageId = "";
@@ -253,32 +252,22 @@ export function createTelegramTextSender(config: {
     const deliveryResults: TelegramSendResult[] = [];
     let sentChunkCount = 0;
     let pendingChunk: PendingChunk | undefined;
+    let finalMeta: TelegramSendResult["meta"] | undefined;
 
     const flushChunk = async (chunk: PendingChunk, finalPart: boolean) => {
-      let hasInlineKeyboard = chunk.hasInlineKeyboard;
       let keyboardError: unknown;
       if (finalPart && replyMarkup && !chunk.hasInlineKeyboard) {
         try {
           await api.editMessageReplyMarkup(chunk.reportChatId, chunk.messageId, {
             reply_markup: replyMarkup,
           });
-          hasInlineKeyboard = true;
+          finalMeta = {
+            telegramDeliveredText: chunk.plainText,
+            telegramHasInlineKeyboard: true,
+          };
         } catch (error) {
           keyboardError = error;
         }
-      }
-      if (!chunk.reported) {
-        await reportDelivery(
-          chunk.messageId,
-          chunk.reportChatId,
-          chunk.result,
-          {
-            telegramDeliveredText: chunk.plainText,
-            telegramHasInlineKeyboard: hasInlineKeyboard,
-          },
-          "text",
-          (delivery) => deliveryResults.push(delivery),
-        );
       }
       await recordDeliveredPromptContext(
         {
@@ -328,20 +317,17 @@ export function createTelegramTextSender(config: {
       }
       sentChunkCount += 1;
       recordSentMessage(chatId, messageId, cfg);
-      const reported = !replyMarkup;
-      if (reported) {
-        await reportDelivery(
-          messageId,
-          params.result?.chat?.id ?? chatId,
-          params.result,
-          {
-            telegramDeliveredText: params.plainText,
-            telegramHasInlineKeyboard: params.hasInlineKeyboard,
-          },
-          "text",
-          (delivery) => deliveryResults.push(delivery),
-        );
-      }
+      await reportDelivery(
+        messageId,
+        params.result?.chat?.id ?? chatId,
+        params.result,
+        {
+          telegramDeliveredText: params.plainText,
+          telegramHasInlineKeyboard: params.hasInlineKeyboard,
+        },
+        "text",
+        (delivery) => deliveryResults.push(delivery),
+      );
       const previousChunk = pendingChunk;
       pendingChunk = {
         result: params.result,
@@ -350,7 +336,6 @@ export function createTelegramTextSender(config: {
         plainText: params.plainText,
         reportChatId: params.result?.chat?.id ?? chatId,
         hasInlineKeyboard: params.hasInlineKeyboard,
-        reported,
       };
       if (previousChunk) {
         await flushChunk(previousChunk, false);
@@ -380,6 +365,7 @@ export function createTelegramTextSender(config: {
         messageId: lastMessageId,
         chatId: lastChatId,
         ...(receipt ? { receipt } : {}),
+        ...(finalMeta ? { meta: finalMeta } : {}),
       };
     };
 

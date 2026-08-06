@@ -1876,8 +1876,9 @@ describe("sendMessageTelegram", () => {
       reply_markup: { inline_keyboard: [[{ text: "OK", callback_data: "ok" }]] },
     });
     expect(result.messageId).toBe("71");
+    expect(result.meta?.telegramHasInlineKeyboard).toBe(true);
     expect(onDeliveryResult).toHaveBeenCalledTimes(1);
-    expect(onDeliveryResult.mock.calls[0]?.[0]?.meta?.telegramHasInlineKeyboard).toBe(true);
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.meta?.telegramHasInlineKeyboard).toBe(false);
     const cached = await createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     }).get({ accountId: "default", chatId: "123", messageId: "71" });
@@ -2401,6 +2402,53 @@ describe("sendMessageTelegram", () => {
     ]);
   });
 
+  it("stops an oversized-caption follow-up when media lands in the wrong topic", async () => {
+    const chatId = "-1001234567890";
+    const longText = "A".repeat(1100);
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 70,
+      message_thread_id: 272,
+      chat: { id: chatId, type: "supergroup" },
+    });
+    const sendMessage = vi.fn();
+    const onDeliveryResult = vi.fn();
+    const api = { sendPhoto, sendMessage } as unknown as TelegramApiOverride;
+    mockLoadedMedia({ contentType: "image/jpeg", fileName: "photo.jpg" });
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram(chatId, longText, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.jpg",
+        messageThreadId: 271,
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
+      caption: undefined,
+      message_thread_id: 271,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(observed.deliveryResult.messageIds).toEqual(["70"]);
+    expect(observed.deliveryResult.receipt).toMatchObject({
+      primaryPlatformMessageId: "70",
+      platformMessageIds: ["70"],
+      threadId: "272",
+      parts: [expect.objectContaining({ platformMessageId: "70", kind: "media" })],
+    });
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt?.threadId).toBe("272");
+  });
+
   it("sends oversized voice captions as a voice note followed by text", async () => {
     const chatId = "123";
     const longText = "A".repeat(1100);
@@ -2451,13 +2499,17 @@ describe("sendMessageTelegram", () => {
       promptContextProjectionPlan: { cursor, finalPart: true },
     });
 
-    expect(result).toEqual({ messageId: "70", chatId: "123" });
+    expect(result).toEqual({
+      messageId: "70",
+      chatId: "123",
+      meta: { telegramHasInlineKeyboard: true },
+    });
     expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
     expect(botApi.editMessageReplyMarkup).toHaveBeenCalledWith("123", 70, {
       reply_markup: { inline_keyboard: [[{ text: "OK", callback_data: "ok" }]] },
     });
     expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult.mock.calls[0]?.[0]?.meta?.telegramHasInlineKeyboard).toBe(true);
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.meta?.telegramHasInlineKeyboard).toBe(false);
     const cached = await createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     }).get({ accountId: "default", chatId: "123", messageId: "70" });
@@ -3847,6 +3899,40 @@ describe("sendMessageTelegram", () => {
         receipt: expect.objectContaining({ threadId: "272" }),
       }),
     );
+  });
+
+  it("stops multipart text after the first provider topic mismatch", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      message_thread_id: 272,
+      chat: { id: chatId, type: "supergroup" },
+    });
+    const onDeliveryResult = vi.fn();
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram(chatId, "A".repeat(9000), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: { sendMessage } as unknown as TelegramApiOverride,
+        textMode: "html",
+        messageThreadId: 271,
+        buttons: [[{ text: "OK", callback_data: "ok" }]],
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(observed.deliveryResult.messageIds).toEqual(["55"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("272");
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
   });
 
   it("does not infer a missing private-chat topic as the General forum topic", async () => {

@@ -333,11 +333,10 @@ async function sendMessageTelegramWithContext(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
-    let mediaReported = false;
     let mediaDeliveryResult: TelegramSendResult | undefined;
     let mediaPromptRecorded = false;
-    const recordMediaDelivery = async (finalPart: boolean, hasInlineKeyboard: boolean) => {
-      if (!mediaReported) {
+    const reportMediaDelivery = async (hasInlineKeyboard: boolean) => {
+      try {
         mediaDeliveryResult = await reportDelivery(
           mediaMessageId,
           resolvedChatId,
@@ -347,9 +346,22 @@ async function sendMessageTelegramWithContext(
             telegramHasInlineKeyboard: hasInlineKeyboard,
           },
           "media",
+          (delivery) => {
+            mediaDeliveryResult = delivery;
+          },
         );
-        mediaReported = true;
+      } catch (error) {
+        if (isChannelPartialDeliveryError(error)) {
+          throw error;
+        }
+        throw createChannelPartialDeliveryError(error, {
+          messageIds: [String(mediaMessageId)],
+          ...(mediaDeliveryResult?.receipt ? { receipt: mediaDeliveryResult.receipt } : {}),
+          visibleReplySent: true,
+        });
       }
+    };
+    const recordMediaPromptContext = async (finalPart: boolean) => {
       if (!mediaPromptRecorded) {
         await recordDeliveredPromptContext(
           {
@@ -365,8 +377,9 @@ async function sendMessageTelegramWithContext(
         mediaPromptRecorded = true;
       }
     };
+    await reportMediaDelivery(!needsSeparateText && Boolean(replyMarkup));
     if (!needsSeparateText) {
-      await recordMediaDelivery(true, Boolean(replyMarkup));
+      await recordMediaPromptContext(true);
     }
     logTelegramOutboundSendOk({
       accountId: account.accountId,
@@ -391,7 +404,7 @@ async function sendMessageTelegramWithContext(
       try {
         textResult = await sendChunkedText(followUpText, "text follow-up send", {
           replyToAlreadyUsed: singleUseReplyTo && mediaUsedReplyTo,
-          beforeFirstAccepted: () => recordMediaDelivery(false, false),
+          beforeFirstAccepted: () => recordMediaPromptContext(false),
         });
       } catch (error) {
         if (isTelegramEmptyContentError(error)) {
@@ -407,22 +420,29 @@ async function sendMessageTelegramWithContext(
               keyboardError = editError;
             }
           }
-          await recordMediaDelivery(true, hasInlineKeyboard);
+          await recordMediaPromptContext(true);
           if (keyboardError !== undefined) {
             throw createChannelPartialDeliveryError(keyboardError, {
               messageIds: [String(mediaMessageId)],
+              ...(mediaDeliveryResult?.receipt ? { receipt: mediaDeliveryResult.receipt } : {}),
               visibleReplySent: true,
             });
           }
-          return mediaDeliveryResult?.receipt
+          const finalMediaResult = mediaDeliveryResult ?? {
+            messageId: String(mediaMessageId),
+            chatId: resolvedChatId,
+          };
+          return hasInlineKeyboard
             ? {
-                messageId: mediaDeliveryResult.messageId,
-                chatId: mediaDeliveryResult.chatId,
-                receipt: mediaDeliveryResult.receipt,
+                ...finalMediaResult,
+                meta: {
+                  ...finalMediaResult.meta,
+                  telegramHasInlineKeyboard: true,
+                },
               }
-            : { messageId: String(mediaMessageId), chatId: resolvedChatId };
+            : finalMediaResult;
         }
-        await recordMediaDelivery(false, false);
+        await recordMediaPromptContext(false);
         const textMessageIds = isChannelPartialDeliveryError(error)
           ? (error.deliveryResult.messageIds ?? [])
           : [];
