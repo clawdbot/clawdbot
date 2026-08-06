@@ -116,6 +116,23 @@ suite("OpenCode and Pi external session catalogs", () => {
     });
 
     await page.goto(`${server.baseUrl}chat`);
+    await expect
+      .poll(() =>
+        page
+          .locator('[data-session-section="catalog:opencode"] [data-provider-icon="opencode"]')
+          .count(),
+      )
+      .toBe(1);
+    await expect
+      .poll(() =>
+        page.locator('[data-session-section="catalog:pi"] [data-provider-icon="pi"]').count(),
+      )
+      .toBe(1);
+    const piIconResponse = await page.request.get(
+      new URL("provider-icons/ProviderIcon-pi.svg", server.baseUrl).toString(),
+    );
+    expect(piIconResponse.ok()).toBe(true);
+
     await page.getByText("OpenCode release review", { exact: true }).click();
     await expect.poll(() => page.getByText("OpenCode transcript loaded").count()).toBe(1);
     await page.getByText("Pi architecture notes", { exact: true }).click();
