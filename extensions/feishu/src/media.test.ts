@@ -217,7 +217,20 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(callData<{ image?: Buffer }>(imageCreateMock).image).toEqual(Buffer.from("opus-output"));
     const ffmpegArgs = mockCallArg<string[]>(runFfmpegMock, 0, 0);
     expect(ffmpegArgs).toEqual(
-      expect.arrayContaining(["-ss", "0.5", "-frames:v", "1", "-c:v", "mjpeg", "-f", "image2"]),
+      expect.arrayContaining([
+        "-ss",
+        "0.5",
+        "-vf",
+        "scale=1280:720:force_original_aspect_ratio=decrease",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "mjpeg",
+        "-f",
+        "image2",
+        "-fs",
+        String(10 * 1024 * 1024 + 1),
+      ]),
     );
     expect(ffmpegArgs.at(-1)).toContain("preview.jpg");
     expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
@@ -277,6 +290,33 @@ describe("sendMediaFeishu msg_type routing", () => {
       expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("video preview upload timed out");
     } finally {
       vi.useRealTimers();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("sends video without a cover when the preview exceeds its image limit", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+      const outputPath = args.at(-1);
+      const sizeLimitIndex = args.indexOf("-fs");
+      const sizeLimit = Number(args[sizeLimitIndex + 1]);
+      if (!outputPath || sizeLimitIndex < 0 || !Number.isSafeInteger(sizeLimit)) {
+        throw new Error("test ffmpeg output limit setup failed");
+      }
+      await fs.writeFile(outputPath, Buffer.alloc(sizeLimit));
+      return "";
+    });
+
+    try {
+      await sendTestVideo();
+      expect(imageCreateMock).not.toHaveBeenCalled();
+      expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual(
+        {
+          file_key: "file_key_1",
+        },
+      );
+      expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("failed to render video preview");
+    } finally {
       warnSpy.mockRestore();
     }
   });

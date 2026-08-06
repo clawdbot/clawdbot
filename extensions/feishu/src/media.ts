@@ -47,6 +47,8 @@ const FEISHU_VOICE_BITRATE = "64k";
 const FEISHU_VIDEO_PREVIEW_FILE_NAME = "preview.jpg";
 const FEISHU_VIDEO_PREVIEW_SEEK_SECONDS = "0.5";
 const FEISHU_VIDEO_PREVIEW_TIMEOUT_MS = 5_000;
+const FEISHU_VIDEO_PREVIEW_MAX_WIDTH = 1280;
+const FEISHU_VIDEO_PREVIEW_MAX_HEIGHT = 720;
 
 const FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES = new Set([
   "image/jpeg",
@@ -968,6 +970,8 @@ async function renderFeishuVideoPreviewFrame(params: {
                 FEISHU_VIDEO_PREVIEW_SEEK_SECONDS,
                 "-i",
                 inputPath,
+                "-vf",
+                `scale=${String(FEISHU_VIDEO_PREVIEW_MAX_WIDTH)}:${String(FEISHU_VIDEO_PREVIEW_MAX_HEIGHT)}:force_original_aspect_ratio=decrease`,
                 "-frames:v",
                 "1",
                 "-c:v",
@@ -976,12 +980,22 @@ async function renderFeishuVideoPreviewFrame(params: {
                 "3",
                 "-f",
                 "image2",
+                "-fs",
+                String(FEISHU_MAX_IMAGE_UPLOAD_BYTES + 1),
                 outputPath,
               ],
               { timeoutMs: FEISHU_VIDEO_PREVIEW_TIMEOUT_MS },
             );
           },
         });
+        const previewStat = await fs.promises.stat(workspace.path(FEISHU_VIDEO_PREVIEW_FILE_NAME));
+        if (
+          !previewStat.isFile() ||
+          previewStat.size === 0 ||
+          previewStat.size > FEISHU_MAX_IMAGE_UPLOAD_BYTES
+        ) {
+          throw new Error("Feishu video preview exceeds its image upload limit");
+        }
         return await workspace.read(FEISHU_VIDEO_PREVIEW_FILE_NAME);
       },
     );
