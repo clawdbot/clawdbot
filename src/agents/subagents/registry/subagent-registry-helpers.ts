@@ -3,7 +3,7 @@
  *
  * Handles frozen result caps, orphan detection, timing persistence, and announce retry logging.
  */
-import fsSync, { promises as fs } from "node:fs";
+import fsSync from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
@@ -17,6 +17,7 @@ import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { removeSubagentAttachmentsDir } from "../spawn/subagent-attachments.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -195,37 +196,10 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return true;
   }
-
-  const resolveReal = async (targetPath: string): Promise<string | null> => {
-    try {
-      return await fs.realpath(targetPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  try {
-    const [rootReal, dirReal] = await Promise.all([
-      resolveReal(entry.attachmentsRootDir),
-      resolveReal(entry.attachmentsDir),
-    ]);
-    if (!dirReal) {
-      return true;
-    }
-
-    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
-    const dirBase = dirReal;
-    if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
-      return false;
-    }
-    await fs.rm(dirBase, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
+  return await removeSubagentAttachmentsDir({
+    rootDir: entry.attachmentsRootDir,
+    absDir: entry.attachmentsDir,
+  });
 }
 
 function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {

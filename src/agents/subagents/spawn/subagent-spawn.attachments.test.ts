@@ -181,6 +181,36 @@ describe("spawnSubagentDirect filename validation", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32").each(["metadata", "attachments"] as const)(
+    "rejects a symlinked %s directory without writing outside the workspace",
+    async (linkedComponent) => {
+      const externalDir = fs.mkdtempSync(
+        path.join(
+          os.tmpdir(),
+          `openclaw-subagent-attachment-external-${process.pid}-${Date.now()}-`,
+        ),
+      );
+      fs.writeFileSync(path.join(externalDir, "sentinel.txt"), "unchanged", "utf8");
+      try {
+        const metadataDir = path.join(workspaceDirOverride, ".openclaw");
+        if (linkedComponent === "metadata") {
+          fs.symlinkSync(externalDir, metadataDir, "dir");
+        } else {
+          fs.mkdirSync(metadataDir, { recursive: true });
+          fs.symlinkSync(externalDir, path.join(metadataDir, "attachments"), "dir");
+        }
+
+        const result = await spawnWithName("file.txt");
+
+        expect(result.status).toBe("error");
+        expect(fs.readdirSync(externalDir)).toEqual(["sentinel.txt"]);
+        expect(fs.readFileSync(path.join(externalDir, "sentinel.txt"), "utf8")).toBe("unchanged");
+      } finally {
+        fs.rmSync(externalDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("normalizes explicit cwd before materializing native subagent attachments", async () => {
     const homeDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-home-attachments-${process.pid}-${Date.now()}-`),

@@ -3,7 +3,6 @@
  *
  * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
  */
-import { promises as fs } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
@@ -29,6 +28,7 @@ import {
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   materializeSubagentAttachments,
+  removeSubagentAttachmentsDir,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
@@ -397,6 +397,7 @@ export async function spawnSubagentDirect(
       cleanupFailedSpawnBeforeAgentStart({
         childSessionKey,
         attachmentAbsDir,
+        attachmentRootDir,
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
         ...provisionalSessionIdentity,
@@ -433,12 +434,11 @@ export async function spawnSubagentDirect(
           return;
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
-        if (attachmentAbsDir) {
-          try {
-            await fs.rm(attachmentAbsDir, { recursive: true, force: true });
-          } catch {
-            // Best-effort cleanup only.
-          }
+        if (attachmentAbsDir && attachmentRootDir) {
+          await removeSubagentAttachmentsDir({
+            rootDir: attachmentRootDir,
+            absDir: attachmentAbsDir,
+          });
         }
         let emitLifecycleHooks = threadBindingReady;
         if (phase === "dispatch" && threadBindingReady) {
