@@ -217,7 +217,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const sdkPreloaded = hasPreloadedOtelSdk();
       retireExporterRoutes = (preserveFailures = false) => {
-        for (const route of [...exporterRoutes.values()]) {
+        for (const route of exporterRoutes.values()) {
           if (preserveFailures && route.status === "failure") {
             continue;
           }

@@ -551,7 +551,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.pluginId = event.pluginId;
       assignReasonCode(record, event.reason);
       break;
-    case "telemetry.exporter":
+    case "telemetry.exporter": {
       record.source = copyExporterCode(event.exporter);
       record.target = event.signal;
       record.outcome = event.status;
@@ -569,6 +569,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       }
       assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
+    }
     case "diagnostic.async_queue.dropped":
       record.droppedEvents = event.droppedEvents;
       record.droppedTrustedEvents = event.droppedTrustedEvents;
