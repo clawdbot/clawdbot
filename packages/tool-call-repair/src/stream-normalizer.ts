@@ -20,6 +20,12 @@ import {
 } from "./grammar.js";
 import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js";
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
+import {
+  advanceProtectionScanState,
+  cloneProtectionScanState,
+  createProtectionScanState,
+  resolveProtectionFastPath,
+} from "./protection-fast-path.js";
 
 export type { PlainTextToolCallNameMatcher } from "./contracts.js";
 
@@ -1115,6 +1121,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
   let protectionContextOverflow = false;
   let protectionBlockContentIndex: number | undefined;
   let protectionBlockStart = 0;
+  // Carried Markdown block state mirrors the protection context so a candidate delta can
+  // skip re-parsing the whole response. `protectionScanAtBlockStart` matches the prefix an
+  // authoritative delta uses (context sliced at protectionBlockStart); the live state
+  // matches the full context. Both stay in sync because every context mutation routes
+  // through advanceProtectionContext/beginProtectionBlock.
+  let protectionScan = createProtectionScanState();
+  let protectionScanAtBlockStart = createProtectionScanState();
 
   const beginProtectionBlock = (contentIndex: number) => {
     if (protectionBlockContentIndex === contentIndex) {
@@ -1122,6 +1135,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     protectionBlockContentIndex = contentIndex;
     protectionBlockStart = protectionContextLength;
+    protectionScanAtBlockStart = cloneProtectionScanState(protectionScan);
   };
   const truncateProtectionContext = (length: number) => {
     while (protectionContextLength > length) {
@@ -1146,6 +1160,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     if (resetActiveBlock) {
       truncateProtectionContext(protectionBlockStart);
+      protectionScan = cloneProtectionScanState(protectionScanAtBlockStart);
     }
     if (protectionContextLength + text.length > MAX_PROTECTION_CONTEXT_CHARS) {
       protectionChunks.length = 0;
@@ -1155,6 +1170,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     if (text) {
       protectionChunks.push(text);
+      advanceProtectionScanState(protectionScan, text);
     }
     protectionContextLength += text.length;
   };
@@ -1350,24 +1366,29 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   partial: incomingRecord.partial,
                   resolveProtectedRanges: options.resolveProtectedRanges,
                 });
-                // Candidate-shaped text is rare. Materialize prior visible text only when the
-                // provider did not supply an authoritative cumulative partial.
-                const protectionPrefix = partialProtection
-                  ? ""
-                  : materializeProtectionPrefix(authoritative);
-                const protectedRanges = partialProtection
-                  ? undefined
-                  : options.resolveProtectedRanges(`${protectionPrefix}${incoming}`);
+                // Candidate-shaped text is rare in prose but constant in bracket-dense
+                // answers, so materializing and re-parsing the whole response here is
+                // quadratic. Ask the carried fence state first; it answers only what it
+                // can prove and yields to the full parse for everything else.
+                const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
+                let isProtectedAt =
+                  partialProtection ??
+                  (protectionContextOverflow
+                    ? undefined
+                    : resolveProtectionFastPath(carriedScan, incoming));
+                if (!isProtectedAt) {
+                  const protectionPrefix = materializeProtectionPrefix(authoritative);
+                  const protectedRanges = options.resolveProtectedRanges(
+                    `${protectionPrefix}${incoming}`,
+                  );
+                  isProtectedAt = (offset) =>
+                    isOffsetInProtectedRanges(protectionPrefix.length + offset, protectedRanges);
+                }
                 callStart = findPotentialCallStart(
                   incoming,
                   atLineStart,
                   options.matcher,
-                  partialProtection ??
-                    ((offset) =>
-                      isOffsetInProtectedRanges(
-                        protectionPrefix.length + offset,
-                        protectedRanges ?? [],
-                      )),
+                  isProtectedAt,
                 );
               }
             }
@@ -1700,6 +1721,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
         protectionContextOverflow = false;
         protectionBlockContentIndex = undefined;
         protectionBlockStart = 0;
+        // Carried block state belongs to the completion that just ended. Without this a
+        // following completion would start inside its fence while the materialized
+        // context is empty, and the fast path would call its first line protected.
+        protectionScan = createProtectionScanState();
+        protectionScanAtBlockStart = createProtectionScanState();
         if (options.stopAfterDone) {
           return;
         }

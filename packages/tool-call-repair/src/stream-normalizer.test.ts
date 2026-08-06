@@ -740,6 +740,81 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(textDeltas(events).join("")).toBe(visibleChunks.join(""));
   });
 
+  it("materializes accumulated Markdown when an inline span blocks the fast path", async () => {
+    const resolvedLengths: number[] = [];
+    // Inline code spans are a shape the carried fence scan deliberately does not model,
+    // so the authoritative full parse must still run — and still stay bounded.
+    const visibleChunks = Array.from({ length: 1_000 }, () => "ordinary `code` prose\n");
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");
+    const events = await collectNormalizedEvents(
+      [...visibleChunks.map((delta) => streamTextDelta(delta)), streamTextDelta(candidate)],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        resolveProtectedRanges: (text) => {
+          resolvedLengths.push(text.length);
+          return [];
+        },
+      },
+    );
+
+    expect(resolvedLengths).toContain(visibleChunks.join("").length + candidate.length);
+    expect(resolvedLengths.length).toBeLessThanOrEqual(3);
+    expect(textDeltas(events).join("")).toBe(visibleChunks.join(""));
+  });
+
+  it("does not carry an open fence from a finished completion into the next one", async () => {
+    // The done branch clears the protection context; carried block state must clear with
+    // it, or the next completion starts "inside" the previous fence and its first line is
+    // wrongly treated as protected literal text.
+    const firstText = "```toml\n[read.section]\n";
+    const call = ["[read]", '{"path":"secret.txt"}', "[/read]"].join("\n");
+    const events = await normalize(
+      [
+        streamTextDelta(firstText),
+        doneAssistantEvent("stop", textContent(firstText), "stop"),
+        streamTextDelta(`${call}\n`),
+        doneAssistantEvent("stop", textContent(`${call}\n`), "stop"),
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events).join("")).not.toContain('{"path":"secret.txt"}');
+  });
+
+  it("keeps protection resolution bounded across a bracket-dense fenced answer", async () => {
+    let resolverCalls = 0;
+    // `[read...` is candidate-shaped for this matcher, so every line trips the candidate
+    // check while staying protected by the surrounding fence.
+    const fenced = [
+      "```toml",
+      ...Array.from({ length: 300 }, (_, index) => `[read.section.${index}]\nname = "svc"`),
+      "```",
+      "",
+    ].join("\n");
+    // Split so every '[' lands at the end of its own delta, which is what makes a real
+    // provider stream trip the candidate check on nearly every line.
+    const deltas = fenced.split(/(?<=\[)/);
+    const events = await collectNormalizedEvents(
+      deltas.map((delta) => streamTextDelta(delta)),
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        resolveProtectedRanges: (text) => {
+          resolverCalls += 1;
+          return resolveTestFenceRanges(text);
+        },
+      },
+    );
+
+    // Before the carried fence state existed this resolved the whole accumulated
+    // response once per bracket delta (hundreds of full parses over a growing buffer).
+    expect(resolverCalls).toBeLessThanOrEqual(3);
+    expect(textDeltas(events).join("")).toBe(fenced);
+  });
+
   it("still scrubs an unfenced call from live deltas and the terminal message", async () => {
     const text = ["[read]", '{"path":"secret.txt"}', "[/read]"].join("\n");
     const events = await normalize(
