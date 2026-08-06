@@ -258,6 +258,8 @@ export type ReplyPayloadMetadata = {
     channel: string;
     accountId?: string;
   };
+  /** Host-staged tool media that may bypass message-tool-only source suppression. */
+  hostOwnedToolMediaUrls?: string[];
   /**
    * Internal OpenClaw notices and host-owned artifacts are not assistant source
    * replies. Dispatch may deliver them even when normal assistant source replies

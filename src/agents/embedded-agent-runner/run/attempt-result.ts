@@ -1,6 +1,7 @@
 /**
  * Projects stream state into the stable embedded-attempt result contract.
  */
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
@@ -285,6 +286,9 @@ export function completeEmbeddedAttemptResult(
     successfulCronAdds: getSuccessfulCronAdds(),
   });
   const pendingToolMediaReply = getPendingToolMediaReply();
+  const pendingToolMediaMetadata = pendingToolMediaReply
+    ? getReplyPayloadMetadata(pendingToolMediaReply)
+    : undefined;
   const replayMetadata = replayMetadataFromState(
     observeReplayMetadata(getReplayState(), observedReplayMetadata),
   );
@@ -395,6 +399,8 @@ export function completeEmbeddedAttemptResult(
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
+    toolMediaAttachments: pendingToolMediaReply?.attachments,
+    hostOwnedToolMediaUrls: pendingToolMediaMetadata?.hostOwnedToolMediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
     hasToolMediaBlockReply: hasToolMediaBlockReplyNow,

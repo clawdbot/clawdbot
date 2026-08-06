@@ -8,6 +8,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -454,12 +455,14 @@ function clearPendingToolMedia(
     | "pendingToolMediaUrls"
     | "pendingToolMediaAttachments"
     | "pendingToolMediaTrustByUrl"
+    | "pendingToolMediaHostOwnedUrls"
     | "pendingToolAudioAsVoice"
   >,
 ) {
   state.pendingToolMediaUrls = [];
   state.pendingToolMediaAttachments = [];
   state.pendingToolMediaTrustByUrl.clear();
+  state.pendingToolMediaHostOwnedUrls.clear();
   state.pendingToolAudioAsVoice = false;
 }
 
@@ -470,7 +473,10 @@ function hasReplyMedia(payload: BlockReplyPayload): boolean {
 function readAlignedPendingToolMedia(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolMediaAttachments" | "pendingToolMediaTrustByUrl"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolMediaTrustByUrl"
+    | "pendingToolMediaHostOwnedUrls"
   >,
 ) {
   const seen = new Set<string>();
@@ -494,7 +500,21 @@ function readAlignedPendingToolMedia(
     attachments: attachments.some((entry) => Object.keys(entry).length > 0)
       ? attachments
       : undefined,
+    hostOwnedToolMediaUrls: mediaUrls.filter((url) => state.pendingToolMediaHostOwnedUrls.has(url)),
   };
+}
+
+function attachHostOwnedToolMediaMetadata(
+  payload: BlockReplyPayload,
+  mediaUrls: readonly string[],
+): BlockReplyPayload {
+  const hostOwnedToolMediaUrls = uniqueStrings(
+    mediaUrls.map((url) => url.trim()).filter((url) => url.length > 0),
+  );
+  if (hostOwnedToolMediaUrls.length > 0) {
+    setReplyPayloadMetadata(payload, { hostOwnedToolMediaUrls });
+  }
+  return payload;
 }
 
 /** Moves queued tool media into a non-reasoning assistant reply payload. */
@@ -504,11 +524,18 @@ export function consumePendingToolMediaIntoReply(
     | "pendingToolMediaUrls"
     | "pendingToolMediaAttachments"
     | "pendingToolMediaTrustByUrl"
+    | "pendingToolMediaHostOwnedUrls"
     | "pendingToolAudioAsVoice"
   >,
   payload: BlockReplyPayload,
 ): BlockReplyPayload {
   if (payload.isReasoning) {
+    return payload;
+  }
+  if (state.pendingToolMediaHostOwnedUrls.size > 0) {
+    // Host-staged MCP attachments belong to the durable terminal handoff. A
+    // channel may intentionally ignore media on streaming block deliveries,
+    // so consuming them here would make the final payload lose the attachment.
     return payload;
   }
   if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
@@ -542,6 +569,10 @@ export function consumePendingToolMediaIntoReply(
       )
         ? { ...payloadWithMetadata, trustedLocalMedia: true }
         : payloadWithMetadata;
+    const selectedHostOwnedMediaUrls = (payload.mediaUrls ?? []).filter((url) =>
+      state.pendingToolMediaHostOwnedUrls.has(url.trim()),
+    );
+    attachHostOwnedToolMediaMetadata(selectedPayload, selectedHostOwnedMediaUrls);
     clearPendingToolMedia(state);
     return selectedPayload;
   }
@@ -556,6 +587,7 @@ export function consumePendingToolMediaIntoReply(
     audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
     ...(payload.trustedLocalMedia || allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
   };
+  attachHostOwnedToolMediaMetadata(mergedPayload, pendingMedia.hostOwnedToolMediaUrls);
   clearPendingToolMedia(state);
   return mergedPayload;
 }
@@ -567,6 +599,7 @@ export function consumePendingToolMediaReply(
     | "pendingToolMediaUrls"
     | "pendingToolMediaAttachments"
     | "pendingToolMediaTrustByUrl"
+    | "pendingToolMediaHostOwnedUrls"
     | "pendingToolAudioAsVoice"
   >,
 ): BlockReplyPayload | null {
@@ -585,6 +618,7 @@ export function readPendingToolMediaReply(
     | "pendingToolMediaUrls"
     | "pendingToolMediaAttachments"
     | "pendingToolMediaTrustByUrl"
+    | "pendingToolMediaHostOwnedUrls"
     | "pendingToolAudioAsVoice"
   >,
 ): BlockReplyPayload | null {
@@ -595,12 +629,15 @@ export function readPendingToolMediaReply(
   const allPendingMediaTrusted =
     pendingMedia.mediaUrls.length > 0 &&
     pendingMedia.mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
-  return {
-    mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
-    attachments: pendingMedia.attachments,
-    audioAsVoice: state.pendingToolAudioAsVoice || undefined,
-    ...(allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
-  };
+  return attachHostOwnedToolMediaMetadata(
+    {
+      mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
+      attachments: pendingMedia.attachments,
+      audioAsVoice: state.pendingToolAudioAsVoice || undefined,
+      ...(allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
+    },
+    pendingMedia.hostOwnedToolMediaUrls,
+  );
 }
 
 function hasReplyDirectiveMetadata(parsed: ReplyDirectiveParseResult | null | undefined): boolean {
@@ -732,14 +769,14 @@ export function consumePendingAssistantReplyDirectivesIntoReply(
     new Set([...(payload.mediaUrls ?? []), ...(pending.mediaUrls ?? [])]),
   );
   state.pendingAssistantReplyDirectives = undefined;
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...payload,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     audioAsVoice: payload.audioAsVoice || pending.audioAsVoice || undefined,
     replyToId: payload.replyToId ?? pending.replyToId,
     replyToTag: Boolean(payload.replyToTag || pending.replyToTag) || undefined,
     replyToCurrent: Boolean(payload.replyToCurrent || pending.replyToCurrent) || undefined,
-  };
+  });
 }
 
 /** True when a reply payload has text, media, or voice content worth sending. */

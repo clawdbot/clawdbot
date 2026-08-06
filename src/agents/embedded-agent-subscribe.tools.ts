@@ -8,6 +8,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,6 +29,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
+import { isHostOwnedMcpRelayMedia } from "./mcp-tool-result-media-provenance.js";
 import { normalizeToolName } from "./tool-policy.js";
 import {
   isToolResultError,
@@ -696,6 +698,16 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
+  if (isExternalToolResult(result)) {
+    const media = readToolResultDetailsMedia(result as Record<string, unknown>);
+    const hostOwnedUrls = new Set(
+      media && isHostOwnedMcpRelayMedia(media) ? collectStructuredMediaUrls(media) : [],
+    );
+    return mediaUrls.filter((url) => {
+      const normalized = url.trim();
+      return HTTP_URL_RE.test(normalized) || hostOwnedUrls.has(normalized);
+    });
+  }
   const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
     toolName,
     result,
@@ -734,10 +746,12 @@ export function filterToolResultMediaUrls(
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
-type ToolResultMediaArtifact = {
+export type ToolResultMediaArtifact = {
   mediaUrls: string[];
+  attachments?: ReplyMediaAttachment[];
   audioAsVoice?: boolean;
   trustedLocalMedia?: boolean;
+  hostOwnedMediaUrls?: string[];
 };
 
 function readToolResultDetailsMedia(
@@ -793,6 +807,51 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   return uniqueStrings(urls);
 }
 
+function extractHostOwnedMcpMediaArtifact(
+  media: Record<string, unknown>,
+): ToolResultMediaArtifact | undefined {
+  if (!isHostOwnedMcpRelayMedia(media) || !Array.isArray(media.attachments)) {
+    return undefined;
+  }
+  const mediaUrls: string[] = [];
+  const attachments: ReplyMediaAttachment[] = [];
+  for (const value of media.attachments) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+    const entry = value as Record<string, unknown>;
+    const mediaUrl = normalizeOptionalString(entry.mediaUrl);
+    const type = entry.type === "image" || entry.type === "audio" ? entry.type : undefined;
+    const mimeType = normalizeOptionalString(entry.mimeType);
+    if (!mediaUrl || !type || !mimeType) {
+      continue;
+    }
+    const name = normalizeOptionalString(entry.name);
+    const sizeBytes =
+      typeof entry.sizeBytes === "number" && Number.isFinite(entry.sizeBytes)
+        ? Math.max(0, entry.sizeBytes)
+        : undefined;
+    mediaUrls.push(mediaUrl);
+    attachments.push({
+      type,
+      mediaUrl,
+      mimeType,
+      ...(name ? { name } : {}),
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+      trustedLocalMedia: true,
+    });
+  }
+  if (mediaUrls.length === 0) {
+    return undefined;
+  }
+  return {
+    mediaUrls,
+    attachments,
+    trustedLocalMedia: true,
+    hostOwnedMediaUrls: mediaUrls.slice(),
+  };
+}
+
 function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
   return media.outbound === false;
 }
@@ -822,6 +881,10 @@ export function extractToolResultMediaArtifact(
     if (isNonOutboundToolResultMedia(detailsMedia)) {
       return undefined;
     }
+    const hostOwnedMcpMedia = extractHostOwnedMcpMediaArtifact(detailsMedia);
+    if (hostOwnedMcpMedia) {
+      return hostOwnedMcpMedia;
+    }
     const mediaUrls = collectStructuredMediaUrls(detailsMedia);
     if (mediaUrls.length > 0) {
       return {
@@ -848,6 +911,43 @@ export function extractToolResultMediaArtifact(
   }
 
   return undefined;
+}
+
+export function filterToolResultMediaArtifact(params: {
+  toolName?: string;
+  artifact: ToolResultMediaArtifact;
+  result?: unknown;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
+}): ToolResultMediaArtifact | undefined {
+  const mediaUrls = filterToolResultMediaUrls(
+    params.toolName,
+    params.artifact.mediaUrls,
+    params.result,
+    params.trustedLocalMediaToolNames,
+  );
+  if (mediaUrls.length === 0) {
+    return undefined;
+  }
+  const sourceIndexByUrl = new Map(
+    params.artifact.mediaUrls.map((url, index) => [url.trim(), index] as const),
+  );
+  const attachments = mediaUrls.map((url) => {
+    const index = sourceIndexByUrl.get(url.trim());
+    return index === undefined ? {} : (params.artifact.attachments?.[index] ?? {});
+  });
+  const hostOwnedUrlSet = new Set(
+    params.artifact.hostOwnedMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
+  );
+  const hostOwnedMediaUrls = mediaUrls.filter((url) => hostOwnedUrlSet.has(url.trim()));
+  return {
+    mediaUrls,
+    ...(attachments.some((attachment) => Object.keys(attachment).length > 0)
+      ? { attachments }
+      : {}),
+    ...(params.artifact.audioAsVoice ? { audioAsVoice: true } : {}),
+    ...(params.artifact.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    ...(hostOwnedMediaUrls.length > 0 ? { hostOwnedMediaUrls } : {}),
+  };
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {

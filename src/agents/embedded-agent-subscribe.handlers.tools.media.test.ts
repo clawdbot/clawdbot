@@ -6,6 +6,7 @@ import {
   handleToolExecutionStart,
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { markHostOwnedMcpRelayMedia } from "./mcp-tool-result-media-provenance.js";
 
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
@@ -36,7 +37,9 @@ function createMockContext(overrides?: {
       pendingMessagingTargets: new Map(),
       pendingMessagingMediaUrls: new Map(),
       pendingToolMediaUrls: [],
+      pendingToolMediaAttachments: [],
       pendingToolMediaTrustByUrl: new Map(),
+      pendingToolMediaHostOwnedUrls: new Set(),
       pendingToolAudioAsVoice: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
@@ -681,6 +684,54 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
     expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
+  });
+
+  it("queues branded MCP attachment metadata and host-owned provenance", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: vi.fn() });
+    const media = markHostOwnedMcpRelayMedia({
+      source: "mcp" as const,
+      attachments: [
+        {
+          type: "image" as const,
+          mediaUrl: "/tmp/openclaw/media/outbound/mcp-image.png",
+          mimeType: "image/png",
+          name: "mcp-image.png",
+          sizeBytes: 4,
+        },
+      ],
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "bundleProbe__bundle_probe",
+      toolCallId: "tc-mcp",
+      isError: false,
+      result: {
+        details: {
+          mcpServer: "bundleProbe",
+          mcpTool: "bundle_probe",
+          media,
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/openclaw/media/outbound/mcp-image.png"]);
+    expect(ctx.state.pendingToolMediaAttachments).toEqual([
+      {
+        type: "image",
+        mediaUrl: "/tmp/openclaw/media/outbound/mcp-image.png",
+        mimeType: "image/png",
+        name: "mcp-image.png",
+        sizeBytes: 4,
+        trustedLocalMedia: true,
+      },
+    ]);
+    expect(
+      ctx.state.pendingToolMediaTrustByUrl.get("/tmp/openclaw/media/outbound/mcp-image.png"),
+    ).toBe(true);
+    expect(ctx.state.pendingToolMediaHostOwnedUrls).toEqual(
+      new Set(["/tmp/openclaw/media/outbound/mcp-image.png"]),
+    );
   });
 
   it("queues trusted TTS local media when the exact built-in name is absent", async () => {

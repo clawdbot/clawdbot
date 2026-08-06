@@ -55,7 +55,7 @@ import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   buildToolLifecycleErrorResult,
   extractToolResultMediaArtifact,
-  filterToolResultMediaUrls,
+  filterToolResultMediaArtifact,
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import {
@@ -278,6 +278,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
     pendingToolMediaAttachments: initialPendingToolMedia.attachments,
     pendingToolMediaTrustByUrl: initialPendingToolMedia.trustByUrl,
+    pendingToolMediaHostOwnedUrls: new Set(
+      initialPendingToolMedia.mediaUrls.filter(
+        (url) => initialPendingToolMedia.trustByUrl.get(url) === true,
+      ),
+    ),
     pendingToolAudioAsVoice: false,
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
@@ -433,6 +438,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
         : withToolMedia;
+    const taggedMetadata = getReplyPayloadMetadata(taggedPayload);
+    if (
+      taggedMetadata?.hostOwnedToolMediaUrls?.length &&
+      !normalizeOptionalString(taggedPayload.text)
+    ) {
+      setReplyPayloadMetadata(taggedPayload, { deliverDespiteSourceReplySuppression: true });
+    }
     if (state.deferBlockReplyDelivery) {
       if (consumesPendingToolMedia) {
         deferredToolMediaReplies.add(taggedPayload);
@@ -820,12 +832,15 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       stripReplyTags: true,
     });
     const mediaArtifact = result ? extractToolResultMediaArtifact(result) : undefined;
-    const filteredMediaUrls = filterToolResultMediaUrls(
-      toolName,
-      mediaArtifact?.mediaUrls ?? [],
-      result,
-      params.trustedLocalMediaToolNames,
-    );
+    const filteredMediaArtifact = mediaArtifact
+      ? filterToolResultMediaArtifact({
+          toolName,
+          artifact: mediaArtifact,
+          result,
+          trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
+        })
+      : undefined;
+    const filteredMediaUrls = filteredMediaArtifact?.mediaUrls ?? [];
     if (
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       parsed.text &&
@@ -841,15 +856,23 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!parsed.text && filteredMediaUrls.length === 0) {
       return;
     }
+    const toolResultPayload: BlockReplyPayload = {
+      text: parsed.text,
+      mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+      attachments: filteredMediaArtifact?.attachments,
+      ...(filteredMediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+      ...(filteredMediaArtifact?.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    };
+    if (filteredMediaArtifact?.hostOwnedMediaUrls?.length) {
+      setReplyPayloadMetadata(toolResultPayload, {
+        hostOwnedToolMediaUrls: filteredMediaArtifact.hostOwnedMediaUrls,
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
     runBestEffortCallback({
       label: "tool result",
       log,
-      callback: () =>
-        params.onToolResult?.({
-          text: parsed.text,
-          mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
-          ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-        }),
+      callback: () => params.onToolResult?.(toolResultPayload),
     });
   };
   const emitToolSummary = (toolName?: string, meta?: string) => {
@@ -1372,6 +1395,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolMediaUrls = [];
     state.pendingToolMediaAttachments = [];
     state.pendingToolMediaTrustByUrl.clear();
+    state.pendingToolMediaHostOwnedUrls.clear();
     state.pendingToolAudioAsVoice = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";

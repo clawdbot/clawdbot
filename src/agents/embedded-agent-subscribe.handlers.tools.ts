@@ -81,7 +81,7 @@ import {
   extractMessagingToolSendResult,
   extractToolErrorMessage,
   extractToolResultText,
-  filterToolResultMediaUrls,
+  filterToolResultMediaArtifact,
   isToolResultError,
   isToolResultTimedOut,
   sanitizeToolArgs,
@@ -821,24 +821,48 @@ function hasMessagingRichContent(record: Record<string, unknown>): boolean {
 
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
+  mediaReply: {
+    mediaUrls: string[];
+    attachments?: NonNullable<ToolHandlerContext["state"]["pendingToolMediaAttachments"]>;
+    audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
+    hostOwnedMediaUrls?: string[];
+  },
 ) {
-  const seen = new Set(ctx.state.pendingToolMediaUrls.map((url) => url.trim()));
-  for (const mediaUrl of mediaReply.mediaUrls) {
+  const indexByUrl = new Map(
+    ctx.state.pendingToolMediaUrls.map((url, index) => [url.trim(), index] as const),
+  );
+  const hostOwnedMediaUrls = new Set(
+    mediaReply.hostOwnedMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
+  );
+  ctx.state.pendingToolMediaAttachments ??= [];
+  for (const [mediaIndex, mediaUrl] of mediaReply.mediaUrls.entries()) {
     const normalized = mediaUrl.trim();
     if (!normalized) {
       continue;
     }
-    if (mediaReply.trustedLocalMedia) {
+    const attachment = mediaReply.attachments?.[mediaIndex];
+    if (mediaReply.trustedLocalMedia || attachment?.trustedLocalMedia === true) {
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
     } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
     }
-    if (seen.has(normalized)) {
+    if (hostOwnedMediaUrls.has(normalized)) {
+      ctx.state.pendingToolMediaHostOwnedUrls.add(normalized);
+    }
+    const existingIndex = indexByUrl.get(normalized);
+    if (existingIndex !== undefined) {
+      if (
+        attachment &&
+        Object.keys(ctx.state.pendingToolMediaAttachments[existingIndex] ?? {}).length === 0
+      ) {
+        ctx.state.pendingToolMediaAttachments[existingIndex] = attachment;
+      }
       continue;
     }
-    seen.add(normalized);
+    indexByUrl.set(normalized, ctx.state.pendingToolMediaUrls.length);
     ctx.state.pendingToolMediaUrls.push(normalized);
+    ctx.state.pendingToolMediaAttachments.push(attachment ?? {});
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
@@ -1029,15 +1053,16 @@ async function emitToolResultOutput(params: {
   }
 
   const outputText = extractToolResultText(sanitizedResult);
-  const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
-  const mediaUrls = mediaReply
-    ? filterToolResultMediaUrls(
-        rawToolName,
-        mediaReply.mediaUrls,
+  const mediaArtifact = isToolError ? undefined : extractToolResultMediaArtifact(result);
+  const mediaReply = mediaArtifact
+    ? filterToolResultMediaArtifact({
+        toolName: rawToolName,
+        artifact: mediaArtifact,
         result,
-        ctx.trustedLocalMediaToolNames,
-      )
-    : [];
+        trustedLocalMediaToolNames: ctx.trustedLocalMediaToolNames,
+      })
+    : undefined;
+  const mediaUrls = mediaReply?.mediaUrls ?? [];
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
       toolName,
@@ -1065,11 +1090,7 @@ async function emitToolResultOutput(params: {
   if (mediaUrls.length === 0) {
     return;
   }
-  queuePendingToolMedia(ctx, {
-    mediaUrls,
-    ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
-    ...(mediaReply.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
-  });
+  queuePendingToolMedia(ctx, mediaReply);
 }
 
 /** Handles a tool-execution start event and emits UI/telemetry start state. */

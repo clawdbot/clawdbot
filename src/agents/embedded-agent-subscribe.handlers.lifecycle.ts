@@ -255,7 +255,7 @@ export function handleAgentEnd(
   };
 
   const flushPendingMediaAndChannel = () => {
-    if (ctx.params.onBlockReply) {
+    if (ctx.params.onBlockReply && ctx.state.pendingToolMediaHostOwnedUrls.size === 0) {
       const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
       if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
         const visibleReplyCountBefore = ctx.state.visibleBlockReplyCount;

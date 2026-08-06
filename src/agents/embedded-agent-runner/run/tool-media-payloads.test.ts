@@ -48,10 +48,39 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
+  it("keeps per-URL trust aligned when trusted and untrusted tool media are mixed", () => {
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "done", mediaUrls: ["https://example.test/existing.png"] }],
+        toolMediaUrls: ["/tmp/staged.png", "https://example.test/remote.opus"],
+        toolMediaAttachments: [
+          { type: "image", mimeType: "image/png", trustedLocalMedia: true },
+          { type: "audio", mimeType: "audio/ogg" },
+        ],
+      }),
+    ).toEqual([
+      {
+        text: "done",
+        mediaUrls: [
+          "https://example.test/existing.png",
+          "/tmp/staged.png",
+          "https://example.test/remote.opus",
+        ],
+        mediaUrl: "https://example.test/existing.png",
+        attachments: [
+          {},
+          { type: "image", mimeType: "image/png", trustedLocalMedia: true },
+          { type: "audio", mimeType: "audio/ogg" },
+        ],
+      },
+    ]);
+  });
+
   it("marks harness-owned media when source replies require the message tool", () => {
     const [mediaReply] =
       mergeAttemptToolMediaPayloads({
         toolMediaUrls: ["/tmp/generated.png"],
+        toolMediaAttachments: [{ type: "image", mimeType: "image/png", trustedLocalMedia: true }],
         hostOwnedToolMediaUrls: ["/tmp/generated.png"],
         sourceReplyDeliveryMode: "message_tool_only",
       }) ?? [];
@@ -59,6 +88,7 @@ describe("mergeAttemptToolMediaPayloads", () => {
     expect(mediaReply).toEqual({
       mediaUrls: ["/tmp/generated.png"],
       mediaUrl: "/tmp/generated.png",
+      attachments: [{ type: "image", mimeType: "image/png", trustedLocalMedia: true }],
       audioAsVoice: undefined,
       trustedLocalMedia: undefined,
     });

@@ -68,7 +68,9 @@ function createContext(
       lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
+      pendingToolMediaAttachments: [],
       pendingToolMediaTrustByUrl: new Map(),
+      pendingToolMediaHostOwnedUrls: new Set(),
       pendingToolAudioAsVoice: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
@@ -888,6 +890,22 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("keeps host-owned MCP media queued for durable terminal delivery", async () => {
+    const ctx = createContext(undefined);
+    ctx.state.pendingToolMediaUrls = ["/tmp/mcp-image.png"];
+    ctx.state.pendingToolMediaAttachments = [
+      { type: "image", mimeType: "image/png", trustedLocalMedia: true },
+    ];
+    ctx.state.pendingToolMediaTrustByUrl.set("/tmp/mcp-image.png", true);
+    ctx.state.pendingToolMediaHostOwnedUrls.add("/tmp/mcp-image.png");
+
+    await handleAgentEnd(ctx);
+
+    expect(ctx.emitBlockReply).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/mcp-image.png"]);
+    expect(ctx.state.pendingToolMediaHostOwnedUrls).toEqual(new Set(["/tmp/mcp-image.png"]));
   });
 
   it("preserves orphaned tool media when no block reply callback is configured", async () => {

@@ -2,6 +2,7 @@
  * Shared metadata and result types for embedded-agent runner surfaces.
  */
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
+import type { ReplyMediaAttachment } from "../../auto-reply/reply-payload.js";
 import type {
   CliSessionBinding,
   SessionContextBudgetStatus,
@@ -222,6 +223,7 @@ export type EmbeddedAgentRunResult = {
     text?: string;
     mediaUrl?: string;
     mediaUrls?: string[];
+    attachments?: ReplyMediaAttachment[];
     replyToId?: string;
     isError?: boolean;
     isReasoning?: boolean;
