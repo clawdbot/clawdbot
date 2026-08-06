@@ -632,6 +632,28 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
   installRecords?: Record<string, PluginInstallRecord>;
   realpathCache: Map<string, string>;
 }): string | undefined {
+  const allowLegacyBareMinHostVersion = (pluginId: string) =>
+    params.candidate.origin === "global" &&
+    Boolean(
+      params.installRecords &&
+      matchesInstalledPluginRecord({
+        pluginId,
+        candidate: params.candidate,
+        env: params.env,
+        installRecords: params.installRecords,
+      }),
+    );
+  const allowsCurrentHost = (pluginId: string) => {
+    if (params.candidate.origin === "bundled") {
+      return true;
+    }
+    const minHostVersionCheck = checkMinHostVersion({
+      currentVersion: resolveCompatibilityHostVersion(params.env),
+      minHostVersion: params.candidate.packageManifest?.install?.minHostVersion,
+      allowLegacyBareSemver: allowLegacyBareMinHostVersion(pluginId),
+    });
+    return minHostVersionCheck.ok;
+  };
   const matchInstalledRecord = (pluginId: string) => {
     if (!params.installRecords || params.candidate.origin === "bundled") {
       return pluginId;
@@ -659,7 +681,10 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
         bundleFormat: params.candidate.bundleFormat,
         rejectHardlinks,
       });
-    return bundleManifest?.ok ? matchInstalledRecord(bundleManifest.manifest.id) : undefined;
+    if (!bundleManifest?.ok || !allowsCurrentHost(bundleManifest.manifest.id)) {
+      return undefined;
+    }
+    return matchInstalledRecord(bundleManifest.manifest.id);
   }
   const resolvedManifest = resolveCandidateManifest(params.candidate.rootDir, rejectHardlinks);
   if (!resolvedManifest) {
@@ -668,23 +693,7 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
   if (params.candidate.origin === "bundled") {
     return resolvedManifest.manifest.id;
   }
-  const allowLegacyBareMinHostVersion =
-    params.candidate.origin === "global" &&
-    Boolean(
-      params.installRecords &&
-      matchesInstalledPluginRecord({
-        pluginId: resolvedManifest.manifest.id,
-        candidate: params.candidate,
-        env: params.env,
-        installRecords: params.installRecords,
-      }),
-    );
-  const minHostVersionCheck = checkMinHostVersion({
-    currentVersion: resolveCompatibilityHostVersion(params.env),
-    minHostVersion: params.candidate.packageManifest?.install?.minHostVersion,
-    allowLegacyBareSemver: allowLegacyBareMinHostVersion,
-  });
-  if (!minHostVersionCheck.ok) {
+  if (!allowsCurrentHost(resolvedManifest.manifest.id)) {
     return undefined;
   }
   const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.candidate.packageManifest);
@@ -728,15 +737,15 @@ function resolveConfiguredPluginCandidateId(params: {
   return params.candidate.idHint;
 }
 
-/** Returns whether any installed record can cross the manifest registry materialization boundary. */
-export function hasMaterializableInstalledPluginRecords(params: {
+/** Returns installed records that can safely cross the manifest registry materialization boundary. */
+export function resolveMaterializableInstalledPluginRecords(params: {
   installRecords?: Record<string, PluginInstallRecord>;
   existingPluginIds?: readonly string[];
   configuredLoadPaths?: readonly string[];
   ownershipUid?: number | null;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): boolean {
+}): Record<string, PluginInstallRecord> {
   const result = createDiscoveryResult();
   const env = params.env ?? process.env;
   const realpathCache = new Map<string, string>();
@@ -770,7 +779,7 @@ export function hasMaterializableInstalledPluginRecords(params: {
     return pluginId ? [pluginId] : [];
   });
   if (materializableInstalledPluginIds.length === 0) {
-    return false;
+    return {};
   }
   const configuredFileSources = new Set(
     (params.configuredLoadPaths ?? [])
@@ -809,9 +818,26 @@ export function hasMaterializableInstalledPluginRecords(params: {
       .filter(([, declaredIds]) => declaredIds.size > 1)
       .map(([policyId]) => policyId),
   );
-  return materializableInstalledPluginIds.some(
-    (pluginId) => !collidingPolicyIds.has(normalizePluginPolicyId(pluginId)),
-  );
+  const materializableInstallRecords: Record<string, PluginInstallRecord> = {};
+  for (const pluginId of materializableInstalledPluginIds) {
+    const record = params.installRecords?.[pluginId];
+    if (record && !collidingPolicyIds.has(normalizePluginPolicyId(pluginId))) {
+      materializableInstallRecords[pluginId] = record;
+    }
+  }
+  return materializableInstallRecords;
+}
+
+/** Returns whether any installed record can cross the manifest registry materialization boundary. */
+export function hasMaterializableInstalledPluginRecords(params: {
+  installRecords?: Record<string, PluginInstallRecord>;
+  existingPluginIds?: readonly string[];
+  configuredLoadPaths?: readonly string[];
+  ownershipUid?: number | null;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  return Object.keys(resolveMaterializableInstalledPluginRecords(params)).length > 0;
 }
 
 function isManagedPluginDir(params: {

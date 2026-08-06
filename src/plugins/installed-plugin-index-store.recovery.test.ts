@@ -562,6 +562,67 @@ describe("installed plugin index policy recovery", () => {
       });
     });
 
+    it("keeps unsafe retained records out of mixed recovery", async () => {
+      const stateDir = makeTempDir();
+      const existingPluginDir = path.join(stateDir, "plugins", "existing");
+      const recoverablePluginDir = path.join(stateDir, "plugins", "recoverable");
+      const collidingPluginDir = path.join(stateDir, "plugins", "colliding");
+      fs.mkdirSync(existingPluginDir, { recursive: true });
+      fs.mkdirSync(recoverablePluginDir, { recursive: true });
+      fs.mkdirSync(collidingPluginDir, { recursive: true });
+      const existingCandidate = createCandidate(existingPluginDir, "case-collision");
+      createCandidate(recoverablePluginDir, "recoverable");
+      createCandidate(collidingPluginDir, "Case-Collision");
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const installRecords = {
+        recoverable: {
+          source: "npm" as const,
+          spec: "recoverable@1.0.0",
+          installPath: recoverablePluginDir,
+        },
+        "Case-Collision": {
+          source: "npm" as const,
+          spec: "Case-Collision@1.0.0",
+          installPath: collidingPluginDir,
+        },
+      };
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=mixed-safe-unsafe-recovery",
+      );
+      const initial = await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [existingCandidate],
+        env,
+        installRecords,
+      });
+      expectPluginIds(initial, ["case-collision"]);
+
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+
+      expectPluginIds(refreshed, ["case-collision", "recoverable"]);
+      expectInstallRecord(refreshed, "recoverable", {
+        source: "npm",
+        spec: "recoverable@1.0.0",
+        installPath: recoverablePluginDir,
+      });
+      expectInstallRecord(refreshed, "Case-Collision", {
+        source: "npm",
+        spec: "Case-Collision@1.0.0",
+        installPath: collidingPluginDir,
+      });
+    });
+
     it("skips broad discovery when only configured plugins can materialize", async () => {
       const stateDir = makeTempDir();
       const configuredPluginDir = path.join(stateDir, "plugins", "configured");
@@ -756,6 +817,74 @@ describe("installed plugin index policy recovery", () => {
         source: "npm",
         spec: "@vendor/incompatible-min-host-version@1.0.0",
         installPath: pluginDir,
+      });
+      expect(refreshed.diagnostics).toEqual([
+        { level: "warn", message: "policy fast-path sentinel" },
+      ]);
+    });
+
+    it("skips broad discovery for an external bundle rejected by minHostVersion", async () => {
+      const stateDir = makeTempDir();
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=incompatible-bundle-min-host-version",
+      );
+      const bundleDir = path.join(stateDir, "plugins", "incompatible-bundle");
+      fs.mkdirSync(path.join(bundleDir, ".codex-plugin"), { recursive: true });
+      fs.writeFileSync(
+        path.join(bundleDir, "package.json"),
+        JSON.stringify({
+          name: "@vendor/incompatible-bundle",
+          openclaw: {
+            install: { minHostVersion: ">=2026.5.1" },
+          },
+        }),
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(bundleDir, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "incompatible bundle", skills: "skills" }),
+        "utf8",
+      );
+      const installRecords = {
+        "incompatible-bundle": {
+          source: "npm" as const,
+          spec: "incompatible-bundle@1.0.0",
+          installPath: bundleDir,
+        },
+      };
+      await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [],
+        diagnostics: [{ level: "warn", message: "policy fast-path sentinel" }],
+        env,
+        installRecords,
+      });
+      discoverSpy.mockClear();
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, []);
+      expectInstallRecord(refreshed, "incompatible-bundle", {
+        source: "npm",
+        spec: "incompatible-bundle@1.0.0",
+        installPath: bundleDir,
       });
       expect(refreshed.diagnostics).toEqual([
         { level: "warn", message: "policy fast-path sentinel" },

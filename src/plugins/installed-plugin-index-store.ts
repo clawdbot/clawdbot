@@ -9,7 +9,7 @@ import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import { hasMaterializableInstalledPluginRecords } from "./discovery.js";
+import { resolveMaterializableInstalledPluginRecords } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
@@ -470,20 +470,21 @@ function hasPolicyRefreshTargets(
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 
-function hasPotentiallyRecoverableInstallRecord(
+function resolvePotentiallyRecoverableInstallRecords(
   persisted: InstalledPluginIndex,
   missingInstallRecordPluginIds: readonly string[],
   params: RefreshInstalledPluginIndexParams,
-): boolean {
-  const installRecords = {} as Record<string, InstalledPluginInstallRecordInfo>;
+): ReturnType<typeof extractPluginInstallRecordsFromInstalledPluginIndex> {
+  const persistedInstallRecords = extractPluginInstallRecordsFromInstalledPluginIndex(persisted);
+  const installRecords: ReturnType<typeof extractPluginInstallRecordsFromInstalledPluginIndex> = {};
   for (const pluginId of missingInstallRecordPluginIds) {
-    const record = persisted.installRecords?.[pluginId];
+    const record = persistedInstallRecords[pluginId];
     if (record) {
       installRecords[pluginId] = record;
     }
   }
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  return hasMaterializableInstalledPluginRecords({
+  return resolveMaterializableInstalledPluginRecords({
     installRecords,
     existingPluginIds: persisted.plugins.map((plugin) => plugin.pluginId),
     configuredLoadPaths: normalizedConfig.loadPaths,
@@ -508,19 +509,44 @@ function buildRecoverableInstallRecordRefresh(
   // recoverable, a recovery refresh would run broad bundled/global discovery
   // without any chance of restoring them, so stay on the scan-free policy fast
   // path like the pre-recovery behavior.
-  if (!hasPotentiallyRecoverableInstallRecord(persisted, missingInstallRecordPluginIds, params)) {
+  const recoverableInstallRecords = resolvePotentiallyRecoverableInstallRecords(
+    persisted,
+    missingInstallRecordPluginIds,
+    params,
+  );
+  if (Object.keys(recoverableInstallRecords).length === 0) {
     return undefined;
   }
+  const installRecords =
+    params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted);
   const current = refreshInstalledPluginIndex({
     ...params,
-    installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+    installRecords: recoverableInstallRecords,
   });
   const materializedPluginIds = new Set(current.plugins.map((plugin) => plugin.pluginId));
   if (missingInstallRecordPluginIds.every((pluginId) => !materializedPluginIds.has(pluginId))) {
     return undefined;
   }
-  return current;
+  const missingInstallRecordPluginIdSet = new Set(missingInstallRecordPluginIds);
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const retainedPlugins = persisted.plugins.map((plugin) => ({
+    ...plugin,
+    enabled: resolveEffectiveEnableState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      config: normalizedConfig,
+      rootConfig: params.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    }).enabled,
+  }));
+  return {
+    ...current,
+    installRecords,
+    plugins: [
+      ...retainedPlugins,
+      ...current.plugins.filter((plugin) => missingInstallRecordPluginIdSet.has(plugin.pluginId)),
+    ],
+  };
 }
 
 function resolvePersistedPolicyRefresh(
