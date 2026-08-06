@@ -177,15 +177,32 @@ function prepareRuntimePack(profile, env) {
   });
 }
 
-function restoreRuntimePack(env) {
+export function restoreRuntimePack(env, cwd = process.cwd()) {
   const script = `
-    const mod = await import("./scripts/package-changelog.mjs");
-    await mod.restorePackageChangelog();
+    const { existsSync } = await import("node:fs");
+    if (existsSync("./scripts/openclaw-postpack.mjs")) {
+      const mod = await import("./scripts/openclaw-postpack.mjs");
+      await mod.restorePrepackArtifacts();
+    } else {
+      // Historical source refs predate the composite lifecycle and only mutate CHANGELOG.md.
+      const mod = await import("./scripts/package-changelog.mjs");
+      await mod.restorePackageChangelog();
+    }
   `;
   runChecked(process.execPath, ["--input-type=module", "--eval", script], {
+    cwd,
     env,
     stdio: "inherit",
   });
+}
+
+export function runPreparedRuntimePack(prepare, pack, restore) {
+  prepare();
+  try {
+    return pack();
+  } finally {
+    restore();
+  }
 }
 
 function packWorkspaceDependencies(npm, workspaceDirs, outputDir) {
@@ -277,16 +294,17 @@ function main() {
   if (runtimePackPlan && runtimePackEnv && supportsPreparedRuntimePack(runtimePackEnv)) {
     // This adapter-only archive is installed into OCM and never published.
     // Standard npm pack still runs the full package build.
-    try {
-      prepareRuntimePack(runtimePackPlan.profile, runtimePackEnv);
-      const result = runNpm(npm, runtimePackPlan.packArgs, {
-        env: runtimePackEnv,
-        stdio: "inherit",
-      });
-      return result.status ?? 1;
-    } finally {
-      restoreRuntimePack(runtimePackEnv);
-    }
+    return runPreparedRuntimePack(
+      () => prepareRuntimePack(runtimePackPlan.profile, runtimePackEnv),
+      () => {
+        const result = runNpm(npm, runtimePackPlan.packArgs, {
+          env: runtimePackEnv,
+          stdio: "inherit",
+        });
+        return result.status ?? 1;
+      },
+      () => restoreRuntimePack(runtimePackEnv),
+    );
   }
   const plan = resolveWorkspaceInstallPlan(args, workspaceDirs);
   if (!plan) {

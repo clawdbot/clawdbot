@@ -170,8 +170,13 @@ const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
       if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
         return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";
       }
-      if (!setupInput.baseUrl) {
+      const normalizedBaseUrl = normalizeNextcloudTalkBaseUrl(setupInput.baseUrl);
+      if (!normalizedBaseUrl) {
         return "Nextcloud Talk requires --base-url.";
+      }
+      const baseUrlError = validateNextcloudTalkBaseUrl(normalizedBaseUrl);
+      if (baseUrlError) {
+        return baseUrlError;
       }
       return null;
     },

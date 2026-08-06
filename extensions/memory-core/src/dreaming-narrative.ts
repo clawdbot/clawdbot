@@ -1,8 +1,5 @@
 // Memory Core plugin module implements dreaming narrative behavior.
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   extractErrorCode,
@@ -12,12 +9,15 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
+import {
+  DREAMING_SESSION_KEY_PREFIX,
+  scrubDreamingNarrativeArtifacts,
+} from "./dreaming-session-cleanup.js";
+import { extractAssistantText } from "./dreaming-shared.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -102,10 +102,7 @@ const NARRATIVE_MESSAGE_FETCH_LIMIT = 5;
 // A completed run can reach the session reader before the final assistant text
 // is visible, so retry briefly before falling back to synthetic diary text.
 const NARRATIVE_MESSAGE_SETTLE_DELAYS_MS = [50, 150, 300, 750] as const;
-const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_SESSION_OWNER_KEY = "memory-core-v2";
-const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
-const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
@@ -353,44 +350,6 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
   return lines.join("\n");
 }
 
-// ── Message extraction ─────────────────────────────────────────────────
-
-function extractNarrativeText(messages: unknown[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
-      continue;
-    }
-    const record = msg as Record<string, unknown>;
-    if (record.role !== "assistant") {
-      continue;
-    }
-    const content = record.content;
-    if (typeof content === "string" && content.trim().length > 0) {
-      return content.trim();
-    }
-    if (Array.isArray(content)) {
-      const text = content
-        .filter(
-          (part: unknown) =>
-            part &&
-            typeof part === "object" &&
-            !Array.isArray(part) &&
-            ((part as Record<string, unknown>).type === "text" ||
-              (part as Record<string, unknown>).type === "output_text") &&
-            typeof (part as Record<string, unknown>).text === "string",
-        )
-        .map((part) => (part as { text: string }).text)
-        .join("\n")
-        .trim();
-      if (text.length > 0) {
-        return text;
-      }
-    }
-  }
-  return null;
-}
-
 function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
@@ -405,7 +364,7 @@ async function readNarrativeText(params: {
     sessionKey: params.sessionKey,
     limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
   });
-  return extractNarrativeText(messages);
+  return extractAssistantText(messages);
 }
 
 async function readSettledNarrativeText(params: {
@@ -814,47 +773,6 @@ async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
-  const cfg = getRuntimeConfig();
-  const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[];
-  try {
-    agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  let prunedEntries = 0;
-  let archivedOrphans = 0;
-
-  for (const agentEntry of agentEntries) {
-    if (!agentEntry.isDirectory()) {
-      continue;
-    }
-
-    try {
-      const result = await cleanupSessionLifecycleArtifacts({
-        agentId: agentEntry.name,
-        archiveRemovedEntryTranscripts: false,
-        sessionStore: cfg.session?.store,
-        sessionKeySegmentPrefix: DREAMING_SESSION_KEY_PREFIX,
-        transcriptContentMarker: DREAMING_TRANSCRIPT_RUN_MARKER,
-        orphanTranscriptMinAgeMs: DREAMING_ORPHAN_MIN_AGE_MS,
-      });
-      prunedEntries += result.removedEntries;
-      archivedOrphans += result.archivedTranscriptArtifacts;
-    } catch {
-      continue;
-    }
-  }
-
-  if (prunedEntries > 0 || archivedOrphans > 0) {
-    logger.info(
-      `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"} and archived ${archivedOrphans} orphan transcript${archivedOrphans === 1 ? "" : "s"}.`,
-    );
-  }
-}
-
 export type DreamNarrativeRequest = {
   /** Agent that owns this workspace; the narrative session lives in its SQLite store. */
   agentId: string;
@@ -1050,7 +968,11 @@ async function generateAndAppendDreamNarrative(
         }
       }
 
-      await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
+      await scrubDreamingNarrativeArtifacts({
+        agentId: params.agentId,
+        config: getRuntimeConfig(),
+        logger: params.logger,
+      }).catch((scrubErr: unknown) => {
         cleanupFailure = formatErrorMessage(scrubErr);
         params.logger.warn(
           `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${cleanupFailure}`,

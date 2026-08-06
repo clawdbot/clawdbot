@@ -170,6 +170,7 @@ function setSubagentControllerRun(
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       createdAt,
+      execution: { status: "running", startedAt: createdAt },
     },
   ]);
 }

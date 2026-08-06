@@ -6,6 +6,7 @@ import type {
   MemorySearchManager,
   MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
+import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -18,6 +19,9 @@ export type MemorySearchResponse = {
   provider: string;
   searchMode: "hybrid" | "fts-only";
   results: MemorySearchResult[];
+  stale?: true;
+  warning?: string;
+  action?: string;
 };
 
 function resolveSearchMode(status: MemoryProviderStatus): MemorySearchResponse["searchMode"] {
@@ -142,6 +146,7 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
         provider: status.provider,
         searchMode: resolveSearchMode(status),
         results,
+        ...resolveMemorySearchStaleness(status, agentId),
       };
       respond(true, payload, undefined);
     } catch (error) {

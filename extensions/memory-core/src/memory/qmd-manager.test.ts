@@ -1325,6 +1325,31 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("logs qmd watcher errors instead of throwing", async () => {
+    configureQmd(
+      { update: { interval: "0s", debounceMs: 0, onBoot: false } },
+      {
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: true, onSessionStart: false, onSearch: false },
+        },
+      },
+    );
+
+    const { manager } = await createManager({ mode: "full" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    const watcher = watchMock.mock.results[0]?.value as EventEmitter;
+
+    expect(() => {
+      watcher.emit("error", new Error("ENOSPC: watcher limit reached"));
+    }).not.toThrow();
+    expectMockMessageContains(logWarnMock, "qmd watcher error: ENOSPC: watcher limit reached");
+
+    await manager.close();
+  });
+
   it("runs qmd sync when watched collection files change", async () => {
     vi.useFakeTimers();
     configureQmd(
@@ -6056,6 +6081,128 @@ describe("QmdMemoryManager", () => {
       ).resolves.toStrictEqual([]);
       await manager.close();
     }
+  });
+
+  it("uses qmd file hints when docid lookup misses", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              docid: "missing-from-openclaw-index",
+              file: "qmd://workspace-main/notes/welcome.md",
+              score: 0.91,
+              snippet: "@@ -3,1\nQMD activation",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: () => { all: () => unknown[] }; close: () => void };
+    };
+    inner.db = {
+      prepare: () => ({
+        all: () => [],
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("QMD activation", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.91,
+        snippet: "@@ -3,1\nQMD activation",
+        source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
+      },
+    ]);
+    await manager.close();
+  });
+
+  it("uses index record after index recovery, not stale hint-only cache", async () => {
+    const searchDocid = "recovered-doc-after-empty-index";
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              docid: searchDocid,
+              file: "qmd://workspace-main/notes/welcome.md",
+              score: 0.91,
+              snippet: "@@ -3,1\nQMD activation",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: {
+        prepare: () => { all: (arg: unknown) => unknown[] };
+        close: () => void;
+      } | null;
+    };
+
+    inner.db = {
+      prepare: () => ({
+        all: () => [],
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("QMD activation", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.91,
+        snippet: "@@ -3,1\nQMD activation",
+        source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
+      },
+    ]);
+
+    inner.db = {
+      prepare: () => ({
+        all: () => [{ collection: "workspace-main", path: "indexed/path.md" }],
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("QMD activation", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "indexed/path.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.91,
+        snippet: "@@ -3,1\nQMD activation",
+        source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
+      },
+    ]);
+    await manager.close();
   });
 
   it("throws when stdout is empty without the no-results marker", async () => {

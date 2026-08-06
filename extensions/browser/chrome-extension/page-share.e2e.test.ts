@@ -154,6 +154,8 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       {
         channel: "chromium",
         headless: true,
+        // Playwright disables extensions by default, which overrides the unpacked fixture below.
+        ignoreDefaultArgs: ["--disable-extensions"],
         args: [
           "--enable-unsafe-extension-debugging",
           `--disable-extensions-except=${unpackedExtension}`,
@@ -333,5 +335,192 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       ),
     ).toBe(true);
     releaseDelivery();
+  });
+
+  it("keeps a real stale-tab sharing error visible across the popup status poll", async () => {
+    const relay = await startExtensionRelayServer({
+      port: 0,
+      token: "openclaw-autoqa-popup-consent-relay-placeholder",
+    });
+    cleanups.push(async () => await relay.close());
+
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const context = await chromium.launchPersistentContext(
+      tempDirs.make("openclaw-popup-consent-profile-"),
+      {
+        channel: "chromium",
+        headless: true,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        args: [
+          "--enable-unsafe-extension-debugging",
+          `--disable-extensions-except=${unpackedExtension}`,
+          `--load-extension=${unpackedExtension}`,
+        ],
+      },
+    );
+    cleanups.push(async () => await context.close());
+
+    const browser = context.browser();
+    if (!browser) {
+      throw new Error("Chromium browser connection unavailable");
+    }
+    const browserCdp = await browser.newBrowserCDPSession();
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
+    const pairingPage = context.pages()[0] ?? (await context.newPage());
+    await pairingPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+
+    const pairing = await pairingPage.evaluate(
+      async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
+      `ws://127.0.0.1:${relay.port}/extension#${relay.token}`,
+    );
+    expect(pairing).toEqual({ ok: true });
+    await expect.poll(() => relay.bridge.extensionConnected, { timeout: 10_000 }).toBe(true);
+
+    const missingTabId = 999_999_999;
+    const expectedError = await worker.evaluate(async (tabId) => {
+      try {
+        await chrome.tabs.get(tabId);
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    }, missingTabId);
+    expect(expectedError).toContain(String(missingTabId));
+
+    const activePage = await context.newPage();
+    await activePage.goto("data:text/html,<title>OpenClaw popup consent fixture</title>");
+    await activePage.bringToFront();
+    const prior = (await browserCdp.send("Target.getTargets", {
+      filter: [{}],
+    })) as { targetInfos: ChromeTarget[] };
+    const activeTarget = prior.targetInfos.find(
+      (target) => target.type === "tab" && target.url === activePage.url(),
+    );
+    if (!activeTarget) {
+      throw new Error("Chromium did not expose the actual popup consent tab target");
+    }
+    const priorTargetIds = new Set(prior.targetInfos.map((target) => target.targetId));
+
+    await browserCdp.send("Extensions.triggerAction", {
+      id: extensionId,
+      targetId: activeTarget.targetId,
+    });
+    await expect
+      .poll(
+        async () => {
+          const targets = (await browserCdp.send("Target.getTargets", {
+            filter: [{}],
+          })) as { targetInfos: ChromeTarget[] };
+          return targets.targetInfos.find(
+            (target) =>
+              !priorTargetIds.has(target.targetId) &&
+              target.url === `chrome-extension://${extensionId}/popup.html`,
+          );
+        },
+        { timeout: 10_000 },
+      )
+      .toBeTruthy();
+
+    const targets = (await browserCdp.send("Target.getTargets", {
+      filter: [{}],
+    })) as { targetInfos: ChromeTarget[] };
+    const target = targets.targetInfos.find(
+      (candidate) =>
+        !priorTargetIds.has(candidate.targetId) &&
+        candidate.url === `chrome-extension://${extensionId}/popup.html`,
+    );
+    if (!target) {
+      throw new Error("Chromium did not open the actual OpenClaw toolbar popup");
+    }
+    const attached = (await browserCdp.send("Target.attachToTarget", {
+      targetId: target.targetId,
+      flatten: false,
+    })) as { sessionId: string };
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<string>(
+            browserCdp,
+            attached.sessionId,
+            'document.querySelector("#statusLine")?.textContent',
+          ),
+        { timeout: 10_000 },
+      )
+      .toContain("Connected");
+
+    await evaluateToolbarPopup<void>(
+      browserCdp,
+      attached.sessionId,
+      `(() => {
+        const relayValue = document.querySelector("#relayValue");
+        const button = document.querySelector("#shareButton");
+        if (!relayValue || !button) throw new Error("Chrome popup action controls are missing");
+        window.__openclawPopupRefreshes = 0;
+        new MutationObserver(() => { window.__openclawPopupRefreshes += 1; })
+          .observe(relayValue, { childList: true });
+        button.dataset.tabId = ${JSON.stringify(String(missingTabId))};
+        button.classList.remove("hidden");
+        button.disabled = false;
+        button.click();
+      })()`,
+    );
+
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<string>(
+            browserCdp,
+            attached.sessionId,
+            'document.querySelector("#statusLine")?.textContent',
+          ),
+        { timeout: 1_500, interval: 25 },
+      )
+      .toBe(expectedError);
+
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<number>(
+            browserCdp,
+            attached.sessionId,
+            "window.__openclawPopupRefreshes",
+          ),
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBeGreaterThan(0);
+    const actionRefreshes = await evaluateToolbarPopup<number>(
+      browserCdp,
+      attached.sessionId,
+      "window.__openclawPopupRefreshes",
+    );
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<number>(
+            browserCdp,
+            attached.sessionId,
+            "window.__openclawPopupRefreshes",
+          ),
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBeGreaterThan(actionRefreshes);
+    const observed = await evaluateToolbarPopup<{
+      refreshes: number;
+      status: string;
+      visible: boolean;
+    }>(
+      browserCdp,
+      attached.sessionId,
+      `({
+        refreshes: window.__openclawPopupRefreshes,
+        status: document.querySelector("#statusLine")?.textContent,
+        visible: document.querySelector("#statusLine")?.closest(".hidden") === null,
+      })`,
+    );
+
+    expect(observed.refreshes).toBeGreaterThan(actionRefreshes);
+    expect(observed.status).toBe(expectedError);
+    expect(observed.visible).toBe(true);
   });
 });

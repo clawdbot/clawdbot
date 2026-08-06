@@ -51,6 +51,9 @@ flow:
         - set: alternate
           value:
             expr: splitModelRef(env.alternateModel)
+        - set: switchRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -74,7 +77,7 @@ flow:
             then:
               - set: switchDebugRequests
                 value:
-                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests`)"
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${switchRequestCursor}`)"
               - set: switchRequest
                 value:
                   expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.followupPrompt))"

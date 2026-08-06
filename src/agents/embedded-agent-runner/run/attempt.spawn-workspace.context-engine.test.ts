@@ -1,8 +1,9 @@
-// Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+// Coverage for context-engine bootstrap, assembly, and turn finalization.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import {
@@ -80,12 +81,7 @@ async function readTrajectoryEvents(tempPaths: string[]): Promise<TrajectoryEven
   return hoisted.trajectoryEvents.filter((event) => event.workspaceDir === workspaceDir);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
   expect(value, label).toBeInstanceOf(Array);
@@ -337,8 +333,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       task: "inspect the parent flow",
       cleanup: "delete",
       createdAt: endedAt - 1_000,
-      endedAt,
-      outcome: { status: "ok" },
+      execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
       expectsCompletionMessage: true,
       completion: { required: true, resultText: frozenResultText },
       delivery: {
@@ -353,7 +348,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           endedAt,
           outcome: { status: "ok" },
           expectsCompletionMessage: true,
-          frozenResultText,
         },
       },
     };

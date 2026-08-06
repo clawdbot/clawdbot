@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
 import {
   computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
@@ -36,6 +37,12 @@ afterEach(() => {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
+});
+
+describe("default redact pattern ownership", () => {
+  it("exposes the browser-safe canonical pattern table without drift", () => {
+    expect(defaults).toEqual(DEFAULT_REDACT_PATTERNS);
+  });
 });
 
 describe("registered exact secret values", () => {
@@ -237,6 +244,16 @@ describe("redactSensitiveText", () => {
     const input = "cdp=https://browserless.example.com/?token=supersecret123";
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe("cdp=https://browserless.example.com/?token=***");
+  });
+
+  it("masks resource-scoped hosted-media bearer query tokens", () => {
+    const id = "a".repeat(24);
+    const token = "b".repeat(48);
+    const input = `GET https://gateway.example.com/webhooks/sms?safe=value&__openclaw_mms_token_${id}=${token}`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain(`safe=value&__openclaw_mms_token_${id}=`);
+    expect(output).not.toContain(token);
   });
 
   it("masks standalone lowercase token assignments in diagnostic output", () => {

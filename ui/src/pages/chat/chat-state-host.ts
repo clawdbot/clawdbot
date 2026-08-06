@@ -8,7 +8,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -60,7 +60,6 @@ export type ChatPageHost = ChatHost &
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     chatToolMessages: Record<string, unknown>[];
-    chatQueueByScope: Record<string, ChatQueueItem[]>;
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
     chatMessagesBySession: ChatMessageCache;
@@ -139,7 +138,7 @@ export type ChatPageHost = ChatHost &
       options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
     ) => void;
     loadAssistantIdentity: () => Promise<void>;
-    applySettings: (next: UiSettings) => void;
+    applySettings: (patch: Partial<UiSettings>) => void;
     handleChatScroll: (event: Event) => void;
     handleChatDraftChange: (next: string) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;

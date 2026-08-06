@@ -14,7 +14,7 @@ import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineOutboundMediaKind, LineSendResult } from "./types.js";
+import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
@@ -22,11 +22,11 @@ type ImageMessage = messagingApi.ImageMessage;
 type VideoMessage = messagingApi.VideoMessage & { trackingId?: string };
 type AudioMessage = messagingApi.AudioMessage;
 type LocationMessage = messagingApi.LocationMessage;
-type FlexMessage = messagingApi.FlexMessage;
 type FlexContainer = messagingApi.FlexContainer;
 type TemplateMessage = messagingApi.TemplateMessage;
 type QuickReply = messagingApi.QuickReply;
 type QuickReplyItem = messagingApi.QuickReplyItem;
+type LineLocation = NonNullable<LineChannelData["location"]>;
 
 const userProfileCache = new Map<
   string,
@@ -34,6 +34,7 @@ const userProfileCache = new Map<
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
+const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
 
 function cacheUserProfile(
   userId: string,
@@ -241,12 +242,16 @@ export function createAudioMessage(originalContentUrl: string, durationMs: numbe
   };
 }
 
-export function createLocationMessage(location: {
-  title: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-}): LocationMessage {
+function isValidLineLocation(location: LineLocation): boolean {
+  // LINE rejects either blank required field atomically, so every delivery path
+  // must use this gate before adding a location to a provider request.
+  return location.title.trim().length > 0 && location.address.trim().length > 0;
+}
+
+export function createLocationMessage(location: LineLocation): LocationMessage | null {
+  if (!isValidLineLocation(location)) {
+    return null;
+  }
   return {
     type: "location",
     title: truncateUtf16Safe(location.title, 100),
@@ -481,7 +486,7 @@ export function createFlexMessage(
 ): messagingApi.FlexMessage {
   return {
     type: "flex",
-    altText,
+    altText: truncateUtf16Safe(altText, LINE_FLEX_ALT_TEXT_LIMIT),
     contents,
   };
 }
@@ -503,15 +508,14 @@ export async function pushImageMessage(
 
 export async function pushLocationMessage(
   to: string,
-  location: {
-    title: string;
-    address: string;
-    latitude: number;
-    longitude: number;
-  },
+  location: LineLocation,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, [createLocationMessage(location)], opts, {
+  const message = createLocationMessage(location);
+  if (!message) {
+    throw new Error("LINE location title and address must be non-empty");
+  }
+  return pushLineMessages(to, [message], opts, {
     verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
   });
 }
@@ -522,13 +526,7 @@ export async function pushFlexMessage(
   contents: FlexContainer,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  const flexMessage: FlexMessage = {
-    type: "flex",
-    altText: truncateUtf16Safe(altText, 400),
-    contents,
-  };
-
-  return pushLineMessages(to, [flexMessage], opts, {
+  return pushLineMessages(to, [createFlexMessage(altText, contents)], opts, {
     errorContext: "push flex message",
     verboseMessage: (chatId) => `line: pushed flex message to ${chatId}`,
   });

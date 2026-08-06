@@ -38,6 +38,7 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
+import { measureAgentStartup } from "../startup-timing.js";
 import {
   hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
@@ -169,6 +170,8 @@ export async function runEmbeddedAgentAttempt(params: {
             input: {
               text: recorderTranscriptText,
               ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
+              senderIsOwner: params.opts.senderIsOwner,
+              ...(params.opts.inputProvenance ? { provenance: params.opts.inputProvenance } : {}),
             },
           }
         : {}),
@@ -195,7 +198,11 @@ export async function runEmbeddedAgentAttempt(params: {
     abortSignal: params.opts.abortSignal,
     state: attemptLifecycleState,
   });
-  const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
+  const attemptExecutionRuntime = await measureAgentStartup(
+    "attempt-runtime-import",
+    () => loadAttemptExecutionRuntime(),
+    { config: cfg },
+  );
   const messageChannel = resolveMessageChannel(
     runContext.messageChannel,
     params.opts.replyChannel ?? params.opts.channel,

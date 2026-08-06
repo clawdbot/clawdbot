@@ -245,6 +245,12 @@ function buildContextEngineMaintenanceRuntimeContext(
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
+      const runtimeSessionKey = normalizeOptionalString(
+        params.sessionTarget?.sessionKey ?? params.sessionKey,
+      );
+      if (!runtimeSessionKey) {
+        throw new Error("Context-engine transcript rewrite requires a session key");
+      }
       const runtimeStorePath =
         params.sessionTarget?.storePath ??
         (runtimeAgentId
@@ -255,7 +261,7 @@ function buildContextEngineMaintenanceRuntimeContext(
       if (!sessionManager) {
         runtimeTarget = await resolveRuntimeTranscriptReadTarget({
           sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
-          sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId,
+          sessionKey: runtimeSessionKey,
           sessionFile: params.sessionFile,
           ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
           ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
@@ -549,10 +555,17 @@ export async function runContextEngineMaintenance(
 
   if (shouldDefer) {
     try {
+      const sessionKey = normalizeOptionalString(params.sessionKey);
+      if (!sessionKey) {
+        params.onDeferredMaintenanceFailure?.(
+          new Error("Deferred context-engine maintenance requires a session key"),
+        );
+        return undefined;
+      }
       const deferred = scheduleDeferredTurnMaintenance({
         ...params,
         contextEngine,
-        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionKey,
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
         onScheduleFailure: params.onDeferredMaintenanceFailure,
       });

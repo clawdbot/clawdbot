@@ -20,6 +20,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
+  inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
@@ -176,6 +177,31 @@ describe("auth profile sqlite store", () => {
         status: "missing",
         reason: "table",
       });
+    });
+  });
+
+  it("classifies each missing auth table through an existing database handle", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-partial-schema-", (agentDir) => {
+      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      database.exec(`
+        CREATE TABLE auth_profile_store (
+          store_key TEXT NOT NULL PRIMARY KEY,
+          store_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      try {
+        expect(inspectPersistedAuthProfileStoreRaw(agentDir, { db: database })).toEqual({
+          status: "missing",
+          reason: "row",
+        });
+        expect(inspectPersistedAuthProfileStateRaw(agentDir, { db: database })).toEqual({
+          status: "missing",
+          reason: "table",
+        });
+      } finally {
+        database.close();
+      }
     });
   });
 

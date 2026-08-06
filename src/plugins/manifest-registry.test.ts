@@ -1812,6 +1812,38 @@ describe("loadPluginManifestRegistry", () => {
     expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
   });
 
+  it("hydrates Slack channel config metadata for lagging npm manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "slack",
+      channels: ["slack"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "slack",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@openclaw/slack",
+      }),
+    ]);
+
+    const slackConfig = expectRecordFields(
+      registry.plugins[0]?.channelConfigs?.slack,
+      "slack config",
+      {
+        label: "Slack",
+        description: "Slack channel, DM, command, and app event integration.",
+      },
+    );
+    expectRecordFields(slackConfig.schema, "slack schema", {
+      type: "object",
+      additionalProperties: true,
+    });
+    expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
+  });
+
   it("hydrates and overlays official external catalog curation metadata", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

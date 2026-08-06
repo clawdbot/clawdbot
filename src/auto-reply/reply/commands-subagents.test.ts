@@ -207,9 +207,12 @@ describe("subagents info", () => {
       task: "do thing",
       cleanup: "keep",
       createdAt: now - 20_000,
-      startedAt: now - 20_000,
-      endedAt: now - 1_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 20_000,
+        endedAt: now - 1_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     createTaskRecord({
@@ -270,10 +273,13 @@ describe("subagents info", () => {
         task: "report the actual child outcome",
         cleanup: "keep",
         createdAt: now - 2_000,
-        startedAt: now - 2_000,
-        endedAt: now - 1_000,
         ...(endedReason ? { endedReason } : {}),
-        outcome,
+        execution: {
+          status: "terminal",
+          startedAt: now - 2_000,
+          endedAt: now - 1_000,
+          outcome,
+        },
       } satisfies SubagentRunRecord;
       addSubagentRunForTests(run);
       const context = buildInfoContext({
@@ -302,10 +308,13 @@ describe("subagents info", () => {
       task: "inspect invalid timestamps",
       cleanup: "keep",
       createdAt: 8_640_000_000_000_001,
-      startedAt: 8_640_000_000_000_001,
-      endedAt: 8_640_000_000_000_001,
       archiveAtMs: 8_640_000_000_000_001,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: 8_640_000_000_000_001,
+        endedAt: 8_640_000_000_000_001,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = buildCommandTestConfig();
@@ -336,17 +345,20 @@ describe("subagents info", () => {
       task: "Inspect the stuck run",
       cleanup: "keep",
       createdAt: now - 20_000,
-      startedAt: now - 20_000,
-      endedAt: now - 1_000,
-      outcome: {
-        status: "error",
-        error: [
-          "OpenClaw runtime context (internal):",
-          "This context is runtime-generated, not user-authored. Keep internal details private.",
-          "",
-          "[Internal task completion event]",
-          "source: subagent",
-        ].join("\n"),
+      execution: {
+        status: "terminal",
+        startedAt: now - 20_000,
+        endedAt: now - 1_000,
+        outcome: {
+          status: "error",
+          error: [
+            "OpenClaw runtime context (internal):",
+            "This context is runtime-generated, not user-authored. Keep internal details private.",
+            "",
+            "[Internal task completion event]",
+            "source: subagent",
+          ].join("\n"),
+        },
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
@@ -397,9 +409,12 @@ describe("subagents info", () => {
       task: "do routed thing",
       cleanup: "keep",
       createdAt: now - 20_000,
-      startedAt: now - 20_000,
-      endedAt: now - 1_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 20_000,
+        endedAt: now - 1_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     createTaskRecord({
@@ -437,6 +452,8 @@ describe("subagents info", () => {
 
 describe("subagents log", () => {
   function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+    const { execution = { status: "running", startedAt: Date.now() - 10_000 }, ...record } =
+      overrides;
     return {
       runId: "run-subagent-log",
       childSessionKey: "agent:main:subagent:log",
@@ -445,8 +462,8 @@ describe("subagents log", () => {
       task: "inspect logs",
       cleanup: "keep",
       createdAt: Date.now() - 10_000,
-      startedAt: Date.now() - 10_000,
-      ...overrides,
+      ...record,
+      execution,
     };
   }
 

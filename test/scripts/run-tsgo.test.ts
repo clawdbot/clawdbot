@@ -1,4 +1,5 @@
 // Run Tsgo tests cover run tsgo script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,6 +13,25 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const { createTempDir } = createScriptTestHarness();
 
 describe("run-tsgo sparse guard", () => {
+  it("ends sparse-checkout failures with the stable failure trailer", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    spawnSync("git", ["init", "-q"], { cwd });
+    spawnSync("git", ["config", "core.sparseCheckout", "true"], { cwd });
+
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/run-tsgo.mjs"), "-p", "test/tsconfig/tsconfig.core.test.json"],
+      {
+        cwd,
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
+  });
+
   it("ignores non-core projects", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
 

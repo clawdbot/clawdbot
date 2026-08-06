@@ -6,10 +6,7 @@ import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
@@ -20,13 +17,12 @@ import {
 } from "./deliver.queue-integration.test-support.js";
 import { collectEntrySpoolPaths, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   claimDeliveryPlatformSendAttempt,
-  enqueueDeliveryOnce,
-  recoverPendingDeliveries,
-  type DeliverFn,
-} from "./delivery-queue.js";
+  loadPendingDeliveries,
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
+import { enqueueDeliveryOnce, recoverPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -78,7 +74,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   afterEach(() => {
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 

@@ -1,4 +1,3 @@
-// Codex tests cover commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +10,8 @@ import {
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+// Codex tests cover commands plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
@@ -302,12 +303,7 @@ function codexRateLimitPayload(params: {
   };
 }
 
-function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(message);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "message");
 
 function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
   const call = mockFn.mock.calls[callIndex];

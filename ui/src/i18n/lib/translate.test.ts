@@ -1,7 +1,11 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
+import {
+  createStorageMock,
+  installSafeLocalStorageForTesting,
+} from "../../test-helpers/storage.ts";
 import { createI18nManagerForTesting } from "./translate.test-support.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
@@ -42,6 +46,28 @@ describe("I18nManager pending locale retry", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("repairs a Node-style storage accessor without invoking its unsafe getter", async () => {
+    const unsafeGetter = vi.fn(() => {
+      throw new Error("Node WebStorage is unavailable without a local-storage file");
+    });
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get: unsafeGetter,
+    });
+
+    const storage = installSafeLocalStorageForTesting();
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+
+    expect(unsafeGetter).not.toHaveBeenCalled();
+    expect(Object.hasOwn(descriptor ?? {}, "get")).toBe(false);
+    expect(descriptor?.value).toBe(storage);
+    expect(getSafeLocalStorage()).toBe(storage);
+
+    const { manager } = createManager();
+    await manager.setLocale("en");
+    expect(storage.getItem("openclaw.i18n.locale")).toBe("en");
   });
 
   it("applies and notifies when a failed locale load is retried after recovery", async () => {

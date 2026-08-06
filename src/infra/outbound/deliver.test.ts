@@ -20,17 +20,9 @@ import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookRegistration } from "../../plugins/types.js";
-import {
-  createChannelTestPluginBase,
-  createOutboundTestPlugin,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -405,7 +397,6 @@ describe("deliverOutboundPayloads", () => {
 
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
@@ -500,43 +491,7 @@ describe("deliverOutboundPayloads", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
-    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
-  });
-
-  it("delivers through full active plugin when pinned setup channel has no sender", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
-    const setupRegistry = createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "setup",
-        plugin: createChannelTestPluginBase({ id: "matrix" }),
-      },
-    ]);
-    const runtimeRegistry = createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "runtime",
-        plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForTest }),
-      },
-    ]);
-
-    setActivePluginRegistry(setupRegistry);
-    pinActivePluginChannelRegistry(setupRegistry);
-    setActivePluginRegistry(runtimeRegistry);
-
-    const results = await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [{ text: "hello from queue" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    expect(sendMatrix).toHaveBeenCalledWith("!room:example", "hello from queue", {
-      cfg: matrixChunkConfig,
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
-    expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
@@ -604,7 +559,7 @@ describe("deliverOutboundPayloads", () => {
           silent: true,
         },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
   });
 
   it("requires a real reconciler for required unknown-send recovery support", async () => {
@@ -687,7 +642,7 @@ describe("deliverOutboundPayloads", () => {
           reconcileUnknownSend: true,
         },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
 
     await expect(
       resolveOutboundDurableFinalDeliverySupport({
@@ -729,7 +684,7 @@ describe("deliverOutboundPayloads", () => {
         channel: "matrix",
         requirements: { text: true, reconcileUnknownSend: true },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
   });
 
   it("requires every concrete reconciliation kind for heterogeneous batches", async () => {
@@ -1192,6 +1147,73 @@ describe("deliverOutboundPayloads", () => {
     for (const [ctx] of messageSendText.mock.calls) {
       expect(ctx.deliveryQueueId).toBeUndefined();
     }
+  });
+
+  it("automatically enables provider reconciliation for one supported prepared payload", async () => {
+    const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+      await ctx.onPlatformSendDispatch?.();
+      return {
+        messageId: "message-adapter-1",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+          kind: "text",
+        }),
+      };
+    });
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        automaticUnknownSendReconciliation: true,
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: messageSendText },
+    });
+
+    await deliverMatrix({ queuePolicy: "required" });
+
+    expect(requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery")).toMatchObject({
+      requireUnknownSendReconciliation: true,
+    });
+    expect(messageSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryQueueId: "mock-queue-id",
+        deliveryPartIndex: 0,
+        deliveryPartCount: 1,
+      }),
+    );
+  });
+
+  it("leaves ordinary multi-payload delivery on the existing fail-closed path", async () => {
+    const messageSendText = vi.fn(async (_ctx: ChannelMessageSendTextContext) => ({
+      messageId: "message-adapter-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+        kind: "text",
+      }),
+    }));
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        automaticUnknownSendReconciliation: true,
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: messageSendText },
+    });
+
+    await deliverMatrix({
+      payloads: [{ text: "first" }, { text: "second" }],
+      queuePolicy: "required",
+    });
+
+    expect(messageSendText).toHaveBeenCalledTimes(2);
+    expect(messageSendText.mock.calls.map(([ctx]) => ctx.deliveryQueueId)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   it("rejects explicitly reconciled multi-payload sends before enqueue or platform I/O", async () => {

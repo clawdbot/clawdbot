@@ -2418,6 +2418,21 @@ checkout_git_openclaw_ref() {
     return 1
 }
 
+validate_git_checkout_head() {
+    local repo_dir="$1"
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        return 0
+    fi
+    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+        return 0
+    fi
+
+    ui_error "Git checkout has no commit: ${repo_dir}"
+    ui_info "Move or remove this incomplete checkout, then retry the installer."
+    return 1
+}
+
 git_install_lockfile_flag() {
     local repo_dir="$1"
     local ref="$2"
@@ -2873,6 +2888,7 @@ install_openclaw_from_git() {
     ensure_pnpm
     ensure_pnpm_binary_for_scripts
 
+    validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" ]]; then
         mkdir -p "$(dirname "$repo_dir")"
         run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"

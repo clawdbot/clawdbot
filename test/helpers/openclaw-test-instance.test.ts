@@ -1,4 +1,5 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -12,6 +13,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`Expected missing path: ${targetPath}`);
+}
+
+function createGatewayProcessState(
+  overrides: Partial<{ exitCode: number | null; signalCode: NodeJS.Signals | null }> = {},
+) {
+  return Object.assign(new EventEmitter(), {
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    ...overrides,
+  });
 }
 
 describe("openclaw test instance", () => {
@@ -40,8 +51,67 @@ describe("openclaw test instance", () => {
 
   it("fails startup waits immediately after signaled gateway exits", async () => {
     await expect(
-      testing.waitForPortOpen({ exitCode: null, signalCode: "SIGTERM" }, [], [], 1, 10_000),
-    ).rejects.toThrow("gateway exited before listening");
+      testing.waitForGatewayReady(
+        createGatewayProcessState({ signalCode: "SIGTERM" }),
+        [],
+        [],
+        1,
+        10_000,
+      ),
+    ).rejects.toThrow("gateway exited before readiness");
+  });
+
+  it("waits until the gateway readiness probe reports ready", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response('{"ready":false,"failing":["startup-sidecars"]}', { status: 503 }),
+      )
+      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }));
+
+    await expect(
+      testing.waitForGatewayReady(createGatewayProcessState(), [], [], 12345, 1_000, fetchImpl),
+    ).resolves.toBeUndefined();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://127.0.0.1:12345/readyz");
+  });
+
+  it("keeps stalled readiness probes inside the startup deadline", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    const startedAt = Date.now();
+
+    await expect(
+      testing.waitForGatewayReady(createGatewayProcessState(), [], [], 12345, 25, fetchImpl),
+    ).rejects.toThrow("timeout waiting for gateway readiness");
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("aborts a stalled readiness probe when the gateway exits", async () => {
+    const processState = createGatewayProcessState();
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    const startedAt = Date.now();
+    setTimeout(() => {
+      processState.signalCode = "SIGTERM";
+      processState.emit("exit", null, "SIGTERM");
+    }, 25);
+
+    await expect(
+      testing.waitForGatewayReady(processState, [], [], 12345, 5_000, fetchImpl),
+    ).rejects.toThrow("gateway exited before readiness");
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
   it("signals test instance process groups on POSIX", () => {

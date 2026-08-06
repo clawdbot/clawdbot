@@ -471,18 +471,24 @@ export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload:
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  visibleReplyDelivered: boolean;
   sessionCtx: ExternalFailureConversationContext;
   cfg?: OpenClawConfig;
 }): ReplyPayload {
+  const text = params.isHeartbeat
+    ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+    : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
+  // Once output is visible, hiding its terminal failure leaves a misleading partial reply.
+  // Keep normal group silence only for failures that produced no visible output.
   return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
-      text: params.isHeartbeat
-        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      sessionCtx: params.sessionCtx,
-      isGenericRunnerFailure: true,
-      cfg: params.cfg,
-    }),
+    text: params.visibleReplyDelivered
+      ? text
+      : resolveExternalRunFailureTextForConversation({
+          text,
+          sessionCtx: params.sessionCtx,
+          isGenericRunnerFailure: true,
+          cfg: params.cfg,
+        }),
   });
 }
 

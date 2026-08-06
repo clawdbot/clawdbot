@@ -302,14 +302,6 @@ async function readSessionHistoryBody(
   return (await res.json()) as SessionHistoryBody;
 }
 
-async function expectSessionHistoryText(params: { sessionKey: string; expectedText: string }) {
-  await withGatewayHarness(async (harness) => {
-    const body = await readSessionHistoryBody(harness.port, params.sessionKey);
-    expect(body.sessionKey).toBe(params.sessionKey);
-    expect(body.messages?.[0]?.content?.[0]?.text).toBe(params.expectedText);
-  });
-}
-
 async function readSseEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   state: { buffer: string },
@@ -771,6 +763,24 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("claims invalid encoded session keys on a listening Gateway", async () => {
+    await withGatewayHarness(async (harness) => {
+      for (const encodedSessionKey of ["%20", "%zz"]) {
+        const response = await fetch(
+          `http://127.0.0.1:${harness.port}/sessions/${encodedSessionKey}/history`,
+        );
+        const body = await response.json();
+        expect(response.status).toBe(400);
+        expect(body).toEqual({
+          error: {
+            type: "invalid_request_error",
+            message: "invalid session key",
+          },
+        });
+      }
+    });
+  });
+
   test("keeps standalone delivery-mirror rows in direct REST history", async () => {
     const { storePath } = await seedSession({ text: "visible history" });
     await appendTranscriptMessage({
@@ -801,7 +811,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("prefers the freshest duplicate row for direct history reads", async () => {
+  test("rejects duplicate canonical rows with an actionable migration error", async () => {
     testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     await replaceTranscriptEvents(
@@ -848,9 +858,14 @@ describe("session history HTTP endpoints", () => {
       ],
     });
 
-    await expectSessionHistoryText({
-      sessionKey: "agent:main:work",
-      expectedText: "fresh history",
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:work");
+      expect(res.status).toBe(409);
+      expectErrorResponse(await res.json(), {
+        type: "migration_required",
+        message:
+          "duplicate rows resolve to canonical session key agent:main:work; stop the Gateway and run openclaw doctor --fix",
+      });
     });
   });
 

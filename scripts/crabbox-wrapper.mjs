@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statfsSync,
@@ -593,115 +594,6 @@ function effectiveTargetContext(commandArgs) {
   };
 }
 
-const runValueOptions = new Set([
-  "allow-env",
-  "artifact-glob",
-  "azure-location",
-  "azure-os-disk",
-  "azure-resource-group",
-  "azure-subnet",
-  "azure-vnet",
-  "blacksmith-job",
-  "blacksmith-org",
-  "blacksmith-ref",
-  "blacksmith-workflow",
-  "capture-stderr",
-  "capture-stdout",
-  "class",
-  "cloudflare-url",
-  "cloudflare-workdir",
-  "daytona-api-url",
-  "daytona-snapshot",
-  "daytona-ssh-access-minutes",
-  "daytona-ssh-gateway-host",
-  "daytona-target",
-  "daytona-user",
-  "daytona-work-root",
-  "download",
-  "env-from-profile",
-  "env-helper",
-  "e2b-api-url",
-  "e2b-domain",
-  "e2b-template",
-  "e2b-user",
-  "e2b-workdir",
-  "fresh-pr",
-  "id",
-  "idle-timeout",
-  "islo-base-url",
-  "islo-disk-gb",
-  "islo-gateway-profile",
-  "islo-image",
-  "islo-memory-mb",
-  "islo-snapshot-name",
-  "islo-vcpus",
-  "islo-workdir",
-  "junit",
-  "label",
-  "market",
-  "modal-app",
-  "modal-image",
-  "modal-python",
-  "modal-workdir",
-  "namespace-auto-stop-idle-timeout",
-  "namespace-image",
-  "namespace-repository",
-  "namespace-site",
-  "namespace-size",
-  "namespace-volume-size-gb",
-  "namespace-work-root",
-  "network",
-  "preflight-tools",
-  "profile",
-  "proof-template",
-  "provider",
-  "proxmox-api-url",
-  "proxmox-bridge",
-  "proxmox-node",
-  "proxmox-pool",
-  "proxmox-storage",
-  "proxmox-template-id",
-  "proxmox-user",
-  "proxmox-work-root",
-  "script",
-  "scenario",
-  "semaphore-host",
-  "semaphore-idle-timeout",
-  "semaphore-machine",
-  "semaphore-os-image",
-  "semaphore-project",
-  "sprites-api-url",
-  "sprites-work-root",
-  "static-host",
-  "static-port",
-  "static-user",
-  "static-work-root",
-  "stop-after",
-  "tailscale-auth-key-env",
-  "tailscale-exit-node",
-  "tailscale-hostname-template",
-  "tailscale-tags",
-  "target",
-  "tensorlake-api-url",
-  "tensorlake-cli",
-  "tensorlake-cpus",
-  "tensorlake-disk-mb",
-  "tensorlake-image",
-  "tensorlake-memory-mb",
-  "tensorlake-namespace",
-  "tensorlake-organization-id",
-  "tensorlake-project-id",
-  "tensorlake-snapshot",
-  "tensorlake-timeout-secs",
-  "tensorlake-workdir",
-  "ttl",
-  "type",
-  "emit-proof",
-  "preset",
-  "preset-var",
-  "windows-mode",
-]);
-
 let runValueOptionsFromHelp;
 
 function parseRunValueOptionsFromHelp(text) {
@@ -717,61 +609,74 @@ function parseRunValueOptionsFromHelp(text) {
   return names;
 }
 
-function currentRunValueOptions() {
-  if (!runValueOptionsFromHelp) {
-    runValueOptionsFromHelp = new Set([
-      ...runValueOptions,
-      ...parseRunValueOptionsFromHelp(help.text),
-    ]);
-  }
-  return runValueOptionsFromHelp;
-}
-
 function runOptionName(arg) {
   return arg.replace(/^-+/u, "").split("=", 1)[0];
 }
 
-function runCommandBounds(commandArgs) {
-  if (commandArgs[0] !== "run") {
-    return { start: -1, optionEnd: commandArgs.length };
+function parseRunInvocation(helpText, commandArgs) {
+  runValueOptionsFromHelp ??= parseRunValueOptionsFromHelp(helpText);
+  let start = -1;
+  let optionEnd = commandArgs.indexOf("--");
+  optionEnd = optionEnd < 0 ? commandArgs.length : optionEnd;
+  if (commandArgs[0] === "run") {
+    for (let index = 1; index < commandArgs.length; index += 1) {
+      const arg = commandArgs[index];
+      if (arg === "--") {
+        start = index + 1;
+        optionEnd = index;
+        break;
+      }
+      if (!arg.startsWith("-")) {
+        start = index;
+        optionEnd = index;
+        break;
+      }
+      if (!arg.includes("=") && runValueOptionsFromHelp.has(runOptionName(arg))) {
+        index += 1;
+      }
+    }
   }
-  for (let index = 1; index < commandArgs.length; index += 1) {
+
+  const optionEntries = [];
+  const options = new Map();
+  for (let index = commandArgs[0] === "run" ? 1 : 0; index < optionEnd; index += 1) {
     const arg = commandArgs[index];
-    if (arg === "--") {
-      return { start: index + 1, optionEnd: index };
-    }
     if (!arg.startsWith("-")) {
-      return { start: index, optionEnd: index };
+      continue;
     }
-    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
+    const name = runOptionName(arg);
+    const assigned = arg.indexOf("=");
+    const consumesValue = commandArgs[0] !== "run" || runValueOptionsFromHelp.has(name);
+    const entry = {
+      index,
+      value:
+        assigned >= 0
+          ? arg.slice(assigned + 1)
+          : consumesValue
+            ? (commandArgs[index + 1] ?? "")
+            : "",
+    };
+    optionEntries.push({ name, ...entry });
+    if (!options.has(name)) {
+      options.set(name, entry);
+    }
+    if (commandArgs[0] === "run" && assigned < 0 && consumesValue) {
       index += 1;
     }
   }
-  return { start: -1, optionEnd: commandArgs.length };
-}
 
-function crabboxOptionArgs(commandArgs) {
-  const bounds = runCommandBounds(commandArgs);
-  if (commandArgs[0] === "run") {
-    return commandArgs.slice(0, bounds.optionEnd);
-  }
-  const delimiterCandidate = commandArgs.indexOf("--");
-  return delimiterCandidate >= 0 ? commandArgs.slice(0, delimiterCandidate) : commandArgs;
+  return {
+    args: commandArgs,
+    commandArgs: start >= 0 ? commandArgs.slice(start) : [],
+    optionEntries,
+    options,
+    optionEnd,
+    start,
+  };
 }
 
 function commandProvider(commandArgsInput) {
-  let commandArgs = commandArgsInput;
-  commandArgs = crabboxOptionArgs(commandArgs);
-  for (let index = 0; index < commandArgs.length; index += 1) {
-    const arg = commandArgs[index];
-    if (arg === "--provider" || arg === "-provider") {
-      return commandArgs[index + 1] ?? "";
-    }
-    if (arg.startsWith("--provider=") || arg.startsWith("-provider=")) {
-      return arg.slice(arg.indexOf("=") + 1);
-    }
-  }
-  return "";
+  return optionValue(commandArgsInput, "--provider");
 }
 
 function selectedProvider(commandArgs, advertisedProviders = [], versionText = "") {
@@ -1074,43 +979,17 @@ function enforceBrokeredCloud(commandArgs, providerName, explicitProviderRequest
 }
 
 function optionValue(commandArgsInput, name) {
-  let commandArgs = commandArgsInput;
-  commandArgs = crabboxOptionArgs(commandArgs);
-  for (let index = 0; index < commandArgs.length; index += 1) {
-    const arg = commandArgs[index];
-    if (arg === name || arg === name.replace(/^--/u, "-")) {
-      return commandArgs[index + 1] ?? "";
-    }
-    if (arg.startsWith(`${name}=`) || arg.startsWith(`${name.replace(/^--/u, "-")}=`)) {
-      return arg.slice(arg.indexOf("=") + 1);
-    }
-  }
-  return "";
+  return (
+    parseRunInvocation(help.text, commandArgsInput).options.get(runOptionName(name))?.value ?? ""
+  );
 }
 
 function hasOption(commandArgsInput, name) {
-  let commandArgs = commandArgsInput;
-  commandArgs = crabboxOptionArgs(commandArgs);
-  const shortName = name.replace(/^--/u, "-");
-  for (const arg of commandArgs) {
-    if (
-      arg === name ||
-      arg === shortName ||
-      arg.startsWith(`${name}=`) ||
-      arg.startsWith(`${shortName}=`)
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return parseRunInvocation(help.text, commandArgsInput).options.has(runOptionName(name));
 }
 
 function commandOptionEnd(commandArgs) {
-  if (commandArgs[0] === "run") {
-    return runCommandBounds(commandArgs).optionEnd;
-  }
-  const delimiterEntry = commandArgs.indexOf("--");
-  return delimiterEntry >= 0 ? delimiterEntry : commandArgs.length;
+  return parseRunInvocation(help.text, commandArgs).optionEnd;
 }
 
 function shouldPreferAzureForWindows(commandArgs, advertisedProviders = []) {
@@ -1231,28 +1110,17 @@ function absolutizeLocalRunPaths(commandArgs) {
   }
 
   const normalizedArgs = [...commandArgs];
-  const { optionEnd } = runCommandBounds(normalizedArgs);
-  for (let index = 1; index < optionEnd; index += 1) {
+  const invocation = parseRunInvocation(help.text, normalizedArgs);
+  for (const { index, name: optionName } of invocation.optionEntries) {
     const arg = normalizedArgs[index];
-    if (!arg.startsWith("-")) {
-      continue;
-    }
-
-    const optionName = runOptionName(arg);
     const absolutize = optionName === "download" ? repoRelativeDownload : repoRelativePath;
     if (localPathRunOptions.has(optionName) || optionName === "download") {
       const equals = arg.indexOf("=");
       if (equals >= 0) {
         normalizedArgs[index] = `${arg.slice(0, equals + 1)}${absolutize(arg.slice(equals + 1))}`;
-      } else if (index + 1 < optionEnd) {
+      } else if (index + 1 < invocation.optionEnd) {
         normalizedArgs[index + 1] = absolutize(normalizedArgs[index + 1]);
-        index += 1;
       }
-      continue;
-    }
-
-    if (!arg.includes("=") && currentRunValueOptions().has(optionName)) {
-      index += 1;
     }
   }
   return normalizedArgs;
@@ -1494,9 +1362,26 @@ function isLocalContainerProvider(providerName) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
 
-function runCommandArgs(commandArgs) {
-  const { start } = runCommandBounds(commandArgs);
-  return start >= 0 ? commandArgs.slice(start) : [];
+function replaceRunPayload(invocation, payload) {
+  const normalizedArgs = [...invocation.args];
+  normalizedArgs.splice(invocation.start, normalizedArgs.length - invocation.start, ...payload);
+  return normalizedArgs;
+}
+
+function renderRunShellCommand(invocation, join = shellJoin) {
+  return invocation.options.has("shell") && invocation.commandArgs.length === 1
+    ? invocation.commandArgs[0]
+    : join(invocation.commandArgs);
+}
+
+function replaceRunCommandWithShell(initialInvocation, shellCommand) {
+  let invocation = initialInvocation;
+  if (!invocation.options.has("shell")) {
+    const normalizedArgs = [...invocation.args];
+    normalizedArgs.splice(invocation.optionEnd, 0, "--shell");
+    invocation = parseRunInvocation(help.text, normalizedArgs);
+  }
+  return replaceRunPayload(invocation, [shellCommand]);
 }
 
 function normalizedCommandWords(commandArgs) {
@@ -2537,7 +2422,8 @@ function remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias) {
     'openclaw_changed_gate_bundle_tmp="$(mktemp /tmp/openclaw-changed-gate.XXXXXX)" || exit 2;',
     "trap 'rm -f \"$openclaw_changed_gate_bundle_tmp\"' EXIT HUP INT TERM;",
     'cp "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle_tmp" || exit 2;',
-    'rm -rf -- "$openclaw_changed_gate_bundle" || exit 2;',
+    // Interrupted rsync leaves bundle.XXXXXX beside the destination; never expose transport residue to lane classification.
+    'rm -rf -- "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle".* || exit 2;',
     "rm -rf .git || exit 2;",
     "git init -q || exit 2;",
     "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git || exit 2;",
@@ -2553,28 +2439,20 @@ function remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias) {
   ].join(" ");
 }
 
-function injectRemoteChangedGateEnvironment(commandArgs) {
-  if (commandArgs[0] !== "run" || isNativeWindowsRemoteTarget(commandArgs)) {
-    return commandArgs;
+function injectRemoteChangedGateEnvironment(invocation, facts) {
+  if (invocation.args[0] !== "run" || isNativeWindowsRemoteTarget(invocation.args)) {
+    return invocation.args;
   }
 
-  const { start } = runCommandBounds(commandArgs);
-  if (start < 0) {
-    return commandArgs;
+  if (invocation.start < 0 || !facts.changedGate) {
+    return invocation.args;
   }
 
-  const remoteCommand = commandArgs.slice(start);
-  if (!isChangedGateCommand(remoteCommand)) {
-    return commandArgs;
-  }
-
-  const normalizedArgs = [...commandArgs];
   const markedRemoteCommand =
-    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
-      ? [markShellChangedGateAsRemoteChild(remoteCommand[0])]
-      : markDirectChangedGateAsRemoteChild(remoteCommand);
-  normalizedArgs.splice(start, normalizedArgs.length - start, ...markedRemoteCommand);
-  return normalizedArgs;
+    invocation.options.has("shell") && invocation.commandArgs.length === 1
+      ? [markShellChangedGateAsRemoteChild(invocation.commandArgs[0])]
+      : markDirectChangedGateAsRemoteChild(invocation.commandArgs);
+  return replaceRunPayload(invocation, markedRemoteCommand);
 }
 
 function markShellChangedGateAsRemoteChild(command) {
@@ -2672,42 +2550,25 @@ function remoteWindowsHydratedNodeModulesBootstrap() {
   ].join("; ");
 }
 
-function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerName) {
-  const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(commandArgs));
+function injectRemoteWindowsHydratedNodeModulesBootstrap(invocation, facts, providerName) {
   if (
-    commandArgs[0] !== "run" ||
+    invocation.args[0] !== "run" ||
     !isHydratedNativeWindowsProvider(providerName) ||
-    !isNativeWindowsRemoteTarget(commandArgs) ||
-    !hasOption(commandArgs, "--id") ||
-    !runtimeEntrypoint
+    !isNativeWindowsRemoteTarget(invocation.args) ||
+    !invocation.options.has("id") ||
+    !facts.runtimeEntrypoint
   ) {
-    return commandArgs;
+    return invocation.args;
   }
 
-  const { start, optionEnd } = runCommandBounds(commandArgs);
-  if (start < 0) {
-    return commandArgs;
+  if (invocation.start < 0) {
+    return invocation.args;
   }
 
-  const normalizedArgs = [...commandArgs];
-  const remoteCommand = normalizedArgs.slice(start);
-  const originalShellCommand =
-    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
-      ? remoteCommand[0]
-      : powershellJoin(remoteCommand);
-  const shellCommand = `${remoteWindowsHydratedNodeModulesBootstrap()}; ${originalShellCommand}`;
-
-  if (!hasOption(normalizedArgs, "--shell")) {
-    normalizedArgs.splice(optionEnd, 0, "--shell");
-  }
-
-  const updatedBounds = runCommandBounds(normalizedArgs);
-  normalizedArgs.splice(
-    updatedBounds.start,
-    normalizedArgs.length - updatedBounds.start,
-    shellCommand,
+  return replaceRunCommandWithShell(
+    invocation,
+    `${remoteWindowsHydratedNodeModulesBootstrap()}; ${renderRunShellCommand(invocation, powershellJoin)}`,
   );
-  return normalizedArgs;
 }
 
 function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase, changedGateAlias) {
@@ -2715,30 +2576,15 @@ function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase, chang
     return commandArgs;
   }
 
-  const { start, optionEnd } = runCommandBounds(commandArgs);
-  if (start < 0) {
+  const invocation = parseRunInvocation(help.text, commandArgs);
+  if (invocation.start < 0) {
     return commandArgs;
   }
 
-  const normalizedArgs = [...commandArgs];
-  const remoteCommand = normalizedArgs.slice(start);
-  const originalShellCommand =
-    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
-      ? remoteCommand[0]
-      : shellJoin(remoteCommand);
-  const shellCommand = `${remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias)} && ${originalShellCommand}`;
-
-  if (!hasOption(normalizedArgs, "--shell")) {
-    normalizedArgs.splice(optionEnd, 0, "--shell");
-  }
-
-  const updatedBounds = runCommandBounds(normalizedArgs);
-  normalizedArgs.splice(
-    updatedBounds.start,
-    normalizedArgs.length - updatedBounds.start,
-    shellCommand,
+  return replaceRunCommandWithShell(
+    invocation,
+    `${remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias)} && ${renderRunShellCommand(invocation)}`,
   );
-  return normalizedArgs;
 }
 
 function remotePosixJsEnvBootstrap() {
@@ -3188,13 +3034,13 @@ function readLeadingShellWord(command, start) {
   return word ? { word, end: command.length } : null;
 }
 
-function remoteWsl2JsBootstrapRequirements(commandArgs) {
-  const runArgs = runCommandArgs(commandArgs);
-  const directScopedEnvCommand = hasOption(commandArgs, "--shell")
+function analyzeRemoteCommand(invocation) {
+  const runArgs = invocation.commandArgs;
+  const directScopedEnvCommand = invocation.options.has("shell")
     ? null
     : scopedAwsMacosEnvCommand(runArgs);
   const shellScopedEnvCommand =
-    hasOption(commandArgs, "--shell") && runArgs.length === 1
+    invocation.options.has("shell") && runArgs.length === 1
       ? scopedAwsMacosShellEnvCommand(runArgs[0])
       : null;
   const scopedEnvCommand = directScopedEnvCommand ?? shellScopedEnvCommand;
@@ -3204,46 +3050,45 @@ function remoteWsl2JsBootstrapRequirements(commandArgs) {
   const packageManagerNeeded = scopedEnvCommand?.packageManager || packageManagerFallbackNeeded;
   const runtimeEntrypoint =
     scopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
-  const runtimeNeeded =
-    runtimeEntrypoint && !awsMacosBunEntrypoints.has(runtimeEntrypoint) ? runtimeEntrypoint : "";
 
   return {
-    scopedEnvCommand,
+    bun: scopedEnvCommand?.bun || commandNeedsAwsMacosBun(runArgs),
+    changedGate: isChangedGateCommand(runArgs),
+    commandArgs: runArgs,
     packageManager: packageManagerNeeded,
-    runtimeEntrypoint: runtimeNeeded,
+    runtimeEntrypoint,
+    scopedEnvCommand,
+    swift: commandNeedsAwsMacosSwiftToolchain(runArgs),
   };
 }
 
-function prepareRemoteWsl2JsBootstrapScript(commandArgs, providerName) {
-  const requirements = remoteWsl2JsBootstrapRequirements(commandArgs);
+function prepareRemoteWsl2JsBootstrapScript(invocation, facts, providerName) {
+  const runtimeEntrypoint = awsMacosBunEntrypoints.has(facts.runtimeEntrypoint)
+    ? ""
+    : facts.runtimeEntrypoint;
   if (
-    !isBrokeredWsl2RemoteTarget(commandArgs, providerName) ||
-    (!requirements.runtimeEntrypoint && !requirements.packageManager)
+    !isBrokeredWsl2RemoteTarget(invocation.args, providerName) ||
+    (!runtimeEntrypoint && !facts.packageManager)
   ) {
-    return { args: commandArgs, cleanup: () => {}, prepared: false };
+    return { args: invocation.args, cleanup: () => {}, prepared: false };
   }
 
-  const { start, optionEnd } = runCommandBounds(commandArgs);
-  if (start < 0) {
-    return { args: commandArgs, cleanup: () => {}, prepared: false };
+  if (invocation.start < 0) {
+    return { args: invocation.args, cleanup: () => {}, prepared: false };
   }
 
   const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-wsl2-script-"));
   const scriptPath = resolve(scriptRoot, "script.sh");
-  const remoteCommand = commandArgs.slice(start);
   const originalShellCommand =
-    requirements.scopedEnvCommand?.shellCommand ??
-    (hasOption(commandArgs, "--shell") && remoteCommand.length === 1
-      ? remoteCommand[0]
-      : shellJoin(remoteCommand));
+    facts.scopedEnvCommand?.shellCommand ?? renderRunShellCommand(invocation);
   const script = `${remoteWsl2JsBootstrap({
-    packageManager: requirements.packageManager,
+    packageManager: facts.packageManager,
   })} || exit $?\n{ ${originalShellCommand}\n}\n`;
   writeFileSync(scriptPath, script, "utf8");
   chmodSync(scriptPath, 0o700);
 
-  const normalizedArgs = commandArgs.slice(0, optionEnd);
-  if (!hasOption(normalizedArgs, "--no-hydrate")) {
+  const normalizedArgs = invocation.args.slice(0, invocation.optionEnd);
+  if (!invocation.options.has("no-hydrate")) {
     normalizedArgs.push("--no-hydrate");
   }
   normalizedArgs.push("--script", scriptPath);
@@ -3255,58 +3100,25 @@ function prepareRemoteWsl2JsBootstrapScript(commandArgs, providerName) {
   };
 }
 
-function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
-  const runArgs = runCommandArgs(commandArgs);
-  const directScopedEnvCommand = hasOption(commandArgs, "--shell")
-    ? null
-    : scopedAwsMacosEnvCommand(runArgs);
-  const shellScopedEnvCommand =
-    hasOption(commandArgs, "--shell") && runArgs.length === 1
-      ? scopedAwsMacosShellEnvCommand(runArgs[0])
-      : null;
-  const scopedEnvCommand = directScopedEnvCommand ?? shellScopedEnvCommand;
-  const packageManagerFallbackNeeded = scopedEnvCommand
-    ? commandNeedsAwsMacosPackageManager(runArgs)
-    : commandNeedsAwsMacosPackageManager(runArgs, { canShimIgnoreEnvironment: false });
-  const packageManagerNeeded = scopedEnvCommand?.packageManager || packageManagerFallbackNeeded;
-  const bunNeeded = scopedEnvCommand?.bun || commandNeedsAwsMacosBun(runArgs);
-  const runtimeEntrypoint =
-    scopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
+function injectRemoteAwsMacosJsBootstrap(invocation, facts, providerName) {
   if (
-    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    (!runtimeEntrypoint && !packageManagerNeeded && !bunNeeded)
+    !isAwsMacosRemoteTarget(invocation.args, providerName) ||
+    (!facts.runtimeEntrypoint && !facts.packageManager && !facts.bun)
   ) {
-    return commandArgs;
+    return invocation.args;
   }
 
-  const { start, optionEnd } = runCommandBounds(commandArgs);
-  if (start < 0) {
-    return commandArgs;
+  if (invocation.start < 0) {
+    return invocation.args;
   }
 
-  const normalizedArgs = [...commandArgs];
-  const remoteCommand = normalizedArgs.slice(start);
   const originalShellCommand =
-    scopedEnvCommand?.shellCommand ??
-    (hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
-      ? remoteCommand[0]
-      : shellJoin(remoteCommand));
+    facts.scopedEnvCommand?.shellCommand ?? renderRunShellCommand(invocation);
   const shellCommand = `${remoteAwsMacosJsBootstrap({
-    packageManager: packageManagerNeeded,
-    bun: bunNeeded,
+    packageManager: facts.packageManager,
+    bun: facts.bun,
   })} && { ${originalShellCommand}\n}`;
-
-  if (!hasOption(normalizedArgs, "--shell")) {
-    normalizedArgs.splice(optionEnd, 0, "--shell");
-  }
-
-  const updatedBounds = runCommandBounds(normalizedArgs);
-  normalizedArgs.splice(
-    updatedBounds.start,
-    normalizedArgs.length - updatedBounds.start,
-    shellCommand,
-  );
-  return normalizedArgs;
+  return replaceRunCommandWithShell(invocation, shellCommand);
 }
 
 function remoteAwsMacosSwiftBootstrap() {
@@ -3334,71 +3146,29 @@ function remoteAwsMacosSwiftBootstrap() {
   ].join(" ");
 }
 
-function injectRemoteAwsMacosSwiftBootstrap(commandArgs, providerName, force = false) {
-  const runArgs = runCommandArgs(commandArgs);
-  if (
-    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    (!force && !commandNeedsAwsMacosSwiftToolchain(runArgs))
-  ) {
-    return commandArgs;
+function injectRemoteAwsMacosSwiftBootstrap(invocation, facts, providerName, force = false) {
+  if (!isAwsMacosRemoteTarget(invocation.args, providerName) || (!force && !facts.swift)) {
+    return invocation.args;
   }
 
-  const { start, optionEnd } = runCommandBounds(commandArgs);
-  if (start < 0) {
-    return commandArgs;
+  if (invocation.start < 0) {
+    return invocation.args;
   }
 
-  const normalizedArgs = [...commandArgs];
-  const remoteCommand = normalizedArgs.slice(start);
-  const originalShellCommand =
-    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
-      ? remoteCommand[0]
-      : shellJoin(remoteCommand);
-  const shellCommand = `${remoteAwsMacosSwiftBootstrap()} && { ${originalShellCommand}\n}`;
-
-  if (!hasOption(normalizedArgs, "--shell")) {
-    normalizedArgs.splice(optionEnd, 0, "--shell");
-  }
-
-  const updatedBounds = runCommandBounds(normalizedArgs);
-  normalizedArgs.splice(
-    updatedBounds.start,
-    normalizedArgs.length - updatedBounds.start,
-    shellCommand,
+  return replaceRunCommandWithShell(
+    invocation,
+    `${remoteAwsMacosSwiftBootstrap()} && { ${renderRunShellCommand(invocation)}\n}`,
   );
-  return normalizedArgs;
-}
-
-function hasRunOption(commandArgs, name) {
-  if (commandArgs[0] !== "run") {
-    return false;
-  }
-  const { optionEnd } = runCommandBounds(commandArgs);
-  const normalizedName = name.replace(/^-+/u, "");
-  for (let index = 1; index < optionEnd; index += 1) {
-    const arg = commandArgs[index];
-    if (arg.startsWith("-") && runOptionName(arg) === normalizedName) {
-      return true;
-    }
-    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
-      index += 1;
-    }
-  }
-  return false;
 }
 
 function replaceRunFlagWithScript(commandArgs, flagName, scriptPath) {
-  const { optionEnd } = runCommandBounds(commandArgs);
-  const normalizedName = flagName.replace(/^-+/u, "");
+  const invocation = parseRunInvocation(help.text, commandArgs);
+  const normalizedName = runOptionName(flagName);
   const normalizedArgs = [...commandArgs];
-  for (let index = 1; index < optionEnd; index += 1) {
-    const arg = normalizedArgs[index];
-    if (arg.startsWith("-") && runOptionName(arg) === normalizedName) {
+  for (const { index, name } of invocation.optionEntries) {
+    if (name === normalizedName) {
       normalizedArgs.splice(index, 1, "--script", scriptPath);
       return normalizedArgs;
-    }
-    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
-      index += 1;
     }
   }
   return normalizedArgs;
@@ -3407,7 +3177,7 @@ function replaceRunFlagWithScript(commandArgs, flagName, scriptPath) {
 function prepareAwsMacosScriptStdinBootstrap(commandArgs, providerName) {
   if (
     !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    !hasRunOption(commandArgs, "--script-stdin")
+    !parseRunInvocation(help.text, commandArgs).options.has("script-stdin")
   ) {
     return { args: commandArgs, cleanup: () => {}, prepared: false };
   }
@@ -3510,7 +3280,10 @@ function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
     return false;
   }
 
-  return isSparseCheckout() || isChangedGateCommand(runCommandArgs(commandArgs));
+  return (
+    isSparseCheckout() ||
+    isChangedGateCommand(parseRunInvocation(help.text, commandArgs).commandArgs)
+  );
 }
 
 function defaultFullCheckoutSyncRoot() {
@@ -3807,8 +3580,7 @@ function injectFullCheckoutLeaseReclaim(commandArgs) {
     return commandArgs;
   }
   const normalizedArgs = [...commandArgs];
-  const { optionEnd } = runCommandBounds(normalizedArgs);
-  normalizedArgs.splice(optionEnd, 0, "--reclaim");
+  normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--reclaim");
   return normalizedArgs;
 }
 
@@ -3817,7 +3589,7 @@ function injectRemoteTestboxCi(commandArgs, providerName) {
     return commandArgs;
   }
   const normalizedArgs = [...commandArgs];
-  const { start } = runCommandBounds(normalizedArgs);
+  const { start } = parseRunInvocation(help.text, normalizedArgs);
   if (start < 0) {
     return normalizedArgs;
   }
@@ -3829,12 +3601,54 @@ function injectRemoteTestboxCi(commandArgs, providerName) {
   return normalizedArgs;
 }
 
+function applyRunTransforms(initialInvocation, initialFacts, options) {
+  const markedArgs = injectRemoteChangedGateEnvironment(initialInvocation, initialFacts);
+  const localArgs =
+    options.childCwd === repoRoot ? markedArgs : absolutizeLocalRunPaths(markedArgs);
+  let invocation = parseRunInvocation(help.text, localArgs);
+  const facts = analyzeRemoteCommand(invocation);
+
+  const wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
+    invocation,
+    facts,
+    options.provider,
+  );
+  let transformedArgs = wsl2ScriptBootstrap.args;
+  invocation = parseRunInvocation(help.text, transformedArgs);
+  transformedArgs = injectRemoteAwsMacosJsBootstrap(invocation, facts, options.provider);
+  invocation = parseRunInvocation(help.text, transformedArgs);
+  transformedArgs = injectRemoteAwsMacosSwiftBootstrap(
+    invocation,
+    facts,
+    options.provider,
+    facts.swift,
+  );
+  invocation = parseRunInvocation(help.text, transformedArgs);
+  transformedArgs = injectRemoteWindowsHydratedNodeModulesBootstrap(
+    invocation,
+    facts,
+    options.provider,
+  );
+  if (options.childCwd !== repoRoot) {
+    transformedArgs = injectRemoteChangedGateGitBootstrap(
+      transformedArgs,
+      options.changedGateBase,
+      options.changedGateAlias,
+    );
+  }
+  return {
+    args: injectRemoteTestboxCi(transformedArgs, options.provider),
+    wsl2ScriptBootstrap,
+  };
+}
+
 const version = probeCrabboxMetadata(binary, ["--version"]);
 const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
+runValueOptionsFromHelp = parseRunValueOptionsFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 
-if (version.status !== 0 || help.status !== 0) {
+if (version.status !== 0 || help.status !== 0 || runValueOptionsFromHelp.size === 0) {
   console.error(
     `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} providers=${providers.join(",") || "unknown"}`,
   );
@@ -3963,13 +3777,16 @@ const scriptStdinPrepared = scriptBootstrap.prepared;
 let wsl2ScriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
 try {
   if (shouldUseFullCheckoutForCleanRemoteSync(normalizedArgs, provider)) {
-    const runWords = runCommandArgs(normalizedArgs);
-    const changedGate = isChangedGateCommand(runWords) ? changedGateBaseForCommand(runWords) : null;
+    const invocation = parseRunInvocation(help.text, normalizedArgs);
+    const facts = analyzeRemoteCommand(invocation);
+    const changedGate = facts.changedGate ? changedGateBaseForCommand(facts.commandArgs) : null;
     const changedGateBase = changedGate?.resolvedBase ?? "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
     fullCheckout = checkout;
     normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
-    childCwd = checkout.dir;
+    // Crabbox claims Git's physical top-level. Match it so macOS /var aliases
+    // restore to the invoking repository instead of the disposable checkout.
+    childCwd = realpathSync(checkout.dir);
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;
     remoteChangedGateAlias = changedGate?.remoteAlias ?? "";
@@ -4004,7 +3821,9 @@ function cleanupOnce() {
   cleanupChildCwd();
 }
 
-const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(normalizedArgs));
+const invocation = parseRunInvocation(help.text, normalizedArgs);
+const commandFacts = analyzeRemoteCommand(invocation);
+const runtimeEntrypoint = commandFacts.runtimeEntrypoint;
 if (
   normalizedArgs[0] === "run" &&
   provider === "aws" &&
@@ -4025,10 +3844,12 @@ if (
   }
 }
 if (normalizedArgs[0] === "run" && isBrokeredWsl2RemoteTarget(normalizedArgs, provider)) {
-  const wsl2Requirements = remoteWsl2JsBootstrapRequirements(normalizedArgs);
-  if (wsl2Requirements.runtimeEntrypoint || wsl2Requirements.packageManager) {
+  const wsl2RuntimeEntrypoint = awsMacosBunEntrypoints.has(runtimeEntrypoint)
+    ? ""
+    : runtimeEntrypoint;
+  if (wsl2RuntimeEntrypoint || commandFacts.packageManager) {
     console.error(
-      `[crabbox] provider=${provider} WSL2 raw boxes may lack Node/Corepack/pnpm for ${wsl2Requirements.runtimeEntrypoint || "package-manager"}; using no-hydrate pinned user-local JavaScript tooling before the command`,
+      `[crabbox] provider=${provider} WSL2 raw boxes may lack Node/Corepack/pnpm for ${wsl2RuntimeEntrypoint || "package-manager"}; using no-hydrate pinned user-local JavaScript tooling before the command`,
     );
   }
 }
@@ -4059,43 +3880,20 @@ if (
   );
 }
 
-const remoteMarkedArgs = injectRemoteChangedGateEnvironment(normalizedArgs);
-const remoteMarkedNeedsAwsMacosSwift =
-  isAwsMacosRemoteTarget(remoteMarkedArgs, provider) &&
-  commandNeedsAwsMacosSwiftToolchain(runCommandArgs(remoteMarkedArgs));
 try {
-  wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
-    childCwd === repoRoot ? remoteMarkedArgs : absolutizeLocalRunPaths(remoteMarkedArgs),
+  const transformed = applyRunTransforms(invocation, commandFacts, {
+    changedGateAlias: remoteChangedGateAlias,
+    changedGateBase: remoteChangedGateBase,
+    childCwd,
     provider,
-  );
+  });
+  wsl2ScriptBootstrap = transformed.wsl2ScriptBootstrap;
+  normalizedArgs = transformed.args;
 } catch (error) {
   cleanupOnce();
   throw error;
 }
-const childArgs = injectRemoteTestboxCi(
-  childCwd === repoRoot
-    ? injectRemoteWindowsHydratedNodeModulesBootstrap(
-        injectRemoteAwsMacosSwiftBootstrap(
-          injectRemoteAwsMacosJsBootstrap(wsl2ScriptBootstrap.args, provider),
-          provider,
-          remoteMarkedNeedsAwsMacosSwift,
-        ),
-        provider,
-      )
-    : injectRemoteChangedGateGitBootstrap(
-        injectRemoteWindowsHydratedNodeModulesBootstrap(
-          injectRemoteAwsMacosSwiftBootstrap(
-            injectRemoteAwsMacosJsBootstrap(wsl2ScriptBootstrap.args, provider),
-            provider,
-            remoteMarkedNeedsAwsMacosSwift,
-          ),
-          provider,
-        ),
-        remoteChangedGateBase,
-        remoteChangedGateAlias,
-      ),
-  provider,
-);
+const childArgs = normalizedArgs;
 let fullCheckoutKeepaliveIntervalMsValue = 0;
 if (fullCheckout) {
   try {

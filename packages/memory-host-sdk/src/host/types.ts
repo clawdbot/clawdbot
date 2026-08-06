@@ -122,6 +122,12 @@ export type MemoryReadResult = {
 };
 
 /** Aggregated memory backend status for CLI/UI diagnostics. */
+export type MemoryVectorIndexState =
+  | { state: "empty" }
+  | { state: "complete" }
+  | { state: "incomplete" }
+  | { state: "unverified" };
+
 export type MemoryProviderStatus = {
   backend: "builtin" | "qmd";
   provider: string;
@@ -140,6 +146,7 @@ export type MemoryProviderStatus = {
   fallback?: { from: string; reason?: string };
   vector?: {
     enabled: boolean;
+    index?: MemoryVectorIndexState;
     storeAvailable?: boolean;
     semanticAvailable?: boolean;
     available?: boolean;
@@ -160,6 +167,28 @@ export type MemoryProviderStatus = {
   };
   custom?: Record<string, unknown>;
 };
+
+export function resolveMemorySearchStaleness(
+  status: Pick<MemoryProviderStatus, "dirty" | "custom">,
+  agentId?: string,
+): { stale: true; warning: string; action: string } | null {
+  const identity = status.custom?.indexIdentity as Record<string, unknown> | undefined;
+  const identityReason =
+    (identity?.status === "mismatched" || identity?.status === "missing") &&
+    typeof identity.reason === "string"
+      ? identity.reason.trim()
+      : undefined;
+  if (!status.dirty && !identityReason) {
+    return null;
+  }
+  return {
+    stale: true,
+    warning: identityReason
+      ? `Memory index is stale: ${identityReason}. Search results may be incomplete.`
+      : "Memory index is dirty. Search results may be incomplete.",
+    action: `Run: openclaw memory status --index${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}`,
+  };
+}
 
 /** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {

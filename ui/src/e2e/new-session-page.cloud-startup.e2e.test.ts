@@ -29,7 +29,13 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
       deferredMethods: ["sessions.dispatch"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.reclaim"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.create",
+        "sessions.dispatch",
+        "sessions.reclaim",
+      ],
       workspaceGit: true,
       sessionKey: "agent:cloud:neutral-e2e",
       methodResponses: {

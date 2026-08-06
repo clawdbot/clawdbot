@@ -21,6 +21,15 @@ function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
     : resolveControllerSessionKey(entry);
 }
 
+function isDeliveryTerminalForRequesterSettle(entry: Pick<SubagentRunRecord, "delivery">): boolean {
+  return (
+    isDeliverySuspended(entry) ||
+    entry.delivery?.disposition === "delivered" ||
+    entry.delivery?.disposition === "intentional_non_delivery" ||
+    entry.delivery?.disposition === "permanent_failure"
+  );
+}
+
 /** Lists requester-owned runs, optionally scoped to the lifetime of a requester run. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -39,8 +48,9 @@ export function listRunsForRequesterFromRuns(
   const requesterRunMatchesScope =
     requesterRun && requesterRun.childSessionKey === key ? requesterRun : undefined;
   // When a requester run is provided, only include children created while that run was active.
-  const lowerBound = requesterRunMatchesScope?.startedAt ?? requesterRunMatchesScope?.createdAt;
-  const upperBound = requesterRunMatchesScope?.endedAt;
+  const lowerBound =
+    requesterRunMatchesScope?.execution.startedAt ?? requesterRunMatchesScope?.createdAt;
+  const upperBound = requesterRunMatchesScope?.execution.endedAt;
 
   const results: SubagentRunRecord[] = [];
   for (const entry of runs.values()) {
@@ -252,7 +262,10 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       }
       const runPending = hasSubagentRunEnded(entry)
         ? typeof entry.cleanupCompletedAt !== "number" &&
-          !(options?.treatSuspendedDeliveryAsSettled === true && isDeliverySuspended(entry))
+          !(
+            options?.treatSuspendedDeliveryAsSettled === true &&
+            isDeliveryTerminalForRequesterSettle(entry)
+          )
         : isLiveUnendedSubagentRun(entry, now);
       if (runPending) {
         count += 1;
@@ -400,9 +413,9 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   return Boolean(
     latest &&
     latest.spawnMode !== "session" &&
-    typeof latest.endedAt === "number" &&
+    typeof latest.execution.endedAt === "number" &&
     typeof latest.cleanupCompletedAt === "number" &&
-    latest.cleanupCompletedAt >= latest.endedAt,
+    latest.cleanupCompletedAt >= latest.execution.endedAt,
   );
 }
 

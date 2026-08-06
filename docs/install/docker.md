@@ -173,7 +173,8 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                                 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                                      |
 | `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                                       |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | OTLP protocol override. Only `http/protobuf` is supported today                                                   |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | Shared OTLP protocol fallback. Only `http/protobuf` is supported today                                            |
+| `OTEL_EXPORTER_OTLP_*_PROTOCOL`                 | Signal-specific protocol fallback for traces, metrics, or logs; wins over the shared fallback                     |
 | `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                                     |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                           |
 | `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                                    |
@@ -287,7 +288,7 @@ The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the 
 Authenticated deep health snapshot:
 
 ```bash
-docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
+docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'
 ```
 
 ### LAN vs loopback

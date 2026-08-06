@@ -1,10 +1,18 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
-import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { resolveUserPath } from "../utils.js";
+import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
+import {
+  resolveAgentRuntimePluginLoadPlan,
+  type AgentHarnessPluginSelection,
+} from "./harness/runtime-plugin-load-plan.js";
 
 type StartupScopedPluginSnapshot = NonNullable<
   ReturnType<typeof getCurrentPluginMetadataSnapshot>
@@ -16,10 +24,12 @@ type StartupScopedPluginSnapshot = NonNullable<
 
 function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
 }): string[] | undefined {
   const snapshot = getCurrentPluginMetadataSnapshot({
     config: params.config,
+    env: params.env,
     workspaceDir: params.workspaceDir,
   }) as StartupScopedPluginSnapshot | undefined;
   const pluginIds = snapshot?.startup?.pluginIds;
@@ -29,36 +39,96 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
 }
 
-/** Ensure standalone runtime plugins are loaded for the current agent context. */
-export function ensureRuntimePluginsLoaded(params: {
+type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
-}): PluginRegistry | undefined {
-  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
-    return undefined;
-  }
+  /** Explicit base scope for hosts without a Gateway startup registry. */
+  basePluginIds?: readonly string[];
+  selections?: readonly AgentHarnessPluginSelection[];
+};
+
+function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistryParams) {
   const workspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
-  const startupPluginIds = resolveStartupPluginIdsFromCurrentSnapshot({
+  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+    return {
+      requiredPluginIds: [],
+      loadOptions: {
+        config: params.config,
+        activationSourceConfig: params.config,
+        ...(params.env ? { env: params.env } : {}),
+        workspaceDir,
+        onlyPluginIds: [],
+        runtimeOptions: params.allowGatewaySubagentBinding
+          ? { allowGatewaySubagentBinding: true }
+          : undefined,
+      },
+    };
+  }
+  const startupPluginIds =
+    params.basePluginIds !== undefined
+      ? [...params.basePluginIds]
+      : resolveStartupPluginIdsFromCurrentSnapshot({
+          config: params.config,
+          env: params.env,
+          workspaceDir,
+        });
+  const plan = resolveAgentRuntimePluginLoadPlan({
     config: params.config,
-    workspaceDir,
+    workspaceDir: workspaceDir ?? process.cwd(),
+    ...(startupPluginIds === undefined ? {} : { basePluginIds: startupPluginIds }),
+    selections: [
+      ...collectConfiguredAgentHarnessRuntimes(params.config ?? {}).map((runtime) => ({
+        runtime,
+        provider: "",
+        modelId: "",
+      })),
+      ...(params.selections ?? []),
+    ],
   });
-  const allowGatewaySubagentBinding =
-    params.allowGatewaySubagentBinding === true ||
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable";
-  return ensureStandaloneRuntimePluginRegistryLoaded({
-    requiredPluginIds: startupPluginIds,
+  return {
+    requiredPluginIds: plan.pluginIds,
     loadOptions: {
-      config: params.config,
+      config: plan.config,
+      ...(plan.config ? { activationSourceConfig: plan.config } : {}),
+      ...(params.env ? { env: params.env } : {}),
       workspaceDir,
-      ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
-      ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
-      runtimeOptions: allowGatewaySubagentBinding
+      ...(startupPluginIds === undefined || plan.pluginIds === undefined
+        ? {}
+        : { onlyPluginIds: plan.pluginIds }),
+      ...(startupPluginIds === undefined ? {} : { channelPluginLoadIntent: "full" as const }),
+      runtimeOptions: params.allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,
     },
+  };
+}
+
+/** Loads the registry handle owned by an agent prepared-runtime generation. */
+export function loadAgentRuntimePluginRegistryHandle(
+  params: AgentRuntimePluginRegistryParams,
+): PluginRegistry {
+  const load = resolveAgentRuntimePluginRegistryLoad(params);
+  return loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
+}
+
+/** Binds a scoped plugin generation when a direct host has no Gateway owner. */
+export async function withAgentPluginRegistry<T>(params: {
+  config: OpenClawConfig;
+  workspaceDir: string;
+  run: () => Promise<T>;
+}): Promise<T> {
+  if (getPluginRuntimeGatewayRequestScope()?.pluginRegistry) {
+    return await params.run();
+  }
+  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+    basePluginIds: [],
+    config: params.config,
+    workspaceDir: params.workspaceDir,
   });
+  return await withPluginRuntimeRegistryScope(pluginRegistry, params.run);
 }

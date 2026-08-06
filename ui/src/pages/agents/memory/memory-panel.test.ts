@@ -4,12 +4,18 @@ import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import {
+  showConfirmDialog,
+  type ConfirmDialogOptions,
+} from "../../../components/confirm-dialog.ts";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
 import type { DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
 import "./memory-panel.ts";
+
+vi.mock("../../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type TestMemoryPanel = HTMLElement & {
   context: ApplicationContext;
@@ -29,6 +35,10 @@ type TestMemoryPanel = HTMLElement & {
     overridden: boolean;
     engineOff: boolean;
   }) => Promise<void>;
+  confirmDreamingTask: (
+    task: (state: DreamingState) => Promise<boolean>,
+    confirmation: ConfirmDialogOptions,
+  ) => Promise<void>;
   render: () => unknown;
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
@@ -118,10 +128,28 @@ async function replaceContext(page: TestMemoryPanel, context: ApplicationContext
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
 describe("AgentMemoryPanel gateway lifecycle", () => {
+  it("does not run a confirmed dreaming action after the selected agent changes", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const page = createPage(contextWithGateway({} as GatewayBrowserClient, true));
+    const task = vi.fn(async () => true);
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pending = page.confirmDreamingTask(task, { message: "Repair?" });
+    page.agentId = "support";
+    await page.updateComplete;
+    confirmation.resolve(true);
+    await pending;
+
+    expect(task).not.toHaveBeenCalled();
+  });
+
   it("loads the selected agent on the first gateway bind", async () => {
     const client = {} as GatewayBrowserClient;
     const context = contextWithGateway(client, true);
@@ -278,6 +306,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
         },
       },
       note: "Dreaming settings reset to the plugin default.",
+      canDispatch: expect.any(Function),
     });
     expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
     expect(context.runtimeConfig.save).not.toHaveBeenCalled();
@@ -487,3 +516,251 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(page.viewState.wikiPreviewContent).toBe("");
   });
 });
+
+describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
+  "agent memory real Chromium owner proof",
+  () => {
+    let browser: import("playwright").Browser;
+    let server: import("../../../test-helpers/control-ui-e2e.ts").ControlUiE2eServer;
+    let e2e: typeof import("../../../test-helpers/control-ui-e2e.ts");
+
+    beforeAll(async () => {
+      const { chromium } = await import("playwright");
+      e2e = await import("../../../test-helpers/control-ui-e2e.ts");
+      const executablePath = e2e.resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+      if (!e2e.canRunPlaywrightChromium(executablePath)) {
+        throw new Error(`Real Chromium required but unavailable: ${executablePath}`);
+      }
+      server = await e2e.startControlUiE2eServer();
+      browser = await chromium.launch({ executablePath, headless: true });
+    }, 90_000);
+
+    afterAll(async () => {
+      await browser?.close();
+      await server?.close();
+    });
+
+    it("preserves both routes, agent ownership, wiki gating, and reconnects", async () => {
+      const status = (agentId: string, promotedToday: number) => ({
+        agentId,
+        provider: "builtin",
+        embedding: { ok: true, checked: true },
+        dreaming: {
+          enabled: true,
+          verboseLogging: false,
+          storageMode: "inline" as const,
+          separateReports: false,
+          shortTermCount: promotedToday,
+          recallSignalCount: 0,
+          dailySignalCount: 0,
+          groundedSignalCount: 0,
+          totalSignalCount: 0,
+          phaseSignalCount: 0,
+          lightPhaseHitCount: 0,
+          remPhaseHitCount: 0,
+          promotedTotal: promotedToday,
+          promotedToday,
+          shortTermEntries: [],
+          signalEntries: [],
+          promotedEntries: [],
+          phases: {
+            light: {
+              enabled: true,
+              cron: "0 * * * *",
+              managedCronPresent: true,
+              lookbackDays: 2,
+              limit: 10,
+            },
+            deep: {
+              enabled: true,
+              cron: "0 3 * * *",
+              managedCronPresent: true,
+              limit: 10,
+              minScore: 0.8,
+              minRecallCount: 2,
+              minUniqueQueries: 2,
+              recencyHalfLifeDays: 14,
+            },
+            rem: {
+              enabled: false,
+              cron: "0 5 * * 0",
+              managedCronPresent: false,
+              lookbackDays: 7,
+              limit: 10,
+              minPatternStrength: 0.75,
+            },
+          },
+        },
+      });
+      const diary = (agentId: string) => ({
+        agentId,
+        found: true,
+        path: "DREAMS.md",
+        content: `# Dream Diary\n\n*April 5, 2026, 3:00 AM*\n\n${agentId} owns this dream.`,
+      });
+      const config = {
+        agents: { entries: { main: { default: true }, support: {} } },
+        plugins: {
+          entries: {
+            "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+      };
+      const roster = {
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "support", name: "Support" },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      };
+      const context = await browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 1440, height: 900 },
+      });
+      const page = await context.newPage();
+      const gateway = await e2e.installMockGateway(page, {
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "doctor.memory.status",
+          "doctor.memory.dreamDiary",
+        ],
+        methodResponses: {
+          "agents.list": roster,
+          "config.get": {
+            config,
+            sourceConfig: config,
+            runtimeConfig: config,
+            hash: "memory-proof-1",
+            issues: [],
+            raw: JSON.stringify(config),
+            valid: true,
+          },
+          "plugins.list": {
+            plugins: [
+              {
+                id: "memory-core",
+                name: "OpenClaw Memory",
+                installed: true,
+                enabled: true,
+                state: "enabled",
+                kind: ["memory"],
+              },
+            ],
+            diagnostics: [],
+            mutationAllowed: true,
+          },
+          "doctor.memory.status": {
+            cases: [
+              { match: { agentId: "main" }, response: status("main", 11) },
+              { match: { agentId: "support" }, response: status("support", 22) },
+            ],
+          },
+          "doctor.memory.dreamDiary": {
+            cases: [
+              { match: { agentId: "main" }, response: diary("main") },
+              { match: { agentId: "support" }, response: diary("support") },
+            ],
+          },
+        },
+      });
+      const detail = () => page.locator("openclaw-agent-memory-panel .dreams__status-detail");
+      const requestCount = () =>
+        gateway.getRequests("doctor.memory.status").then((requests) => requests.length);
+      const chooseAgent = async (name: string) => {
+        const picker = page.locator(".memory-page .agent-scope-control openclaw-agent-select");
+        await picker.locator(".agent-select__trigger").click();
+        await picker
+          .locator("wa-dropdown-item[data-agent-option]")
+          .filter({ hasText: name })
+          .evaluate((item) => (item as HTMLElement).click());
+      };
+
+      try {
+        expect((await page.goto(`${server.baseUrl}settings/agents/main/memory`))?.status()).toBe(
+          200,
+        );
+        await e2e.waitForControlUiRoute(page, {
+          routeId: "agents",
+          pathname: "/settings/agents/main/memory",
+        });
+        await expect
+          .poll(async () => await detail().textContent(), { timeout: 15_000 })
+          .toContain("11 promoted");
+        expect(await gateway.getRequests("wiki.importInsights")).toHaveLength(0);
+        expect(await gateway.getRequests("wiki.overview")).toHaveLength(0);
+
+        const beforeFirstMain = await requestCount();
+        await gateway.deferNext("doctor.memory.status");
+        await page.evaluate(() => {
+          history.pushState(null, "", "/settings/memory/dreams");
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        });
+        await e2e.waitForControlUiRoute(page, {
+          routeId: "memory",
+          pathname: "/settings/memory/dreams",
+        });
+        await expect.poll(requestCount, { timeout: 15_000 }).toBeGreaterThan(beforeFirstMain);
+
+        const beforeSupport = await requestCount();
+        await gateway.deferNext("doctor.memory.status");
+        await chooseAgent("Support");
+        await expect.poll(requestCount, { timeout: 15_000 }).toBeGreaterThan(beforeSupport);
+        await gateway.setMethodResponse("doctor.memory.status", {
+          cases: [
+            { match: { agentId: "main" }, response: status("main", 33) },
+            { match: { agentId: "support" }, response: status("support", 22) },
+          ],
+        });
+        await chooseAgent("Main");
+        await expect
+          .poll(async () => await detail().textContent(), { timeout: 15_000 })
+          .toContain("33 promoted");
+        await gateway.resolveDeferred("doctor.memory.status", status("main", 11));
+        await gateway.resolveDeferred("doctor.memory.status", status("support", 22));
+        await expect
+          .poll(async () => await detail().textContent(), { timeout: 15_000 })
+          .toContain("33 promoted");
+        expect(await gateway.getRequests("wiki.importInsights")).toHaveLength(0);
+        expect(await gateway.getRequests("wiki.overview")).toHaveLength(0);
+
+        await gateway.setMethodResponse("doctor.memory.status", status("main", 44));
+        const beforeReconnect = await requestCount();
+        const socketCount = await gateway.getSocketCount();
+        await gateway.closeLatest(1001, "proxy idle timeout");
+        await gateway.setOnline(false);
+        await expect
+          .poll(
+            () =>
+              page.evaluate(
+                () =>
+                  (
+                    document.querySelector("openclaw-app") as HTMLElement & {
+                      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+                    }
+                  ).runtime?.context.gateway.snapshot.phase,
+              ),
+            { timeout: 15_000 },
+          )
+          .toBe("reconnecting");
+        await expect
+          .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
+          .toBeGreaterThan(socketCount);
+        await gateway.setOnline(true);
+        await expect.poll(requestCount, { timeout: 15_000 }).toBeGreaterThan(beforeReconnect);
+        await expect
+          .poll(async () => await detail().textContent(), { timeout: 15_000 })
+          .toContain("44 promoted");
+        await e2e.waitForControlUiRoute(page, {
+          routeId: "memory",
+          pathname: "/settings/memory/dreams",
+        });
+      } finally {
+        await context.close();
+      }
+    }, 120_000);
+  },
+);

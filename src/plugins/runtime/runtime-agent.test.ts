@@ -21,6 +21,59 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("plugin runtime session creation", () => {
+  it("resolves synchronous session catalog targets through agent model policy", () => {
+    const runtime = createRuntimeAgent();
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+
+    expect(
+      runtime.resolveSessionCatalogCreateTarget({
+        config,
+        provider: "anthropic",
+        modelIds: ["claude-opus-5", "claude-opus-4-8"],
+        agentRuntime: "claude-cli",
+      }),
+    ).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+  });
+
+  it("skips routed catalog targets denied by agent model policy", () => {
+    const runtime = createRuntimeAgent();
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+          modelPolicy: { allow: ["anthropic/claude-opus-4-8"] },
+        },
+      },
+    };
+
+    expect(
+      runtime.resolveSessionCatalogCreateTarget({
+        config,
+        provider: "anthropic",
+        modelIds: ["claude-opus-5", "claude-opus-4-8"],
+        agentRuntime: "claude-cli",
+      }),
+    ).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+  });
+
   it("requires recovery initialization to return the final trusted patch", () => {
     type CreateSessionParams = Parameters<
       ReturnType<typeof createRuntimeAgent>["session"]["createSessionEntry"]

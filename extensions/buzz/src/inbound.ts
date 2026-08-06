@@ -126,7 +126,6 @@ export async function handleBuzzInbound(params: {
       mentions: { canDetectMention: true, wasMentioned },
     },
     extra: {
-      GroupChannel: channelId,
       GroupSubject: roomName,
       BuzzEventKind: message.kind,
     },

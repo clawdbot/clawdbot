@@ -23,7 +23,12 @@ export function shouldDeleteTemporaryWorkflowRef(params: {
   keepBranch: boolean;
   dryRun: boolean;
   parentConclusion: string;
+  evidenceVerified: boolean;
 }): boolean;
+export function assertTrustedWorkflowHarness(
+  workflowSha: string,
+  pathExists?: (relativePath: string) => boolean,
+): string;
 export function releaseEvidenceVerifierPath(worktreeRoot: unknown): string;
 export function resolveRemoteTargetRefSha(
   targetRef: string,

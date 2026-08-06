@@ -743,16 +743,20 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.has("tag")).toBe(false);
   });
 
-  it("sends owner-qualified skill verification lookups as slug plus ownerHandle", async () => {
+  it("sends owner-qualified skill verification lookups without resolved auth when requested", async () => {
+    process.env.CLAWHUB_TOKEN = "env-token-123";
     let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
 
     await expect(
       fetchClawHubSkillVerification({
         slug: "weather",
         ownerHandle: "demo-owner",
         version: "1.0.0",
-        fetchImpl: async (input) => {
+        skipAuth: true,
+        fetchImpl: async (input, init) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
+          requestedInit = init;
           return new Response(
             JSON.stringify({
               schema: "clawhub.skill.verify.v1",
@@ -778,6 +782,7 @@ describe("clawhub helpers", () => {
     expect(url.pathname).toBe("/api/v1/skills/weather/verify");
     expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
     expect(url.searchParams.get("version")).toBe("1.0.0");
+    expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
   });
 
   it("posts bulk skill security verdict requests", async () => {
@@ -801,7 +806,7 @@ describe("clawhub helpers", () => {
 
     await expect(
       fetchClawHubSkillSecurityVerdicts({
-        items: [{ slug: "agentreceipt", version: "1.2.3" }],
+        items: [{ slug: "agentreceipt", ownerHandle: "openclaw", version: "1.2.3" }],
         fetchImpl: async (input, init) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
           requestedInit = init;
@@ -818,7 +823,9 @@ describe("clawhub helpers", () => {
     expect(requestedInit?.method).toBe("POST");
     expect(requestedInit?.headers).toMatchObject({ "Content-Type": "application/json" });
     expect(requestedInit?.body).toBe(
-      JSON.stringify({ items: [{ slug: "agentreceipt", version: "1.2.3" }] }),
+      JSON.stringify({
+        items: [{ slug: "agentreceipt", ownerHandle: "openclaw", version: "1.2.3" }],
+      }),
     );
   });
 

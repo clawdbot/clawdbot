@@ -61,6 +61,8 @@ export type ConfigProps = {
   /** App updater running; config writes and restarts are interlocked. */
   updating: boolean;
   connected: boolean;
+  mutationAllowed?: boolean;
+  openFileAllowed?: boolean;
   schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
@@ -125,6 +127,8 @@ export type ConfigProps = {
   resetTextScale: () => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
+  hiddenSessionCatalogIds: ReadonlySet<string>;
+  setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
   showAdvancedSettings: boolean;

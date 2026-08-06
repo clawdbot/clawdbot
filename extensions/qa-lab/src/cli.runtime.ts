@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements cli behavior.
+// QA Lab plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -47,6 +47,7 @@ import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
@@ -66,7 +67,11 @@ import {
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
+import {
+  normalizeQaTransportId,
+  qaTransportSupportsModuleFlows,
+  type QaTransportId,
+} from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -98,7 +103,10 @@ import {
   runQaSuiteWithInfraRetry,
 } from "./suite-launch.runtime.js";
 import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
-import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
+import {
+  readQaSuiteFailedOrSkippedScenarioCountFromFile,
+  resolveQaReportOnlyOptionalScenarioNames as resolveQaReportOnlyOptionalScenarioNamesFromCatalog,
+} from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -659,6 +667,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
           ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
         ]
       : taxonomyScenarios;
+  const liveAdapterFactories =
+    profileReport.channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
   const executionSelection = resolveQaRunProfileExecutionSelection({
     scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
@@ -668,6 +678,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
     supportsChannel:
       profileReport.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
+    resolveModuleFlowSupport:
+      profileReport.channelDriver === "live"
+        ? (channel) =>
+            channel
+              ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
+                  channelId: channel,
+                  driver: "live",
+                })
+              : false
+        : undefined,
   });
   if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
     const exclusions = executionSelection.excludedScenarios
@@ -698,6 +718,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );
   let evidencePath: string | undefined;
+  let expectedCells: QaProfileEvidencePlan["expectedCells"] = [];
+  let observedCells: QaProfileEvidencePlan["observedCells"] = [];
   await withTemporaryQaProfileEnv(profile, async () => {
     const suiteResult = await runQaSuiteCommand({
       repoRoot,
@@ -710,6 +732,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       fastMode: opts.fastMode,
       failFast: opts.failFast,
       scenarioIds: scenarios.map((scenario) => scenario.id),
+      explicitScenarioSelection: requestedScenarioIds.length > 0,
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
       channelDriver: profileReport.channelDriver,
@@ -717,14 +740,25 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
+    expectedCells = suiteResult && "expectedCells" in suiteResult ? suiteResult.expectedCells : [];
+    observedCells = suiteResult && "observedCells" in suiteResult ? suiteResult.observedCells : [];
   });
   if (!evidencePath) {
     throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
   }
+  const profilePlan = qaProfileEvidencePlan.build({
+    profile,
+    membershipScenarios: taxonomyScenarios,
+    selectedScenarios: scenarios,
+    excludedScenarios: executionSelection.excludedScenarios,
+    expectedCells,
+    observedCells,
+  });
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
     evidenceMode: opts.evidenceMode,
     profile,
+    profilePlan,
     filters: {
       surface: opts.surface,
       category: opts.category,
@@ -812,25 +846,12 @@ function resolveQaReportOnlyOptionalScenarioNames(params: {
   scenarioIds: readonly string[];
   explicitScenarioSelection?: boolean;
 }): ReadonlySet<string> | undefined {
-  if (params.explicitScenarioSelection || params.scenarioIds.length > 0) {
+  const explicitScenarioSelection =
+    params.explicitScenarioSelection ?? params.scenarioIds.length > 0;
+  if (explicitScenarioSelection) {
     return undefined;
   }
-  return new Set(
-    readQaScenarioPack()
-      .scenarios.filter((scenario) => {
-        if (scenario.execution.kind !== "flow") {
-          return false;
-        }
-        const toolCoverage = scenario.execution.config?.toolCoverage;
-        return (
-          typeof toolCoverage === "object" &&
-          toolCoverage !== null &&
-          "required" in toolCoverage &&
-          toolCoverage.required === false
-        );
-      })
-      .map((scenario) => scenario.title),
-  );
+  return resolveQaReportOnlyOptionalScenarioNamesFromCatalog(readQaScenarioPack().scenarios);
 }
 
 export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
@@ -847,6 +868,19 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     parityPack: opts.parityPack,
     scenarioIds: opts.scenarioIds,
   });
+  const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
+  const liveAdapterFactories =
+    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
+  const resolveModuleFlowSupport =
+    channelDriver === "live"
+      ? (channel?: string) =>
+          channel
+            ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
+                channelId: channel,
+                driver: "live",
+              })
+            : false
+      : undefined;
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({
     channel: opts.channel,
@@ -858,6 +892,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     scenarioIds: explicitScenarioIds,
     runtimePairLanes,
     runtimePair: runtimePair !== undefined,
+    resolveModuleFlowSupport,
   });
   const scenarioIds = runtimePairLaneSelection.scenarioIds;
   if (runtimePair) {
@@ -877,9 +912,6 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (opts.channel?.trim() && channelDriver !== "crabline" && channelDriver !== "live") {
     throw new Error("--channel override requires --channel-driver crabline or live.");
   }
-  const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
-  const liveAdapterFactories =
-    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
   const liveAdapterFactory = liveChannelId
     ? liveAdapterFactories?.find((factory) => factory.id === liveChannelId)
     : undefined;
@@ -1064,7 +1096,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
-      return result;
+      return {
+        ...result,
+        expectedCells: runtimeResult.expectedCells,
+        observedCells: runtimeResult.observedCells,
+      };
     }
     case "flow": {
       const result = runtimeResult.result;
@@ -1085,7 +1121,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
-      return result;
+      return {
+        ...result,
+        expectedCells: runtimeResult.expectedCells,
+        observedCells: runtimeResult.observedCells,
+      };
     }
   }
   return undefined;
@@ -1381,6 +1421,16 @@ export async function runQaCharacterEvalCommand(opts: {
   });
   process.stdout.write(`QA character eval report: ${result.reportPath}\n`);
   process.stdout.write(`QA character eval summary: ${result.summaryPath}\n`);
+  const failedCandidateCount = result.runs.filter((run) => run.status === "fail").length;
+  const failedJudgeCount = result.judgments.filter(
+    (judgment) => judgment.rankings.length === 0,
+  ).length;
+  if (failedCandidateCount > 0 || failedJudgeCount > 0) {
+    process.stderr.write(
+      `QA character eval failed: ${failedCandidateCount} candidate(s), ${failedJudgeCount} judge(s).\n`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 export async function runQaManualLaneCommand(opts: {

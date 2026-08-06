@@ -73,6 +73,7 @@ describe("dedupeLatestChildCompletionRows", () => {
       childSessionKey,
       task: "older",
       createdAt: 1_000,
+      execution: {},
     };
     const newer = { ...older, runId: "run-newer", generation: 2, task: "newer" };
 
@@ -157,17 +158,51 @@ describe("readSubagentOutput", () => {
   });
 
   it.each(["toolUse", "functionCall", "function_call"])(
-    "reports visible tool activity for provider-specific %s transcript blocks",
+    "does not synthesize output from provider-specific %s transcript blocks",
     async (type) => {
       installOutputDeps({
         messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
       });
 
-      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-        "1 tool call(s) made without visible output.",
-      );
+      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
     },
   );
+
+  it.each(["toolUse", "functionCall", "function_call"])(
+    "summarizes provider-specific %s transcript blocks after a timeout",
+    async (type) => {
+      installOutputDeps({
+        messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
+      });
+
+      await expect(
+        readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+      ).resolves.toBe("1 tool call(s) made without visible output.");
+    },
+  );
+
+  it.each(["toolCalls", "tool_calls"])("summarizes top-level %s after a timeout", async (field) => {
+    installOutputDeps({
+      messages: [{ role: "assistant", [field]: [{ name: "read" }, { name: "exec" }] }],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("2 tool call(s) made without visible output.");
+  });
+
+  it("keeps an intentional silent reply ahead of timeout tool progress", async () => {
+    installOutputDeps({
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", name: "read" }] },
+        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("NO_REPLY");
+  });
 
   it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {
     installOutputDeps({
@@ -264,7 +299,7 @@ describe("readSubagentOutput", () => {
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it("reports only tool calls belonging to the latest user turn", async () => {
+  it("does not synthesize output from tool calls in the latest user turn", async () => {
     installOutputDeps({
       messages: [
         {
@@ -279,9 +314,30 @@ describe("readSubagentOutput", () => {
       ],
     });
 
-    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "1 tool call(s) made without visible output.",
-    );
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("resets timeout tool progress at the latest user turn", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "old-read", name: "read", arguments: {} },
+            { type: "toolCall", id: "old-exec", name: "exec", arguments: {} },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "Start the next task." }] },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "current-call", name: "write", arguments: {} }],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("1 tool call(s) made without visible output.");
   });
 
   it("does not fall back to tool output when the last assistant turn is empty", async () => {
@@ -376,7 +432,7 @@ describe("buildChildCompletionFindings", () => {
         task: `worker ${index}`,
         createdAt: index,
         completion: { resultText: "🚀".repeat(60_000) },
-        outcome: { status: "ok" as const },
+        execution: { outcome: { status: "ok" as const } },
       })),
     );
 
@@ -399,21 +455,23 @@ describe("buildChildCompletionFindings", () => {
         task: "first large result",
         createdAt: 1,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:second",
         task: "second large result",
         createdAt: 2,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:failure",
         task: "later actionable failure",
         createdAt: 3,
         completion: { resultText: "Permission required." },
-        outcome: { status: "error", error: "Writable session authorization required." },
+        execution: {
+          outcome: { status: "error", error: "Writable session authorization required." },
+        },
       },
     ]);
 
@@ -431,14 +489,16 @@ describe("buildChildCompletionFindings", () => {
         task: "earlier oversized success",
         createdAt: 1,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:failure",
         task: "later oversized failure",
         createdAt: 2,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "error", error: "Writable session authorization required." },
+        execution: {
+          outcome: { status: "error", error: "Writable session authorization required." },
+        },
       },
     ]);
 
@@ -457,7 +517,7 @@ describe("buildChildCompletionFindings", () => {
         task: "child task",
         createdAt: 1,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "error", error: "E".repeat(20_000) },
+        execution: { outcome: { status: "error", error: "E".repeat(20_000) } },
       },
     ]);
 
@@ -476,7 +536,7 @@ describe("buildChildCompletionFindings", () => {
         task: "silent task",
         createdAt: 1,
         completion: { resultText: "ANNOUNCE_SKIP" },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -490,7 +550,7 @@ describe("buildChildCompletionFindings", () => {
         task: "silent task",
         createdAt: 1,
         completion: { resultText: "ANNOUNCE_SKIP" },
-        outcome: { status: "error", error: "boom" },
+        execution: { outcome: { status: "error", error: "boom" } },
       },
     ]);
 
@@ -505,7 +565,7 @@ describe("buildChildCompletionFindings", () => {
         task: "child task",
         createdAt: 1,
         frozenResultText: "final child output",
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -513,24 +573,18 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).not.toContain("(no output)");
   });
 
-  it("uses pending delivery payload text when completion text has been cleared", () => {
+  it("does not recover result text from delivery metadata after completion text is cleared", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         task: "child task",
         createdAt: 1,
         completion: { resultText: null },
-        delivery: {
-          payload: {
-            frozenResultText: "delivery payload output",
-          },
-        },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
-    expect(findings).toContain("delivery payload output");
-    expect(findings).not.toContain("(no output)");
+    expect(findings).toContain("(no output)");
   });
 
   it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {
@@ -543,7 +597,7 @@ describe("buildChildCompletionFindings", () => {
           resultText: "NO_REPLY",
           fallbackResultText: "findings captured before the wake",
         },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -563,7 +617,7 @@ describe("buildChildCompletionFindings", () => {
             resultText,
             fallbackResultText: "stale findings",
           },
-          outcome: { status: "ok" },
+          execution: { outcome: { status: "ok" } },
         },
       ]);
 
@@ -578,14 +632,14 @@ describe("buildChildCompletionFindings", () => {
         task: "silent task",
         createdAt: 1,
         completion: { resultText: "ANNOUNCE_SKIP" },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:visible",
         task: "visible task",
         createdAt: 2,
         completion: { resultText: "actual output" },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -598,9 +652,8 @@ describe("buildChildCompletionFindings", () => {
       childSessionKey: "agent:main:subagent:z",
       task: "Z task",
       createdAt: 1_000,
-      endedAt: 2_000,
       completion: { resultText: "Z result" },
-      outcome: { status: "ok" as const },
+      execution: { endedAt: 2_000, outcome: { status: "ok" as const } },
     };
     const earlierKey = {
       ...laterKey,

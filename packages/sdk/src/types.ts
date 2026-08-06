@@ -87,8 +87,14 @@ export type EnvironmentCreateParams = {
   idempotencyKey: string;
 };
 
+export type WorkerEnvironmentProfileSummary = {
+  id: string;
+  providerId: string;
+};
+
 export type EnvironmentsListResult = {
   environments: EnvironmentSummary[];
+  profiles?: WorkerEnvironmentProfileSummary[];
 };
 
 export type WorkspaceSelection = {

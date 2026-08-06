@@ -43,7 +43,7 @@ type ChatPaneHeaderProps = {
   platform: string | null;
   canReveal: boolean;
   copiedAction: ChatPaneHeaderAction | null;
-  canRename: boolean;
+  renameDisabledReason?: string;
   terminalAction: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
@@ -299,8 +299,12 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             }}
             @blur=${props.onCommitRename}
           />`
-        : props.catalog || !props.session || !props.canRename
-          ? html`<span class="chat-pane__session-title" title=${props.title}>${props.title}</span>`
+        : props.catalog || !props.session || props.renameDisabledReason
+          ? html`<span
+              class="chat-pane__session-title"
+              title=${props.renameDisabledReason ?? props.title}
+              >${props.title}</span
+            >`
           : html`<button
               class="chat-pane__session-title chat-pane__session-title-button"
               type="button"

@@ -133,7 +133,7 @@ function extractTopicThreadId(targetTo: string): string | undefined {
 }
 
 /** Compares a message-tool target with the required source delivery target. */
-function sourceDeliveryTargetsMatch(
+export function sourceDeliveryTargetsMatch(
   target: SourceDeliveryMessageToolTarget,
   delivery: SourceDeliveryTarget,
 ): boolean {

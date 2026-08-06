@@ -12,6 +12,8 @@ import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   countSqliteSessionEntryRowsReadOnly as countSessionEntryRowsReadOnly,
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
+  ensureSqliteSessionEntrySync,
+  hasSqliteSessionEntriesByStatusReadOnly as hasSessionEntriesByStatusReadOnly,
   listSqliteSessionGenerationIdsForCanonicalRepair as listSessionGenerationIdsForCanonicalRepair,
   listSqliteSessionChildEntriesReadOnly as listSessionChildEntriesReadOnly,
   listSqliteSessionEntries,
@@ -61,6 +63,8 @@ export { clearPluginOwnedSessionState };
 export {
   countSessionEntryRowsReadOnly,
   copySessionOwnedStateForCanonicalRepair,
+  ensureSqliteSessionEntrySync,
+  hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,

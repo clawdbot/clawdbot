@@ -12,7 +12,6 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { hasLineSpecificMediaOptions } from "./outbound-media.js";
@@ -42,7 +41,7 @@ type LineAutoReplyDeps = {
     address: string;
     latitude: number;
     longitude: number;
-  }) => messagingApi.LocationMessage;
+  }) => messagingApi.LocationMessage | null;
   replyMessageLine: (
     replyToken: string,
     messages: messagingApi.Message[],
@@ -228,7 +227,7 @@ export async function deliverLineAutoReply(params: {
   if (lineData.flexMessage) {
     richMessages.push(
       deps.createFlexMessage(
-        truncateUtf16Safe(lineData.flexMessage.altText, 400),
+        lineData.flexMessage.altText,
         lineData.flexMessage.contents as FlexContainer,
       ),
     );
@@ -242,7 +241,10 @@ export async function deliverLineAutoReply(params: {
   }
 
   if (lineData.location) {
-    richMessages.push(deps.createLocationMessage(lineData.location));
+    const locationMessage = deps.createLocationMessage(lineData.location);
+    if (locationMessage) {
+      richMessages.push(locationMessage);
+    }
   }
 
   // Inbound auto-replies bypass the channel outbound adapter, so enforce the
@@ -252,13 +254,26 @@ export async function deliverLineAutoReply(params: {
     ? deps.processLineMessage(visibleText)
     : { text: "", flexMessages: [] };
 
-  for (const flexMsg of processed.flexMessages) {
-    richMessages.push(
-      deps.createFlexMessage(truncateUtf16Safe(flexMsg.altText, 400), flexMsg.contents),
-    );
+  if (!processed.segments) {
+    for (const flexMsg of processed.flexMessages) {
+      richMessages.push(deps.createFlexMessage(flexMsg.altText, flexMsg.contents));
+    }
   }
 
-  const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
+  const orderedMessages = processed.segments?.flatMap<
+    messagingApi.FlexMessage | messagingApi.TextMessage
+  >((segment) =>
+    segment.type === "flex"
+      ? [deps.createFlexMessage(segment.message.altText, segment.message.contents)]
+      : deps
+          .chunkMarkdownText(segment.text, textLimit)
+          .map((text) => ({ type: "text" as const, text })),
+  );
+  const chunks = orderedMessages
+    ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
+    : processed.text
+      ? deps.chunkMarkdownText(processed.text, textLimit)
+      : [];
 
   // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
   // other LINE media options so a reply-token video/audio is not silently
@@ -296,7 +311,11 @@ export async function deliverLineAutoReply(params: {
     });
   }
   if (hasQuickReplies) {
-    const targetMessages = textMessages.length > 0 ? textMessages : richMediaMessages;
+    const targetMessages = orderedMessages?.length
+      ? orderedMessages
+      : textMessages.length > 0
+        ? textMessages
+        : richMediaMessages;
     const lastIndex = targetMessages.length - 1;
     const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
     targetMessages[lastIndex] = {
@@ -308,8 +327,8 @@ export async function deliverLineAutoReply(params: {
   // Quick replies disappear when a newer message arrives, so rich/media parts
   // lead and the action-bearing text remains final across reply/push batches.
   const messages = hasQuickReplies
-    ? [...richMediaMessages, ...textMessages]
-    : [...textMessages, ...richMediaMessages];
+    ? [...richMediaMessages, ...(orderedMessages ?? textMessages)]
+    : [...(orderedMessages ?? textMessages), ...richMediaMessages];
   try {
     // A reply token carries five messages without consuming push quota. The
     // canonical batcher owns overflow and reply failure fallback for every payload.

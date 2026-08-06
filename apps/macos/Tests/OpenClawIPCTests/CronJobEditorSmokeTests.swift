@@ -47,7 +47,22 @@ struct CronJobEditorSmokeTests {
                 channel: nil,
                 to: nil,
                 bestEffortDeliver: nil),
-            delivery: CronDelivery(mode: .announce, channel: "whatsapp", to: "+15551234567", bestEffort: true),
+            delivery: CronDelivery(
+                mode: .announce,
+                channel: "whatsapp",
+                to: "+15551234567",
+                bestEffort: true,
+                threadId: AnyCodable(42),
+                completionDestination: [
+                    "mode": AnyCodable("webhook"),
+                    "to": AnyCodable("https://example.test/complete"),
+                ],
+                failureDestination: [
+                    "mode": AnyCodable("announce"),
+                    "channel": AnyCodable("telegram"),
+                    "to": AnyCodable("ops"),
+                    "accountId": AnyCodable("alerts"),
+                ]),
             state: CronJobState(
                 nextRunAtMs: 1_700_000_100_000,
                 runningAtMs: nil,
@@ -58,6 +73,12 @@ struct CronJobEditorSmokeTests {
 
         let view = self.makeEditor(job: job, channelsStore: channelsStore)
         _ = view.body
+
+        let delivery = view.buildDelivery()
+        #expect(delivery["threadId"] as? Int == 42)
+        #expect((delivery["completionDestination"] as? [String: Any])?["to"] as? String ==
+            "https://example.test/complete")
+        #expect((delivery["failureDestination"] as? [String: Any])?["accountId"] as? String == "alerts")
     }
 
     @Test func `cron job editor exercises builders`() {

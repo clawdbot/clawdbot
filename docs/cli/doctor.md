@@ -14,6 +14,11 @@ When Gateway status reports degraded SecretRef owners, doctor prints a **Secret 
 
 When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
 
+When the Gateway has exporter health facts, doctor reports the latest trusted
+per-signal state and transport under **Telemetry exporters**. The summary is
+redacted and does not include endpoint values, headers, certificates, payloads,
+or raw errors.
+
 Related:
 
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)
@@ -360,7 +365,12 @@ it writes the local support report and prints a prefilled issue URL.
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the
 original path is missing, reports conflicts when both paths exist, and leaves
-the SQLite database in place.
+the SQLite database in place. When several manifests recorded the same original
+path, restore plans all candidates before moving any of them. Identical archives
+are safe duplicates, and one nonempty legacy `sessions.json` may supersede empty
+copies created by older writers. Distinct nonempty indexes, distinct transcript
+archives, invalid archives, and archives missing without a recorded prior
+restore fail closed so restore cannot silently replace or hide recoverable data.
 
 ### Downgrading After Session SQLite Migration
 

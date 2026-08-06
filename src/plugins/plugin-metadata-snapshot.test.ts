@@ -21,8 +21,8 @@ const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForIns
     };
   });
 
-vi.mock("./plugin-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-registry.js")>();
+vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
   return {
     ...actual,
     loadPluginRegistrySnapshotWithMetadata: (params: unknown) =>
@@ -61,7 +61,6 @@ function makeIndex(pluginId = "demo"): InstalledPluginIndex {
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -383,6 +382,37 @@ describe("plugin metadata snapshot", () => {
     expect(resolvePluginMetadataSnapshot({ config, env: {} })).toBe(snapshot);
     expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+  });
+
+  it("propagates the current-snapshot bypass to the registry reader", () => {
+    const config = {};
+    const index = makeIndex();
+    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: index,
+      diagnostics: [],
+    });
+    const current = loadPluginMetadataSnapshot({ config, env: {}, index });
+    setCurrentPluginMetadataSnapshot(current, { config, env: {} });
+    loadPluginRegistrySnapshotWithMetadata.mockClear();
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: index,
+      diagnostics: [],
+    });
+
+    const resolved = resolvePluginMetadataSnapshot({
+      config,
+      env: {},
+      allowCurrent: false,
+    });
+
+    expect(resolved).not.toBe(current);
+    expect(resolved.registrySource).toBe("persisted");
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ allowCurrent: false }),
+    );
   });
 
   it("keeps scoped loads separate without an LRU", () => {

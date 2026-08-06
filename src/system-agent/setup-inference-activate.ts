@@ -6,6 +6,7 @@ import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +14,8 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
@@ -281,18 +284,22 @@ async function activateSetupInferenceUnredacted(
         traceCommand: "openclaw-setup-probe",
         logger: { warn: (message) => (registryRefreshWarning = message) },
       });
-      const ensureHarnessPlugin =
-        deps.ensureSelectedAgentHarnessPlugin ??
-        (await import("../agents/harness/runtime-plugin.js")).ensureSelectedAgentHarnessPlugin;
       try {
-        await ensureHarnessPlugin({
-          provider: testPlan.provider,
-          modelId: testPlan.model,
+        const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
           config: testPlan.config,
-          agentId: testPlan.routeAgentId,
-          agentHarnessRuntimeOverride: "codex",
           workspaceDir: tempDir,
+          selections: [
+            {
+              provider: testPlan.provider,
+              modelId: testPlan.model,
+              runtime: "codex",
+              agentId: testPlan.routeAgentId,
+            },
+          ],
         });
+        if (!pluginRegistry) {
+          throw new Error("The Codex runtime plugin registry is unavailable.");
+        }
       } catch (error) {
         const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
         return {
@@ -302,10 +309,26 @@ async function activateSetupInferenceUnredacted(
         };
       }
     }
-    const baselineRoute = await projectDefaultInferenceRoute(cfg);
-    const verifiedRoute = await projectDefaultInferenceRoute(testPlan.config);
+    const metadataWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+    // Manifest inventory is process-stable for one activation attempt. A plugin
+    // install is the lifecycle boundary: bypass the old process snapshot after refresh.
+    const resolveRouteMetadata =
+      deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
+    const routeMetadataSnapshot = resolveRouteMetadata({
+      config: testPlan.config,
+      env: process.env,
+      ...(metadataWorkspaceDir ? { workspaceDir: metadataWorkspaceDir } : {}),
+      ...(codexRegistryNeedsReload ? { allowCurrent: false } : {}),
+    });
+    const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
+    const baselineRoute = await projectDefaultInferenceRoute(cfg, routeDeps);
+    const verifiedRoute = await projectDefaultInferenceRoute(testPlan.config, routeDeps);
     const stagedRoute = verifiedRoute.route;
-    const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(testPlan.config);
+    const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+      testPlan.config,
+      undefined,
+      routeDeps,
+    );
     if (
       !stagedRoute ||
       !stagedExecutionRoute ||
@@ -487,7 +510,7 @@ async function activateSetupInferenceUnredacted(
           ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
           : undefined;
       const latestRoute = latestRuntime
-        ? await projectDefaultInferenceRoute(latestRuntime)
+        ? await projectDefaultInferenceRoute(latestRuntime, routeDeps)
         : undefined;
       if (!latestRoute || !sameDefaultInferenceRoute(latestRoute, verifiedRoute)) {
         return {
@@ -498,7 +521,7 @@ async function activateSetupInferenceUnredacted(
         };
       }
       const latestResolvedRoute = latestRuntime
-        ? await resolveSystemAgentConfiguredRouteFromConfig(latestRuntime)
+        ? await resolveSystemAgentConfiguredRouteFromConfig(latestRuntime, undefined, routeDeps)
         : null;
       if (!latestResolvedRoute) {
         return {
@@ -537,6 +560,7 @@ async function activateSetupInferenceUnredacted(
         stagedOwnerPluginArtifacts,
         baselineTargetModelMetadata,
         sourceTargetModelMetadata,
+        routeDeps,
         readSnapshot,
         hasPreparedAuthProfiles,
         state: persistenceState,

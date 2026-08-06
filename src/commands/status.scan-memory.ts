@@ -16,10 +16,6 @@ const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.deps.runtime.js"),
 );
 
-function loadStatusScanDepsRuntimeModule() {
-  return statusScanDepsRuntimeModuleLoader.load();
-}
-
 /** Returns the owning agent database path for built-in memory. */
 export function resolveDefaultMemoryDatabasePath(agentId: string): string {
   return resolveOpenClawAgentSqlitePath({ agentId });
@@ -32,7 +28,7 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
   memoryPlugin: MemoryPluginStatus;
   requireDefaultDatabasePath?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {
-  const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
+  const { getMemorySearchManager } = await statusScanDepsRuntimeModuleLoader.load();
   return await resolveSharedMemoryStatusSnapshot({
     cfg: params.cfg,
     agentStatus: params.agentStatus,

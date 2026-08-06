@@ -3,11 +3,26 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { completionMock, killProcessTreeMock, spawnMock } = vi.hoisted(() => ({
+const { completionMock, killProcessTreeMock, spawnMock, windowsLegacyOutput } = vi.hoisted(() => ({
   completionMock: vi.fn(),
   killProcessTreeMock: vi.fn(),
   spawnMock: vi.fn(),
+  windowsLegacyOutput: { enabled: false },
 }));
+
+vi.mock("../../infra/windows-encoding.js", async (importOriginal) => {
+  const { createWindowsOutputDecoder } =
+    await importOriginal<typeof import("../../infra/windows-encoding.js")>();
+  return {
+    createWindowsOutputDecoder: (params?: Parameters<typeof createWindowsOutputDecoder>[0]) =>
+      createWindowsOutputDecoder({
+        ...params,
+        ...(windowsLegacyOutput.enabled
+          ? { platform: "win32", windowsEncoding: "gbk" }
+          : { platform: "linux" }),
+      }),
+  };
+});
 
 vi.mock("../../process/child-process.js", () => ({
   releaseChildProcessOutputAfterExit: vi.fn(() => vi.fn()),
@@ -64,6 +79,7 @@ describe("execCommand", () => {
     killProcessTreeMock.mockReset();
     spawnMock.mockReset();
     completionMock.mockReset();
+    windowsLegacyOutput.enabled = false;
     vi.useRealTimers();
   });
 
@@ -171,6 +187,81 @@ describe("execCommand", () => {
     const result = await resultPromise;
     expect(result.stdout).toBe("stdout-😀-complete");
     expect(result.stderr).toBe("stderr-😀-complete");
+  });
+
+  it("preserves leading UTF-8 BOMs in stdout and stderr", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    const stdout = Buffer.from("\uFEFFstdout", "utf8");
+    const stderr = Buffer.from("\uFEFFstderr", "utf8");
+    child.stdout.emit("data", stdout.subarray(0, 1));
+    child.stdout.emit("data", stdout.subarray(1, 2));
+    child.stdout.emit("data", stdout.subarray(2));
+    child.stderr.emit("data", stderr.subarray(0, 2));
+    child.stderr.emit("data", stderr.subarray(2));
+    wait.resolve(0);
+
+    await expect(resultPromise).resolves.toMatchObject({
+      stdout: "\uFEFFstdout",
+      stderr: "\uFEFFstderr",
+    });
+  });
+
+  it("decodes split GBK stdout on legacy-codepage Windows", async () => {
+    windowsLegacyOutput.enabled = true;
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    child.stdout.emit("data", Buffer.from([0xb2]));
+    child.stdout.emit("data", Buffer.from([0xe2, 0xca]));
+    child.stdout.emit("data", Buffer.from([0xd4]));
+    wait.resolve(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "测试" });
+  });
+
+  it("decodes split GBK stderr on legacy-codepage Windows", async () => {
+    windowsLegacyOutput.enabled = true;
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    child.stderr.emit("data", Buffer.from([0xc4]));
+    child.stderr.emit("data", Buffer.from([0xe3, 0xba]));
+    child.stderr.emit("data", Buffer.from([0xc3]));
+    wait.resolve(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stderr: "你好" });
+  });
+
+  it("preserves split UTF-8 output on legacy-codepage Windows", async () => {
+    windowsLegacyOutput.enabled = true;
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    const stdout = Buffer.from("测试", "utf8");
+    child.stdout.emit("data", stdout.subarray(0, 1));
+    child.stdout.emit("data", stdout.subarray(1, 3));
+    child.stdout.emit("data", stdout.subarray(3));
+    wait.resolve(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "测试" });
   });
 
   it("flushes incomplete UTF-8 sequences when the process exits", async () => {

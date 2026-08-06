@@ -1,28 +1,25 @@
-// OpenClaw operation tests cover rescue operation planning and execution.
 import fs from "node:fs/promises";
 import path from "node:path";
+// OpenClaw operation tests cover rescue operation planning and execution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
+import { runGatewayLifecycle } from "./operations-execution-helpers.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
 } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 type TestConfig = Record<string, unknown>;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -142,6 +139,28 @@ const mockConfig = vi.hoisted(() => {
     ),
   };
 });
+const mockDaemonRestart = vi.hoisted(() => vi.fn(async () => true));
+const mockScheduleGatewayRestart = vi.hoisted(() =>
+  vi.fn(() => ({
+    ok: true,
+    pid: process.pid,
+    signal: "SIGUSR1" as const,
+    delayMs: 0,
+    mode: "emit" as const,
+    coalesced: false,
+    cooldownMsApplied: 0,
+    emitHooksQueued: false,
+  })),
+);
+vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
+  runDaemonStart: vi.fn(async () => {}),
+  runDaemonStop: vi.fn(async () => {}),
+  runDaemonRestart: mockDaemonRestart,
+}));
+vi.mock("../infra/restart.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/restart.js")>()),
+  scheduleGatewaySigusr1Restart: mockScheduleGatewayRestart,
+}));
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
     command,
@@ -191,6 +210,8 @@ describe("parseSystemAgentOperation", () => {
 
   beforeEach(() => {
     mockConfig.reset();
+    mockDaemonRestart.mockClear();
+    mockScheduleGatewayRestart.mockClear();
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
@@ -444,7 +465,7 @@ describe("parseSystemAgentOperation", () => {
     const runGatewayRestart = vi.fn(async () => {});
 
     const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
-      deps: { runGatewayRestart },
+      deps: { runGatewayRestart, setupSurface: "gateway" },
     });
 
     expectRecordFields(result as unknown as Record<string, unknown>, {
@@ -453,6 +474,53 @@ describe("parseSystemAgentOperation", () => {
     });
     expect(lines.join("\n")).toContain("Plan: restart the Gateway");
     expect(runGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://another-gateway.example:9443");
+    mockConfig.setConfig({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://configured-remote-gateway.example:9443" },
+      },
+    });
+
+    await expect(runGatewayLifecycle("restart", "gateway")).resolves.toBe(true);
+
+    expect(mockScheduleGatewayRestart).toHaveBeenCalledExactlyOnceWith({
+      reason: "gateway.restart.safe",
+      delayMs: 0,
+    });
+    expect(mockDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("preserves the standalone CLI Gateway restart route", async () => {
+    await runGatewayLifecycle("restart", "cli");
+
+    expect(mockDaemonRestart).toHaveBeenCalledExactlyOnceWith();
+    expect(mockScheduleGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { surface: "gateway" as const, summary: "Scheduled Gateway restart" },
+    { surface: "cli" as const, summary: "Restarted Gateway" },
+  ])("records an approved $surface restart truthfully", async ({ surface, summary }) => {
+    const tempDir = opTempDirs.make("openclaw-restart-scheduled-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const runGatewayRestart = vi.fn(async () => true);
+
+    const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
+      approved: true,
+      deps: { runGatewayRestart, setupSurface: surface },
+    });
+
+    expect(result.applied).toBe(true);
+    expect(runGatewayRestart).toHaveBeenCalledOnce();
+    if (surface === "gateway") {
+      expect(lines.join("\n")).toContain(summary);
+    }
+    expectAuditRecord(readLastAuditEntry(), { operation: "gateway.restart", summary }, {});
   });
 
   it("does not report or audit a gateway restart that returned false", async () => {

@@ -1,5 +1,5 @@
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
-import { registerAgentRunContext } from "../../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { log } from "../logger.js";
@@ -61,6 +61,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     const resolvedTarget = await resolveAgentRunSessionTarget({
       agentId: nextSessionTarget.agentId ?? sessionAgentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionId: nextSessionTarget.sessionId ?? activeSessionId,
       sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
       sessionTarget: nextSessionTarget,

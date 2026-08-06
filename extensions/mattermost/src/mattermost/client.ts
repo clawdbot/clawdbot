@@ -1,6 +1,7 @@
 // Mattermost plugin module implements client behavior.
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
@@ -27,7 +28,6 @@ const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
 // Non-JSON success bodies are a rare fallback (the API is JSON-first); keep a
 // generous text budget but still bound it instead of buffering the whole stream.
 const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type MattermostRequestInit = RequestInit & {
@@ -92,6 +92,20 @@ type MattermostFileInfo = {
   size?: number | null;
 };
 
+export function parseMattermostApiStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  // Read only the provider's status prefix; upstream details can mention other HTTP statuses.
+  const match = /Mattermost API (\d{3})\b/.exec(message);
+  if (!match) {
+    return undefined;
+  }
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : undefined;
+}
+
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -145,56 +159,6 @@ export async function readMattermostError(res: Response): Promise<string> {
     }
   }
   return text;
-}
-
-function responseWithRelease(response: Response, release: () => Promise<void>): Response {
-  let released = false;
-  const releaseOnce = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release();
-  };
-
-  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void releaseOnce();
-    return new Response(null, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
-  }
-
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const { done, value } = await reader.read();
-        if (done) {
-          await releaseOnce();
-          controller.close();
-          return;
-        }
-        if (value) {
-          controller.enqueue(value);
-        }
-      } catch (error) {
-        await releaseOnce();
-        throw error;
-      }
-    },
-    async cancel(reason) {
-      await reader.cancel(reason).catch(() => undefined);
-      await releaseOnce();
-    },
-  });
-
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
 }
 
 export function createMattermostClient(params: {

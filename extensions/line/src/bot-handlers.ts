@@ -14,6 +14,7 @@ import {
   resolvePairingIdLabel,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
@@ -529,7 +530,7 @@ export async function handleLineWebhookEvents(
     }
   }
   if (firstError) {
-    throw toLintErrorObject(firstError, "Non-Error thrown");
+    throw toErrorObject(firstError, "Non-Error thrown");
   }
 }
 
@@ -559,18 +560,4 @@ async function handleLineWebhookEvent(
     default:
       logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

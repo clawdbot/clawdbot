@@ -1,5 +1,6 @@
-// Pending and resolve CLI tests stay separate from policy-management coverage.
 import { Command } from "commander";
+// Pending and resolve CLI tests stay separate from policy-management coverage.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
@@ -30,12 +31,7 @@ const mocks = vi.hoisted(() => {
 
 const { callGatewayFromCli, defaultRuntime, runtimeErrors } = mocks;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
   const call = mock.mock.calls[0];

@@ -1,6 +1,7 @@
 import type {
   SessionApprovalReplay,
   SystemAgentChatQuestion,
+  WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
@@ -52,6 +53,11 @@ import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
 } from "../worker-environments/service-contract.js";
+import type { ChatMetadataReadParams, ChatMetadataResult } from "./chat-metadata-contract.js";
+import type {
+  ChatStartupProjectionReadParams,
+  ChatStartupProjectionResult,
+} from "./chat-startup-projection-contract.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /**
@@ -67,6 +73,8 @@ export type GatewayClient = {
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
   authenticatedUserId?: string;
+  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
+  authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -101,8 +109,8 @@ export type GatewayClient = {
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
-    /** In-process subagent-completion handoff eligible for verified policy inheritance. */
-    delegatedToolPolicyHandoff?: true;
+    /** Opaque in-process subagent-completion capability; never accepted from wire params. */
+    delegatedToolPolicyHandoffId?: string;
   };
 };
 
@@ -131,6 +139,12 @@ type GatewaySystemAgentSession = {
       message: string,
       options?: { uiContext?: { page: string } },
     ) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
+    }>;
+    answerWizard: (answer: WizardAnswer) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
@@ -205,6 +219,15 @@ export type GatewayRequestContext = {
     readOnly?: boolean;
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
+  readPreparedGatewayModelCatalog?: (params?: {
+    agentId?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+  }) => Promise<ModelCatalogEntry[] | undefined>;
+  readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readChatStartupProjection?: (
+    params: ChatStartupProjectionReadParams,
+  ) => Promise<ChatStartupProjectionResult>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;

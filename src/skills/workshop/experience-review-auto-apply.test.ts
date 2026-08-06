@@ -91,6 +91,142 @@ describe("experience review auto apply", () => {
     );
   });
 
+  it("leaves reviewer update proposals pending instead of auto-applying them", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-update-");
+    const seedTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    const seeded = await seedTool.execute("seed-create", {
+      action: "create",
+      name: "deployment-preflight",
+      description: "Check deployment prerequisites before retrying.",
+      proposal_content: "# Deployment Preflight\n\nOperator-authored preflight steps.\n",
+    });
+    await seedTool.execute("seed-apply", {
+      action: "apply",
+      proposal_id: (seeded.details as { id: string }).id,
+      reason: "seed live skill",
+    });
+
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      expect(params.skillWorkshopUpdateProposals).toBe(true);
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        origin: params.skillWorkshopOrigin,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        updateProposals: params.skillWorkshopUpdateProposals,
+        autonomousCapture: params.skillWorkshopAutonomousCapture,
+        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await tool.execute("review-update", {
+        action: "update",
+        skill_name: "deployment-preflight",
+        proposal_content: "# Deployment Preflight\n\nReviewer-rewritten steps.\n",
+      });
+      return {};
+    });
+    const candidate: ExperienceReviewCandidate = {
+      ctx: {
+        agentId: "main",
+        runId: "foreground-run",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+      },
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      transcript: "[user]\nRefine the deployment workflow.",
+      modelIterations: 10,
+    };
+
+    await runSkillExperienceReview(candidate, {
+      getCurrentConfig: () => candidate.config ?? {},
+    });
+
+    const manifest = await listSkillProposals({ workspaceDir });
+    const updateEntry = manifest.proposals.find((entry) => entry.kind === "update");
+    expect(updateEntry).toMatchObject({
+      skillKey: "deployment-preflight",
+      status: "pending",
+    });
+    await expect(
+      fs.readFile(`${workspaceDir}/skills/deployment-preflight/SKILL.md`, "utf8"),
+    ).resolves.toContain("Operator-authored preflight steps.");
+  });
+
+  it("auto-applies reviewer patch proposals composed from the live body", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-extend-");
+    const seedTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    const seeded = await seedTool.execute("seed-create", {
+      action: "create",
+      name: "deployment-preflight",
+      description: "Check deployment prerequisites before retrying.",
+      proposal_content: "# Deployment Preflight\n\nOperator-authored preflight steps.\n",
+    });
+    await seedTool.execute("seed-apply", {
+      action: "apply",
+      proposal_id: (seeded.details as { id: string }).id,
+      reason: "seed live skill",
+    });
+
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        origin: params.skillWorkshopOrigin,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        updateProposals: params.skillWorkshopUpdateProposals,
+        autonomousCapture: params.skillWorkshopAutonomousCapture,
+        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await tool.execute("review-read", { action: "read", skill_name: "deployment-preflight" });
+      await tool.execute("review-patch", {
+        action: "patch",
+        skill_name: "deployment-preflight",
+        old_string: "",
+        new_string: "## Learned\n\nCheck alerts and timing before retrying.",
+      });
+      return {};
+    });
+    const candidate: ExperienceReviewCandidate = {
+      ctx: {
+        agentId: "main",
+        runId: "foreground-run",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+      },
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      transcript: "[user]\nRefine the deployment workflow.",
+      modelIterations: 10,
+    };
+
+    await runSkillExperienceReview(candidate, {
+      getCurrentConfig: () => candidate.config ?? {},
+    });
+
+    const manifest = await listSkillProposals({ workspaceDir });
+    const updateEntry = manifest.proposals.find((entry) => entry.kind === "update");
+    expect(updateEntry).toMatchObject({
+      skillKey: "deployment-preflight",
+      status: "applied",
+    });
+    const liveSkill = await fs.readFile(
+      `${workspaceDir}/skills/deployment-preflight/SKILL.md`,
+      "utf8",
+    );
+    expect(liveSkill).toContain("Operator-authored preflight steps.");
+    expect(liveSkill).toContain("Check alerts and timing before retrying.");
+  });
+
   it("re-enters gateway admission when fired from a released request root", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-admission-workspace-");
     let subordinateClosedInsideRun: boolean | undefined;

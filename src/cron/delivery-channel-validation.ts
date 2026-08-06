@@ -8,6 +8,7 @@ import {
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { resolveFailureAlert } from "./service/failure-alerts.js";
 import type { CronDelivery, CronFailureAlert, CronJobCreate } from "./types.js";
 
 function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
@@ -33,8 +34,13 @@ async function assertConfiguredAnnounceChannel(params: {
   if (params.channel === "last") {
     return;
   }
-  const configuredChannels = (await listConfiguredMessageChannels(params.cfg)).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
+  if (!normalizedChannel && params.field === "delivery.channel") {
+    // Primary implicit routing is service-owned because session-backed and
+    // best-effort jobs must remain valid even on multi-channel hosts.
+    return;
+  }
+  const configuredChannels = (await listConfiguredMessageChannels(params.cfg)).toSorted();
   if (!normalizedChannel) {
     if (configuredChannels.length <= 1) {
       return;
@@ -180,45 +186,23 @@ export async function assertValidCronFailureAlert(params: {
   failureAlert?: CronFailureAlert | false;
   delivery?: CronDelivery;
 }) {
-  const failureAlert = params.failureAlert;
-  const globalFailureAlert = params.cfg.cron?.failureAlert;
-  // `false` disables alerts. An unset job alert still inherits an enabled global
-  // alert, so validate its effective route rather than allowing it to bypass the
-  // same channel checks as an explicit per-job alert.
-  if (failureAlert === false || (!failureAlert && globalFailureAlert?.enabled !== true)) {
+  // Validate the scheduler-owned route so prefix, global, and inheritance
+  // decisions cannot diverge between mutations and actual alert delivery.
+  const failureAlert = resolveFailureAlert(
+    { deps: { cronConfig: params.cfg.cron } },
+    { delivery: params.delivery, failureAlert: params.failureAlert },
+  );
+  if (!failureAlert || failureAlert.mode === "webhook") {
     return;
   }
-  // Only announce alerts route through a channel type; webhook alerts POST to
-  // `to`. Resolve the effective mode exactly as runtime does in
-  // resolveFailureAlert(): a job that omits `mode` inherits the global cron
-  // failure-alert mode, so validating with a hard "announce" default would
-  // wrongly reject a channel that a globally webhook-mode alert never uses.
-  const effectiveMode = failureAlert?.mode ?? globalFailureAlert?.mode;
-  if (effectiveMode === "webhook") {
-    return;
-  }
-  // Mirror resolveFailureAlert(): the alert inherits the job delivery channel and
-  // `to`, then the final send channel is resolved from that effective (channel,
-  // to) pair - a provider prefix in `to` only wins when the effective channel is
-  // unset/"last". Inheriting even when the alert names no route of its own means a
-  // routing-changing edit (e.g. flipping mode to announce) that activates a
-  // legacy-invalid inherited delivery channel is rejected up front rather than
-  // only when the alert fires.
-  const effectiveChannel = failureAlert?.channel ?? params.delivery?.channel;
-  const effectiveTo = failureAlert?.to ?? params.delivery?.to;
-  const resolvedChannel =
-    resolveAnnounceValidationChannel({
-      channel: effectiveChannel,
-      to: effectiveTo,
-    }) ?? "last";
   assertCompatibleAnnounceTarget({
-    channel: effectiveChannel,
-    to: effectiveTo,
+    channel: failureAlert.channel,
+    to: failureAlert.to,
     field: "failureAlert.channel",
   });
   await assertConfiguredAnnounceChannel({
     cfg: params.cfg,
-    channel: resolvedChannel,
+    channel: failureAlert.channel,
     field: "failureAlert.channel",
   });
 }

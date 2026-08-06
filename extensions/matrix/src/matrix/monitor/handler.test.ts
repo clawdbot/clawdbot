@@ -1,4 +1,3 @@
-// Matrix tests cover handler plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +13,8 @@ import {
   sessionDeliveryOrigin,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+// Matrix tests cover handler plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
@@ -172,12 +173,7 @@ function createReactionHarness(params?: {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
@@ -952,6 +948,67 @@ describe("matrix monitor handler pairing account scope", () => {
     },
   );
 
+  it.each([
+    { label: "full Matrix user ID", body: "hello @bot:example.org" },
+    { label: "colon-delimited full Matrix user ID", body: "@bot:example.org: help" },
+    { label: "Unicode-whitespace-colon-delimited full ID", body: "@bot:example.org:\u2003help" },
+    { label: "localpart shorthand", body: "hello @bot" },
+  ])("processes native plain-text $label without configured mention patterns", async ({ body }) => {
+    const getMemberDisplayName = vi.fn(async () => "sender");
+    const { handler, recordInboundSession, runPrepared } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [],
+      getMemberDisplayName,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$native-plain-text-mention",
+        body,
+        mentions: { user_ids: ["@bot:example.org"] },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalledOnce();
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload).toMatchObject({
+      AccountId: "ops",
+      WasMentioned: true,
+    });
+    expect(getMemberDisplayName).not.toHaveBeenCalledWith("!room:example.org", "@bot:example.org");
+  });
+
+  it.each([
+    { label: "another homeserver", body: "hello @bot:evil.example" },
+    { label: "an unexpected homeserver port", body: "@bot:example.org:8448: help" },
+    { label: "an invisible full-ID command separator", body: "@bot:example.org:\ufeffhelp" },
+    { label: "a room-alias full-ID command collision", body: "#@bot:example.org: help" },
+    { label: "a longer Unicode localpart", body: "hello @boté" },
+    { label: "a historical exclamation localpart", body: "hello @bot!evil:evil.example" },
+    { label: "a historical percent localpart", body: "hello @bot%evil:evil.example" },
+    { label: "an exclamation-only historical account", body: "hello @bot!" },
+    { label: "a percent-only historical account", body: "hello @bot%" },
+    { label: "a Markdown-only historical account", body: "hello @bot**" },
+    { label: "an attached Markdown-wrapped account", body: "hello evil**@bot" },
+  ])("rejects forged plain-text native mentions targeting $label", async ({ body }) => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [],
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$foreign-native-mention",
+        body,
+        mentions: { user_ids: ["@bot:example.org"] },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({
@@ -1649,7 +1706,7 @@ describe("matrix monitor handler pairing account scope", () => {
     }
   });
 
-  it("uses stable room ids instead of room-declared aliases in group context", async () => {
+  it("keeps stable room ids as routing metadata without using them as the display channel", async () => {
     const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       getRoomInfo: async () => ({
@@ -1677,7 +1734,9 @@ describe("matrix monitor handler pairing account scope", () => {
       lastCallArg(finalizeInboundContext, 0, "finalized context"),
       "finalized context",
     );
-    expect(finalized.GroupChannel).toBe("!room:example.org");
+    expect(finalized.ChatId).toBe("!room:example.org");
+    expect(finalized.NativeChannelId).toBe("!room:example.org");
+    expect(finalized.GroupChannel).toBeUndefined();
     expect(finalized.GroupSubject).toBe("Ops Room");
     expect(finalized.GroupId).toBe("!room:example.org");
   });
@@ -2891,11 +2950,11 @@ describe("matrix monitor handler draft streaming", () => {
       explanation?: string;
       steps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void>;
-    onApprovalEvent?: (payload: { phase: string; command?: string }) => Promise<void>;
+    onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void>;
     onCommandOutput?: (payload: {
       itemId?: string;
       toolCallId?: string;
-      phase: string;
+      phase?: string;
       name?: string;
       exitCode?: number;
       status?: string;
@@ -2904,7 +2963,7 @@ describe("matrix monitor handler draft streaming", () => {
     onPatchSummary?: (payload: {
       itemId?: string;
       toolCallId?: string;
-      phase: string;
+      phase?: string;
       name?: string;
       summary?: string;
       title?: string;
@@ -3264,6 +3323,24 @@ describe("matrix monitor handler draft streaming", () => {
 
     expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
+    await finish();
+    vi.useRealTimers();
+  });
+
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    vi.useFakeTimers();
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onApprovalEvent?.({ command: "must stay hidden" });
+    await opts.onCommandOutput?.({ title: "must stay hidden", exitCode: 0 });
+    await opts.onPatchSummary?.({ summary: "must stay hidden" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     await finish();
     vi.useRealTimers();
   });

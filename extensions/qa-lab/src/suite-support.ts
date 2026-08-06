@@ -93,7 +93,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     enabledPluginIds: params.input?.enabledPluginIds,
     concurrency: 1,
     startLab: params.startLab,
-    controlUiEnabled: scenarioRequiresControlUi(params.scenario),
+    controlUiEnabled: params.input?.controlUiEnabled ?? scenarioRequiresControlUi(params.scenario),
     transportReadyTimeoutMs: params.input?.transportReadyTimeoutMs,
     workerStartStaggerMs: params.input?.workerStartStaggerMs,
     forcedRuntime: params.input?.forcedRuntime,

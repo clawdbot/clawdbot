@@ -515,16 +515,9 @@ private struct ChatMessageBody: View {
     }
 
     private var primaryText: String {
-        let parts = self.message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return nil }
-            return content.text
-        }
-        return OpenClawChatMessage.displayText(
-            contentText: parts.joined(separator: "\n"),
-            role: self.message.role,
-            stopReason: self.message.stopReason,
-            errorMessage: self.message.errorMessage)
+        ChatMessageVisibleText.displayText(
+            in: self.message,
+            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {

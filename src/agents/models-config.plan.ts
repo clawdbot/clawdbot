@@ -222,7 +222,10 @@ async function planOpenClawModelsJsonWithDeps(
     workspaceDir?: string;
     existingRaw: string;
     existingParsed: unknown;
-    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    pluginMetadataSnapshot?: Pick<
+      PluginMetadataSnapshot,
+      "index" | "manifestRegistry" | "owners" | "pluginIds"
+    >;
     preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
@@ -273,6 +276,10 @@ async function planOpenClawModelsJsonWithDeps(
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
   const manifestPlugins = params.pluginMetadataSnapshot?.manifestRegistry.plugins;
+  const providerPolicyManifestRegistry =
+    params.pluginMetadataSnapshot?.pluginIds === undefined
+      ? params.pluginMetadataSnapshot?.manifestRegistry
+      : undefined;
   const normalizedProviders =
     normalizeProviders({
       providers,
@@ -283,6 +290,9 @@ async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
       manifestPlugins,
+      ...(providerPolicyManifestRegistry
+        ? { manifestRegistry: providerPolicyManifestRegistry }
+        : {}),
     }) ?? providers;
   const mergedProviders = resolveProvidersForMode({
     mode,

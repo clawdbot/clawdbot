@@ -1,7 +1,6 @@
 // Read-only channel tests cover read-only plugin registration and runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -17,7 +16,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
-  listPluginLoaderModuleCandidateUrls,
   listReadOnlyChannelPluginsForConfig,
   resolveReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
@@ -54,11 +52,6 @@ function createExternalChannelTestConfig(params: {
   };
 }
 
-function modulePathEndsWith(modulePath: string, suffix: string): boolean {
-  const normalized = modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
-  return normalized.replace(/\\/g, "/").endsWith(suffix);
-}
-
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -82,96 +75,6 @@ vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
 vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../plugins/plugin-module-loader-cache.js")>();
-  const { createRequire } = await import("node:module");
-  const require = createRequire(import.meta.url);
-
-  type LoaderConfig = {
-    plugins?: {
-      load?: { paths?: unknown };
-    };
-  };
-  type LoaderParams = {
-    config?: LoaderConfig;
-    onlyPluginIds?: readonly string[];
-    workspaceDir?: string;
-  };
-
-  function readJson(filePath: string): unknown {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  }
-
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return Boolean(value && typeof value === "object" && !Array.isArray(value));
-  }
-
-  function listCandidatePluginDirs(params: LoaderParams): string[] {
-    const paths = params.config?.plugins?.load?.paths;
-    const explicitPaths = Array.isArray(paths)
-      ? paths.filter((entry): entry is string => typeof entry === "string")
-      : [];
-    const workspaceExtensionsDir = params.workspaceDir
-      ? path.join(params.workspaceDir, ".openclaw", "extensions")
-      : undefined;
-    if (!workspaceExtensionsDir || !fs.existsSync(workspaceExtensionsDir)) {
-      return explicitPaths;
-    }
-    return explicitPaths.concat(
-      fs
-        .readdirSync(workspaceExtensionsDir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(workspaceExtensionsDir, entry.name)),
-    );
-  }
-
-  function loadOpenClawPlugins(params: LoaderParams) {
-    const onlyPluginIds = new Set(params.onlyPluginIds ?? []);
-    const diagnostics: Array<{
-      level: "error";
-      pluginId: string;
-      source: string;
-      message: string;
-    }> = [];
-    const channelSetups = listCandidatePluginDirs(params).flatMap((pluginDir) => {
-      const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-      const packagePath = path.join(pluginDir, "package.json");
-      if (!fs.existsSync(manifestPath) || !fs.existsSync(packagePath)) {
-        return [];
-      }
-      const manifest = readJson(manifestPath);
-      if (!isRecord(manifest) || typeof manifest.id !== "string") {
-        return [];
-      }
-      if (onlyPluginIds.size > 0 && !onlyPluginIds.has(manifest.id)) {
-        return [];
-      }
-      const packageJson = readJson(packagePath);
-      const openclaw = isRecord(packageJson) ? packageJson.openclaw : undefined;
-      const setupEntry = isRecord(openclaw) ? openclaw.setupEntry : undefined;
-      if (typeof setupEntry !== "string") {
-        return [];
-      }
-      const setupPath = path.join(pluginDir, setupEntry);
-      let setupModule: unknown;
-      try {
-        setupModule = require(setupPath);
-      } catch (error) {
-        diagnostics.push({
-          level: "error",
-          pluginId: manifest.id,
-          source: setupPath,
-          message: `failed to load setup entry: ${String(error)}`,
-        });
-        return [];
-      }
-      const entry = ((setupModule as { default?: unknown }).default ?? setupModule) as {
-        plugin?: unknown;
-      };
-      const plugin = entry.plugin;
-      return plugin ? [{ pluginId: manifest.id, plugin }] : [];
-    });
-    return { channelSetups, diagnostics };
-  }
-
   return {
     ...actual,
     getCachedPluginModuleLoader: ((params) => {
@@ -179,16 +82,7 @@ vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) =>
         modulePath: params.modulePath,
         tryNative: params.tryNative,
       });
-      const actualLoader = actual.getCachedPluginModuleLoader(params);
-      return ((modulePath: string) => {
-        if (
-          modulePathEndsWith(modulePath, "/plugins/loader.js") ||
-          modulePathEndsWith(modulePath, "/plugins/loader.ts")
-        ) {
-          return { loadOpenClawPlugins };
-        }
-        return actualLoader(modulePath);
-      }) as ReturnType<typeof actual.getCachedPluginModuleLoader>;
+      return actual.getCachedPluginModuleLoader(params);
     }) satisfies typeof actual.getCachedPluginModuleLoader,
   };
 });
@@ -510,20 +404,6 @@ afterAll(() => {
 });
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
-  it("keeps built plugin loader candidates inside the installed package dist root", () => {
-    const packageRoot = path.join(makeTempDir(), "node_modules", "openclaw");
-    const importerPath = path.join(packageRoot, "dist", "read-only-B4EkEtUx.js");
-    const candidates = listPluginLoaderModuleCandidateUrls(pathToFileURL(importerPath).href).map(
-      (candidate) => fileURLToPath(candidate),
-    );
-
-    expect(candidates).toEqual([
-      path.join(packageRoot, "dist", "plugins", "loader.js"),
-      path.join(packageRoot, "dist", "plugins", "build-smoke-entry.js"),
-    ]);
-    expect(candidates).not.toContain(path.join(packageRoot, "..", "plugins", "loader.js"));
-  });
-
   it("uses package channel metadata without loading setup or full runtime", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
     const plugins = listReadOnlyChannelPluginsForConfig(
@@ -551,14 +431,10 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     );
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
-    expect(
-      moduleLoaderParams.some(
-        (entry) =>
-          entry.tryNative === true &&
-          (modulePathEndsWith(entry.modulePath, "/plugins/loader.js") ||
-            modulePathEndsWith(entry.modulePath, "/plugins/loader.ts")),
-      ),
-    ).toBe(true);
+    expect(moduleLoaderParams).toContainEqual({
+      modulePath: fs.realpathSync(path.join(pluginDir, "setup-entry.cjs")),
+      tryNative: true,
+    });
   });
 
   it("uses activation source config to discover channel setup metadata after secret stripping", () => {
@@ -636,35 +512,6 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
 
     expect(first.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe("first");
     expect(second.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe("second");
-  });
-
-  it("refreshes cached read-only channel plugins when active registry channels mutate in place", () => {
-    const cfg = { channels: { "external-chat": { token: "configured" } } } as never;
-    const registry = createTestRegistry([]);
-    setActivePluginRegistry(registry);
-
-    const first = listReadOnlyChannelPluginsForConfig(cfg, {
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    });
-
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "external-chat" as never }),
-      meta: {
-        ...createChannelTestPluginBase({ id: "external-chat" as never }).meta,
-        blurb: "mutated registry",
-      },
-    };
-    registry.channels.push({ pluginId: "mutated-plugin", plugin, source: "test" } as never);
-    const second = listReadOnlyChannelPluginsForConfig(cfg, {
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    });
-
-    expect(pluginIds(first)).not.toContain("external-chat");
-    expect(second.find((entry) => entry.id === "external-chat")?.meta.blurb).toBe(
-      "mutated registry",
-    );
   });
 
   it("refreshes cached read-only channel plugins when ambient env changes", () => {

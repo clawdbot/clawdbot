@@ -7,6 +7,36 @@ import { writeJson } from "../shared/http-json.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
+export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockCompactionSummaryFaultMode =
+  | "none"
+  | "empty-output-once"
+  | "reasoning-only-output-once";
+
+type MockOpenAiRequestOutcome = "success" | "error";
+
+export type QaMockProviderDispatchRequest = {
+  route: "responses" | "anthropic-messages";
+  body: Record<string, unknown>;
+  raw: string;
+};
+
+export type QaMockProviderFailure = {
+  status: number;
+  type: string;
+  code?: string;
+  message: string;
+  presentation?: "anthropic-thinking";
+};
+
+export type QaMockProviderDispatchResult = {
+  events: StreamEvent[];
+  model: string;
+  failure?: QaMockProviderFailure;
+  onResponseSent?: () => void;
+  previewPauseMs?: number;
+};
+
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
   | {
@@ -122,7 +152,13 @@ export type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  requestKind: MockOpenAiRequestKind;
+  compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
+  outcome: MockOpenAiRequestOutcome;
+  errorCode?: string;
+  rawByteLength: number;
   plannedToolCallId?: string;
+  plannedToolItemId?: string;
   plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
@@ -192,6 +228,7 @@ export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
 export const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 export const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
@@ -234,6 +271,10 @@ export const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 export const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 export const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
+  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback)/i;
+export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
+  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
 
 export function buildStrandedFinalRecoveryText(): string {
   return [
@@ -258,6 +299,13 @@ export function isStrandedFinalRetryFailureRequest(allInputText: string): boolea
   );
 }
 export const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+export const QA_SUBAGENT_TERMINAL_MARKERS = {
+  visible: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
+  empty: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
+  restart: "QA-SUBAGENT-TERMINAL-RESTART-OK",
+  fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
+} as const;
+export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
 export const QA_NATIVE_STOP_DELAY_PROMPT_RE =
   /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
 export const QA_NATIVE_STOP_DELAY_MS = 180_000;
@@ -290,6 +338,8 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
+  compactionOverflowInjected: boolean;
+  compactionRetryActive: boolean;
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;

@@ -1,5 +1,11 @@
 // Gateway request scope tests cover request-local plugin runtime context propagation.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
+import {
+  requireActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.test-fixtures.js";
 
 const TEST_SCOPE: PluginRuntimeGatewayRequestScope = {
@@ -8,6 +14,7 @@ const TEST_SCOPE: PluginRuntimeGatewayRequestScope = {
 };
 
 describe("gateway request scope", () => {
+  afterEach(() => resetPluginRuntimeStateForTest());
   async function importGatewayRequestScopeModule() {
     return await import("./gateway-request-scope.js");
   }
@@ -62,5 +69,19 @@ describe("gateway request scope", () => {
 
   it("attaches plugin id to the active scope", async () => {
     await expectPluginIdScopedGatewayScope("voice-call");
+  });
+
+  it("resolves the owned registry while preserving gateway request facts", async () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    const requestRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry);
+
+    await withTestGatewayScope(async (runtimeScope) => {
+      await runtimeScope.withPluginRuntimeRegistryScope(requestRegistry, async () => {
+        expect(requireActivePluginRegistry()).toBe(requestRegistry);
+        expectGatewayScope(runtimeScope, { ...TEST_SCOPE, pluginRegistry: requestRegistry });
+      });
+      expect(requireActivePluginRegistry()).toBe(activeRegistry);
+    });
   });
 });

@@ -5,6 +5,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -260,6 +261,13 @@ async function downloadOpenAIVideo(
     dispatcherPolicy: params.dispatcherPolicy,
   });
   try {
+    try {
+      assertProviderBinaryResponseContent(response, deadline.label, "video");
+    } catch (error) {
+      // Capture can tee this unread body; awaiting its cancellation deadlocks before release.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
       timeoutMs,
@@ -270,6 +278,9 @@ async function downloadOpenAIVideo(
       onOverflow: ({ maxBytes }) =>
         new Error(`OpenAI generated video download exceeds ${maxBytes} bytes`),
     });
+    if (buffer.byteLength === 0) {
+      throw new Error(`${deadline.label}: malformed video response`);
+    }
     return {
       buffer,
       mimeType,
@@ -286,10 +297,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],
-    isConfigured: ({ agentDir }) =>
+    isConfigured: (ctx) =>
       isProviderApiKeyConfigured({
         provider: "openai",
-        agentDir,
+        ...ctx,
         profileTypes: ["api_key"],
       }),
     capabilities: {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MatrixQaObservedEvent } from "./events.js";
+import { inheritMatrixQaReplacementRelation, type MatrixQaObservedEvent } from "./events.js";
 
 export type MatrixQaE2eeActorId = "driver" | "observer" | `driver-${string}` | `cli-${string}`;
 
@@ -10,29 +10,23 @@ export const MATRIX_QA_E2EE_SYNC_FILTER = {
   },
 };
 
-export async function runMatrixQaE2eeClientOperation<T>(params: {
-  label: string;
-  run: () => Promise<T>;
-  stop: () => void;
-  timeoutMs: number;
-}): Promise<T> {
+async function withMatrixQaE2eeTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onTimeout?: () => void,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      // Matrix SDK encryption can wait indefinitely after room-key sharing. Stop this
-      // disposable QA client so the scenario can fail and release its worker resources.
-      try {
-        params.stop();
-      } catch {
-        // Preserve the operation timeout as the actionable failure.
-      }
-      reject(new Error(`${params.label} timed out after ${params.timeoutMs}ms`));
-    }, params.timeoutMs);
+      onTimeout?.();
+      reject(new Error(message));
+    }, timeoutMs);
     timer.unref();
   });
 
   try {
-    return await Promise.race([params.run(), timeout]);
+    return await Promise.race([promise, timeout]);
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -40,7 +34,84 @@ export async function runMatrixQaE2eeClientOperation<T>(params: {
   }
 }
 
-export function shouldRecordMatrixQaObservedEventUpdate(params: {
+export function createMatrixQaE2eeClientLifecycle(params: {
+  detachListeners: () => void;
+  drainPendingDecryptions: () => Promise<void>;
+  shutdownTimeoutMs: number;
+  stopAndPersist: () => Promise<void>;
+  stopWithoutPersist: () => void;
+}) {
+  const activeOperations = new Set<Promise<unknown>>();
+  let shutdownStarted = false;
+  let stopPromise: Promise<void> | undefined;
+
+  const failShutdown = (phase: string, cause: unknown): never => {
+    try {
+      params.stopWithoutPersist();
+    } catch {
+      // Preserve the lifecycle failure that explains why persistence was skipped.
+    }
+    throw new Error(
+      `Matrix E2EE client shutdown failed while ${phase}; crypto state was discarded. Retry the QA scenario with a fresh client.`,
+      { cause },
+    );
+  };
+  const stop = (): Promise<void> => {
+    if (stopPromise) {
+      return stopPromise;
+    }
+    shutdownStarted = true;
+    stopPromise = (async () => {
+      const deadline = Date.now() + params.shutdownTimeoutMs;
+      params.detachListeners();
+      if (activeOperations.size > 0) {
+        const graceMs = Math.min(1_000, Math.max(0, deadline - Date.now()));
+        await withMatrixQaE2eeTimeout(
+          Promise.allSettled(activeOperations),
+          graceMs,
+          "active Matrix SDK operations did not settle before shutdown",
+        ).catch((error: unknown) => {
+          failShutdown("waiting for active Matrix SDK operations", error);
+        });
+      }
+      await withMatrixQaE2eeTimeout(
+        params.drainPendingDecryptions(),
+        Math.max(0, deadline - Date.now()),
+        "pending Matrix decryptions did not drain before shutdown",
+      ).catch((error: unknown) => {
+        failShutdown("draining pending Matrix decryptions", error);
+      });
+      await params.stopAndPersist();
+    })();
+    return stopPromise;
+  };
+
+  const runMatrixQaE2eeClientOperation = async <T>(operation: {
+    label: string;
+    run: () => Promise<T>;
+    timeoutMs: number;
+  }): Promise<T> => {
+    if (shutdownStarted) {
+      throw new Error(
+        `Matrix E2EE client shutdown has started; cannot start ${operation.label}. Retry the QA scenario with a fresh client.`,
+      );
+    }
+    const active = operation.run();
+    activeOperations.add(active);
+    void active.finally(() => activeOperations.delete(active)).catch(() => undefined);
+
+    return withMatrixQaE2eeTimeout(
+      active,
+      operation.timeoutMs,
+      `${operation.label} timed out after ${operation.timeoutMs}ms`,
+      () => void stop().catch(() => undefined),
+    );
+  };
+
+  return { runOperation: runMatrixQaE2eeClientOperation, stop };
+}
+
+function shouldRecordMatrixQaObservedEventUpdate(params: {
   next: MatrixQaObservedEvent;
   previous: MatrixQaObservedEvent | undefined;
 }) {
@@ -53,9 +124,73 @@ export function shouldRecordMatrixQaObservedEventUpdate(params: {
     (previous.body === undefined && next.body !== undefined) ||
     (previous.formattedBody === undefined && next.formattedBody !== undefined) ||
     (previous.msgtype === undefined && next.msgtype !== undefined) ||
+    (previous.relatesTo === undefined && next.relatesTo !== undefined) ||
     (previous.mentions === undefined && next.mentions !== undefined) ||
     (previous.attachment === undefined && next.attachment !== undefined)
   );
+}
+
+export function createMatrixQaE2eeObservedEventRecorder(params: {
+  append: (event: MatrixQaObservedEvent) => void;
+}) {
+  const eventsById = new Map<string, MatrixQaObservedEvent>();
+  const replacementIdsByTargetId = new Map<string, Set<string>>();
+
+  const append = (event: MatrixQaObservedEvent) => {
+    eventsById.set(event.eventId, event);
+    params.append(event);
+  };
+
+  const rehydrateReplacements = (target: MatrixQaObservedEvent) => {
+    if (!target.relatesTo) {
+      return;
+    }
+    for (const replacementId of replacementIdsByTargetId.get(target.eventId) ?? []) {
+      const replacement = eventsById.get(replacementId);
+      if (!replacement || replacement.relatesTo) {
+        continue;
+      }
+      const rehydrated = inheritMatrixQaReplacementRelation({
+        event: replacement,
+        replacedEvent: target,
+      });
+      if (rehydrated !== replacement) {
+        // Waiters scan append-only history from a cursor, so relation enrichment
+        // must be observable as a new record rather than an in-place mutation.
+        append(rehydrated);
+      }
+    }
+  };
+
+  return {
+    record(normalized: MatrixQaObservedEvent | null) {
+      if (!normalized) {
+        return;
+      }
+      const observed = inheritMatrixQaReplacementRelation({
+        event: normalized,
+        replacedEvent: normalized.replacesEventId
+          ? eventsById.get(normalized.replacesEventId)
+          : undefined,
+      });
+      if (
+        !shouldRecordMatrixQaObservedEventUpdate({
+          next: observed,
+          previous: eventsById.get(observed.eventId),
+        })
+      ) {
+        return;
+      }
+      if (observed.replacesEventId) {
+        const replacementIds =
+          replacementIdsByTargetId.get(observed.replacesEventId) ?? new Set<string>();
+        replacementIds.add(observed.eventId);
+        replacementIdsByTargetId.set(observed.replacesEventId, replacementIds);
+      }
+      append(observed);
+      rehydrateReplacements(observed);
+    },
+  };
 }
 
 function buildMatrixQaE2eeStoragePaths(params: {

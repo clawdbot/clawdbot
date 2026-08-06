@@ -25,6 +25,7 @@ import {
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchCatalogToolExecutor,
@@ -349,12 +350,16 @@ export function prepareEmbeddedAttemptStream(input: {
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.
       const acceptedResult = await toolParams.acceptResultBeforeProjection(result);
+      const isError = isToolResultError(acceptedResult);
       input.toolSearchTargetTranscriptProjections.push({
         parentToolCallId: toolParams.parentToolCallId,
         toolCallId: toolParams.toolCallId,
         toolName: toolParams.toolName,
         input: toolParams.input,
         result: acceptedResult,
+        // Fulfilled tools can still carry a canonical failure result (for example MCP isError).
+        // Preserve that fact before the hidden target call is projected into session history.
+        isError,
         timestamp: Date.now(),
       });
       notifyToolActivity(attempt.runId);
@@ -395,7 +400,7 @@ export function prepareEmbeddedAttemptStream(input: {
         if (options?.steeringMode) {
           input.activeSession.agent.steeringMode = options.steeringMode;
         }
-        await steerActiveSessionWithOptionalDeliveryWait(
+        return await steerActiveSessionWithOptionalDeliveryWait(
           input.activeSession,
           text,
           options,

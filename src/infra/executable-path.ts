@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
@@ -127,13 +128,7 @@ function cacheExecutablePath(key: string, resolved: string | undefined): void {
     expiresAt: Date.now() + EXECUTABLE_PATH_CACHE_TTL_MS,
     resolved: resolved ?? null,
   });
-  while (executablePathCache.size > EXECUTABLE_PATH_CACHE_MAX_ENTRIES) {
-    const oldest = executablePathCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    executablePathCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(executablePathCache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
 }
 
 function executablePathCacheKey(

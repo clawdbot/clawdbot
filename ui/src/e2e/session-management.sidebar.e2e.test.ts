@@ -300,6 +300,112 @@ suite.define(() => {
     }
   });
 
+  it("names session-row actions and tabs from their menu into the next visible session", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+          sessionRow(
+            "agent:main:follow-up",
+            "Follow-up work",
+            Date.parse("2026-07-01T14:00:00.000Z"),
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const researchRow = page.locator('[data-session-key="agent:main:research"]');
+      const followUpRow = page.locator('[data-session-key="agent:main:follow-up"]');
+      const researchMenu = researchRow.getByRole("button", {
+        name: "Open thread menu: Research notes",
+        exact: true,
+      });
+      await researchRow
+        .getByRole("button", { name: "Pin thread: Research notes", exact: true })
+        .waitFor();
+      await followUpRow
+        .getByRole("button", { name: "Open thread menu: Follow-up work", exact: true })
+        .waitFor();
+
+      await researchMenu.focus();
+      await page.keyboard.press("Enter");
+      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await menu.waitFor({ state: "visible" });
+
+      await page
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Change icon" })
+        .click();
+      const iconPicker = page.getByRole("dialog", { name: "Change icon" });
+      await iconPicker.waitFor({ state: "visible" });
+      await expect
+        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+      await iconPicker.getByRole("button", { name: "Back" }).click();
+      await menu.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Change icon" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Tab");
+
+      await expect.poll(() => menu.count()).toBe(0);
+      await expect
+        .poll(() =>
+          followUpRow
+            .locator(".sidebar-recent-session__link")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+
+      await researchRow.locator(".sidebar-recent-session__link").focus();
+      await page.keyboard.press("Shift+F10");
+      await menu.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Open chat" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Tab");
+
+      await expect.poll(() => menu.count()).toBe(0);
+      await expect
+        .poll(() =>
+          followUpRow
+            .locator(".sidebar-recent-session__link")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -535,7 +641,13 @@ suite.define(() => {
         ]),
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+        "sessions.patch",
+      ],
       sessionKey: "agent:main:candidate",
       sessionGroups: ["Research"],
     });

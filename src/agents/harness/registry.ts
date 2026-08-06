@@ -2,29 +2,17 @@
  * Registry for native agent harness implementations and lifecycle cleanup.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  assertDirectPluginRegistrationReplacement,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "../../plugins/runtime.js";
 import type { AgentHarness, AgentHarnessResetParams, RegisteredAgentHarness } from "./types.js";
 
-/**
- * Process-wide registry for agent harnesses contributed by core and runtime plugins.
- *
- * The registry is global-symbol backed so repeated imports, test module resets, and plugin lazy
- * loads share one harness table inside a running gateway process.
- */
-const AGENT_HARNESS_REGISTRY_STATE = Symbol.for("openclaw.agentHarnessRegistryState");
 const log = createSubsystemLogger("agents/harness");
 
-type AgentHarnessRegistryState = {
-  harnesses: Map<string, RegisteredAgentHarness>;
-};
-
-function getAgentHarnessRegistryState(): AgentHarnessRegistryState {
-  const globalState = globalThis as typeof globalThis & {
-    [AGENT_HARNESS_REGISTRY_STATE]?: AgentHarnessRegistryState;
-  };
-  globalState[AGENT_HARNESS_REGISTRY_STATE] ??= {
-    harnesses: new Map<string, RegisteredAgentHarness>(),
-  };
-  return globalState[AGENT_HARNESS_REGISTRY_STATE];
+function getAgentHarnesses() {
+  return requireActivePluginRegistry().agentHarnesses;
 }
 
 /** Registers or replaces an agent harness under its trimmed id. */
@@ -33,38 +21,53 @@ export function registerAgentHarness(
   options?: { ownerPluginId?: string },
 ): void {
   const id = harness.id.trim();
-  getAgentHarnessRegistryState().harnesses.set(id, {
+  const harnesses = getAgentHarnesses();
+  const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "core";
+  const entry = {
+    pluginId,
+    source: "runtime",
     harness: {
       ...harness,
       id,
-      pluginId: harness.pluginId ?? options?.ownerPluginId,
+      pluginId: harness.pluginId ?? (pluginId === "core" ? undefined : pluginId),
     },
-    ownerPluginId: options?.ownerPluginId,
-  });
+  };
+  const existingIndex = harnesses.findIndex((registration) => registration.harness.id === id);
+  if (existingIndex !== -1) {
+    assertDirectPluginRegistrationReplacement(
+      harnesses[existingIndex]?.pluginId,
+      `agent harness ${id}`,
+    );
+  }
+  if (existingIndex === -1) {
+    harnesses.push(entry);
+  } else {
+    harnesses.splice(existingIndex, 1, entry);
+  }
 }
 
 /** Returns the harness plus plugin ownership metadata for registry diagnostics. */
 export function getRegisteredAgentHarness(id: string): RegisteredAgentHarness | undefined {
-  return getAgentHarnessRegistryState().harnesses.get(id.trim());
+  const registration = getAgentHarnesses().find((entry) => entry.harness.id === id.trim());
+  return registration
+    ? {
+        harness: registration.harness,
+        ownerPluginId: registration.pluginId === "core" ? undefined : registration.pluginId,
+      }
+    : undefined;
 }
 
 /** Lists registered harness records for selection and lifecycle fan-out. */
 export function listRegisteredAgentHarnesses(): RegisteredAgentHarness[] {
-  return Array.from(getAgentHarnessRegistryState().harnesses.values());
+  return getAgentHarnesses().map((entry) => ({
+    harness: entry.harness,
+    ownerPluginId: entry.pluginId === "core" ? undefined : entry.pluginId,
+  }));
 }
 
 /** Clears all harnesses; intended for tests and controlled registry reloads. */
 export function clearAgentHarnesses(): void {
-  getAgentHarnessRegistryState().harnesses.clear();
-}
-
-/** Restores a prior harness snapshot after tests temporarily replace the registry. */
-export function restoreRegisteredAgentHarnesses(entries: RegisteredAgentHarness[]): void {
-  const map = getAgentHarnessRegistryState().harnesses;
-  map.clear();
-  for (const entry of entries) {
-    map.set(entry.harness.id, entry);
-  }
+  getAgentHarnesses().length = 0;
 }
 
 /** Calls each registered harness session-reset hook without letting one failure stop the fan-out. */

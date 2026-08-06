@@ -38,6 +38,8 @@ type FollowupQueueState = {
     count: number;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];
+    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
+    summaryLines: string[];
     /** Weak source mapping keeps concurrent summary consumption identity-safe. */
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
@@ -65,6 +67,22 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
+export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
+  const seen = new Set<string>();
+  for (const key of keys) {
+    const cleaned = normalizeOptionalString(key);
+    if (!cleaned || seen.has(cleaned)) {
+      continue;
+    }
+    seen.add(cleaned);
+    const queue = getExistingFollowupQueue(cleaned);
+    if (queue && (queue.items.length > 0 || queue.inFlight.size > 0 || queue.droppedCount > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 type SummaryElisionCapState = Pick<
   FollowupQueueState,
   "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions"
@@ -86,6 +104,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
         continue;
       }
       const [source] = entry.sources.splice(sourceIndex, 1);
+      entry.summaryLines.splice(sourceIndex, 1);
       entry.count = entry.sources.length;
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
