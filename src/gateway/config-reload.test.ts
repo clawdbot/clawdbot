@@ -3531,11 +3531,11 @@ describe("startGatewayConfigReloader", () => {
     const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
     const configB = {
       gateway: { reload: {}, port: 18793 },
-      agents: { defaults: { temperature: 0.1 } },
+      agents: { defaults: { params: { temperature: 0.1 } } },
     } satisfies OpenClawConfig;
     const configD = {
       gateway: { reload: {}, port: 18793 },
-      agents: { defaults: { temperature: 0.3 } },
+      agents: { defaults: { params: { temperature: 0.3 } } },
     } satisfies OpenClawConfig;
     const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
       configPath: "/tmp/openclaw.json",
