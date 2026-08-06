@@ -16,10 +16,6 @@ import {
 } from "./recovery-point.js";
 import type { SnapshotManifest, SnapshotRef, SqliteSnapshotProvider } from "./snapshot-provider.js";
 
-type RecoveryPointOwnerInventory = Parameters<
-  typeof createRecoveryPointManifest
->[0]["ownerInventory"];
-
 const tempRoots: string[] = [];
 
 type RecoveryPointOwnerInventory = Parameters<
