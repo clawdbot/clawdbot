@@ -3851,7 +3851,7 @@ describe("sendMessageTelegram", () => {
         sendMessage: typeof sendMessage;
       };
 
-      await sendMessageTelegram(testCase.chatId, testCase.text, {
+      const result = await sendMessageTelegram(testCase.chatId, testCase.text, {
         cfg: TELEGRAM_TEST_CFG,
         token: "tok",
         api,
@@ -3862,6 +3862,7 @@ describe("sendMessageTelegram", () => {
         parse_mode: "HTML",
         message_thread_id: 271,
       });
+      expect(result.receipt?.threadId, testCase.name).toBe("271");
     }
   });
 
