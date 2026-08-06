@@ -89,6 +89,7 @@ describe("qa suite provider selection", () => {
       ],
     },
     { scenarioId: "goal-context-next-turn", adapterFactories: undefined },
+    { scenarioId: "subagent-completion-direct-fallback", adapterFactories: undefined },
   ])("adopts the provider requirement for directly selected $scenarioId", async (selection) => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-provider-lane-"));
     const startLab = vi.fn(async () => {

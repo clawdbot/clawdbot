@@ -37,9 +37,11 @@ scenario:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
+    providerMode: mock-openai
     retryCount: 0
     summary: Exercise terminal-reply dispositions through mock provider, ephemeral Gateway, SQLite task state, and qa-channel capture.
     config:
+      requiredProviderMode: mock-openai
       cases:
         - name: visible
           marker: QA-SUBAGENT-TERMINAL-VISIBLE-OK
@@ -57,6 +59,10 @@ flow:
   steps:
     - name: proves terminal-reply channel behavior including restart recovery
       actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
         - call: waitForGatewayHealthy
           args:
             - ref: env
