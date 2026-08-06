@@ -139,7 +139,30 @@ export default defineToolPlugin({
           ),
           notebook: Type.Optional(
             Type.Record(Type.String(), Type.Unknown(), {
-              description: "Notebook document payload when the caller has generated one.",
+              description:
+                'The FULL nbformat 4 document when you author the analysis yourself. REQUIRED whenever the user asked for a NAMED analysis (e.g. "the opening range of XAU_USD"): without it the backend instantiates a generic run-metrics template that analyses nothing. Shape: {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [...]} where each cell is {"id": "<unique>", "cell_type": "markdown"|"code", "source": "<text>", "metadata": {}}. Code cells run in a kernel where `import vctrader` exposes governed workspace reads under the notebook owner\'s identity (get_multi_timeframe_candles, get_atr, classify_regime, detect_support_resistance, list_run_trades, get_run_equity_curve, list_experiment_runs, ...); pandas and matplotlib are installed. Author cells that CALL those reads and compute/plot the requested analysis from the returned rows. If this field and notebook_json are both absent, the backend generates the template selected by template_kind.',
+              examples: [
+                {
+                  nbformat: 4,
+                  nbformat_minor: 5,
+                  metadata: {},
+                  cells: [
+                    {
+                      id: "intro",
+                      cell_type: "markdown",
+                      source: "# XAU_USD opening range\nWhat this notebook computes and why.",
+                      metadata: {},
+                    },
+                    {
+                      id: "load",
+                      cell_type: "code",
+                      source:
+                        "import vctrader as vc\nimport pandas as pd\nraw = vc.get_multi_timeframe_candles(instrument='XAU_USD', timeframes=['M15'])\n",
+                      metadata: {},
+                    },
+                  ],
+                },
+              ],
             }),
           ),
           notebook_json: Type.Optional(
@@ -148,7 +171,7 @@ export default defineToolPlugin({
           run_id: Type.Optional(
             Type.String({
               description:
-                "The backtest/experiment run this notebook analyses. WITHOUT IT THE NOTEBOOK IS AUTHORED WITH NO DATA: the executor runs in a locked sandbox with no database or network access, so the run's equity, trades and metrics must be embedded AT AUTHORING TIME. Omit it and every analysis cell degrades to 'No run snapshot is embedded in this notebook.' Pass the dispatch job / run id you are reporting on.",
+                "The backtest/experiment run this notebook analyses. For a TEMPLATE notebook (no authored cells) this selects the run whose equity/trades/metrics snapshot is embedded at authoring time -- omit it and the template's analysis cells degrade to 'No run snapshot is embedded in this notebook.' For an AUTHORED notebook (you passed cells) NO snapshot is embedded; pass run_id so the notebook records which run it analyses, and author cells that pass this same id to vctrader.list_run_trades(run_id) / vctrader.get_run_equity_curve(run_id) -- the kernel reads live data through the governed vctrader seam under the owner's identity, so cells are NOT cut off from workspace data.",
               examples: ["2dd91b18-f3b2-4303-8778-27c255a7e522"],
             }),
           ),
