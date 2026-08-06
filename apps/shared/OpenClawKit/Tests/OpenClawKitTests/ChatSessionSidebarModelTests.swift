@@ -2,7 +2,6 @@ import Foundation
 import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
-import OpenClawProtocol
 
 @MainActor
 struct ChatSessionSidebarModelTests {

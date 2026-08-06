@@ -15,6 +15,7 @@ import {
   isAcpSessionKey,
   isCronSessionKey,
   isSubagentSessionKey,
+  normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 
@@ -83,15 +84,16 @@ export function sessionClassificationForRow(
   agentId: string,
   entry?: SessionEntry,
 ): GatewaySessionClassification {
+  const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(key);
   const isMain =
-    key === "global"
+    canonicalKey === "global"
       ? cfg.session?.scope === "global"
-      : key === resolveAgentMainSessionKey({ cfg, agentId });
-  const parsedAgent = parseAgentSessionKey(key);
+      : canonicalKey === resolveAgentMainSessionKey({ cfg, agentId });
+  const parsedAgent = parseAgentSessionKey(canonicalKey);
   const resolvedAgentId = parsedAgent?.agentId ?? normalizeOptionalString(agentId);
-  const rest = parsedAgent?.rest ?? key;
-  const parsedThread = parseThreadSessionSuffix(key);
-  const route = parseSessionDeliveryRoute(key);
+  const rest = parsedAgent?.rest ?? canonicalKey;
+  const parsedThread = parseThreadSessionSuffix(canonicalKey);
+  const route = parseSessionDeliveryRoute(canonicalKey);
   const hasLegacyDirectPeer = /^(?:direct|dm):.+$/i.test(
     parseAgentSessionKey(parsedThread.baseSessionKey)?.rest ?? "",
   );
@@ -102,19 +104,19 @@ export function sessionClassificationForRow(
     entry?.chatType === "direct";
 
   let classification: SessionClassification;
-  if (key === "global") {
+  if (canonicalKey === "global") {
     classification = "global";
-  } else if (key === "unknown") {
+  } else if (canonicalKey === "unknown") {
     classification = "unknown";
   } else if (entry?.heartbeatIsolatedBaseSessionKey) {
     classification = "heartbeat";
   } else if (isMain) {
     classification = "main";
-  } else if (isSubagentSessionKey(key)) {
+  } else if (isSubagentSessionKey(canonicalKey)) {
     classification = "subagent";
-  } else if (isAcpSessionKey(key)) {
+  } else if (isAcpSessionKey(canonicalKey)) {
     classification = "acp";
-  } else if (isCronSessionKey(key)) {
+  } else if (isCronSessionKey(canonicalKey)) {
     classification = "cron";
   } else if (parsedThread.threadId) {
     classification = "thread";

@@ -41,6 +41,35 @@ describe("sessionClassificationForRow", () => {
     });
   });
 
+  it("canonicalizes structural casing while preserving opaque peer ids", () => {
+    expect(
+      classification({
+        key: "AGENT:MAIN:MAIN",
+        isMain: true,
+        entry: entry(),
+      }),
+    ).toMatchObject({ classification: "main", agentId: "main", isMain: true });
+    expect(
+      classification({
+        key: "AGENT:MAIN:TELEGRAM:MAIN:DIRECT:491234567890",
+        isMain: false,
+        entry: entry(),
+      }),
+    ).toMatchObject({ classification: "direct", accountId: "main", peerKind: "direct" });
+    expect(
+      sessionClassificationForRow(
+        { session: { scope: "global" } } as OpenClawConfig,
+        "GLOBAL",
+        "main",
+        entry(),
+      ),
+    ).toMatchObject({ classification: "global", isMain: true });
+    expect(classification({ key: "UNKNOWN", isMain: false, entry: entry() })).toMatchObject({
+      classification: "unknown",
+      isMain: false,
+    });
+  });
+
   it("projects routing facts without exposing the peer id", () => {
     const result = classification({
       key: "agent:main:telegram:main:direct:491234567890",
