@@ -117,9 +117,12 @@ export function presentExecutionDecisionReceipts(params: {
   }
   const nextOffset = offset + decisions.length;
   const pageCoverage = new Set(decisions.map((receipt) => receipt.enforcement.coverageState));
+  // Approval linkage is an owner fact, not a property of the requested page.
+  // Preserve ambiguity even when pagination has not returned the approval yet.
+  const hasAmbiguousApproval = approvalCount > 0 && params.approvalLinkState === "ambiguous";
   const coverageState = pageCoverage.has("unsupported")
     ? "unsupported"
-    : pageCoverage.has("unknown")
+    : hasAmbiguousApproval || pageCoverage.has("unknown")
       ? "unknown"
       : approvalCount > 0 || pageCoverage.has("enforced")
         ? "enforced"
@@ -127,6 +130,7 @@ export function presentExecutionDecisionReceipts(params: {
   const missingEvidence = [
     ...new Set([
       ...params.context.missingEvidence,
+      ...(hasAmbiguousApproval ? ["decision.execution_link"] : []),
       ...decisions.flatMap((receipt) => receipt.missingEvidence),
     ]),
   ].toSorted();

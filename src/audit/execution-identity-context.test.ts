@@ -390,6 +390,19 @@ describe("execution identity context storage", () => {
     expect(firstInspection.decisions[1]?.receiptId).not.toBe(
       secondInspection.decisions[1]?.receiptId,
     );
+    expect(
+      inspectExecutionIdentityRun(
+        { executionId: "execution-first", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["decision.execution_link"]),
+      },
+      decisions: [{ decision: { outcome: "not-applicable" } }],
+      nextDecisionCursor: "1",
+    });
   });
 
   it("confirms durable retries without manufacturing lost evidence", () => {
