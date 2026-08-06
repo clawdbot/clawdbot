@@ -407,8 +407,25 @@ export async function resolveDoctorContributionHealthChecks(): Promise<readonly 
 }
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
+  const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
+  if (!runWithPluginMetadataSnapshot) {
+    for (const contribution of resolveDoctorHealthContributions()) {
+      await contribution.run(ctx);
+    }
+    return;
+  }
+
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
   for (const contribution of resolveDoctorHealthContributions()) {
-    await contribution.run(ctx);
+    const workspaceDir = resolveAgentWorkspaceDir(
+      ctx.cfg,
+      resolveDefaultAgentId(ctx.cfg),
+      ctx.env ?? process.env,
+    );
+    await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
+      contribution.run(ctx),
+    );
   }
 }
 

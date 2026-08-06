@@ -199,7 +199,7 @@ export function expectDeliveryPath(
   value: unknown,
   path: "direct" | "none" | "queued" | "steered",
 ): Record<string, unknown> {
-  return expectRecordFields(value, { delivered: true, path }, "delivery");
+  return expectRecordFields(value, { delivered: path !== "queued", path }, "delivery");
 }
 
 export function mockCallArg(

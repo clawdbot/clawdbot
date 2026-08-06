@@ -1,5 +1,12 @@
 // Model list status tests cover status column construction and auth/probe summaries.
 import { describe, expect, it, type Mock, vi } from "vitest";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
@@ -547,6 +554,136 @@ async function withOpenAIStatusFixture<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
+  it("shows cooldown reasons and recovery guidance in JSON and text output", async () => {
+    const now = Date.now();
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<string, { cooldownUntil: number; cooldownReason: "session_expired" }>;
+    };
+    store.usageStats = {
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "session_expired",
+      },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, profileId) =>
+      profileId === "anthropic:default" ? now + 60_000 : undefined,
+    );
+
+    try {
+      const jsonRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
+        expect.objectContaining({
+          profileId: "anthropic:default",
+          kind: "cooldown",
+          reason: "session_expired",
+          recoveryHint:
+            "Re-authenticate with `openclaw models auth login --provider anthropic --profile-id 'anthropic:default'`.",
+        }),
+      ]);
+
+      const textRuntime = createRuntime();
+      await modelsStatusCommand({}, textRuntime as never);
+      const output = (textRuntime.log as Mock).mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("Unavailable auth profiles");
+      expect(output).toContain("anthropic:default (anthropic) cooldown:session_expired");
+      expect(output).toContain("openclaw models auth login --provider anthropic");
+    } finally {
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
+  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
+    const now = Date.now();
+    const profileId = "google-gemini-cli:legacy";
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<string, { cooldownUntil: number; cooldownReason: "session_expired" }>;
+    };
+    store.profiles[profileId] = {
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: now + 60_000,
+    };
+    store.usageStats = {
+      [profileId]: { cooldownUntil: now + 60_000, cooldownReason: "session_expired" },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, candidate) =>
+      candidate === profileId ? now + 60_000 : undefined,
+    );
+
+    try {
+      const statusRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, statusRuntime as never);
+      const [unusable] = parseFirstJsonLog(statusRuntime).auth.unusableProfiles;
+      expect(unusable).toMatchObject({
+        profileId,
+        provider: "google-gemini-cli",
+        recoveryHint: expect.stringContaining("--provider google`"),
+      });
+      expect(unusable.recoveryHint).not.toContain("--provider google-gemini-cli");
+    } finally {
+      delete store.profiles[profileId];
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
+  it("does not restore over plugin metadata published while status is running", async () => {
+    const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
+    const config = mocks.loadConfig();
+    const workspaceDir = "/tmp/openclaw-agent/workspace";
+    const catalogStarted = createDeferred();
+    const releaseCatalog = createDeferred();
+    let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
+    clearCurrentPluginMetadataSnapshot();
+    mocks.loadModelCatalog.mockImplementationOnce(async () => {
+      replacement = getCurrentPluginMetadataSnapshot({
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      catalogStarted.resolve();
+      await releaseCatalog.promise;
+      return [];
+    });
+    const commandPromise = modelsStatusCommand({ json: true }, createRuntime() as never);
+
+    try {
+      await catalogStarted.promise;
+      expect(replacement).toBeDefined();
+      clearPluginMetadataLifecycleCaches();
+      setCurrentPluginMetadataSnapshot(replacement!, {
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      releaseCatalog.resolve();
+      await commandPromise;
+
+      expect(
+        getCurrentPluginMetadataSnapshot({
+          config,
+          workspaceDir,
+          env: process.env,
+        }),
+      ).toBe(replacement);
+    } finally {
+      releaseCatalog.resolve();
+      await commandPromise.catch(() => {});
+      clearCurrentPluginMetadataSnapshot();
+      if (originalLoadModelCatalog) {
+        mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
+      } else {
+        mocks.loadModelCatalog.mockResolvedValue([]);
+      }
+    }
+  });
+
   it.each([
     [{ probeTimeout: "5000ms" }, "--probe-timeout"],
     [{ probeConcurrency: "2.5" }, "--probe-concurrency"],

@@ -97,10 +97,11 @@ enum DashboardGatewayCatalog {
 
     @MainActor
     static func primaryHealth(for state: ControlChannel.ConnectionState) -> DashboardGatewayHealth {
-        // ControlChannel currently has no failed state. Keep every representable
-        // non-connected state neutral instead of painting a speculative error.
-        if case .connected = state { return .ok }
-        return .unknown
+        switch state {
+        case .connected: .ok
+        case .degraded: .error
+        case .connecting, .disconnected: .unknown
+        }
     }
 
     @MainActor

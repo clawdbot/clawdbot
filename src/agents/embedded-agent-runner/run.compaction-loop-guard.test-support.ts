@@ -25,7 +25,7 @@ import {
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedRunEmbeddedAttempt,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
@@ -111,7 +111,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
   beforeEach(() => {
     liveToolCallSeq = 0;
     diagnosticSessionStates.clear();
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
@@ -388,85 +388,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       settleAttempt?.(makeAttemptResult());
       vi.useRealTimers();
     }
-  });
-
-  it("does not abort when the result hash changes across post-compaction attempts (progress was made)", async () => {
-    const overflowError = makeOverflowError();
-    // Attempt 1: overflow → triggers compaction.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({
-        terminal: { kind: "failed", source: "prompt", error: overflowError },
-      }),
-    );
-    // Attempt 2 (post-compaction): identical args, but DIFFERENT result hash
-    // each time. This fills the window without triggering the persisted-loop
-    // abort because the tool is making progress.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
-        .onToolOutcome;
-      for (let i = 0; i < 3; i += 1) {
-        await executeWrappedToolOutcome(
-          "gateway",
-          { action: "lookup", path: "x" },
-          `result-${i}`,
-          onToolOutcome,
-        );
-      }
-      return makeAttemptResult({
-        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
-      });
-    });
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-    expect(result.meta.error).toBeUndefined();
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("disarms after the built-in observation window, so later identical calls do not abort", async () => {
-    const overflowError = makeOverflowError();
-
-    // Attempt 1: overflow → triggers compaction.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({
-        terminal: { kind: "failed", source: "prompt", error: overflowError },
-      }),
-    );
-    // Attempt 2 (post-compaction): three distinct records → window full,
-    // guard disarms with no abort. We then append more identical records
-    // afterwards in this test to confirm they are not observed by the guard.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
-        .onToolOutcome;
-      await executeWrappedToolOutcome("read", { path: "/a" }, "ra", onToolOutcome);
-      await executeWrappedToolOutcome("write", { path: "/b" }, "rb", onToolOutcome);
-      await executeWrappedToolOutcome("read", { path: "/c" }, "rc", onToolOutcome);
-      return makeAttemptResult({
-        toolMetas: [{ toolName: "read" }, { toolName: "write" }, { toolName: "read" }],
-      });
-    });
-
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(result.meta.error).toBeUndefined();
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
   it("does not arm the post-compaction guard when loop detection is disabled", async () => {

@@ -3,6 +3,7 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createPluginStateKeyedStoreForTests,
@@ -19,6 +20,12 @@ import {
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import {
+  registerSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+  unregisterSessionBindingAdapter,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -46,6 +53,7 @@ import {
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
 } from "./message-cache-persistence.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -121,9 +129,7 @@ const CHECK_MARK_EMOJI = "\u{2705}";
 const THUMBS_UP_EMOJI = "\u{1F44D}";
 const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
-const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
-
 type TelegramChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
 
 function mockTelegramConfig(
@@ -165,6 +171,13 @@ type TelegramReactionPolicyCase = {
   expectedEnqueueCalls: number;
   expectedEvent?: string;
 };
+const TELEGRAM_POLL_REGISTRY_NAMESPACE = "telegram.poll-registry";
+const TELEGRAM_POLL_REGISTRY_MAX_ENTRIES = 10_000;
+
+type TelegramPollRegistryEntry = Omit<
+  Parameters<typeof recordTelegramPollRegistryEntry>[0],
+  "accountId" | "env"
+> & { createdAt: number };
 
 async function withTelegramSpooledReplayUpdate<T>(
   update: object,
@@ -220,6 +233,57 @@ function getTelegramCallbackHandlerForTests() {
   return getOnHandler("callback_query") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
+function createTelegramPluginCallbackHandler(params: {
+  handler: TelegramInteractiveHandlerRegistration["handler"];
+  namespace?: string;
+  pluginId?: string;
+  pluginRoot?: string;
+  config?: NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+}) {
+  registerPluginInteractiveHandler(
+    params.pluginId ?? "codex-plugin",
+    {
+      channel: "telegram",
+      namespace: params.namespace ?? "codexapp",
+      handler: params.handler as never,
+    },
+    params.pluginRoot ? { pluginRoot: params.pluginRoot } : undefined,
+  );
+  createTelegramBot({
+    token: "tok",
+    config: params.config ?? {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    },
+  });
+  return getTelegramCallbackHandlerForTests();
+}
+
+function createReplyPhotoMessage(text: string) {
+  return {
+    chat: { id: 7, type: "private" },
+    text,
+    date: 1_736_380_800,
+    reply_to_message: {
+      message_id: 9001,
+      photo: [{ file_id: "reply-photo-1" }],
+      from: { first_name: "Ada" },
+    },
+  };
+}
+
+async function dispatchTelegramReaction(params: {
+  updateId: number;
+  channelConfig: TelegramChannelConfig;
+  reaction?: Record<string, unknown>;
+}) {
+  mockTelegramConfig(params.channelConfig);
+  createTelegramBot({ token: "tok" });
+  const handler = getOnHandler("message_reaction") as (
+    ctx: Record<string, unknown>,
+  ) => Promise<void>;
+  await handler(createTelegramReactionContext(params));
+}
+
 const getEmptyTelegramFile = async () => ({
   download: async () => new Uint8Array(),
 });
@@ -229,6 +293,41 @@ let telegramTestStoreSequence = 0;
 function createTelegramTestStorePath(label: string): string {
   telegramTestStoreSequence += 1;
   return telegramTestState.path(`${label}-${telegramTestStoreSequence}.json`);
+}
+
+async function installTelegramPollRegistryForTests(
+  entry?: Omit<TelegramPollRegistryEntry, "createdAt">,
+) {
+  setTelegramPluginStateRuntimeForTests();
+  const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+    namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+    maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+  await store.clear();
+  if (entry) {
+    await recordTelegramPollRegistryEntry(entry);
+  }
+  return store;
+}
+
+function setTelegramPollRegistryRuntimeForTests(
+  store: PluginStateKeyedStore<TelegramPollRegistryEntry>,
+): void {
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
+}
+
+function getTelegramPollAnswerHandlerForTests() {
+  return getOnHandler("poll_answer") as (ctx: Record<string, unknown>) => Promise<void>;
+}
+
+function getTelegramPollHandlerForTests() {
+  return getOnHandler("poll") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
 async function loadEnvelopeTimestampHelpers() {
@@ -696,6 +795,393 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
 
     expect(getOnHandler("message")).toEqual(expect.any(Function));
+  });
+
+  it("routes poll answers through the recorded forum topic", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    getChatSpy.mockResolvedValue({ status: "member" });
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-topic-agent",
+      chat: {
+        id: -1001234567890,
+        type: "supergroup",
+        title: "Reviewers",
+        is_forum: true,
+      },
+      messageId: 321,
+      messageThreadId: 99,
+      question: "Escalate?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: {
+              "-1001234567890": {
+                requireMention: false,
+                topics: { "99": { agentId: "forum-agent", requireMention: false } },
+              },
+            },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+
+      await getTelegramPollAnswerHandlerForTests()({
+        update: { update_id: 9001 },
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+        pollAnswer: {
+          poll_id: "poll-topic-agent",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].ctx.SessionKey).toContain(
+        "agent:forum-agent:telegram:group:-1001234567890:topic:99",
+      );
+      expect(dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].ctx.Body).toContain(
+        'Poll response to "Escalate?": Yes',
+      );
+      expect(getChatSpy).toHaveBeenCalledWith(-1001234567890, 9);
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("blocks forwarded group poll answers from allowlisted former members", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    getChatSpy.mockResolvedValueOnce({ status: "left" });
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-forwarded-group",
+      chat: {
+        id: -1001234567890,
+        type: "supergroup",
+        title: "Reviewers",
+        is_forum: true,
+      },
+      messageId: 324,
+      messageThreadId: 99,
+      question: "Escalate?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: { groupPolicy: "allowlist", groupAllowFrom: ["10"] },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+
+      await getTelegramPollAnswerHandlerForTests()({
+        update: { update_id: 9003 },
+        pollAnswer: {
+          poll_id: "poll-forwarded-group",
+          option_ids: [0],
+          user: { id: 10, first_name: "Mallory" },
+        },
+      });
+
+      expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(getChatSpy).toHaveBeenCalledWith(-1001234567890, 10);
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("blocks forwarded direct-message poll answers from another user", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-forwarded-dm",
+      chat: { id: 9876, type: "private", first_name: "Ada" },
+      messageId: 325,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      });
+      createTelegramBot({ token: "tok" });
+
+      await getTelegramPollAnswerHandlerForTests()({
+        update: { update_id: 9004 },
+        pollAnswer: {
+          poll_id: "poll-forwarded-dm",
+          option_ids: [0],
+          user: { id: 10, first_name: "Mallory" },
+        },
+      });
+
+      expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("blocks direct poll answers when requireTopic has no persisted topic", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    getChatSpy.mockClear();
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-dm-topic",
+      chat: { id: 9876, type: "private", first_name: "Ada" },
+      messageId: 322,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["9876"],
+            direct: { "9876": { requireTopic: true } },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+
+      await getTelegramPollAnswerHandlerForTests()({
+        pollAnswer: {
+          poll_id: "poll-dm-topic",
+          option_ids: [0],
+          user: { id: 9876, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      expect(getChatSpy).not.toHaveBeenCalled();
+      expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("routes poll answers to the recorded direct-message topic session", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-dm-topic",
+      chat: { id: 9876, type: "private", first_name: "Ada" },
+      messageId: 323,
+      messageThreadId: 42,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+
+      await getTelegramPollAnswerHandlerForTests()({
+        update: { update_id: 9002 },
+        me: { id: 999, username: "openclaw_bot", has_topics_enabled: true },
+        getFile: getEmptyTelegramFile,
+        pollAnswer: {
+          poll_id: "poll-dm-topic",
+          option_ids: [0],
+          user: { id: 9876, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].ctx.SessionKey).toBe(
+        "agent:main:main:thread:9876:42",
+      );
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("preserves durable replay for synthetic poll-answer turns", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    await installTelegramPollRegistryForTests({
+      pollId: "poll-durable-replay",
+      chat: { id: 9876, type: "private", first_name: "Ada" },
+      messageId: 326,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const update = {
+        update_id: 9005,
+        poll_answer: {
+          poll_id: "poll-durable-replay",
+          option_ids: [0],
+          user: { id: 9876, first_name: "Ada", username: "ada" },
+        },
+      };
+
+      const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+        await getTelegramPollAnswerHandlerForTests()({
+          update,
+          me: { id: 999, username: "openclaw_bot" },
+          getFile: getEmptyTelegramFile,
+          pollAnswer: update.poll_answer,
+        });
+      });
+
+      expect(replay.deferredWork).toBeDefined();
+      await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("ignores unknown poll ids without dispatching", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    await installTelegramPollRegistryForTests();
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await getTelegramPollAnswerHandlerForTests()({
+        pollAnswer: {
+          poll_id: "missing-poll",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada" },
+        },
+      });
+      expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("retires a closed poll route after the durable replay grace", async () => {
+    onSpy.mockClear();
+    const entry: Omit<TelegramPollRegistryEntry, "createdAt"> = {
+      pollId: "poll-closed",
+      chat: { id: 123, type: "private", first_name: "Ada" },
+      messageId: 44,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    };
+    const register = vi.fn(async () => {});
+    setTelegramPollRegistryRuntimeForTests({
+      lookup: async () => entry,
+      register,
+    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const poll = { id: "poll-closed", is_closed: true };
+      await getTelegramPollHandlerForTests()({
+        update: { update_id: 9003, poll },
+        poll,
+      });
+
+      expect(register).toHaveBeenCalledWith("default:poll-closed", entry, {
+        ttlMs: 48 * 60 * 60 * 1_000,
+      });
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it.each([
+    {
+      name: "bot voter",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [0],
+        user: { id: 9, first_name: "Bot", is_bot: true },
+      },
+    },
+    {
+      name: "vote retraction",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [],
+        user: { id: 9, first_name: "Ada" },
+      },
+    },
+    {
+      name: "voter chat without a user identity",
+      pollAnswer: {
+        poll_id: "poll-skip",
+        option_ids: [0],
+        voter_chat: { id: -100123, type: "supergroup", title: "Reviewers" },
+      },
+    },
+  ])("drops $name before registry I/O", async ({ pollAnswer }) => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const lookup = vi.fn(async () => {
+      throw new Error("registry should not be read");
+    });
+    setTelegramPollRegistryRuntimeForTests({
+      lookup,
+    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await getTelegramPollAnswerHandlerForTests()({ pollAnswer });
+      expect(lookup).not.toHaveBeenCalled();
+      expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("marks spooled registry read failures retryable", async () => {
+    onSpy.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const readError = new Error("registry db unavailable");
+    setTelegramPollRegistryRuntimeForTests({
+      lookup: async () => {
+        throw readError;
+      },
+    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const update = {
+        update_id: 98082,
+        poll_answer: {
+          poll_id: "poll-read-error",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada" },
+        },
+      };
+      const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+        withTelegramSpooledReplayUpdate(update, () =>
+          getTelegramPollAnswerHandlerForTests()({
+            update,
+            pollAnswer: update.poll_answer,
+          }),
+        ),
+      );
+
+      expect(result).toEqual({ kind: "failed-retryable", error: readError });
+      expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
   });
 
   it("dedupes outbound prompt-context sends with ambient group history", async () => {
@@ -1690,7 +2176,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
   });
 
-  it("does not resolve opaque approval-shaped plugin callbacks", async () => {
+  it("terminalizes unowned opaque approval-shaped plugin callbacks", async () => {
     mockTelegramConfig({
       dmPolicy: "open",
       allowFrom: ["*"],
@@ -1708,7 +2194,14 @@ describe("createTelegramBot", () => {
     );
 
     expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
-    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 25, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "This action is no longer available.",
+      undefined,
+    );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-plugin-approve");
   });
 
@@ -2101,10 +2594,98 @@ describe("createTelegramBot", () => {
     },
   );
 
+  describe("model picker auth profile compatibility", () => {
+    it.each([
+      {
+        name: "preserves a compatible auth profile on a same-provider picker switch",
+        callbackData: "mdl_sel_openai/gpt-4.1",
+        expectedProfile: "team:prod",
+      },
+      {
+        name: "clears an incompatible auth profile on a cross-provider picker switch",
+        callbackData: "mdl_sel_anthropic/claude-sonnet-4-5",
+        expectedProfile: undefined,
+      },
+    ])("$name", async ({ callbackData, expectedProfile }) => {
+      onSpy.mockClear();
+      editMessageTextSpy.mockClear();
+
+      const storePath = createTelegramTestStorePath("model-auth-profile");
+      const config = {
+        auth: {
+          profiles: { "team:prod": { provider: "openai", mode: "api_key" } },
+        },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5",
+            models: {
+              "openai/gpt-4.1": {},
+              "openai/gpt-5": {},
+              "anthropic/claude-sonnet-4-5": {},
+            },
+          },
+        },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        session: { store: storePath },
+      } satisfies OpenClawConfig;
+      const route = resolveTelegramConversationRoute({
+        cfg: config,
+        accountId: "default",
+        chatId: 1234,
+        isGroup: false,
+        senderId: 9,
+      }).route;
+      const sessionKey = resolveTelegramConversationBaseSessionKey({
+        cfg: config,
+        route,
+        chatId: 1234,
+        isGroup: false,
+        senderId: 9,
+      });
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "model-auth-profile",
+          updatedAt: 1,
+          providerOverride: "openai",
+          modelOverride: "gpt-4o",
+          authProfileOverride: "team:prod",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 2,
+        },
+      });
+      const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
+      buildModelsProviderDataMock.mockResolvedValueOnce({
+        byProvider: new Map([
+          ["openai", new Set(["gpt-4.1", "gpt-5"])],
+          ["anthropic", new Set(["claude-sonnet-4-5"])],
+        ]),
+        providers: ["anthropic", "openai"],
+        resolvedDefault: { provider: "openai", model: "gpt-5" },
+        modelNames: new Map(),
+      });
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      await getTelegramCallbackHandlerForTests()(
+        createTelegramCallbackContext({
+          id: `cbq-model-auth-${expectedProfile ? "same" : "cross"}`,
+          data: callbackData,
+        }),
+      );
+
+      const entry = readOnlySessionEntry(storePath);
+      expect(entry?.authProfileOverride).toBe(expectedProfile);
+      expect(entry?.authProfileOverrideSource).toBe(expectedProfile ? "user" : undefined);
+      expect(entry?.authProfileOverrideCompactionCount).toBe(expectedProfile ? 2 : undefined);
+      expect(entry?.liveModelSwitchPending).toBe(true);
+    });
+  });
+
   it("renders model callback lists with configured display names", async () => {
     const storePath = createTelegramTestStorePath("model-display-names");
-    const buildModelsProviderDataMock =
-      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
     buildModelsProviderDataMock.mockResolvedValueOnce({
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],
@@ -3700,16 +4281,7 @@ describe("createTelegramBot", () => {
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
       await handler({
-        message: {
-          chat: { id: 7, type: "private" },
-          text: "what is in this image?",
-          date: 1736380800,
-          reply_to_message: {
-            message_id: 9001,
-            photo: [{ file_id: "reply-photo-1" }],
-            from: { first_name: "Ada" },
-          },
-        },
+        message: createReplyPhotoMessage("what is in this image?"),
         me: { username: "openclaw_bot" },
         getFile: async () => ({}),
       });
@@ -3766,16 +4338,7 @@ describe("createTelegramBot", () => {
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
       await handler({
-        message: {
-          chat: { id: 7, type: "private" },
-          text: "continue without the old image",
-          date: 1736380800,
-          reply_to_message: {
-            message_id: 9001,
-            photo: [{ file_id: "reply-photo-1" }],
-            from: { first_name: "Ada" },
-          },
-        },
+        message: createReplyPhotoMessage("continue without the old image"),
         me: { username: "openclaw_bot" },
         getFile: async () => ({}),
       });
@@ -3802,16 +4365,7 @@ describe("createTelegramBot", () => {
 
     const { result } = await runWithTelegramUpdateProcessingFrame(() =>
       handler({
-        message: {
-          chat: { id: 7, type: "private" },
-          text: "continue after polling restart",
-          date: 1736380800,
-          reply_to_message: {
-            message_id: 9001,
-            photo: [{ file_id: "reply-photo-1" }],
-            from: { first_name: "Ada" },
-          },
-        },
+        message: createReplyPhotoMessage("continue after polling restart"),
         me: { username: "openclaw_bot" },
         getFile: async () => ({}),
       }),
@@ -3838,19 +4392,7 @@ describe("createTelegramBot", () => {
       mediaAbortSignal: mediaAbort.signal,
     });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-    const update = {
-      update_id: 98081,
-      message: {
-        chat: { id: 7, type: "private" },
-        text: "keep the old image",
-        date: 1736380800,
-        reply_to_message: {
-          message_id: 9001,
-          photo: [{ file_id: "reply-photo-1" }],
-          from: { first_name: "Ada" },
-        },
-      },
-    };
+    const update = { update_id: 98081, message: createReplyPhotoMessage("keep the old image") };
 
     const { result } = await runWithTelegramUpdateProcessingFrame(() =>
       withTelegramSpooledReplayUpdate(update, () =>
@@ -4822,9 +5364,7 @@ describe("createTelegramBot", () => {
   });
 
   it("routes plugin-owned callback namespaces before synthetic command fallback", async () => {
-    registerPluginInteractiveHandler("codex-plugin", {
-      channel: "telegram",
-      namespace: "codexapp",
+    const callbackHandler = createTelegramPluginCallbackHandler({
       handler: (async ({ respond, callback }: TelegramInteractiveHandlerContext) => {
         await respond.editMessage({
           text: `Handled ${callback.payload}`,
@@ -4833,21 +5373,8 @@ describe("createTelegramBot", () => {
       }) as never,
     });
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-          },
-        },
-      },
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler({
-      callbackQuery: makeCallbackQuery({
+    await callbackHandler(
+      createTelegramCallbackContext({
         id: "cbq-codex-1",
         data: "codexapp:resume:thread-1",
         message: {
@@ -4856,9 +5383,7 @@ describe("createTelegramBot", () => {
           text: "Select a thread",
         },
       }),
-      me: { username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    });
+    );
 
     expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 11, "Handled resume:thread-1", {
       business_connection_id: "biz-1",
@@ -4867,30 +5392,15 @@ describe("createTelegramBot", () => {
   });
 
   it("deletes plugin-owned callback messages through the bot API", async () => {
-    registerPluginInteractiveHandler("codex-plugin", {
-      channel: "telegram",
-      namespace: "codexapp",
+    const callbackHandler = createTelegramPluginCallbackHandler({
       handler: (async ({ respond }: TelegramInteractiveHandlerContext) => {
         await respond.deleteMessage();
         return { handled: true };
       }) as never,
     });
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-          },
-        },
-      },
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler({
-      callbackQuery: makeCallbackQuery({
+    await callbackHandler(
+      createTelegramCallbackContext({
         id: "cbq-codex-delete",
         data: "codexapp:delete:thread-1",
         message: {
@@ -4898,39 +5408,22 @@ describe("createTelegramBot", () => {
           text: "Select a thread",
         },
       }),
-      me: { username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    });
+    );
 
     expect(deleteMessageSpy).toHaveBeenCalledWith(1234, 11);
     expect(replySpy).not.toHaveBeenCalled();
   });
 
   it("routes plugin-owned callback replies with Telegram topic params", async () => {
-    registerPluginInteractiveHandler("codex-plugin", {
-      channel: "telegram",
-      namespace: "codexapp",
+    const callbackHandler = createTelegramPluginCallbackHandler({
       handler: (async ({ respond }: TelegramInteractiveHandlerContext) => {
         await respond.reply({ text: "Handled in topic" });
         return { handled: true };
       }) as never,
     });
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-          },
-        },
-      },
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler({
-      callbackQuery: makeCallbackQuery({
+    await callbackHandler(
+      createTelegramCallbackContext({
         id: "cbq-codex-topic-reply",
         data: "codexapp:reply:thread-1",
         message: {
@@ -4942,9 +5435,7 @@ describe("createTelegramBot", () => {
           text: "Select a thread",
         },
       }),
-      me: { username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    });
+    );
 
     expect(sendMessageSpy).toHaveBeenCalledWith(-100987654321, "Handled in topic", {
       business_connection_id: "biz-topic-1",
@@ -4952,8 +5443,8 @@ describe("createTelegramBot", () => {
     });
 
     sendMessageSpy.mockClear();
-    await callbackHandler({
-      callbackQuery: makeCallbackQuery({
+    await callbackHandler(
+      createTelegramCallbackContext({
         id: "cbq-codex-general-reply",
         data: "codexapp:reply:thread-1",
         message: {
@@ -4964,9 +5455,7 @@ describe("createTelegramBot", () => {
           text: "Select a thread",
         },
       }),
-      me: { username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    });
+    );
 
     expect(sendMessageSpy).toHaveBeenCalledWith(-100987654322, "Handled in topic", undefined);
     expect(replySpy).not.toHaveBeenCalled();
@@ -4974,29 +5463,16 @@ describe("createTelegramBot", () => {
 
   it("submits plugin-owned callback text through the Telegram inbound path", async () => {
     const replyDone = waitForReplyCalls(1);
-    registerPluginInteractiveHandler("smart-replies-plugin", {
-      channel: "telegram",
-      namespace: "openclaw-smart-replies",
-      handler: async () => ({ handled: true, submitText: "Fix a broken tool" }),
-    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramPluginStateRuntimeForTests();
 
     try {
-      createTelegramBot({
-        token: "tok",
-        config: {
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-        },
+      const callbackHandler = createTelegramPluginCallbackHandler({
+        pluginId: "smart-replies-plugin",
+        namespace: "openclaw-smart-replies",
+        handler: async () => ({ handled: true, submitText: "Fix a broken tool" }),
       });
-      const callbackHandler = getTelegramCallbackHandlerForTests();
-
-      await callbackHandler({
-        callbackQuery: makeCallbackQuery({
+      await callbackHandler(
+        createTelegramCallbackContext({
           id: "cbq-smart-reply-submit",
           data: "openclaw-smart-replies:v1:Rm14IGEgYnJva2VuIHRvb2w",
           message: {
@@ -5005,9 +5481,7 @@ describe("createTelegramBot", () => {
             text: "What should I help you sharpen next?",
           },
         }),
-        me: { username: "openclaw_bot" },
-        getFile: getEmptyTelegramFile,
-      });
+      );
       await replyDone;
     } finally {
       clearTelegramRuntime();
@@ -5025,29 +5499,16 @@ describe("createTelegramBot", () => {
 
   it("does not submit plugin-owned callback text when the handler declines the callback", async () => {
     const handler = vi.fn(async () => ({ handled: false, submitText: "Ignore this" }));
-    registerPluginInteractiveHandler("smart-replies-plugin", {
-      channel: "telegram",
-      namespace: "openclaw-smart-replies",
-      handler,
-    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramPluginStateRuntimeForTests();
 
     try {
-      createTelegramBot({
-        token: "tok",
-        config: {
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-        },
+      const callbackHandler = createTelegramPluginCallbackHandler({
+        pluginId: "smart-replies-plugin",
+        namespace: "openclaw-smart-replies",
+        handler,
       });
-      const callbackHandler = getTelegramCallbackHandlerForTests();
-
-      await callbackHandler({
-        callbackQuery: makeCallbackQuery({
+      await callbackHandler(
+        createTelegramCallbackContext({
           id: "cbq-smart-reply-declined-submit",
           data: "openclaw-smart-replies:v1:SWdub3JlIHRoaXM",
           message: {
@@ -5056,9 +5517,7 @@ describe("createTelegramBot", () => {
             text: "Pick a direction",
           },
         }),
-        me: { username: "openclaw_bot" },
-        getFile: getEmptyTelegramFile,
-      });
+      );
     } finally {
       clearTelegramRuntime();
     }
@@ -5082,16 +5541,12 @@ describe("createTelegramBot", () => {
       });
       return { handled: true, submitText: "Do not submit this" };
     });
-    registerPluginInteractiveHandler("smart-replies-plugin", {
-      channel: "telegram",
-      namespace: "openclaw-smart-replies",
-      handler,
-    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramPluginStateRuntimeForTests();
-
     try {
-      createTelegramBot({
-        token: "tok",
+      const callbackHandler = createTelegramPluginCallbackHandler({
+        pluginId: "smart-replies-plugin",
+        namespace: "openclaw-smart-replies",
+        handler,
         config: {
           channels: {
             telegram: {
@@ -5102,21 +5557,15 @@ describe("createTelegramBot", () => {
           },
         },
       });
-      const callbackHandler = getTelegramCallbackHandlerForTests();
-
-      const callbackContext = {
-        callbackQuery: makeCallbackQuery({
-          id: "cbq-smart-reply-policy-skip",
-          data: "openclaw-smart-replies:v1:RG8gbm90IHN1Ym1pdCB0aGlz",
-          message: {
-            chat: { id: 9, type: "private" },
-            message_id: 11,
-            text: "Pick a direction",
-          },
-        }),
-        me: { username: "openclaw_bot" },
-        getFile: getEmptyTelegramFile,
-      };
+      const callbackContext = createTelegramCallbackContext({
+        id: "cbq-smart-reply-policy-skip",
+        data: "openclaw-smart-replies:v1:RG8gbm90IHN1Ym1pdCB0aGlz",
+        message: {
+          chat: { id: 9, type: "private" },
+          message_id: 11,
+          text: "Pick a direction",
+        },
+      });
 
       await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
       await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
@@ -5131,16 +5580,12 @@ describe("createTelegramBot", () => {
 
   it("submits plugin-owned callback text in mention-required group topics", async () => {
     const replyDone = waitForReplyCalls(1);
-    registerPluginInteractiveHandler("smart-replies-plugin", {
-      channel: "telegram",
-      namespace: "openclaw-smart-replies",
-      handler: async () => ({ handled: true, submitText: "Investigate topic callback" }),
-    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramPluginStateRuntimeForTests();
-
     try {
-      createTelegramBot({
-        token: "tok",
+      const callbackHandler = createTelegramPluginCallbackHandler({
+        pluginId: "smart-replies-plugin",
+        namespace: "openclaw-smart-replies",
+        handler: async () => ({ handled: true, submitText: "Investigate topic callback" }),
         config: {
           channels: {
             telegram: {
@@ -5153,10 +5598,8 @@ describe("createTelegramBot", () => {
           },
         },
       });
-      const callbackHandler = getTelegramCallbackHandlerForTests();
-
-      await callbackHandler({
-        callbackQuery: makeCallbackQuery({
+      await callbackHandler(
+        createTelegramCallbackContext({
           id: "cbq-smart-reply-topic-submit",
           data: "openclaw-smart-replies:v1:SW52ZXN0aWdhdGUgdG9waWMgY2FsbGJhY2s",
           message: {
@@ -5167,9 +5610,7 @@ describe("createTelegramBot", () => {
             text: "What should I help you sharpen next?",
           },
         }),
-        me: { username: "openclaw_bot" },
-        getFile: getEmptyTelegramFile,
-      });
+      );
       await replyDone;
     } finally {
       clearTelegramRuntime();
@@ -5197,26 +5638,14 @@ describe("createTelegramBot", () => {
       }
       return undefined;
     });
-    registerPluginInteractiveHandler("smart-replies-plugin", {
-      channel: "telegram",
-      namespace: "openclaw-smart-replies",
-      handler: async () => ({ handled: true, submitText: "Make Alice funnier" }),
-    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramPluginStateRuntimeForTests();
 
     try {
-      createTelegramBot({
-        token: "tok",
-        config: {
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-        },
+      const callbackHandler = createTelegramPluginCallbackHandler({
+        pluginId: "smart-replies-plugin",
+        namespace: "openclaw-smart-replies",
+        handler: async () => ({ handled: true, submitText: "Make Alice funnier" }),
       });
-      const callbackHandler = getTelegramCallbackHandlerForTests();
       const callbackQuery = makeCallbackQuery({
         id: "cbq-smart-reply-submit-retry",
         data: "openclaw-smart-replies:v1:TWFrZSBBbGljZSBmdW5uaWVy",
@@ -5267,29 +5696,17 @@ describe("createTelegramBot", () => {
       return undefined;
     });
     const handler = vi.fn(async () => ({ handled: true, submitText: "Try this later" }));
-    registerPluginInteractiveHandler("smart-replies-plugin", {
-      channel: "telegram",
-      namespace: "openclaw-smart-replies",
-      handler,
-    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramPluginStateRuntimeForTests();
 
     try {
-      createTelegramBot({
-        token: "tok",
-        config: {
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-        },
+      const callbackHandler = createTelegramPluginCallbackHandler({
+        pluginId: "smart-replies-plugin",
+        namespace: "openclaw-smart-replies",
+        handler,
       });
-      const callbackHandler = getTelegramCallbackHandlerForTests();
       const createCallbackUpdate = (updateId: number) => ({
         update_id: updateId,
-        callbackQuery: makeCallbackQuery({
+        ...createTelegramCallbackContext({
           id: "cbq-smart-reply-submit-fail",
           data: "openclaw-smart-replies:v1:VHJ5IHRoaXMgbGF0ZXI",
           message: {
@@ -5298,8 +5715,6 @@ describe("createTelegramBot", () => {
             text: "Pick a direction",
           },
         }),
-        me: { username: "openclaw_bot" },
-        getFile: getEmptyTelegramFile,
       });
 
       await expect(callbackHandler(createCallbackUpdate(401))).rejects.toThrow(
@@ -5333,15 +5748,64 @@ describe("createTelegramBot", () => {
       expectedAuth: true,
     },
   ])("$name", async ({ sender, messageId, expectedAuth }) => {
-    let observedAuth: TelegramInteractiveHandlerContext["auth"] | undefined;
-    const handler = vi.fn(async ({ auth }: TelegramInteractiveHandlerContext) => {
-      observedAuth = auth;
-      return { handled: true };
+    const pluginId = "qa-telegram-interactive-binding";
+    const pluginRoot = "/plugins/qa-telegram-interactive-binding";
+    const conversationId = "-100999:topic:99";
+    let binding: SessionBindingRecord | null = null;
+    const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
+      binding = {
+        bindingId: "qa-telegram-interactive-binding",
+        targetSessionKey: input.targetSessionKey,
+        targetKind: input.targetKind,
+        conversation: input.conversation,
+        status: "active",
+        boundAt: 1,
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      };
+      return binding;
     });
-    registerPluginInteractiveHandler("codex-plugin", {
+    const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>((ref) =>
+      binding?.conversation.conversationId === ref.conversationId ? binding : null,
+    );
+    const unbind = vi.fn<NonNullable<SessionBindingAdapter["unbind"]>>(async (input) => {
+      if (!binding || input.bindingId !== binding.bindingId) {
+        return [];
+      }
+      const removed = binding;
+      binding = null;
+      return [removed];
+    });
+    const adapter: SessionBindingAdapter = {
       channel: "telegram",
-      namespace: "codexapp",
-      handler: handler as never,
+      accountId: "default",
+      capabilities: { bindSupported: true, unbindSupported: true, placements: ["current"] },
+      bind,
+      listBySession: () => [],
+      resolveByConversation,
+      unbind,
+    };
+    let observed:
+      | {
+          auth: TelegramInteractiveHandlerContext["auth"];
+          request: Awaited<
+            ReturnType<TelegramInteractiveHandlerContext["requestConversationBinding"]>
+          >;
+          current: Awaited<
+            ReturnType<TelegramInteractiveHandlerContext["getCurrentConversationBinding"]>
+          >;
+          detach: Awaited<
+            ReturnType<TelegramInteractiveHandlerContext["detachConversationBinding"]>
+          >;
+        }
+      | undefined;
+    const handler = vi.fn(async (context: TelegramInteractiveHandlerContext) => {
+      observed = {
+        auth: context.auth,
+        request: await context.requestConversationBinding({ summary: "Refresh this topic" }),
+        current: await context.getCurrentConversationBinding(),
+        detach: await context.detachConversationBinding(),
+      };
+      return { handled: true };
     });
 
     const config = {
@@ -5361,24 +5825,67 @@ describe("createTelegramBot", () => {
     } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
     loadConfig.mockReturnValue(config);
 
-    createTelegramBot({ token: "tok", config });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler(
-      createTelegramCallbackContext({
-        id: `cbq-plugin-auth-${expectedAuth}`,
-        data: "codexapp:resume:thread-1",
-        from: sender,
-        message: {
-          chat: { id: -100999, type: "supergroup", title: "Test Group" },
-          message_id: messageId,
-          text: "Select a thread",
+    const callbackHandler = createTelegramPluginCallbackHandler({
+      handler: handler as never,
+      config,
+      pluginId,
+      pluginRoot,
+    });
+    registerSessionBindingAdapter(adapter);
+    try {
+      await bind({
+        targetSessionKey: "agent:qa:telegram:interactive-binding",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId,
+          parentConversationId: "-100999",
         },
-      }),
-    );
+        metadata: { pluginBindingOwner: "plugin", pluginId, pluginRoot },
+      });
+      bind.mockClear();
+      resolveByConversation.mockClear();
+      unbind.mockClear();
 
-    expect(handler).toHaveBeenCalledOnce();
-    expect(observedAuth?.isAuthorizedSender).toBe(expectedAuth);
+      await callbackHandler(
+        createTelegramCallbackContext({
+          id: `cbq-plugin-auth-${expectedAuth}`,
+          data: "codexapp:resume:thread-1",
+          from: sender,
+          message: {
+            chat: { id: -100999, type: "supergroup", title: "Test Group", is_forum: true },
+            message_id: messageId,
+            message_thread_id: 99,
+            is_topic_message: true,
+            text: "Select a thread",
+          },
+        }),
+      );
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(observed?.auth.isAuthorizedSender).toBe(expectedAuth);
+      if (expectedAuth) {
+        expect(observed?.request).toMatchObject({
+          status: "bound",
+          binding: { conversationId, threadId: 99 },
+        });
+        expect(observed?.current).toMatchObject({ conversationId, threadId: 99 });
+        expect(observed?.detach).toEqual({ removed: true });
+        expect(bind).toHaveBeenCalledOnce();
+        expect(resolveByConversation).toHaveBeenCalled();
+        expect(unbind).toHaveBeenCalledOnce();
+      } else {
+        expect(observed?.request).toMatchObject({ status: "error" });
+        expect(observed?.current).toBeNull();
+        expect(observed?.detach).toEqual({ removed: false });
+        expect(bind).not.toHaveBeenCalled();
+        expect(resolveByConversation).not.toHaveBeenCalled();
+        expect(unbind).not.toHaveBeenCalled();
+      }
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
+    }
   });
 
   it("passes true command auth to Telegram plugin callbacks for access-group DM senders", async () => {
@@ -5386,11 +5893,6 @@ describe("createTelegramBot", () => {
     const handler = vi.fn(async ({ auth }: TelegramInteractiveHandlerContext) => {
       observedAuth = auth;
       return { handled: true };
-    });
-    registerPluginInteractiveHandler("codex-plugin", {
-      channel: "telegram",
-      namespace: "codexapp",
-      handler: handler as never,
     });
 
     const config = {
@@ -5410,11 +5912,13 @@ describe("createTelegramBot", () => {
     } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
     loadConfig.mockReturnValue(config);
 
-    createTelegramBot({ token: "tok", config });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
+    const callbackHandler = createTelegramPluginCallbackHandler({
+      handler: handler as never,
+      config,
+    });
 
-    await callbackHandler({
-      callbackQuery: makeCallbackQuery({
+    await callbackHandler(
+      createTelegramCallbackContext({
         id: "cbq-plugin-access-group-auth",
         data: "codexapp:resume:thread-1",
         from: { id: 123456789, first_name: "Ada", username: "ada" },
@@ -5424,9 +5928,7 @@ describe("createTelegramBot", () => {
           text: "Select a thread",
         },
       }),
-      me: { username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    });
+    );
 
     expect(handler).toHaveBeenCalledOnce();
     expect(observedAuth?.isAuthorizedSender).toBe(true);
@@ -5444,27 +5946,12 @@ describe("createTelegramBot", () => {
         return { handled: true };
       },
     );
-    registerPluginInteractiveHandler("codex-plugin", {
-      channel: "telegram",
-      namespace: "codexapp",
+    const callbackHandler = createTelegramPluginCallbackHandler({
       handler: handler as never,
     });
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-          },
-        },
-      },
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler({
-      callbackQuery: makeCallbackQuery({
+    await callbackHandler(
+      createTelegramCallbackContext({
         id: "cbq-codex-general",
         data: "codexapp:resume:thread-1",
         message: {
@@ -5473,9 +5960,7 @@ describe("createTelegramBot", () => {
           text: "Select a thread",
         },
       }),
-      me: { username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    });
+    );
 
     expect(getChatSpy).toHaveBeenCalledWith(-100123456789);
     expect(handler).toHaveBeenCalledOnce();
@@ -5644,22 +6129,11 @@ describe("createTelegramBot", () => {
   });
 
   it("enqueues system event for reaction", async () => {
-    mockTelegramConfig({ dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 500 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 42,
+    await dispatchTelegramReaction({
+      updateId: 500,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      reaction: {
         user: { id: 9, first_name: "Ada", username: "ada_bot" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
       },
     });
 
@@ -5822,14 +6296,7 @@ describe("createTelegramBot", () => {
         wasSentByBot.mockReturnValue(sentByBot);
       }
 
-      mockTelegramConfig(channelConfig);
-
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message_reaction") as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-
-      await handler(createTelegramReactionContext({ updateId, reaction }));
+      await dispatchTelegramReaction({ updateId, channelConfig, reaction });
 
       expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(expectedEnqueueCalls);
       if (expectedEvent) {
@@ -5840,20 +6307,10 @@ describe("createTelegramBot", () => {
   );
 
   it("enqueues one event per added emoji reaction", async () => {
-    mockTelegramConfig({ dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 505 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 42,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
+    await dispatchTelegramReaction({
+      updateId: 505,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      reaction: {
         old_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
         new_reaction: [
           { type: "emoji", emoji: THUMBS_UP_EMOJI },
@@ -5870,79 +6327,32 @@ describe("createTelegramBot", () => {
     ]);
   });
 
-  it("routes forum group reactions to the general topic (thread id not available on reactions)", async () => {
-    mockTelegramConfig({ dmPolicy: "open", reactionNotifications: "all" });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    // MessageReactionUpdated does not include message_thread_id in the Bot API,
-    // so forum reactions always route to the general topic (1).
-    await handler({
-      update: { update_id: 505 },
-      messageReaction: {
+  it("drops forum reactions whose topic is no longer in the message cache", async () => {
+    // MessageReactionUpdated carries no message_thread_id, and this message was never
+    // cached, so the topic is unknown. Guessing General would authorize and enqueue
+    // against a topic the user did not react in.
+    await dispatchTelegramReaction({
+      updateId: 505,
+      channelConfig: { dmPolicy: "open", reactionNotifications: "all" },
+      reaction: {
         chat: { id: 5678, type: "supergroup", is_forum: true },
         message_id: 100,
         user: { id: 10, first_name: "Bob", username: "bob_user" },
-        date: 1736380800,
-        old_reaction: [],
         new_reaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
       },
     });
 
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(firstSystemEventArg(0)).toBe(
-      `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
-    );
-    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
-    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:100:10");
-  });
-
-  it("uses correct session key for forum group reactions in general topic", async () => {
-    mockTelegramConfig({ dmPolicy: "open", reactionNotifications: "all" });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 506 },
-      messageReaction: {
-        chat: { id: 5678, type: "supergroup", is_forum: true },
-        message_id: 101,
-        // No message_thread_id - should default to general topic (1)
-        user: { id: 10, first_name: "Bob" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: EYES_EMOJI }],
-      },
-    });
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(firstSystemEventArg(0)).toBe(`Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101`);
-    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
-    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:101:10");
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 
   it("uses correct session key for regular group reactions without topic", async () => {
-    mockTelegramConfig({ dmPolicy: "open", reactionNotifications: "all" });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 507 },
-      messageReaction: {
+    await dispatchTelegramReaction({
+      updateId: 507,
+      channelConfig: { dmPolicy: "open", reactionNotifications: "all" },
+      reaction: {
         chat: { id: 9999, type: "group" },
         message_id: 200,
         user: { id: 11, first_name: "Charlie" },
-        date: 1736380800,
-        old_reaction: [],
         new_reaction: [{ type: "emoji", emoji: HEART_EMOJI }],
       },
     });

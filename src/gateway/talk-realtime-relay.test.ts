@@ -28,7 +28,6 @@ import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  closeTalkRealtimeRelaySessionsForConnection,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
@@ -38,6 +37,7 @@ import {
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
+import { cleanupTalkConnection } from "./talk-session-registry.js";
 
 const activeRelaySessions = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -168,8 +168,7 @@ describe("talk realtime gateway relay", () => {
         throw new Error("provider close failed");
       });
 
-      expect(() => closeTalkRealtimeRelaySessionsForConnection("conn-owner")).not.toThrow();
-      closeTalkRealtimeRelaySessionsForConnection("conn-owner");
+      expect(() => cleanupTalkConnection("conn-owner", logGateway)).not.toThrow();
       await Promise.resolve();
       await Promise.resolve();
 
@@ -252,7 +251,7 @@ describe("talk realtime gateway relay", () => {
         relaySessionId: unrelated.relaySessionId,
         connId: "conn-other",
       });
-      closeTalkRealtimeRelaySessionsForConnection("conn-other");
+      cleanupTalkConnection("conn-other", logGateway);
       expect(bridgeCloses[2]).toHaveBeenCalledOnce();
     } finally {
       clientVoiceSessionTesting.reset();
@@ -1388,6 +1387,7 @@ describe("talk realtime gateway relay", () => {
         bridgeRequest?.onReady?.();
         bridgeRequest?.onAudio(Buffer.from("audio-out"));
         bridgeRequest?.onMark?.("mark-1");
+        bridgeRequest?.onTranscript?.("user", "hel", false);
         bridgeRequest?.onTranscript?.("user", "hello", true);
         bridgeRequest?.onTranscript?.("assistant", "hi there", true);
         bridgeRequest?.onToolCall?.({
@@ -1432,6 +1432,9 @@ describe("talk realtime gateway relay", () => {
         events.push({ event, payload, connIds: [...connIds], opts });
       },
     } as never;
+    const expectDelivery = (payload: Record<string, unknown>, dropIfSlow: boolean) => {
+      expectRecordFields(events.find((entry) => entry.payload === payload)?.opts, { dropIfSlow });
+    };
 
     const session = createTalkRealtimeRelaySession({
       context,
@@ -1483,7 +1486,7 @@ describe("talk realtime gateway relay", () => {
     });
     const readyEvent = events.find((entry) => entry.payload === readyPayload);
     expectRecordFields(readyEvent, { event: "talk.event", connIds: ["conn-1"] });
-    expectRecordFields(readyEvent?.opts, { dropIfSlow: false });
+    expectDelivery(readyPayload, false);
 
     const audioPayload = findEventPayload(events, (payload) => payload.type === "audio");
     expectRecordFields(audioPayload, {
@@ -1492,8 +1495,7 @@ describe("talk realtime gateway relay", () => {
       audioBase64: Buffer.from("audio-out").toString("base64"),
     });
     expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
-    const audioEvent = events.find((entry) => entry.payload === audioPayload);
-    expectRecordFields(audioEvent?.opts, { dropIfSlow: true });
+    expectDelivery(audioPayload, true);
 
     const markPayload = findEventPayload(events, (payload) => payload.type === "mark");
     expectRecordFields(markPayload, {
@@ -1501,12 +1503,19 @@ describe("talk realtime gateway relay", () => {
       type: "mark",
       markName: "mark-1",
     });
-    const markEvent = events.find((entry) => entry.payload === markPayload);
-    expectRecordFields(markEvent?.opts, { dropIfSlow: false });
+    expectDelivery(markPayload, false);
+
+    const partialTranscript = findEventPayload(
+      events,
+      (payload) =>
+        payload.type === "transcript" && payload.role === "user" && payload.final === false,
+    );
+    expectDelivery(partialTranscript, true);
 
     const userTranscript = findEventPayload(
       events,
-      (payload) => payload.type === "transcript" && payload.role === "user",
+      (payload) =>
+        payload.type === "transcript" && payload.role === "user" && payload.final === true,
     );
     expectRecordFields(userTranscript, {
       relaySessionId: session.relaySessionId,
@@ -1516,6 +1525,7 @@ describe("talk realtime gateway relay", () => {
       final: true,
     });
     expectRecordFields(userTranscript.talkEvent, { type: "transcript.done", final: true });
+    expectDelivery(userTranscript, false);
 
     const assistantTranscript = findEventPayload(
       events,
@@ -1533,6 +1543,7 @@ describe("talk realtime gateway relay", () => {
       final: true,
       payload: { text: "hi there" },
     });
+    expectDelivery(assistantTranscript, false);
 
     const toolCallPayload = findEventPayload(events, (payload) => payload.type === "toolCall");
     expectRecordFields(toolCallPayload, {
@@ -1548,6 +1559,7 @@ describe("talk realtime gateway relay", () => {
       itemId: "item-1",
       callId: "call-1",
     });
+    expectDelivery(toolCallPayload, false);
 
     sendTalkRealtimeRelayAudio({
       relaySessionId: session.relaySessionId,
@@ -1628,6 +1640,7 @@ describe("talk realtime gateway relay", () => {
       byteLength: Buffer.from("audio-in").byteLength,
     });
     expectRecordFields(inputAudioPayload.talkEvent, { type: "input.audio.delta" });
+    expectDelivery(inputAudioPayload, true);
 
     const clearPayload = findEventPayload(events, (payload) => payload.type === "clear");
     expectRecordFields(clearPayload, {
@@ -1639,6 +1652,7 @@ describe("talk realtime gateway relay", () => {
       payload: { reason: "barge-in" },
       final: true,
     });
+    expectDelivery(clearPayload, false);
 
     const toolResultPayloads = events
       .map((entry) => entry.payload)
@@ -1680,6 +1694,9 @@ describe("talk realtime gateway relay", () => {
       callId: "call-1",
       final: true,
     });
+    expect(
+      toolResultPayloads.map((payload) => events.find((event) => event.payload === payload)?.opts),
+    ).toEqual([{ dropIfSlow: true }, { dropIfSlow: true }, { dropIfSlow: false }]);
 
     const closePayload = findEventPayload(events, (payload) => payload.type === "close");
     expectRecordFields(closePayload, {
@@ -1688,6 +1705,7 @@ describe("talk realtime gateway relay", () => {
       reason: "completed",
     });
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
+    expectDelivery(closePayload, false);
   });
 
   it("emits generic issue details when relay connect fails", async () => {
@@ -1708,10 +1726,20 @@ describe("talk realtime gateway relay", () => {
         isConnected: vi.fn(() => false),
       }),
     };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const events: Array<{
+      event: string;
+      payload: unknown;
+      connIds: string[];
+      opts?: { dropIfSlow?: boolean };
+    }> = [];
     const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
+      broadcastToConnIds: (
+        event: string,
+        payload: unknown,
+        connIds: ReadonlySet<string>,
+        opts?: { dropIfSlow?: boolean },
+      ) => {
+        events.push({ event, payload, connIds: [...connIds], opts });
       },
     } as never;
 
@@ -1747,6 +1775,9 @@ describe("talk realtime gateway relay", () => {
       model: "gpt-realtime-2",
       transport: "gateway-relay",
       phase: "connect",
+    });
+    expectRecordFields(events.find((event) => event.payload === errorPayload)?.opts, {
+      dropIfSlow: false,
     });
   });
 

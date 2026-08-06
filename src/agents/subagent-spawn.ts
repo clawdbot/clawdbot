@@ -7,7 +7,6 @@ import { promises as fs } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import {
   GatewayDrainingError,
@@ -33,6 +32,7 @@ import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
+  retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import {
@@ -198,6 +198,16 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    const provisionalSessionIdentity = {
+      expectedSessionId: initialSession.entry?.sessionId,
+      expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
+    };
+    const cleanupCreatedSession = (emitLifecycleHooks = false) =>
+      cleanupProvisionalSession(childSessionKey, {
+        emitLifecycleHooks,
+        deleteTranscript: true,
+        ...provisionalSessionIdentity,
+      });
     const preparedSpawnContext = await prepareSubagentSessionContext({
       cfg,
       contextMode,
@@ -207,10 +217,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
     });
     if (preparedSpawnContext.status === "error") {
-      await cleanupProvisionalSession(childSessionKey, {
-        emitLifecycleHooks: false,
-        deleteTranscript: true,
-      });
+      await cleanupCreatedSession();
       return {
         status: "error",
         error: preparedSpawnContext.error,
@@ -224,10 +231,7 @@ export async function spawnSubagentDirect(
         resolvedModel,
       });
       if (runtimeModelPersistError) {
-        await cleanupProvisionalSession(childSessionKey, {
-          emitLifecycleHooks: false,
-          deleteTranscript: true,
-        });
+        await cleanupCreatedSession();
         return {
           status: "error",
           error: runtimeModelPersistError,
@@ -252,10 +256,7 @@ export async function spawnSubagentDirect(
         },
       });
       if (bindResult.status === "error") {
-        await cleanupProvisionalSession(childSessionKey, {
-          emitLifecycleHooks: false,
-          deleteTranscript: true,
-        });
+        await cleanupCreatedSession();
         return {
           status: "error",
           error: bindResult.error,
@@ -309,10 +310,7 @@ export async function spawnSubagentDirect(
       mountPathHint,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
-      await cleanupProvisionalSession(childSessionKey, {
-        emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
-      });
+      await cleanupCreatedSession(threadBindingReady);
       return {
         status: materializedAttachments.status,
         error: materializedAttachments.error,
@@ -392,6 +390,15 @@ export async function spawnSubagentDirect(
       spawnMode,
       resolvedModelMetadata,
     });
+    const cleanupFailedSpawn = (waitForSessionDeletion?: boolean) =>
+      cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        attachmentAbsDir,
+        emitLifecycleHooks: threadBindingReady,
+        deleteTranscript: true,
+        ...provisionalSessionIdentity,
+        waitForSessionDeletion,
+      });
     type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
@@ -419,12 +426,7 @@ export async function spawnSubagentDirect(
       },
       async cleanupOnFailure({ phase, state }) {
         if (phase === "initialize") {
-          await cleanupFailedSpawnBeforeAgentStart({
-            childSessionKey,
-            attachmentAbsDir,
-            emitLifecycleHooks: threadBindingReady,
-            deleteTranscript: true,
-          });
+          await cleanupFailedSpawn();
           return;
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
@@ -464,10 +466,7 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        await cleanupProvisionalSession(childSessionKey, {
-          emitLifecycleHooks,
-          deleteTranscript: true,
-        });
+        await cleanupCreatedSession(emitLifecycleHooks);
       },
     };
     const pipelineResult = await runSpawnPipeline({
@@ -556,7 +555,11 @@ export async function spawnSubagentDirect(
                 );
               }
             } catch (error) {
-              await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
+              await terminateAcceptedCollectorRun({
+                childSessionKey,
+                gatewayRunId,
+                ...provisionalSessionIdentity,
+              });
               launchTerminationConfirmed = true;
               throw error;
             }
@@ -570,28 +573,16 @@ export async function spawnSubagentDirect(
           const launchError = summarizeSpawnError(error);
           const [contextRollback, sessionCleanup] = await Promise.allSettled([
             rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
-            cleanupFailedSpawnBeforeAgentStart({
-              childSessionKey,
-              attachmentAbsDir,
-              emitLifecycleHooks: threadBindingReady,
-              deleteTranscript: true,
+            cleanupFailedSpawn(
               // A launch RPC can fail after acceptance. Keep the FIFO slot until
               // deleting the child session proves no accepted run remains active.
-              waitForSessionDeletion: !launchTerminationConfirmed,
-            }),
+              !launchTerminationConfirmed,
+            ),
           ]);
-          for (;;) {
-            try {
-              settleFailedQueuedSubagentLaunch(childRunId, launchError);
-              break;
-            } catch {
-              // The child is stopped; retry only the durable terminal write.
-              await new Promise<void>((resolve) => {
-                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-                timer.unref?.();
-              });
-            }
-          }
+          await retrySubagentCleanup(async () => {
+            settleFailedQueuedSubagentLaunch(childRunId, launchError);
+            return true;
+          });
           const cleanupComplete =
             contextRollback.status === "fulfilled" &&
             contextRollback.value &&

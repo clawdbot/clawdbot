@@ -60,56 +60,8 @@ type TestableAudioPeer = {
 };
 
 type TestableGatewayBridge = {
-  delegations?: {
-    handleEvent(event: { kind: "delegation"; id: string; prompt: string }): void;
-  };
   pendingAudio: Buffer;
-  sideband?: {
-    socket: FakeSocket;
-    requestIds: { realtimeSessionId: string; sessionId: string; threadId: string };
-  };
 };
-
-function delegate(testBridge: TestableGatewayBridge, id: string, prompt: string): void {
-  const delegations = testBridge.delegations;
-  if (!delegations) {
-    throw new Error("Expected delegation controller");
-  }
-  delegations.handleEvent({ kind: "delegation", id, prompt });
-}
-
-function createDelegationBridge(
-  runAgentConsult: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>,
-) {
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const bridge = new OpenAIQuicksilverGatewayBridge({
-    providerConfig: {},
-    model: "gpt-live-1-codex",
-    voice: "marin",
-    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-    onAudio: vi.fn(),
-    onClearAudio: vi.fn(),
-    runAgentConsult,
-    logger,
-    resolveAuth: vi.fn(async () => ({
-      type: "oauth" as const,
-      token: "oauth-token",
-      accountId: "account-1",
-    })),
-  });
-  const socket = new FakeSocket("manual");
-  socket.readyState = 1;
-  const testBridge = bridge as unknown as TestableGatewayBridge;
-  testBridge.sideband = {
-    socket,
-    requestIds: {
-      realtimeSessionId: "realtime-session",
-      sessionId: "session",
-      threadId: "thread",
-    },
-  };
-  return { bridge, logger, socket, testBridge };
-}
 
 async function createInboundAudioHarness(params?: { onRtpPacket?: () => void }) {
   const { RtpHeader, RtpPacket } = await import("werift");
@@ -752,78 +704,6 @@ describe("GPT-Live gateway relay bridge", () => {
     await expect(connection).rejects.toThrow("sideband overflow observed");
     expect(socket.closeCode).toBe(1009);
     expect(socket.closeReason).toBe("sideband startup buffer exceeded");
-  });
-
-  it("does not append failure text when the host cancels a delegation", async () => {
-    const abortError = new Error("The operation was aborted");
-    abortError.name = "AbortError";
-    const runAgentConsult = vi.fn(async () => {
-      throw abortError;
-    });
-    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      delegate(testBridge, "delegation-cancelled", "stop this");
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-
-      expect(socket.sent).toEqual([]);
-      expect(logger.warn).not.toHaveBeenCalled();
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("keeps only the latest delegation when the superseded consult rejects on abort", async () => {
-    const resolvers: Array<(value: { text: string }) => void> = [];
-    const signals: AbortSignal[] = [];
-    const runAgentConsult = vi.fn(
-      async ({ signal }: { prompt: string; signal?: AbortSignal }) =>
-        await new Promise<{ text: string }>((resolve, reject) => {
-          signals.push(signal as AbortSignal);
-          resolvers.push(resolve);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
-            },
-            { once: true },
-          );
-        }),
-    );
-    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      delegate(testBridge, "delegation-1", "first task");
-      delegate(testBridge, "delegation-2", "second task");
-      delegate(testBridge, "delegation-3", "latest task");
-
-      expect(runAgentConsult).toHaveBeenCalledOnce();
-      expect(signals[0]?.aborted).toBe(true);
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
-      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
-      expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
-
-      resolvers[1]?.({ text: "latest result" });
-      await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "delegation.context.append",
-          delegation_item_id: "delegation-3",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "latest result" }],
-        }),
-      );
-      expect(socket.closed).toBe(false);
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("ignores delegation work after the bridge closes", () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "unused" }));
-    const { bridge, testBridge } = createDelegationBridge(runAgentConsult);
-
-    bridge.close();
-    delegate(testBridge, "delegation-late", "late task");
-
-    expect(runAgentConsult).not.toHaveBeenCalled();
   });
 
   it("bounds peer creation and closes a peer that resolves after the deadline", async () => {

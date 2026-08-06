@@ -131,7 +131,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.146.0`):
+with the official plugin (currently `@openai/codex` `0.146.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -253,7 +253,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin accepts exactly stable Codex app-server `0.146.0`. Older or newer
+The plugin accepts exactly stable Codex app-server `0.146.1`. Older or newer
 versions, prereleases, build-suffixed versions, and unversioned app-server
 handshakes are rejected. The same exact-version requirement applies to explicit
 custom executables, remote app-servers, and macOS desktop binaries.
@@ -304,7 +304,7 @@ configured plugin's details to reserve the denied app IDs. It does not scan
 unrelated marketplaces or install, enable, or authenticate the disabled plugin;
 missing ownership fails closed.
 
-Only connect OpenClaw to a `0.146.0` remote app-server trusted to accept
+Only connect OpenClaw to a `0.146.1` remote app-server trusted to accept
 configured marketplace plugin installs and inventory refreshes. Missing modern
 inventory methods and server, authentication, or transport failures fail closed.
 
@@ -380,7 +380,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.146.0` app-server.
+This preview path uses the pinned Codex `0.146.1` app-server.
 
 ```json5
 {
@@ -663,8 +663,8 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.146.0`. A live `model/list`
-probe against the official `0.146.0` app-server returned these public picker
+The current bundled harness is `@openai/codex` `0.146.1`. A live `model/list`
+probe against the official `0.146.1` app-server returned these public picker
 rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |

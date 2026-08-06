@@ -12,7 +12,7 @@ import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import { isEmbeddedAgentRunActive, queueEmbeddedAgentMessageWithOutcome } from "./runs.js";
@@ -26,7 +26,7 @@ describe("sessions_yield orchestration", () => {
   });
 
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 

@@ -6,6 +6,7 @@ read_when:
   - You need to call core helpers from a plugin (TTS, STT, image gen, web search, Gateway, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
+  - You are implementing model-picker persistence in a channel plugin
 ---
 
 Reference for the `api.runtime` object injected into every plugin during registration. Use these helpers instead of importing host internals directly.
@@ -60,7 +61,19 @@ Model-picker integrations use two focused runtime subpaths. Import the typed
 `applySessionModelSelection(...)` and its result types from
 `openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
 seam, including its authoritative conflict check and post-commit effects. The
-lower-level session-entry model helpers are not a picker persistence API.
+lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
+persistence API.
+
+Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
+persistence fallback when a channel callback cannot enter the full live-session
+transaction and already owns an atomic canonical session-entry patch. Pass the
+active config, resolved agent directory, entry, effective provider before the
+change, and validated selection. The helper mutates that entry only: it keeps a
+pinned auth profile when its recorded credential provider or configured alias is
+compatible, clears an incompatible pin, and enforces the model-selection lock.
+The caller still owns model allowlist validation, atomic persistence,
+`markLiveSwitchPending`, and any post-commit effects. Prefer
+`applySessionModelSelection(...)` whenever the full transaction is available.
 
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in
@@ -137,6 +150,15 @@ two-party event loops that do not go through the shared inbound reply runner.
       // pass level to an embedded run
     }
 
+    // Resolve a synchronous create target for a session catalog
+    const target = api.runtime.agent.resolveSessionCatalogCreateTarget({
+      config: api.runtime.config.current(),
+      requestedAgentId: agentId,
+      provider: "example",
+      modelIds: ["example-model"],
+      agentRuntime: "example-cli",
+    });
+
     // Get agent timeout
     const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 
@@ -162,6 +184,8 @@ two-party event loops that do not go through the shared inbound reply runner.
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
+
+    `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy seam for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
 
     **Session store helpers** are under `api.runtime.agent.session`:
 

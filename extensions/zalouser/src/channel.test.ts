@@ -338,6 +338,112 @@ describe("zalouser channel policies", () => {
     });
   });
 
+  it.each([
+    {
+      name: "prefixed group target",
+      params: { to: "zalouser:group:group-123" },
+      threadId: "group-123",
+      isGroup: true,
+    },
+    {
+      name: "prefixed direct target inside an ambient group",
+      params: { chatId: "zlu:user:user-456" },
+      threadId: "user-456",
+      isGroup: false,
+    },
+    {
+      name: "explicit group override for a bare identifier",
+      params: { threadId: "bare-group", isGroup: true },
+      threadId: "bare-group",
+      isGroup: true,
+    },
+    {
+      name: "explicit direct override for a group target",
+      params: { to: "group:override-789", isGroup: false },
+      threadId: "override-789",
+      isGroup: false,
+    },
+    {
+      name: "ambient group without a target prefix",
+      params: {},
+      threadId: "ambient-group",
+      isGroup: true,
+    },
+    {
+      name: "core-materialized ambient group target",
+      params: { to: "ambient-group" },
+      threadId: "ambient-group",
+      isGroup: true,
+    },
+    {
+      name: "explicit direct target with the ambient group identifier",
+      params: { to: "user:ambient-group" },
+      threadId: "ambient-group",
+      isGroup: false,
+    },
+    {
+      name: "explicit thread target before the fallback target",
+      params: { threadId: "user:priority-123", to: "group:fallback-456" },
+      threadId: "priority-123",
+      isGroup: false,
+    },
+  ])("routes $name reactions through the canonical target owner", async (testCase) => {
+    const result = await zalouserMessageActions.handleAction?.({
+      channel: "zalouser",
+      action: "react",
+      params: {
+        messageId: "111",
+        cliMsgId: "222",
+        emoji: "👍",
+        ...testCase.params,
+      },
+      cfg: { channels: { zalouser: { enabled: true, profile: "default" } } },
+      toolContext: {
+        currentChannelProvider: "zalouser",
+        currentChannelId: "ambient-group",
+        currentChatType: "group",
+      },
+    });
+
+    expect(mockSendReaction).toHaveBeenCalledWith({
+      profile: "default",
+      threadId: testCase.threadId,
+      isGroup: testCase.isGroup,
+      msgId: "111",
+      cliMsgId: "222",
+      emoji: "👍",
+      remove: false,
+    });
+    expect(result?.details).toEqual({
+      messageId: "111",
+      cliMsgId: "222",
+      threadId: testCase.threadId,
+    });
+  });
+
+  it("does not borrow group routing from another channel with the same conversation id", async () => {
+    await zalouserMessageActions.handleAction?.({
+      channel: "zalouser",
+      action: "react",
+      params: {
+        to: "shared-conversation",
+        messageId: "111",
+        cliMsgId: "222",
+        emoji: "👍",
+      },
+      cfg: { channels: { zalouser: { enabled: true, profile: "default" } } },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "shared-conversation",
+        currentChatType: "group",
+      },
+    });
+
+    expect(mockSendReaction).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "shared-conversation", isGroup: false }),
+    );
+  });
+
   it("honors the selected Zalouser account during discovery", () => {
     const actions = zalouserMessageActions;
     const cfg = {

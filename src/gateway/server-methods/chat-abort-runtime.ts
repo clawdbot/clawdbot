@@ -3,17 +3,13 @@ import {
   type ChatAbortControllerEntry,
   type ChatAbortOps,
 } from "../chat-abort.js";
-import {
-  abortQueuedChatTurns,
-  listQueuedChatTurnsForSession,
-  type QueuedChatTurnMap,
-} from "../chat-queued-turns.js";
+import { abortQueuedChatTurns, listQueuedChatTurnsForSession } from "../chat-queued-turns.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 // Cancellation orchestration across active, queued, pending, and worker runs.
 import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
-  canRequesterAbortQueuedChatTurn,
+  canRequesterAbortChatRun,
   resolveAuthorizedPreRegisteredRunsForSessionKeys,
   resolveAuthorizedRunsForSessionKeys,
   writePreRegisteredAgentAbort,
@@ -114,10 +110,6 @@ export function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps
   };
 }
 
-export function ensureChatQueuedTurns(context: GatewayRequestContext): QueuedChatTurnMap {
-  return context.chatQueuedTurns;
-}
-
 function resolveAuthorizedQueuedTurnsForSession(params: {
   context: GatewayRequestContext;
   sessionKeys: string[];
@@ -126,19 +118,15 @@ function resolveAuthorizedQueuedTurnsForSession(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
 }) {
-  const chatQueuedTurns = ensureChatQueuedTurns(params.context);
   const matches = listQueuedChatTurnsForSession({
-    chatQueuedTurns,
+    chatQueuedTurns: params.context.chatQueuedTurns,
     sessionKeys: params.sessionKeys,
     sessionIds: [params.sessionId],
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
   });
-  if (matches.length === 0) {
-    return { authorized: [], hasUnauthorizedRuns: false };
-  }
-  const authorized = matches.filter((m) =>
-    canRequesterAbortQueuedChatTurn(m.entry, params.requester),
+  const authorized = matches.filter((match) =>
+    canRequesterAbortChatRun(match.entry, params.requester),
   );
   return {
     authorized,
@@ -310,7 +298,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   // Abort queued owners before any active-work signal can promote a successor.
   // Keep them first in the response to preserve the established runIds ordering.
   const runIds: string[] = abortQueuedChatTurns(
-    ensureChatQueuedTurns(params.context),
+    params.context.chatQueuedTurns,
     queuedPlan.authorized,
     params.stopReason,
   );

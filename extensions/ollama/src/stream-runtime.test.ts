@@ -19,8 +19,8 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import {
-  OLLAMA_INCOMPLETE_STREAM_ERROR,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
@@ -29,7 +29,7 @@ import {
   buildAssistantMessage,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
-} from "./stream.js";
+} from "./stream.runtime.js";
 
 type GuardedFetchCall = {
   url: string;

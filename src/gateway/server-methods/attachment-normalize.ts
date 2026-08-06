@@ -68,6 +68,6 @@ export function normalizeRpcAttachmentsToChatAttachments(
           ...(height !== undefined ? { height } : {}),
         };
       })
-      .filter((a) => a.content) ?? []
+      .filter((a) => a.content !== undefined) ?? []
   );
 }

@@ -22,7 +22,10 @@ import {
   closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
-import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
+import {
+  forgetUnifiedTalkSession,
+  registerTalkConnectionCleanup,
+} from "./talk-session-registry.js";
 
 /**
  * Gateway-owned relay for streaming speech-to-text providers used by Talk.
@@ -32,6 +35,9 @@ import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
  * events for the same connection.
  */
 const TRANSCRIPTION_SESSION_TTL_MS = 30 * 60 * 1000;
+// Realtime transcription websocket owners retain provider sockets for this
+// bounded interval so a graceful close can still deliver its final transcript.
+const TRANSCRIPTION_PROVIDER_FINAL_DRAIN_MS = 5_000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_TRANSCRIPTION_SESSIONS_PER_CONN = 2;
 const MAX_TRANSCRIPTION_SESSIONS_GLOBAL = 64;
@@ -61,6 +67,8 @@ type TranscriptionRelaySession = {
   talk: TalkSessionController;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
+  receivedAudio: boolean;
+  draining: boolean;
   closed: boolean;
 };
 
@@ -160,7 +168,9 @@ function broadcastToOwner(
   connId: string,
   event: TalkTranscriptionRelayEvent,
 ): void {
-  context.broadcastToConnIds(TRANSCRIPTION_EVENT, event, new Set([connId]), { dropIfSlow: true });
+  context.broadcastToConnIds(TRANSCRIPTION_EVENT, event, new Set([connId]), {
+    dropIfSlow: event.type === "inputAudio" || event.type === "partial",
+  });
 }
 
 function ensureTranscriptionTurn(session: TranscriptionRelaySession): string {
@@ -187,7 +197,9 @@ function closeTranscriptionSession(
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   try {
-    session.sttSession.close();
+    if (!session.draining) {
+      session.sttSession.close();
+    }
   } finally {
     // Provider teardown may throw, but the owner-visible terminal event must
     // still complete so disconnect cleanup cannot leave ambiguous state.
@@ -205,7 +217,7 @@ function closeTranscriptionSession(
 }
 
 /** Releases every transcription relay owned by a disconnected gateway connection. */
-export function closeTalkTranscriptionRelaySessionsForConnection(connId: string): void {
+function closeTalkTranscriptionRelaySessionsForConnection(connId: string): void {
   closeTalkRelaySessionsForConnection({
     sessions: transcriptionSessions.values(),
     connId,
@@ -283,7 +295,7 @@ export function createTalkTranscriptionRelaySession(
     providerConfig: params.providerConfig,
     onSpeechStart: () => {
       const relay = getActiveRelay();
-      if (!relay) {
+      if (!relay || relay.draining) {
         return;
       }
       ensureTranscriptionTurn(relay);
@@ -359,15 +371,20 @@ export function createTalkTranscriptionRelaySession(
         closeTranscriptionSession(active, "completed");
       }
     }, TRANSCRIPTION_SESSION_TTL_MS),
+    receivedAudio: false,
+    draining: false,
     closed: false,
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   transcriptionSessions.set(transcriptionSessionId, relay);
+  registerTalkConnectionCleanup(params.connId, "transcription-relay", () => {
+    closeTalkTranscriptionRelaySessionsForConnection(params.connId);
+  });
   sttSession
     .connect()
     .then(() => {
-      if (transcriptionSessions.get(transcriptionSessionId) !== relay) {
+      if (transcriptionSessions.get(transcriptionSessionId) !== relay || relay.draining) {
         return;
       }
       emit({ transcriptionSessionId, type: "ready" }, { type: "session.ready", payload: null });
@@ -409,13 +426,17 @@ function getTranscriptionSession(
   transcriptionSessionId: string,
   connId: string,
 ): TranscriptionRelaySession {
-  return requireActiveTalkRelaySession({
+  const relay = requireActiveTalkRelaySession({
     sessions: transcriptionSessions,
     sessionId: transcriptionSessionId,
     connId,
     closeSession: (session) => closeTranscriptionSession(session, "completed"),
     unknownSessionMessage: "Unknown transcription Talk session",
   });
+  if (relay.draining) {
+    throw new Error("Unknown transcription Talk session");
+  }
+  return relay;
 }
 
 /** Streams one base64-encoded audio frame into the owning transcription relay. */
@@ -431,6 +452,7 @@ export function sendTalkTranscriptionRelayAudio(params: {
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Transcription Talk");
   const turnId = ensureTranscriptionTurn(session);
   session.sttSession.sendAudio(audio);
+  session.receivedAudio = true;
   broadcastToOwner(session.context, session.connId, {
     transcriptionSessionId: session.id,
     type: "inputAudio",
@@ -449,7 +471,12 @@ export function stopTalkTranscriptionRelaySession(params: {
   connId: string;
 }): void {
   const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
-  if (session.talk.activeTurnId) {
+  const turnId = session.talk.activeTurnId;
+  if (!turnId && !session.receivedAudio) {
+    closeTranscriptionSession(session, "completed");
+    return;
+  }
+  if (turnId) {
     broadcastToOwner(session.context, session.connId, {
       transcriptionSessionId: session.id,
       type: "transcript",
@@ -457,13 +484,28 @@ export function stopTalkTranscriptionRelaySession(params: {
       final: true,
       talkEvent: session.talk.emit({
         type: "input.audio.committed",
-        turnId: session.talk.activeTurnId,
+        turnId,
         payload: {},
         final: true,
       }),
     });
   }
-  closeTranscriptionSession(session, "completed");
+  session.draining = true;
+  clearTimeout(session.cleanupTimer);
+  session.cleanupTimer = setTimeout(() => {
+    if (transcriptionSessions.get(session.id) === session) {
+      closeTranscriptionSession(session, "completed");
+    }
+  }, TRANSCRIPTION_PROVIDER_FINAL_DRAIN_MS);
+  session.cleanupTimer.unref?.();
+  try {
+    // Providers can flush several finals across asynchronous frames; keep this
+    // exact owner registered throughout its bounded provider shutdown window.
+    session.sttSession.close();
+  } catch (error) {
+    closeTranscriptionSession(session, "completed");
+    throw error;
+  }
 }
 
 /** Cancels the active transcription turn and closes the relay. */

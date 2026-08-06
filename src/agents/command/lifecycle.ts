@@ -78,7 +78,7 @@ export function createAgentCommandLifecycle(params: {
     error?: string,
     fallbackExhausted?: boolean,
   ) => {
-    const { aborted, yielded, replayInvalid } = terminal.metadata;
+    const { aborted, yielded, replayInvalid, terminalReply } = terminal.metadata;
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
     emitAgentEvent({
       runId: params.runId,
@@ -97,6 +97,7 @@ export function createAgentCommandLifecycle(params: {
         ...(providerStarted !== undefined ? { providerStarted } : {}),
         ...(error ? { error: formatErrorMessage(error) } : {}),
         ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
+        ...(terminalReply ? { terminalReply } : {}),
         ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
       },
     });

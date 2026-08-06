@@ -246,6 +246,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("cdp=https://browserless.example.com/?token=***");
   });
 
+  it("masks resource-scoped hosted-media bearer query tokens", () => {
+    const id = "a".repeat(24);
+    const token = "b".repeat(48);
+    const input = `GET https://gateway.example.com/webhooks/sms?safe=value&__openclaw_mms_token_${id}=${token}`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain(`safe=value&__openclaw_mms_token_${id}=`);
+    expect(output).not.toContain(token);
+  });
+
   it("masks standalone lowercase token assignments in diagnostic output", () => {
     const input = "matrix access_token=abcdef1234567890ghij next";
     const output = redactSensitiveText(input, { mode: "tools" });

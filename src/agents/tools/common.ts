@@ -21,6 +21,7 @@ import type {
   AgentToolUpdateCallback,
 } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
+import { registerTrustedToolInputError } from "../tool-result-error.js";
 import { textResult } from "./tool-results.js";
 
 export { jsonResult, textResult } from "./tool-results.js";
@@ -92,6 +93,7 @@ export class ToolInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ToolInputError";
+    registerTrustedToolInputError(this);
   }
 }
 

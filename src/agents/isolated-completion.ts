@@ -30,6 +30,7 @@ import {
 } from "./provider-secret-egress.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
+import type { UsageLike } from "./usage.js";
 
 type RunIsolatedCompletionParams = {
   config?: OpenClawConfig;
@@ -58,7 +59,7 @@ export type IsolatedCompletionResult = {
   model: string;
   owner: { kind: "cli" | "harness"; id: string };
   /** CLI runtimes may not report token usage; absence must not be projected as zero. */
-  usage?: AssistantMessage["usage"];
+  usage?: UsageLike;
 };
 
 type IsolatedCompletionErrorCode =
@@ -141,7 +142,7 @@ async function runCliIsolatedCompletion(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-}): Promise<{ model: string; text: string }> {
+}): Promise<{ model: string; text: string; usage?: UsageLike }> {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
     async ({ dir }) => {
@@ -219,7 +220,12 @@ async function runCliIsolatedCompletion(params: {
           `CLI backend ${params.provider} became unavailable after execution.`,
         );
       }
-      return { text, model: normalizeCliModel(params.request.model, backend.config) };
+      const usage = result.meta?.agentMeta?.usage;
+      return {
+        text,
+        model: normalizeCliModel(params.request.model, backend.config),
+        ...(usage ? { usage } : {}),
+      };
     },
   );
 }
@@ -373,6 +379,7 @@ export async function runIsolatedCompletion(
           provider,
           model: completion.model,
           owner: { kind: "cli", id: cliOwner },
+          ...(completion.usage ? { usage: completion.usage } : {}),
         };
       }
 

@@ -615,6 +615,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  refreshChatMetadata?: () => Promise<void>;
   onChannelsStarted?: () => Awaitable<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -700,6 +701,9 @@ export async function startGatewaySidecars(params: {
       params.prewarmPrimaryModel,
     ),
   );
+  await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
+    await params.refreshChatMetadata?.();
+  });
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
@@ -1031,6 +1035,7 @@ export async function startGatewayPostAttachRuntime(
   params: {
     minimalTestGateway: boolean;
     cfgAtStart: OpenClawConfig;
+    getConfig: () => OpenClawConfig;
     bindHost: string;
     bindHosts: string[];
     port: number;
@@ -1063,6 +1068,7 @@ export async function startGatewayPostAttachRuntime(
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    refreshChatMetadata?: () => Promise<void>;
     recoveryRuntime: GatewayRecoveryRuntime;
     logHooks: {
       info: (msg: string) => void;
@@ -1250,6 +1256,7 @@ export async function startGatewayPostAttachRuntime(
                 defaultWorkspaceDir: params.defaultWorkspaceDir,
                 deps: params.deps,
                 startChannels: params.startChannels,
+                refreshChatMetadata: params.refreshChatMetadata,
                 log: params.log,
                 logHooks: params.logHooks,
                 logChannels: params.logChannels,
@@ -1290,8 +1297,8 @@ export async function startGatewayPostAttachRuntime(
             // would miss lifetime registration and race the replacement gateway.
             if (params.isClosing?.() !== true) {
               mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
-                cfg: params.cfgAtStart,
                 delayMs: 0,
+                getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
                 waitForStart: params.waitForPostReadyWork,
                 gatewayRuntime: params.recoveryRuntime,
@@ -1302,8 +1309,8 @@ export async function startGatewayPostAttachRuntime(
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }
         try {
-          const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
-          scheduleSubagentOrphanRecovery();
+          const { scheduleSubagentRegistrySweep } = await import("../agents/subagent-registry.js");
+          scheduleSubagentRegistrySweep();
         } catch (err) {
           params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
         }

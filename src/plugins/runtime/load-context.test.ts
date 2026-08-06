@@ -133,6 +133,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
       logger: context.logger,
       manifestRegistry,
+      metadataSnapshot,
       installRecords: {},
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
@@ -154,6 +155,21 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
     expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
+  });
+
+  it("reuses a prepared metadata snapshot without resolving metadata again", () => {
+    const config = { plugins: {} };
+    const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+
+    const context = resolvePluginRuntimeLoadContext({
+      config,
+      env,
+      metadataSnapshot: metadataSnapshot as never,
+      workspaceDir: "/resolved-workspace",
+    });
+
+    expect(context.metadataSnapshot).toBe(metadataSnapshot);
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("stores derived metadata as the reusable runtime snapshot", () => {

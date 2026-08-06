@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mjs";
 import { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
 const DEFAULT_SCAN_ROOTS = ["src", "extensions", "packages", "ui", "scripts", "test"];
@@ -142,20 +143,6 @@ function collectExtensionDependencyDeclarations(repoRoot) {
   }
 
   return declarations;
-}
-
-function collectExcludedPackagedExtensionDirs(rootPackageJson) {
-  const excluded = new Set();
-  for (const entry of rootPackageJson.files ?? []) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
 }
 
 function collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPackageJson) {

@@ -160,7 +160,7 @@ function createMemoryManager(overrides?: {
     source: "memory" | "sessions";
     citation?: string;
   }>;
-  readResult?: { text: string; path: string };
+  readResult?: { text: string; path: string; from?: number; lines?: number };
 }) {
   return {
     search: vi.fn().mockResolvedValue(overrides?.searchResults ?? []),
@@ -1881,6 +1881,83 @@ describe("getMemoryWikiPage", () => {
       relPath: "MEMORY.md",
       from: 2,
       lines: 2,
+    });
+  });
+
+  it("surfaces shared memory backend failures through the wiki_get tool", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager();
+    manager.readFile.mockRejectedValue(new Error("memory database is unavailable"));
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const tool = createWikiGetTool(config, createAppConfig());
+
+    await expect(tool.execute("wiki-get-failure", { lookup: "MEMORY.md" })).rejects.toThrow(
+      "memory database is unavailable",
+    );
+  });
+
+  it("reports genuinely missing shared memory files through the wiki_get tool", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      readResult: { path: "memory/missing.md", text: "" },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const tool = createWikiGetTool(config, createAppConfig());
+    const result = await tool.execute("wiki-get-missing", { lookup: "memory/missing.md" });
+
+    expect(result.details).toEqual({ found: false });
+    expect(result.content).toEqual([
+      { type: "text", text: "Wiki page not found: memory/missing.md" },
+    ]);
+  });
+
+  it("keeps existing empty shared memory files distinct from missing files", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      readResult: { path: "memory/empty.md", text: "", from: 1, lines: 0 },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const tool = createWikiGetTool(config, createAppConfig());
+    const result = await tool.execute("wiki-get-empty", { lookup: "memory/empty.md" });
+
+    expect(result.details).toEqual(
+      expect.objectContaining({ found: true, path: "memory/empty.md", content: "" }),
+    );
+  });
+
+  it("normalizes extensionless shared memory lookups before reading", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      readResult: { path: "memory/notes.md", text: "durable notes", from: 1, lines: 1 },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const result = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      lookup: "memory/notes",
+    });
+
+    expectFields(result, { path: "memory/notes.md", content: "durable notes" });
+    expect(manager.readFile).toHaveBeenCalledExactlyOnceWith({
+      relPath: "memory/notes.md",
+      from: 1,
+      lines: 200,
     });
   });
 

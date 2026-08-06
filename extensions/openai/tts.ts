@@ -17,7 +17,12 @@ import {
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
-export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
+export const OPENAI_TTS_MODELS = [
+  "gpt-4o-mini-tts",
+  "gpt-4o-mini-tts-2025-12-15",
+  "tts-1",
+  "tts-1-hd",
+] as const;
 
 export const OPENAI_TTS_VOICES = [
   "alloy",

@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { SkillWorkshopHistoryScanResult, SkillWorkshopHistoryScanState } from "./state.ts";
 
 type SkillWorkshopHistoryStatusLoadParams = {
@@ -92,11 +93,19 @@ export async function loadSkillWorkshopHistoryScanStatus(
 export async function runSkillWorkshopHistoryScan(params: {
   agentId: string;
   gateway: ApplicationGateway;
+  isCurrent?: () => boolean;
   state: SkillWorkshopHistoryScanState;
 }): Promise<boolean> {
-  let client = params.gateway.snapshot.client;
+  if (
+    !canCallGatewayMethod(params.gateway.snapshot, "skills.proposals.historyScan", "operator.admin")
+  ) {
+    return false;
+  }
+  const client = params.gateway.snapshot.client;
+  const isCurrent = params.isCurrent ?? (() => params.gateway.snapshot.client === client);
   if (
     !client ||
+    !isCurrent() ||
     params.gateway.snapshot.phase !== "connected" ||
     params.state.running ||
     params.state.loading
@@ -108,8 +117,15 @@ export async function runSkillWorkshopHistoryScan(params: {
     if (!params.state.result) {
       return false;
     }
-    client = params.gateway.snapshot.client;
-    if (!client || params.gateway.snapshot.phase !== "connected") {
+    if (
+      !isCurrent() ||
+      params.gateway.snapshot.client !== client ||
+      !canCallGatewayMethod(
+        params.gateway.snapshot,
+        "skills.proposals.historyScan",
+        "operator.admin",
+      )
+    ) {
       return false;
     }
   }
@@ -173,6 +189,7 @@ function actionLabel(state: SkillWorkshopHistoryScanState): string {
 
 export function renderSkillWorkshopHistoryScan(params: {
   state: SkillWorkshopHistoryScanState;
+  canScan: boolean;
   onScan: () => void;
 }) {
   const result = params.state.result;
@@ -215,7 +232,7 @@ export function renderSkillWorkshopHistoryScan(params: {
       <div class="sw-history__action">
         <button
           class="sw-btn sw-btn--primary"
-          ?disabled=${params.state.running || params.state.loading}
+          ?disabled=${!params.canScan || params.state.running || params.state.loading}
           @click=${params.onScan}
         >
           ${params.state.loading ? t("skillWorkshop.history.loading") : actionLabel(params.state)}

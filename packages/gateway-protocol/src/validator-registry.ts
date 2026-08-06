@@ -2,6 +2,7 @@ import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
   AuditActivityListParams,
+  AuditRunInspectParams,
   WebPushSubscribeParams,
   WebPushTestParams,
   WebPushUnsubscribeParams,
@@ -84,6 +85,10 @@ export const validateAgentParams = compile(S.AgentParamsSchema);
 export const validateAuditActivityListParams = compile<AuditActivityListParams>(
   S.AuditActivityListParamsSchema,
 );
+export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
+  S.AuditRunInspectParamsSchema,
+);
+export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersSelfParams = compile(S.UsersSelfParamsSchema);
@@ -243,6 +248,7 @@ export const validateTaskSuggestionsDismissParams = compile(S.TaskSuggestionsDis
 export const validateTasksListParams = compile(S.TasksListParamsSchema);
 export const validateTasksGetParams = compile(S.TasksGetParamsSchema);
 export const validateTasksCancelParams = compile(S.TasksCancelParamsSchema);
+export const validateTasksRecoveryParams = compile(S.TasksRecoveryParamsSchema);
 export const validateConfigGetParams = compile(S.ConfigGetParamsSchema);
 export const validateConfigSetParams = compile(S.ConfigSetParamsSchema);
 export const validateConfigApplyParams = compile(S.ConfigApplyParamsSchema);

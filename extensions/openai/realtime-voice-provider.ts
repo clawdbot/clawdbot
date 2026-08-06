@@ -787,6 +787,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         attempt.resolve();
         return;
       }
+      // Auth preparation owns its own timeout. Start the socket deadline only
+      // after connection parameters are available.
+      attempt.startTimeout();
       const url = resolvedConnection.url;
       this.connectionUrl = resolvedConnection.url;
       const debugProxy = resolveDebugProxySettings();

@@ -9,6 +9,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -57,6 +58,7 @@ const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {
@@ -1059,6 +1061,7 @@ describe("createOpenClawCodingTools", () => {
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
       .mockReturnValue([]);
+    const preparedModelRuntime = { metadataSnapshot: {} } as never;
 
     try {
       createOpenClawCodingTools({
@@ -1069,6 +1072,7 @@ describe("createOpenClawCodingTools", () => {
         modelId: "openrouter/auto",
         nativeChannelId: "oc_native_chat",
         clientCaps: ["inline-widgets"],
+        preparedModelRuntime,
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -1085,6 +1089,7 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
       expect(pluginToolOptions?.clientCaps).toEqual(["inline-widgets"]);
+      expect(pluginToolOptions?.preparedModelRuntime).toBe(preparedModelRuntime);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
@@ -2568,6 +2573,23 @@ describe("createOpenClawCodingTools read behavior", () => {
       await fs.rm(outsidePath, { force: true });
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("rejects sandbox directory reads before calling the bridge read operation", async () => {
+    const tmpDir = tempDirs.make("openclaw-sbx-directory-");
+    const directoryName = "notes";
+    await fs.mkdir(path.join(tmpDir, directoryName));
+    const hostBridge = createHostSandboxFsBridge(tmpDir);
+    const readFile = vi.fn(hostBridge.readFile.bind(hostBridge));
+    const readTool = createSandboxedReadTool({
+      root: tmpDir,
+      bridge: { ...hostBridge, readFile },
+    });
+
+    await expect(readTool.execute("sandbox-directory", { path: directoryName })).rejects.toThrow(
+      `Read requires a file path, but ${directoryName} is a directory. List the directory, then read a specific file.`,
+    );
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   it("auto-pages read output across chunks when context window budget allows", async () => {

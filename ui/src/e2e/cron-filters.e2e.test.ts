@@ -298,13 +298,62 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("creates a cron-scheduled task and renders the refreshed row", async () => {
+    const schedule = { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" };
+    const createdJob = {
+      ...cronJob("weekday-report", "Weekday report", schedule),
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Prepare the weekday report" },
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.add": { id: createdJob.id },
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-name").fill(createdJob.name);
+      await page.locator("#cron-payload-text").fill(createdJob.payload.message);
+      await page.locator('[data-test-id="cron-schedule-kind-cron"]').click();
+      await page.locator("#cron-cron-expr").fill(schedule.expr);
+      await page.locator("#cron-cron-tz").fill(schedule.tz);
+      await gateway.setMethodResponse("cron.list", cronListResponse([createdJob]));
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: createdJob.name,
+        payload: createdJob.payload,
+        schedule,
+      });
+      await jobTitle(page, createdJob.name).waitFor({ state: "visible", timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps read-only operators on Cron browse and history surfaces", async () => {
-    const readOnlyJob = cronJob(
-      "read-only-job",
-      "Read-only nightly digest",
-      { kind: "cron", expr: "0 1 * * *", tz: "UTC" },
-      { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
-    );
+    const readOnlyJob = {
+      ...cronJob(
+        "read-only-job",
+        "Read-only nightly digest",
+        { kind: "cron", expr: "0 1 * * *", tz: "UTC" },
+        { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
+      ),
+      description: "Explain the nightly digest without granting write access",
+    };
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -332,6 +381,9 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}cron`);
       await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
       await page.getByRole("note").filter({ hasText: "Browsing only" }).waitFor();
+      expect(
+        await page.locator(`[data-test-id="cron-row-description-${readOnlyJob.id}"]`).textContent(),
+      ).toContain(readOnlyJob.description);
 
       await expect.poll(() => page.locator('[data-test-id="cron-new-task"]').count()).toBe(0);
       await expect
@@ -346,12 +398,18 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
 
       await jobTitle(page, readOnlyJob.name).click();
       await page.locator("fieldset.cron-editor:disabled").waitFor();
+      expect(
+        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
+      ).toContain(readOnlyJob.description);
       await expect.poll(() => page.locator('[data-test-id="cron-run-now"]').count()).toBe(0);
       await expect.poll(() => page.locator('[data-test-id="cron-submit"]').count()).toBe(0);
       await expect.poll(() => page.locator(".cron-editor-actions").count()).toBe(0);
 
       await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await page.getByText("Read-only history remains available", { exact: true }).waitFor();
+      expect(
+        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
+      ).toContain(readOnlyJob.description);
 
       const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);
       expect(

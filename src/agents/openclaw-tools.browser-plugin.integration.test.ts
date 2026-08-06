@@ -4,10 +4,19 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import {
+  getPreparedPluginRuntimeLoadContext,
+  prepareOwnedPluginLoadContext,
+} from "./prepared-model-runtime.plugin-context.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
@@ -154,6 +163,62 @@ describe("createOpenClawTools browser plugin integration", () => {
 
     expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
     expect(firstResolvePluginToolsParams().allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const config = { plugins: { enabled: true } } as OpenClawConfig;
+    const pluginRegistry = { tools: [] } as never;
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: makeRegistry([]),
+      workspaceDir: "/tmp",
+    });
+    const resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+      .mockReturnValue(metadataSnapshot);
+    try {
+      expect(
+        prepareOwnedPluginLoadContext(
+          { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
+          process.env,
+          pluginRegistry,
+        ),
+      ).toBe(metadataSnapshot);
+    } finally {
+      resolveMetadata.mockRestore();
+    }
+    const loadContext = getPreparedPluginRuntimeLoadContext(pluginRegistry);
+    if (!loadContext) {
+      throw new Error("expected prepared plugin load context");
+    }
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config,
+        workspaceDir: "/tmp",
+        preparedModelRuntime: {
+          agentDir: "/tmp/agent",
+          workspaceDir: "/tmp",
+          activeProjectKeys: [],
+          config,
+          metadataSnapshot,
+          pluginRegistry,
+          allowGatewaySubagentBinding: false,
+          modelCatalog: { entries: [], routeVariants: [] },
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+          createStores: vi.fn(),
+        },
+      },
+      resolvedConfig: config,
+    });
+
+    expect(firstResolvePluginToolsParams().preparedRuntime).toEqual({
+      loadContext,
+      metadataSnapshot,
+      registry: pluginRegistry,
+    });
   });
 
   it("forwards auth profile helpers to plugin resolution and context", async () => {

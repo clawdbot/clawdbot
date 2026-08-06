@@ -8,6 +8,7 @@ import {
   type ChannelMessageUnknownSendContext,
   type ChannelMessageUnknownSendReconciliationResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
@@ -263,9 +264,9 @@ export async function sendClickClackMedia(params: {
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,
       }));
-    const filename = media.fileName?.trim() || "attachment";
-    mediaFilename = filename;
     const contentType = media.contentType?.trim() || "application/octet-stream";
+    const filename = media.fileName?.trim() || `attachment${extensionForMime(contentType) ?? ""}`;
+    mediaFilename = filename;
     await dispatch();
     upload = await client.createUpload({
       workspaceId,

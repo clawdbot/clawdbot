@@ -64,7 +64,11 @@ import {
 } from "./code-mode-control-tools.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
+import {
+  formatToolExecutionErrorMessage,
+  isTrustedToolExecutionPreflightError,
+  protectNetworkToolExecutionError,
+} from "./tool-result-error.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -476,13 +480,21 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const startedAt = Date.now();
       try {
-        const result = await (execute as ForwardedToolExecution)(
-          toolCallId,
-          executeParams,
-          signal,
-          onUpdate,
-          ...executionArgs,
-        );
+        let result: Awaited<ReturnType<ForwardedToolExecution>>;
+        try {
+          result = await (execute as ForwardedToolExecution)(
+            toolCallId,
+            executeParams,
+            signal,
+            onUpdate,
+            ...executionArgs,
+          );
+        } catch (error) {
+          throw tool.resultContentSource === "network" &&
+            getBeforeToolCallFailureDisposition(error) === undefined
+            ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
+            : error;
+        }
         const durationMs = Date.now() - startedAt;
         const terminalPresentation = resolveToolTerminalPresentation({
           tool,
@@ -555,7 +567,10 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           error: err,
-          resultContentSource: tool.resultContentSource,
+          resultContentSource:
+            isTrustedToolExecutionPreflightError(err) || (signal?.aborted && err === signal.reason)
+              ? undefined
+              : tool.resultContentSource,
           toolCallOrdinal,
         });
         throw err;

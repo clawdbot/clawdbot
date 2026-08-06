@@ -615,6 +615,30 @@ describe("buildExportSessionReply", () => {
     );
   });
 
+  it("marks the skipped-row list as truncated when more than 20 rows are invalid", async () => {
+    hoisted.sessionTranscriptEvents = [
+      ...Array.from({ length: 25 }, (_, index) => ({
+        type: "message",
+        id: `bad-${index + 1}`,
+        timestamp: `2026-05-16T00:00:${String(index).padStart(2, "0")}.000Z`,
+        message: { content: "missing role" },
+      })),
+      {
+        type: "message",
+        id: "entry-valid",
+        timestamp: "2026-05-16T00:01:00.000Z",
+        message: { role: "assistant", content: "valid assistant" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    const expectedRows = Array.from({ length: 20 }, (_, index) => index + 1).join(", ");
+    expect(reply.text).toContain(
+      `⚠️ Skipped 25 malformed transcript rows that were not session entries. rows ${expectedRows}, …`,
+    );
+  });
+
   it("warns when the session only contains user messages (backend-delegated transcript)", async () => {
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {

@@ -80,7 +80,7 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
       ${renderChatAuthorAvatar(item.sender)}
       ${steered
         ? html`<span class="chat-queue__badge chat-queue__badge--steered"
-            >${t("chat.queue.steered")}</span
+            >${t("chat.queue.states.steering")}</span
           >`
         : nothing}
       ${stateLabel

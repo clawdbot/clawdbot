@@ -1456,28 +1456,31 @@ export async function getMemoryWikiPage(input: {
       : null;
 
   for (const relPath of lookupCandidates) {
-    if (visibleSessionPaths && isSessionMemoryPath(relPath) && !visibleSessionPaths.has(relPath)) {
+    // Raw session candidates still need visibility checks; memory readers accept Markdown only.
+    if (
+      !relPath.endsWith(".md") ||
+      (visibleSessionPaths && isSessionMemoryPath(relPath) && !visibleSessionPaths.has(relPath))
+    ) {
       continue;
     }
 
-    try {
-      const result = await manager.readFile({
-        relPath,
-        from: fromLine,
-        lines: lineCount,
-      });
-      return {
-        corpus: "memory",
-        path: result.path,
-        title: buildMemorySearchTitle(result.path),
-        kind: "memory",
-        content: result.text,
-        fromLine,
-        lineCount,
-      };
-    } catch {
+    const result = await manager.readFile({
+      relPath,
+      from: fromLine,
+      lines: lineCount,
+    });
+    if (result.path === relPath && result.text === "" && result.from === undefined) {
       continue;
     }
+    return {
+      corpus: "memory",
+      path: result.path,
+      title: buildMemorySearchTitle(result.path),
+      kind: "memory",
+      content: result.text,
+      fromLine,
+      lineCount,
+    };
   }
 
   return null;

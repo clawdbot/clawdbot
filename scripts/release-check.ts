@@ -114,6 +114,7 @@ const requiredPathGroups = [
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/audit/audit-event-writer.worker.js",
+  "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",
   "dist/system-agent/setup-inference-detection.worker.js",

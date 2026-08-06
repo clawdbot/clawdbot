@@ -498,7 +498,7 @@ function createStartupConfig(params: {
   return config as OpenClawConfig;
 }
 
-describe("resolveGatewayStartupPluginIds", () => {
+describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
       if (Object.hasOwn(config, "channels")) {
@@ -774,6 +774,18 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       ["browser", "openai", "memory-core"],
+    ],
+    [
+      "keeps configured memory embedding providers behind restrictive allowlists",
+      {
+        channels: {},
+        memory: { search: { provider: "openai" } },
+        plugins: {
+          allow: ["memory-core"],
+          slots: { memory: "memory-core" },
+        },
+      } as OpenClawConfig,
+      ["memory-core"],
     ],
     [
       "includes the owning plugin for a configured memory embedding fallback at startup",

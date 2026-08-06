@@ -239,17 +239,19 @@ describe("Plugin SDK session write-lock adapter", () => {
     const sessionFile = path.join(await fs.realpath(root), "session.jsonl");
     const held = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
     const lockPath = `${sessionFile}.lock`;
-    const originalReadFile = fs.readFile.bind(fs);
     let observedContention: (() => void) | undefined;
     const contention = new Promise<void>((resolve) => {
       observedContention = resolve;
     });
-    const readFile = vi.spyOn(fs, "readFile").mockImplementation((async (file, options) => {
+    // fs-safe 0.5.2 polls contended sidecars via lstat/open descriptors, not
+    // readFile; observe contention at the lstat seam.
+    const originalLstat = fs.lstat.bind(fs);
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation((async (file, options) => {
       if (file === lockPath) {
         observedContention?.();
       }
-      return await originalReadFile(file, options as never);
-    }) as typeof fs.readFile);
+      return await originalLstat(file, options as never);
+    }) as typeof fs.lstat);
     const abort = new AbortController();
     const reason = new Error("stop requested");
     try {
@@ -269,7 +271,7 @@ describe("Plugin SDK session write-lock adapter", () => {
       await successor.release();
       await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      readFile.mockRestore();
+      lstatSpy.mockRestore();
       await held.release();
     }
   });
@@ -398,11 +400,12 @@ describe("Plugin SDK session write-lock adapter", () => {
     );
     const originalReadFile = fs.readFile.bind(fs);
     let lockReads = 0;
+    // fs-safe 0.5.2 reads sidecar payloads through pinned descriptors; the
+    // adapter's stale diagnostics are the only readFile consumer left. Vanish
+    // the sidecar on that first diagnostics read so the retry path is taken.
     const readFile = vi.spyOn(fs, "readFile").mockImplementation((async (file, options) => {
       if (typeof file === "string" && path.basename(file) === path.basename(lockPath)) {
         lockReads += 1;
-      }
-      if (lockReads === 3) {
         await fs.rm(lockPath, { force: true });
         throw Object.assign(new Error("lock disappeared"), { code: "ENOENT" });
       }
@@ -410,7 +413,7 @@ describe("Plugin SDK session write-lock adapter", () => {
     }) as typeof fs.readFile);
     try {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 1 });
-      expect(lockReads).toBeGreaterThanOrEqual(3);
+      expect(lockReads).toBeGreaterThanOrEqual(1);
       await lock.release();
     } finally {
       readFile.mockRestore();

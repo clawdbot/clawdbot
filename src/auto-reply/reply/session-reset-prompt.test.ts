@@ -1,7 +1,7 @@
 // Tests session reset prompt generation and transcript-preserving restart hints.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -140,5 +140,19 @@ describe("resolveBareSessionResetPromptState", () => {
     expect(pending.prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
     expect(pending.prompt).toContain("while bootstrap is still pending for this workspace");
     expect(pending.prompt).not.toContain("Execute your Session Startup sequence now");
+  });
+
+  it("awaits async bootstrap file access before selecting reset mode", async () => {
+    const workspaceDir = await makeBootstrapPendingWorkspace();
+    const hasBootstrapFileAccess = vi.fn(async () => false);
+
+    const pending = await resolveBareSessionResetPromptState({
+      workspaceDir,
+      hasBootstrapFileAccess,
+    });
+
+    expect(hasBootstrapFileAccess).toHaveBeenCalledTimes(1);
+    expect(pending.bootstrapMode).toBe("limited");
+    expect(pending.shouldPrependStartupContext).toBe(false);
   });
 });

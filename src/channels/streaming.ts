@@ -777,8 +777,38 @@ export function resolveChannelStreamingChunkMode(
 
 export function resolveChannelStreamingBlockEnabled(
   entry: StreamingCompatEntry | null | undefined,
+): boolean | undefined;
+export function resolveChannelStreamingBlockEnabled(
+  entry: StreamingCompatEntry | null | undefined,
+  previewPolicy: {
+    previewAvailable: boolean;
+    blockStreamingDefault?: "off" | "on";
+  },
+): boolean;
+export function resolveChannelStreamingBlockEnabled(
+  entry: StreamingCompatEntry | null | undefined,
+  previewPolicy?: {
+    previewAvailable: boolean;
+    blockStreamingDefault?: "off" | "on";
+  },
 ): boolean | undefined {
-  return asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled);
+  const explicitBlockStreaming = asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled);
+  if (typeof explicitBlockStreaming === "boolean" || !previewPolicy) {
+    return explicitBlockStreaming;
+  }
+  // Explicit channel choices beat the inherited agent default. Keep availability
+  // in the decision so a turn that cannot render a preview may still use blocks.
+  const explicitPreviewMode = parsePreviewStreamingMode(
+    getChannelStreamingConfigObject(entry)?.mode,
+  );
+  if (
+    previewPolicy.previewAvailable &&
+    explicitPreviewMode !== null &&
+    explicitPreviewMode !== "off"
+  ) {
+    return false;
+  }
+  return previewPolicy.blockStreamingDefault === "on";
 }
 
 export function resolveChannelStreamingBlockCoalesce(

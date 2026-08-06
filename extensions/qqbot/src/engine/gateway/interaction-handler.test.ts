@@ -356,6 +356,72 @@ describe("createInteractionHandler approval buttons", () => {
     );
   });
 
+  it.each([
+    [
+      "an inherited accounts container",
+      () =>
+        Object.create({
+          accounts: {
+            bot2: { allowFrom: ["ATTACKER_OPENID"] },
+          },
+        }) as Record<string, unknown>,
+    ],
+    [
+      "an inherited account allowlist",
+      () => ({
+        accounts: {
+          bot2: Object.create({ allowFrom: ["ATTACKER_OPENID"] }) as Record<string, unknown>,
+        },
+      }),
+    ],
+  ] satisfies Array<[string, () => Record<string, unknown>]>)(
+    "rejects fallback approval buttons authorized only by %s",
+    async (_name, createQQBotConfig) => {
+      const namedAccount = { ...account, accountId: "bot2" };
+      const cfg = {
+        channels: {
+          qqbot: createQQBotConfig(),
+        },
+      } as unknown as OpenClawConfig;
+      const handler = createInteractionHandler(namedAccount, runtime, undefined, {
+        getActiveCfg: () => cfg,
+      });
+
+      handler(makeApprovalEvent());
+
+      await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        { content: "You are not authorized to approve this request." },
+      );
+      expect(resolveApprovalMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses an own named-account allowlist for fallback approval buttons", async () => {
+    const namedAccount = { ...account, accountId: "bot2" };
+    const handler = createInteractionHandler(namedAccount, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              accounts: {
+                bot2: { allowFrom: ["ATTACKER_OPENID"] },
+              },
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(makeApprovalEvent());
+
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+    );
+  });
+
   it("delegates fallback approval button auth to the gateway command resolver", async () => {
     const access = createSdkAccessAdapter();
     const handler = createInteractionHandler(account, runtime, undefined, {

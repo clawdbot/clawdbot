@@ -598,11 +598,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       "fal-ai/wan/v2.2-a14b/text-to-video",
       "fal-ai/wan/v2.2-a14b/image-to-video",
     ],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "fal",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
