@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WhatsAppPollStore } from "./poll-durable-store.js";
 
@@ -10,11 +11,11 @@ describe("WhatsAppPollStore", () => {
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-poll-store-"));
-    store = new WhatsAppPollStore(dir);
+    store = new WhatsAppPollStore({ ...process.env, OPENCLAW_STATE_DIR: dir });
   });
 
   afterEach(() => {
-    store.close();
+    resetPluginStateStoreForTests();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -39,54 +40,48 @@ describe("WhatsAppPollStore", () => {
     );
   });
 
-  it("does not resurrect an ownership row after it expires", () => {
-    store.rememberOwnPollCreation("acct", "chat@lid", "POLL-3", -1);
+  it("does not resurrect an ownership entry after it expires", async () => {
+    store.rememberOwnPollCreation("acct", "chat@lid", "POLL-3", 1);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(store.isOwnPollCreation("acct", "chat@lid", "POLL-3")).toBe(false);
   });
 
-  it("does not resurrect a creation message after it expires", () => {
+  it("does not resurrect a creation message after it expires", async () => {
     const message = { pollCreationMessage: { name: "q", options: [] } };
-    store.rememberPollCreationMessage("acct", "chat@lid", "POLL-4", message, -1);
+    store.rememberPollCreationMessage("acct", "chat@lid", "POLL-4", message, 1);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(store.readPollCreationMessage("acct", "chat@lid", "POLL-4")).toBeUndefined();
   });
 
-  it("scopes ownership and creation-message rows by account", () => {
+  it("scopes ownership and creation-message entries by account", () => {
     store.rememberOwnPollCreation("acct-a", "chat@lid", "POLL-5", 60_000);
     expect(store.isOwnPollCreation("acct-b", "chat@lid", "POLL-5")).toBe(false);
   });
 
-  it("round-trips vote dedup and respects expiry", () => {
+  it("round-trips vote dedup and respects expiry", async () => {
     expect(store.isVoteDedup("acct", "chat@lid", "VOTE-1")).toBe(false);
     store.rememberVoteDedup("acct", "chat@lid", "VOTE-1", 60_000);
     expect(store.isVoteDedup("acct", "chat@lid", "VOTE-1")).toBe(true);
-    store.rememberVoteDedup("acct", "chat@lid", "VOTE-2", -1);
+    store.rememberVoteDedup("acct", "chat@lid", "VOTE-2", 1);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(store.isVoteDedup("acct", "chat@lid", "VOTE-2")).toBe(false);
   });
 
-  it("prunes only expired rows from both tables", () => {
-    store.rememberOwnPollCreation("acct", "chat@lid", "POLL-KEEP", 60_000);
-    store.rememberOwnPollCreation("acct", "chat@lid", "POLL-EXPIRED", -1);
-    store.rememberVoteDedup("acct", "chat@lid", "VOTE-KEEP", 60_000);
-    store.rememberVoteDedup("acct", "chat@lid", "VOTE-EXPIRED", -1);
-
-    const pruned = store.pruneExpired();
-
-    expect(pruned).toEqual({ creations: 1, votes: 1 });
-    expect(store.isOwnPollCreation("acct", "chat@lid", "POLL-KEEP")).toBe(true);
-    expect(store.isVoteDedup("acct", "chat@lid", "VOTE-KEEP")).toBe(true);
-  });
-
-  it("survives being reopened against the same directory (simulates a process restart)", () => {
+  it("survives being reopened against the same state dir (simulates a process restart)", () => {
     store.rememberOwnPollCreation("acct", "chat@lid", "POLL-RESTART", 60_000);
     const message = {
       pollCreationMessage: { name: "q", options: [{ optionName: "a" }] },
       messageContextInfo: { messageSecret: Buffer.from([9, 9, 9]) },
     };
     store.rememberPollCreationMessage("acct", "chat@lid", "POLL-RESTART", message, 60_000);
-    store.close();
 
-    const reopened = new WhatsAppPollStore(dir);
-    store = reopened; // let afterEach close this one instead of the already-closed original
+    const reopened = new WhatsAppPollStore({ ...process.env, OPENCLAW_STATE_DIR: dir });
     expect(reopened.isOwnPollCreation("acct", "chat@lid", "POLL-RESTART")).toBe(true);
     const read = reopened.readPollCreationMessage("acct", "chat@lid", "POLL-RESTART");
     expect(Buffer.from(read!.messageContextInfo!.messageSecret as Uint8Array)).toEqual(

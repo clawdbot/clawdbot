@@ -1,11 +1,9 @@
 // Whatsapp plugin module decodes WhatsApp poll votes for the poll_vote_received hook.
 import { createHash } from "node:crypto";
-import path from "node:path";
 import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   rememberWhatsAppBaileysCacheEntry,
@@ -245,7 +243,7 @@ function resolveWhatsAppPollVoteRetentionMs(cfg: OpenClawConfig, accountId?: str
  * separate test-only setter/export needed.
  */
 function resolvePollStore(override?: WhatsAppPollStore): WhatsAppPollStore {
-  return override ?? getWhatsAppPollStore(path.join(resolveStateDir(), "whatsapp", "poll-state"));
+  return override ?? getWhatsAppPollStore();
 }
 
 /**
@@ -435,13 +433,6 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     ) {
       return;
     }
-    rememberWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey, true, ttlMs);
-    resolvePollStore(params.store).rememberVoteDedup(
-      params.accountId,
-      remoteJid,
-      voteUpdateId,
-      ttlMs,
-    );
   }
   const decoded = decodeWhatsAppPollVote({
     message: params.message,
@@ -452,14 +443,29 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     accountId: params.accountId,
     store: params.store,
   });
-  if (decoded) {
-    emitWhatsAppPollVoteReceivedHook({
-      accountId: params.accountId,
-      vote: decoded,
-      // Falls back to the poll id in the (practically unseen) case a vote
-      // update key has no id of its own — still a valid identity, just not
-      // distinct per-vote.
-      voteUpdateId: voteUpdateId ?? decoded.pollMessageId,
-    });
+  if (!decoded) {
+    // Decode failed (e.g. the poll creation payload hasn't arrived/been
+    // cached yet) — leave the vote-update id undeduped so a later
+    // redelivery, once the payload is available, can still be decoded and
+    // dispatched instead of being silently suppressed as a duplicate.
+    return;
   }
+  if (voteUpdateId) {
+    const dedupKey = `${params.accountId}:${remoteJid}:${voteUpdateId}`;
+    rememberWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey, true, ttlMs);
+    resolvePollStore(params.store).rememberVoteDedup(
+      params.accountId,
+      remoteJid,
+      voteUpdateId,
+      ttlMs,
+    );
+  }
+  emitWhatsAppPollVoteReceivedHook({
+    accountId: params.accountId,
+    vote: decoded,
+    // Falls back to the poll id in the (practically unseen) case a vote
+    // update key has no id of its own — still a valid identity, just not
+    // distinct per-vote.
+    voteUpdateId: voteUpdateId ?? decoded.pollMessageId,
+  });
 }

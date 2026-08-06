@@ -1,6 +1,6 @@
 // Whatsapp plugin module implements send result behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { WAMessage, WAMessageKey } from "baileys";
+import type { proto, WAMessage, WAMessageKey } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   createChannelPartialDeliveryError,
@@ -38,6 +38,14 @@ export type WhatsAppSendResult = {
   receipt?: MessageReceipt;
   keys: WhatsAppSendKey[];
   providerAccepted: boolean;
+  /**
+   * The accepted poll creation message's own content, straight from Baileys'
+   * `sendMessage` return value — includes `messageContextInfo.messageSecret`,
+   * the decryption key `poll-votes.ts` needs. Only set for `kind: "poll"`,
+   * so callers can persist it durably at the accepted send itself instead of
+   * waiting for the later `messages.upsert` echo (which a restart could miss).
+   */
+  pollCreationMessage?: proto.IMessage;
 };
 
 // Producer-owned accounting follows the accepted object across nested owner boundaries.
@@ -204,6 +212,7 @@ export function normalizeWhatsAppSendResult(
     receipt: createWhatsAppSendReceipt(kind, [key]),
     keys: [key],
     providerAccepted: true,
+    ...(kind === "poll" && result?.message ? { pollCreationMessage: result.message } : {}),
   };
 }
 
@@ -384,12 +393,16 @@ export function combineWhatsAppSendResults(
     throw createWhatsAppProviderNotAcceptedError(kind);
   }
   const keys = results.flatMap((result) => result.keys);
+  const pollCreationMessage = results.find(
+    (result) => result.pollCreationMessage,
+  )?.pollCreationMessage;
   const combined: WhatsAppSendResult = {
     kind,
     messageId,
     receipt: createWhatsAppSendReceipt(kind, keys),
     keys,
     providerAccepted: results.some((result) => result.providerAccepted),
+    ...(pollCreationMessage ? { pollCreationMessage } : {}),
   };
   if (results.some((result) => activityAccountedWhatsAppSendResults.has(result))) {
     activityAccountedWhatsAppSendResults.add(combined);

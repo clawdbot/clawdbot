@@ -793,6 +793,7 @@ describe("web outbound", () => {
       "default",
       "1555@s.whatsapp.net",
       "poll123",
+      WHATSAPP_TEST_CFG,
     );
   });
 

@@ -17,7 +17,10 @@ import {
 } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
-import { rememberWhatsAppOwnPollCreation } from "./inbound/poll-votes.js";
+import {
+  rememberWhatsAppOwnPollCreation,
+  rememberWhatsAppPollCreationMessage,
+} from "./inbound/poll-votes.js";
 import {
   mergeWhatsAppAcceptedSendError,
   requireWhatsAppAcceptedSendResult,
@@ -435,6 +438,19 @@ export async function sendPollWhatsApp(
     // stream — a vote arriving before (or without) that echo would
     // otherwise be silently rejected by the poll_vote_received hook gate.
     rememberWhatsAppOwnPollCreation(resolvedAccountId, sentJid, messageId, cfg);
+    if (result.pollCreationMessage) {
+      // Persist the decryptable poll payload (including its decryption key)
+      // from the accepted send's own result, not just from the later
+      // messages.upsert echo — a restart between accepted-send and that
+      // echo would otherwise leave an owned poll without decodable state.
+      rememberWhatsAppPollCreationMessage(
+        resolvedAccountId,
+        sentJid,
+        messageId,
+        result.pollCreationMessage,
+        cfg,
+      );
+    }
     return { messageId, toJid: sentJid };
   } catch (err) {
     logger.error({ err: String(err), to: redactedTo }, "failed to send poll via web session");

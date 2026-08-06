@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { proto, WAMessageKey } from "baileys";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WhatsAppPollStore } from "./poll-durable-store.js";
 import {
@@ -308,11 +309,11 @@ describe("poll vote decoding survives a simulated gateway restart (durable-store
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-poll-restart-"));
-    store = new WhatsAppPollStore(dir);
+    store = new WhatsAppPollStore({ ...process.env, OPENCLAW_STATE_DIR: dir });
   });
 
   afterEach(() => {
-    store.close();
+    resetPluginStateStoreForTests();
     rmSync(dir, { recursive: true, force: true });
   });
 

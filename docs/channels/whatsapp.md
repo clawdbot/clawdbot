@@ -279,14 +279,17 @@ agent run — and delivers `pollMessageId`, `chatJid`, `voter`, and
 payload reference.
 
 **Retention.** Decoding a vote requires the poll's decryption key, captured
-when the poll is created. That key (and the "this account created this poll"
-record) is kept in a small, extension-local SQLite database — separate from
-the main OpenClaw state database — so it survives a gateway restart, not just
-an in-memory cache. Each record expires after `pollVoteRetentionMs`
-(default: `600000`, 10 minutes) counted from poll creation; a vote arriving
-after that window (or an unrelated poll's leftover state) is not decodable
-and the hook simply does not fire for it — no error is raised. Configure the
-window channel-wide or per account:
+as soon as the poll creation is accepted by WhatsApp (no need to wait for the
+`messages.upsert` echo). That key (and the "this account created this poll"
+record) is kept in the runtime's canonical plugin-state store, namespaced
+under the `whatsapp` plugin id — not a bespoke database — so it survives a
+gateway restart, not just an in-memory cache. Each record expires after
+`pollVoteRetentionMs` (default: `600000`, 10 minutes) counted from poll
+creation; expired records are swept automatically by the framework's own
+plugin-state maintenance task, so no key material lingers past its TTL. A
+vote arriving after that window (or an unrelated poll's leftover state) is
+not decodable and the hook simply does not fire for it — no error is raised.
+Configure the window channel-wide or per account:
 
 ```json5
 {
