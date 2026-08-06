@@ -140,7 +140,7 @@ export default defineToolPlugin({
           notebook: Type.Optional(
             Type.Record(Type.String(), Type.Unknown(), {
               description:
-                'The FULL nbformat 4 document when you author the analysis yourself. REQUIRED whenever the user asked for a NAMED analysis (e.g. "the opening range of XAU_USD"): without it the backend instantiates a generic run-metrics template that analyses nothing. Shape: {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [...]} where each cell is {"id": "<unique>", "cell_type": "markdown"|"code", "source": "<text>", "metadata": {}}. Code cells run in a kernel where `import vctrader` exposes governed workspace reads under the notebook owner\'s identity (get_multi_timeframe_candles, get_atr, classify_regime, detect_support_resistance, list_run_trades, get_run_equity_curve, list_experiment_runs, ...); pandas and matplotlib are installed. Author cells that CALL those reads and compute/plot the requested analysis from the returned rows. If this field and notebook_json are both absent, the backend generates the template selected by template_kind.',
+                'The FULL nbformat 4 document when you author the analysis yourself. REQUIRED whenever the user asked for a NAMED analysis (e.g. "the opening range of XAU_USD"): without it the backend instantiates a generic run-metrics template that analyses nothing. Shape: {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [...]} where each cell is {"id": "<unique>", "cell_type": "markdown"|"code", "source": "<text>", "metadata": {}}. Code cells run in a kernel where `import vctrader` exposes governed workspace reads under the notebook owner\'s identity. MARKET DATA comes from the Dukascopy store via vctrader.ohlcv_tail(instrument, timeframe, n) and vctrader.get_coverage(instrument) - NO account needed (the tail returns the most recent file, roughly 74 hourly bars; state the covered window in the notebook). The perception family (get_multi_timeframe_candles, get_atr, classify_regime, detect_support_resistance) REQUIRES a linked broker account_id and must not be used for plain market-data analyses. Run-scoped reads: list_run_trades, get_run_equity_curve, list_experiment_runs. pandas and matplotlib are installed. Author cells that CALL those reads and compute/plot the requested analysis from the returned rows. If this field and notebook_json are both absent, the backend generates the template selected by template_kind.',
               examples: [
                 {
                   nbformat: 4,
@@ -157,7 +157,7 @@ export default defineToolPlugin({
                       id: "load",
                       cell_type: "code",
                       source:
-                        "import vctrader as vc\nimport pandas as pd\n# Signatures come from the seam catalogue: symbol= (not instrument=),\n# timeframes= is a CSV STRING (not a list).\nraw = vc.get_multi_timeframe_candles(symbol='XAUUSD', timeframes='H1')\ndf = pd.DataFrame(raw.get('H1', []))\n",
+                        "import vctrader as vc\nimport pandas as pd\n# Market data reads the DUKASCOPY STORE - no account needed.\ntail = vc.ohlcv_tail(instrument='XAU_USD', timeframe='1H', n=500)\ndf = pd.DataFrame(tail.get('rows', []))\n# ohlcv_tail returns the most recent file (~74 hourly bars) - say so.\n",
                       metadata: {},
                     },
                   ],
