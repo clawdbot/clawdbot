@@ -287,6 +287,24 @@ describe("WebSocket connect suspension admission", () => {
     suspension?.release();
   });
 
+  it("admits the prepared operator probe while startup is still pending", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ startupPending: true });
+
+    harness.sendConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.setClient).toHaveBeenCalledOnce();
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as { ok?: boolean };
+    expect(response).toMatchObject({ ok: true });
+    expect(harness.close).not.toHaveBeenCalled();
+    expect(harness.client).not.toBeNull();
+    suspension?.release();
+  });
+
   it("tracks a prepared control handshake across a concurrent restart", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);

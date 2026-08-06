@@ -251,6 +251,10 @@ describe("plugin HTTP suspension admission", () => {
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
       terminalSessions: new Map(),
+      getRestoredAdmissionStatus: () => ({
+        status: "held",
+        restoreOperationId: "restore-8",
+      }),
     } as unknown as GatewayRequestContext;
     let requestedMethod = "gateway.suspend.prepare";
     let requestedParams: Record<string, unknown> = { requestId: "admin-http-suspension" };
@@ -299,6 +303,12 @@ describe("plugin HTTP suspension admission", () => {
     });
     const suspensionId = (prepared.payload as { suspensionId: string }).suspensionId;
 
+    await expect(
+      invoke("gateway.restore.status", { restoreOperationId: "restore-8" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { status: "held", restoreOperationId: "restore-8" },
+    });
     await expect(invoke("gateway.suspend.status", { suspensionId })).resolves.toMatchObject({
       ok: true,
       payload: { status: "ready" },

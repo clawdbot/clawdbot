@@ -100,6 +100,7 @@ export type GatewayConnectPhaseContext = {
   authRateLimiter?: AuthRateLimiter;
   clientLabel: string;
   clientMeta: Record<string, unknown>;
+  allowStartupPendingConnect: boolean;
   markHandshakeFailure: (cause: string, meta?: Record<string, unknown>) => void;
   sendHandshakeErrorResponse: (
     code: Parameters<typeof errorShape>[0],

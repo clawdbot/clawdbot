@@ -216,6 +216,30 @@ describe("restored recovery-point admission", () => {
     });
   });
 
+  it("quarantines startup descriptors that diverge from committed restore records", async () => {
+    const fixture = await createFixture();
+    const result = await restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv);
+    const startup = await readRecoveryJournalRecord(result.startupDescriptorPath, "startup");
+    replaceJournalPayload(
+      result.startupDescriptorPath,
+      "startup",
+      stableStringify({
+        ...(startup as object),
+        result: {
+          ...result,
+          restoreOperationId: "restore-other",
+        },
+      }),
+    );
+
+    await expect(
+      loadRestoredAdmissionDescriptor(result.startupDescriptorPath),
+    ).rejects.toMatchObject({
+      code: "restored-admission.operation-conflict",
+      disposition: "quarantine",
+    });
+  });
+
   it("quarantines committed result metadata that conflicts with durable intent", async () => {
     const fixture = await createFixture();
     const result = await restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv);

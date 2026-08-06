@@ -176,6 +176,18 @@ export async function loadRestoredAdmissionDescriptor(
   if (descriptor.result.startupDescriptorPath !== descriptorPath) {
     throw conflict("Restored-admission descriptor does not identify its loaded path.");
   }
+  const committedIntent = requestSchema.safeParse(await readJournalRecord(descriptorPath, "intent"));
+  if (!committedIntent.success) {
+    throw conflict("Restored-admission committed intent is invalid.");
+  }
+  const committedResult = resultSchema.safeParse(await readJournalRecord(descriptorPath, "result"));
+  if (!committedResult.success) {
+    throw conflict("Restored-admission committed result is invalid.");
+  }
+  if (!isDeepStrictEqual(descriptor.result, committedResult.data)) {
+    throw conflict("Restored-admission descriptor conflicts with committed restore result.");
+  }
+  assertResultMatchesIntent(committedIntent.data, committedResult.data, descriptorPath);
   return descriptor;
 }
 
@@ -436,6 +448,33 @@ function createRestoreResult(params: {
     ...resultWithoutReceipt,
     restoreReceiptIdentity: sha256Hex(stableStringify(resultWithoutReceipt)),
   });
+}
+
+function assertResultMatchesIntent(
+  intent: RestoredRecoveryPointRequest,
+  result: RestoredRecoveryPointResult,
+  descriptorPath: string,
+): void {
+  const expected = {
+    runtimeLineage: intent.runtimeLineage,
+    lifecycleOwnerGeneration: intent.lifecycleOwnerGeneration,
+    destinationRuntimeGeneration: intent.destinationRuntimeGeneration,
+    restoreOperationId: intent.restoreOperationId,
+    destinationOwner: intent.destinationOwner,
+    admissionIdentity: intent.admissionIdentity,
+    recoveryPointId: intent.recoveryPointId,
+    acceptanceSetId: intent.acceptanceSetId,
+    startupDescriptorPath: descriptorPath,
+  };
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    if (result[key as keyof typeof expected] !== expectedValue) {
+      throw conflict("Restored-admission descriptor is not bound to committed restore intent.");
+    }
+  }
+  const { restoreReceiptIdentity, ...resultWithoutReceipt } = result;
+  if (sha256Hex(stableStringify(resultWithoutReceipt)) !== restoreReceiptIdentity) {
+    throw conflict("Restored-admission committed restore receipt identity is invalid.");
+  }
 }
 
 async function writeStartupDescriptor(
