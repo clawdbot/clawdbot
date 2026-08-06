@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { stableStringify } from "@openclaw/normalization-core";
 import { z } from "zod";
 import type { GatewayRestoreStatusResult } from "../../packages/gateway-protocol/src/index.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import {
   readRecoveryJournalRecord,
