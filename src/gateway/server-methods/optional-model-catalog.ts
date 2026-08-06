@@ -66,10 +66,12 @@ export function startOptionalServerMethodModelCatalogSnapshotLoad(
   loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
 ): OptionalServerMethodModelCatalogLoad<GatewayModelCatalogSnapshot> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    // Published startup facts only. Optional metadata decorates a response the
-    // caller already owes the client, so it must never start provider discovery
-    // while the gateway request loop waits on it.
-    load: async () => await context.readPreparedGatewayModelCatalogSnapshot?.(loadParams),
+    load: async () =>
+      // Published startup facts answer without provider discovery. The load stays as
+      // the cold-start path because it also publishes the generation that capability
+      // checks (image support) read; skipping it makes them fail closed.
+      (await context.readPreparedGatewayModelCatalogSnapshot?.(loadParams)) ??
+      (await context.loadGatewayModelCatalogSnapshot(loadParams)),
     normalize: normalizeOptionalModelCatalogSnapshot,
   });
 }

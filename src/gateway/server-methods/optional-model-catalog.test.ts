@@ -57,27 +57,30 @@ describe("loadOptionalServerMethodModelCatalogSnapshot", () => {
     expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
-  it("does not start provider discovery when no prepared catalog is published", async () => {
-    const loadGatewayModelCatalogSnapshot = vi.fn(async () => ({
+  it("falls back to the catalog load when no prepared catalog is published", async () => {
+    const coldSnapshot = {
       agentId: "main",
       agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/main",
       config: {},
-      entries: [],
+      entries: [{ id: "cold", name: "Cold Model", provider: "cold-provider" }],
       routeVariants: [],
-    }));
+    };
+    const loadGatewayModelCatalogSnapshot = vi.fn(async () => coldSnapshot);
     const context = {
       loadGatewayModelCatalogSnapshot,
       readPreparedGatewayModelCatalogSnapshot: vi.fn(async () => undefined),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
 
+    // The cold load publishes the generation that capability checks read, so skipping
+    // it makes image support resolve as unsupported on later requests.
     await expect(
       loadOptionalServerMethodModelCatalogSnapshot(context, "chat.startup", {
         loadParams: { agentId: "main" },
-        timeoutMs: 25,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(coldSnapshot);
 
-    expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "main" });
   });
 });
