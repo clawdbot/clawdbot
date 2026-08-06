@@ -278,8 +278,8 @@ function resolveMinimaxMusicCoverSource(req: {
   const coverFeatureId = normalizeOptionalString(req.coverFeatureId);
   const audioUrl = normalizeOptionalString(req.audioUrl);
   const audioBase64 = normalizeOptionalString(req.audioBase64);
-  const explicitFields = [coverFeatureId, audioUrl, audioBase64].filter(
-    (value): value is string => Boolean(value),
+  const explicitFields = [coverFeatureId, audioUrl, audioBase64].filter((value): value is string =>
+    Boolean(value),
   );
   if (explicitFields.length > 1) {
     throw new Error(
@@ -391,9 +391,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         throw new Error("MiniMax music cover requires lyrics when using coverFeatureId.");
       }
       if (isCoverModel && !coverSource) {
-        throw new Error(
-          "MiniMax music cover requires audioUrl, audioBase64, or coverFeatureId.",
-        );
+        throw new Error("MiniMax music cover requires audioUrl, audioBase64, or coverFeatureId.");
       }
       if (!isCoverModel && coverSource) {
         throw new Error("MiniMax music cover source audio requires a music-cover model.");
