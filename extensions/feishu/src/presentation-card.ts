@@ -7,6 +7,7 @@ import {
   type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 
 type NormalizedMessagePresentation = NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
@@ -55,6 +56,58 @@ export function assertFeishuCardWithinEnvelope(
   if (!isFeishuCardWithinEnvelope(card)) {
     throw new Error(`${label} exceeds the 30 KB or 200-element API limit.`);
   }
+}
+
+/** Feishu allows at most 5 table components per static interactive card (ErrCode 11310). */
+const FEISHU_CARD_TABLE_LIMIT = 5;
+
+/**
+ * Count GFM tables with the shared markdown parser (the same parser used for
+ * post-mode table conversion), so every parser-recognized table form is caught
+ * — including pipe-less GFM tables and alignment-colon delimiters — while
+ * fenced code, thematic breaks, and plain pipes in prose are not counted.
+ */
+function countMarkdownTables(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  return markdownToIRWithMeta(text, { tableMode: "block" }).tables.length;
+}
+
+/** Check whether the number of markdown tables is within Feishu static-card limits. */
+export function withinCardTableLimit(text: string): boolean {
+  return countMarkdownTables(text) <= FEISHU_CARD_TABLE_LIMIT;
+}
+
+function collectFeishuCardMarkdownTexts(value: unknown, out: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectFeishuCardMarkdownTexts(item, out);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.tag === "markdown" && typeof record.content === "string") {
+    out.push(record.content);
+  }
+  for (const child of Object.values(record)) {
+    collectFeishuCardMarkdownTexts(child, out);
+  }
+}
+
+/**
+ * Check a built Feishu card JSON against the table limit by counting tables in
+ * the combined markdown content of all its elements. Covers generated cards
+ * whose tables come from fallback text as well as presentation blocks.
+ */
+export function feishuCardWithinTableLimit(card: Record<string, unknown>): boolean {
+  const texts: string[] = [];
+  collectFeishuCardMarkdownTexts(card, texts);
+  const total = texts.reduce((sum, text) => sum + countMarkdownTables(text), 0);
+  return total <= FEISHU_CARD_TABLE_LIMIT;
 }
 
 function escapeFeishuCardMarkdownText(text: string): string {

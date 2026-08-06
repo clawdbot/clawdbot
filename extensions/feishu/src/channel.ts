@@ -92,6 +92,7 @@ import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
+  feishuCardWithinTableLimit,
   isFeishuCardWithinEnvelope,
 } from "./presentation-card.js";
 import {
@@ -1085,16 +1086,23 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (textCard && !presentation) {
               assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
             }
+            const presentationFallbackText = textCard
+              ? undefined
+              : resolveLegacyInteractiveTextFallback({ text, interactive });
             const generatedCard = presentation
               ? buildFeishuPresentationCard({
                   presentation,
-                  fallbackText: textCard
-                    ? undefined
-                    : resolveLegacyInteractiveTextFallback({ text, interactive }),
+                  fallbackText: presentationFallbackText,
                 })
               : undefined;
+            // Feishu static cards cap out at 5 table components (ErrCode 11310). Count
+            // tables across every markdown element of the generated card (fallback text
+            // and presentation blocks alike) and fall back to the text path when
+            // exceeded via presentationFellBack.
             const presentationCard =
-              generatedCard && isFeishuCardWithinEnvelope(generatedCard)
+              generatedCard &&
+              feishuCardWithinTableLimit(generatedCard) &&
+              isFeishuCardWithinEnvelope(generatedCard)
                 ? generatedCard
                 : undefined;
             const presentationFellBack = Boolean(generatedCard && !presentationCard);

@@ -55,7 +55,9 @@ import type { ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCardElements,
+  feishuCardWithinTableLimit,
   isFeishuCardWithinEnvelope,
+  withinCardTableLimit,
 } from "./presentation-card.js";
 import {
   sendCardFeishu,
@@ -216,6 +218,7 @@ function buildFeishuPayloadCard(params: {
         text: rawText,
         interactive,
       });
+
   const elements = presentation
     ? buildFeishuPresentationCardElements({ presentation, fallbackText: text })
     : [
@@ -250,7 +253,13 @@ function buildFeishuPayloadCard(params: {
       : {}),
     body: { elements },
   });
-  return isFeishuCardWithinEnvelope(card) ? card : undefined;
+  // Static cards cap out at 5 table components (Feishu ErrCode 11310). Count
+  // tables across every markdown element of the built card (fallback text and
+  // presentation blocks alike) and fall back to the text path when exceeded.
+  if (!isFeishuCardWithinEnvelope(card) || !feishuCardWithinTableLimit(card)) {
+    return undefined;
+  }
+  return card;
 }
 
 // Keep this aligned with the shared fallback renderer: guidance is valid only
@@ -421,7 +430,10 @@ async function sendOutboundText(params: {
   // Decide card routing on the original text so card content is never
   // modified by post-md newline normalization. Only the post path below
   // materializes CommonMark soft breaks for Feishu rendering.
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+  if (
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    withinCardTableLimit(text)
+  ) {
     return await reportFeishuOutboundDelivery(
       await sendMarkdownCardFeishu({
         cfg,
@@ -862,7 +874,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
 
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      const useCard =
+        (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+        withinCardTableLimit(text);
       if (useCard) {
         const header = identity
           ? {

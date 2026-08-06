@@ -28,6 +28,7 @@ import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { withinCardTableLimit } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -957,24 +958,39 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const cardHeader = resolveCardHeader(agentId, identity);
     const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+    // Static cards cap out at 5 table components (Feishu ErrCode 11310). When the
+    // recovered content exceeds the limit, deliver it through the post path instead
+    // of retrying a static card the API would reject again.
+    const useRecoveryCard = withinCardTableLimit(content);
     return await sendChunkedTextReply({
       text: content,
-      useCard: true,
+      useCard: useRecoveryCard,
       infoKind,
       chunkMentions: requiredMentionTargets,
       sendChunk: async ({ chunk, mentions }) =>
-        await sendStructuredCardFeishu({
-          cfg,
-          to: sendTarget,
-          text: chunk,
-          replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          allowTopLevelReplyFallback,
-          accountId,
-          header: cardHeader,
-          note: cardNote,
-          ...(mentions ? { mentions } : {}),
-        }),
+        useRecoveryCard
+          ? await sendStructuredCardFeishu({
+              cfg,
+              to: sendTarget,
+              text: chunk,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              allowTopLevelReplyFallback,
+              accountId,
+              header: cardHeader,
+              note: cardNote,
+              ...(mentions ? { mentions } : {}),
+            })
+          : await sendMessageFeishu({
+              cfg,
+              to: sendTarget,
+              text: chunk,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              allowTopLevelReplyFallback,
+              accountId,
+              ...(mentions ? { mentions } : {}),
+            }),
     });
   };
 
@@ -1289,7 +1305,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         hasText &&
         (renderMode === "card" ||
           (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-          (renderMode === "auto" && shouldUseCard(text)));
+          (renderMode === "auto" && shouldUseCard(text))) &&
+        withinCardTableLimit(text);
       const useStreamingCard =
         hasText &&
         streamingEnabled &&
