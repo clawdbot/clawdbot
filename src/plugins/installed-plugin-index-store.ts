@@ -523,11 +523,12 @@ function buildRecoverableInstallRecordRefresh(
     ...params,
     installRecords: recoverableInstallRecords,
   });
+  const recoverableInstallRecordPluginIds = Object.keys(recoverableInstallRecords);
   const materializedPluginIds = new Set(current.plugins.map((plugin) => plugin.pluginId));
-  if (missingInstallRecordPluginIds.every((pluginId) => !materializedPluginIds.has(pluginId))) {
+  if (recoverableInstallRecordPluginIds.every((pluginId) => !materializedPluginIds.has(pluginId))) {
     return undefined;
   }
-  const missingInstallRecordPluginIdSet = new Set(missingInstallRecordPluginIds);
+  const recoverableInstallRecordPluginIdSet = new Set(recoverableInstallRecordPluginIds);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const retainedPlugins = persisted.plugins.map((plugin) => ({
     ...plugin,
@@ -544,7 +545,9 @@ function buildRecoverableInstallRecordRefresh(
     installRecords,
     plugins: [
       ...retainedPlugins,
-      ...current.plugins.filter((plugin) => missingInstallRecordPluginIdSet.has(plugin.pluginId)),
+      ...current.plugins.filter((plugin) =>
+        recoverableInstallRecordPluginIdSet.has(plugin.pluginId),
+      ),
     ],
   };
 }

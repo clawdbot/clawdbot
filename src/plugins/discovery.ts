@@ -654,6 +654,24 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
     });
     return minHostVersionCheck.ok;
   };
+  const allowsCurrentPluginApi = () => {
+    if (params.candidate.origin === "bundled") {
+      return true;
+    }
+    const packagePluginApiRangeCheck = resolvePackagePluginApiRange(
+      params.candidate.packageManifest,
+    );
+    if (!packagePluginApiRangeCheck.ok) {
+      return false;
+    }
+    return (
+      !packagePluginApiRangeCheck.range ||
+      satisfiesPluginApiRange(
+        resolveCompatibilityHostVersion(params.env),
+        packagePluginApiRangeCheck.range,
+      )
+    );
+  };
   const matchInstalledRecord = (pluginId: string) => {
     if (!params.installRecords || params.candidate.origin === "bundled") {
       return pluginId;
@@ -681,7 +699,11 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
         bundleFormat: params.candidate.bundleFormat,
         rejectHardlinks,
       });
-    if (!bundleManifest?.ok || !allowsCurrentHost(bundleManifest.manifest.id)) {
+    if (
+      !bundleManifest?.ok ||
+      !allowsCurrentHost(bundleManifest.manifest.id) ||
+      !allowsCurrentPluginApi()
+    ) {
       return undefined;
     }
     return matchInstalledRecord(bundleManifest.manifest.id);
@@ -696,17 +718,10 @@ function resolveMaterializableInstalledPluginCandidateId(params: {
   if (!allowsCurrentHost(resolvedManifest.manifest.id)) {
     return undefined;
   }
-  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.candidate.packageManifest);
-  if (!packagePluginApiRangeCheck.ok) {
+  if (!allowsCurrentPluginApi()) {
     return undefined;
   }
-  const compatible =
-    !packagePluginApiRangeCheck.range ||
-    satisfiesPluginApiRange(
-      resolveCompatibilityHostVersion(params.env),
-      packagePluginApiRangeCheck.range,
-    );
-  return compatible ? matchInstalledRecord(resolvedManifest.manifest.id) : undefined;
+  return matchInstalledRecord(resolvedManifest.manifest.id);
 }
 
 function resolveConfiguredPluginCandidateId(params: {
