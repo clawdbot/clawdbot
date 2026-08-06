@@ -56,8 +56,6 @@ const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
-const RETRY_AFTER_HTTP_DATE_RE =
-  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const HTTP_DATE_MONTH_INDEX = new Map(
   ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map(
     (month, index) => [month, index],
@@ -463,7 +461,8 @@ function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | 
   if (rfc850Date) {
     const now = new Date(nowMs);
     if (Number.isNaN(now.getTime())) return undefined;
-    const candidateYear = Math.floor(now.getUTCFullYear() / 100) * 100 + Number.parseInt(rfc850Date[4] ?? "", 10);
+    const candidateYear =
+      Math.floor(now.getUTCFullYear() / 100) * 100 + Number.parseInt(rfc850Date[4] ?? "", 10);
     const components = {
       weekday: HTTP_DATE_LONG_WEEKDAY_INDEX.get(rfc850Date[1] ?? ""),
       month: HTTP_DATE_MONTH_INDEX.get(rfc850Date[3] ?? ""),
@@ -474,7 +473,15 @@ function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | 
     };
     const candidate = parseHttpDateCalendarMs({ year: candidateYear, ...components });
     if (candidate === undefined) return undefined;
-    const fiftyYearsFromNow = Date.UTC(now.getUTCFullYear() + 50, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds(), now.getUTCMilliseconds());
+    const fiftyYearsFromNow = Date.UTC(
+      now.getUTCFullYear() + 50,
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      now.getUTCHours(),
+      now.getUTCMinutes(),
+      now.getUTCSeconds(),
+      now.getUTCMilliseconds(),
+    );
     const resolvedYear = candidate > fiftyYearsFromNow ? candidateYear - 100 : candidateYear;
     return parseHttpDateComponentsMs({ year: resolvedYear, ...components });
   }
@@ -498,13 +505,40 @@ function parseHttpDateComponentsMs(components: HttpDateComponents): number | und
   return new Date(weekdayTimestamp).getUTCDay() === components.weekday ? timestamp : undefined;
 }
 
-function parseHttpDateCalendarMs(components: Omit<HttpDateComponents, "weekday">): number | undefined {
+function parseHttpDateCalendarMs(
+  components: Omit<HttpDateComponents, "weekday">,
+): number | undefined {
   const { year, month, day, hours, minutes, seconds } = components;
-  if (month === undefined || !Number.isInteger(year) || year < 1900 || !Number.isInteger(day) || day < 1 || day > 31 || !Number.isInteger(hours) || hours < 0 || hours > 23 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59 || !Number.isInteger(seconds) || seconds < 0 || seconds > 60) return undefined;
+  if (
+    month === undefined ||
+    !Number.isInteger(year) ||
+    year < 1900 ||
+    !Number.isInteger(day) ||
+    day < 1 ||
+    day > 31 ||
+    !Number.isInteger(hours) ||
+    hours < 0 ||
+    hours > 23 ||
+    !Number.isInteger(minutes) ||
+    minutes < 0 ||
+    minutes > 59 ||
+    !Number.isInteger(seconds) ||
+    seconds < 0 ||
+    seconds > 60
+  )
+    return undefined;
   const calendarSecond = Math.min(seconds, 59);
   const timestamp = Date.UTC(year, month, day, hours, minutes, calendarSecond);
   const parsedDate = new Date(timestamp);
-  if (parsedDate.getUTCFullYear() !== year || parsedDate.getUTCMonth() !== month || parsedDate.getUTCDate() !== day || parsedDate.getUTCHours() !== hours || parsedDate.getUTCMinutes() !== minutes || parsedDate.getUTCSeconds() !== calendarSecond) return undefined;
+  if (
+    parsedDate.getUTCFullYear() !== year ||
+    parsedDate.getUTCMonth() !== month ||
+    parsedDate.getUTCDate() !== day ||
+    parsedDate.getUTCHours() !== hours ||
+    parsedDate.getUTCMinutes() !== minutes ||
+    parsedDate.getUTCSeconds() !== calendarSecond
+  )
+    return undefined;
   return seconds === 60 ? timestamp + 1_000 : timestamp;
 }
 
