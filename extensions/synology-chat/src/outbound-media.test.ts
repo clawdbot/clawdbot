@@ -236,6 +236,14 @@ describe("Synology Chat hosted outbound media", () => {
       fileName: "diagram.bin",
     },
     {
+      name: "SVG bytes beyond long whitespace and repeated wrappers",
+      buffer: Buffer.from(
+        `${" ".repeat(5_000)}${"<!--fixture-->".repeat(6)}<svg onload="alert(1)"/>`,
+      ),
+      contentType: "application/octet-stream",
+      fileName: "diagram.bin",
+    },
+    {
       name: "an active filename with generic content",
       buffer: Buffer.from("not markup"),
       contentType: "application/octet-stream",

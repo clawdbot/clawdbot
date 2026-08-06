@@ -146,42 +146,55 @@ function startsWithHtmlTag(value: string, tag: string): boolean {
   return boundary === ">" || boundary === "/" || /\s/u.test(boundary ?? "");
 }
 
+function skipAsciiWhitespace(buffer: Buffer, start: number): number {
+  let cursor = start;
+  while (cursor < buffer.length) {
+    const byte = buffer[cursor];
+    if (byte !== 0x09 && byte !== 0x0a && byte !== 0x0c && byte !== 0x0d && byte !== 0x20) {
+      break;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
 function sniffActiveTextContent(buffer: Buffer): string | undefined {
-  let prefix = buffer
-    .subarray(0, 4_096)
-    .toString("utf8")
-    .replace(/^\uFEFF/u, "")
-    .trimStart();
-  // XML declarations and comments commonly precede SVG roots, so skip only
-  // bounded leading wrappers before inspecting the actual document element.
-  for (let index = 0; index < 4; index += 1) {
+  let cursor =
+    buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf ? 3 : 0;
+  // Walk the complete, already size-bounded payload. Active roots can legally
+  // follow arbitrarily long whitespace or multiple XML/comment wrappers.
+  while (cursor < buffer.length) {
+    cursor = skipAsciiWhitespace(buffer, cursor);
+    const prefix = buffer
+      .subarray(cursor, Math.min(cursor + 64, buffer.length))
+      .toString("ascii")
+      .toLowerCase();
     if (prefix.startsWith("<?xml")) {
-      const end = prefix.indexOf("?>");
+      const end = buffer.indexOf("?>", cursor + 5, "ascii");
       if (end === -1) {
         break;
       }
-      prefix = prefix.slice(end + 2).trimStart();
+      cursor = end + 2;
       continue;
     }
     if (prefix.startsWith("<!--")) {
-      const end = prefix.indexOf("-->");
+      const end = buffer.indexOf("-->", cursor + 4, "ascii");
       if (end === -1) {
         break;
       }
-      prefix = prefix.slice(end + 3).trimStart();
+      cursor = end + 3;
       continue;
     }
+    if (startsWithHtmlTag(prefix, "svg")) {
+      return "image/svg+xml";
+    }
+    if (
+      /^<!doctype\s+html(?:\s|>)/u.test(prefix) ||
+      HTML_ACTIVE_PREFIX_TAGS.some((tag) => startsWithHtmlTag(prefix, tag))
+    ) {
+      return "text/html";
+    }
     break;
-  }
-  const normalized = prefix.toLowerCase();
-  if (startsWithHtmlTag(normalized, "svg")) {
-    return "image/svg+xml";
-  }
-  if (
-    normalized.startsWith("<!doctype html") ||
-    HTML_ACTIVE_PREFIX_TAGS.some((tag) => startsWithHtmlTag(normalized, tag))
-  ) {
-    return "text/html";
   }
   return undefined;
 }
