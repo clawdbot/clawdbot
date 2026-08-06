@@ -173,6 +173,44 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
   });
 
+  test("keeps large-roster neutral projections prepared outside the session cache", async () => {
+    const defaultAgentId = "agent-0";
+    const agentIds = Array.from({ length: 65 }, (_, index) => `agent-${index}`);
+    const harness = createHarness({
+      agents: {
+        list: agentIds.map((id) => ({
+          id,
+          ...(id === defaultAgentId ? { default: true } : {}),
+        })),
+      },
+    });
+    await harness.runtime.refresh();
+
+    const readNeutralStartup = async () =>
+      await harness.runtime.readStartup({
+        agentId: defaultAgentId,
+        includeSystem: false,
+      });
+    const first = await readNeutralStartup();
+    const second = await readNeutralStartup();
+
+    expect(first.agentsList.agents).toHaveLength(agentIds.length);
+    expect(second.agentsList).toBe(first.agentsList);
+    expect(harness.buildProjection).toHaveBeenCalledTimes(agentIds.length);
+
+    await harness.runtime.readStartup({
+      agentId: defaultAgentId,
+      sessionEntry: {
+        authProfileOverride: "test:session",
+        authProfileOverrideSource: "user",
+      },
+      includeSystem: false,
+    });
+    await readNeutralStartup();
+
+    expect(harness.buildProjection).toHaveBeenCalledTimes(agentIds.length + 1);
+  });
+
   test("caches a session auth projection separately from the neutral roster", async () => {
     const harness = createHarness();
     await harness.runtime.refresh();

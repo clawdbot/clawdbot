@@ -63,7 +63,8 @@ type PreparedMetadataGeneration = {
   epoch: number;
   facts: PreparedGenerationFacts;
   agentsById: Map<string, PreparedAgentMetadata>;
-  projectionByKey: Map<string, Promise<PreparedAgentProjection>>;
+  neutralProjectionByAgentId: Map<string, Promise<PreparedAgentProjection>>;
+  sessionProjectionByKey: Map<string, Promise<PreparedAgentProjection>>;
   agentsListByKey: Map<string, ChatStartupProjectionResult["agentsList"]>;
 };
 
@@ -197,8 +198,10 @@ function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefin
   };
 }
 
-function metadataKey(agentId: string, sessionEntry: ChatMetadataSessionEntry | undefined): string {
-  const profiles = resolveSessionProfiles(sessionEntry);
+function sessionProjectionKey(
+  agentId: string,
+  profiles: ReturnType<typeof resolveSessionProfiles>,
+): string {
   return [
     normalizeAgentId(agentId),
     profiles.preferredProfileId ?? "",
@@ -298,12 +301,17 @@ export function createGatewayChatMetadataRuntime(params: {
     agent: PreparedAgentMetadata,
     sessionEntry?: ChatMetadataSessionEntry,
   ): Promise<PreparedAgentProjection> => {
-    const key = metadataKey(agent.agentId, sessionEntry);
-    const existing = generation.projectionByKey.get(key);
+    const profiles = resolveSessionProfiles(sessionEntry);
+    const neutral =
+      profiles.preferredProfileId === undefined && profiles.lockedProfileId === undefined;
+    const projections = neutral
+      ? generation.neutralProjectionByAgentId
+      : generation.sessionProjectionByKey;
+    const key = neutral ? agent.agentId : sessionProjectionKey(agent.agentId, profiles);
+    const existing = projections.get(key);
     if (existing) {
       return existing;
     }
-    const profiles = resolveSessionProfiles(sessionEntry);
     const projection = deps
       .buildProjection({
         context: deps.getContext(),
@@ -319,11 +327,15 @@ export function createGatewayChatMetadataRuntime(params: {
         },
       }))
       .catch((error: unknown) => {
-        generation.projectionByKey.delete(key);
+        projections.delete(key);
         throw error;
       });
-    generation.projectionByKey.set(key, projection);
-    pruneMapToMaxSize(generation.projectionByKey, CHAT_METADATA_CACHE_MAX_ENTRIES);
+    projections.set(key, projection);
+    if (!neutral) {
+      // Neutral projections belong to the published generation. Only request-derived profile
+      // variants are bounded; evicting neutral entries puts catalog work back on startup reads.
+      pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
+    }
     return projection;
   };
 
@@ -353,7 +365,8 @@ export function createGatewayChatMetadataRuntime(params: {
       epoch,
       facts,
       agentsById: new Map(agents.map((agent) => [agent.agentId, agent])),
-      projectionByKey: new Map(),
+      neutralProjectionByAgentId: new Map(),
+      sessionProjectionByKey: new Map(),
       agentsListByKey: new Map(),
     };
     if (epoch !== invalidationEpoch) {
