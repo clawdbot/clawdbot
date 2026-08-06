@@ -296,13 +296,20 @@ test.each([
   const exporter: SpanExporter = {
     export(spans, resultCallback) {
       const resource = spans[0]?.resource;
-      void resource?.waitForAsyncAttributes().then(
+      if (!resource) {
+        const error = new Error("expected exported span resource");
+        resultCallback({ code: ExportResultCode.FAILED, error });
+        rejectExport(error);
+        return;
+      }
+      void Promise.resolve(resource.waitForAsyncAttributes?.()).then(
         () => {
           resourceAttributes = resource.attributes;
           resultCallback({ code: ExportResultCode.SUCCESS });
           resolveExport();
         },
-        (error: unknown) => {
+        (cause: unknown) => {
+          const error = cause instanceof Error ? cause : new Error(String(cause));
           resultCallback({ code: ExportResultCode.FAILED, error });
           rejectExport(error);
         },
