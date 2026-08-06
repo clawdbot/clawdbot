@@ -235,7 +235,7 @@ included here because they use different APIs.
 
 | Model ref                          | Input       | Context   | Picker status |
 | ---------------------------------- | ----------- | --------- | ------------- |
-| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 |
+| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
