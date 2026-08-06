@@ -32,6 +32,7 @@ describe("formatTelemetryExporterSummary", () => {
           type: "telemetry.exporter",
           source: "diagnostics-prometheus",
           target: "metrics",
+          transport: "prometheus-scrape",
           outcome: "failure",
           reason: "handler_failed",
         },
@@ -63,7 +64,7 @@ describe("formatTelemetryExporterSummary", () => {
         "custom_exporter · metrics · started · external SDK ownership",
         "diagnostics-otel · traces · recovered · OTLP/HTTP protobuf (dependency default endpoint) · after export failure",
         "diagnostics-otel · logs · started · stdout",
-        "diagnostics-prometheus · metrics · failed · exporter · handler failed",
+        "diagnostics-prometheus · metrics · failed · prometheus-scrape · handler failed",
       ],
     });
     expect(JSON.stringify(summary)).not.toContain("collector.example");

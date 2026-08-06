@@ -27,6 +27,12 @@ type ExporterHealthRecord = {
   ownership?: "configured" | "default_endpoint";
 };
 
+type TelemetryExporterSummary = {
+  title: string;
+  status: "ok" | "warn";
+  lines: string[];
+};
+
 function oneOf<const T extends readonly string[]>(value: unknown, choices: T): value is T[number] {
   return typeof value === "string" && (choices as readonly string[]).includes(value);
 }
@@ -100,7 +106,7 @@ function formatReason(record: ExporterHealthRecord): string | undefined {
 }
 
 /** Builds the redacted exporter-health text shared by Doctor and status --all. */
-export function formatTelemetryExporterSummary(snapshot: unknown) {
+export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExporterSummary | null {
   if (!isRecord(snapshot) || !Array.isArray(snapshot.events)) {
     return null;
   }

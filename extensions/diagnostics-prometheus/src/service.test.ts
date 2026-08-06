@@ -799,6 +799,7 @@ describe("diagnostics-prometheus service", () => {
         type: "telemetry.exporter",
         exporter: "diagnostics-prometheus",
         signal: "metrics",
+        transport: "prometheus-scrape",
         status: "started",
         reason: "configured",
       },
@@ -832,6 +833,13 @@ describe("diagnostics-prometheus service", () => {
     exporter.service.stop?.();
 
     expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(emitted.at(-1)).toStrictEqual({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-prometheus",
+      signal: "metrics",
+      transport: "prometheus-scrape",
+      status: "dropped",
+    });
     expect(exporter.render()).toBe("");
   });
 });

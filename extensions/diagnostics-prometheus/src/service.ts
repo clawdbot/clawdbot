@@ -10,6 +10,7 @@ import type {
   DiagnosticEventPayload,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
+  OpenClawPluginServiceContext,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 
@@ -1004,6 +1005,9 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
 export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
+  let emitExporterEvent:
+    | NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>["emit"]
+    | undefined;
 
   const service = {
     id: "diagnostics-prometheus",
@@ -1022,10 +1026,12 @@ export function createDiagnosticsPrometheusExporter() {
           );
         }
       });
-      ctx.internalDiagnostics?.emit({
+      emitExporterEvent = ctx.internalDiagnostics?.emit;
+      emitExporterEvent?.({
         type: "telemetry.exporter",
         exporter: "diagnostics-prometheus",
         signal: "metrics",
+        transport: "prometheus-scrape",
         status: "started",
         reason: "configured",
       });
@@ -1033,6 +1039,14 @@ export function createDiagnosticsPrometheusExporter() {
     stop() {
       unsubscribe?.();
       unsubscribe = undefined;
+      emitExporterEvent?.({
+        type: "telemetry.exporter",
+        exporter: "diagnostics-prometheus",
+        signal: "metrics",
+        transport: "prometheus-scrape",
+        status: "dropped",
+      });
+      emitExporterEvent = undefined;
       store.reset();
     },
   } satisfies OpenClawPluginService;
