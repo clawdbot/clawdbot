@@ -79,6 +79,32 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).toHaveBeenCalledOnce();
   });
 
+  it("ignores deferred orphan cleanup owners when settling surviving children", () => {
+    const survivor = makeRun("run-survivor", false);
+    const orphan = makeRun("run-orphan", false);
+    const persistOrThrow = vi.fn();
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: false,
+        acceptedSessionSpawns: [accepted(survivor)],
+        ignoredRunIds: new Set([orphan.runId]),
+        runs: new Map([
+          [survivor.runId, survivor],
+          [orphan.runId, orphan],
+        ]),
+        persistOrThrow,
+        schedule: vi.fn(),
+      }),
+    ).toBe(true);
+
+    expect(survivor.requesterTurnRunId).toBeUndefined();
+    expect(orphan.requesterTurnRunId).toBe(REQUESTER_TURN);
+    expect(persistOrThrow).toHaveBeenCalledExactlyOnceWith(survivor.runId);
+  });
+
   it.each([
     ["matches", "agent:main:subagent:worker", true],
     ["rejects", "agent:main:subagent:other", false],

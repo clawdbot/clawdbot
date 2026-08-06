@@ -220,6 +220,75 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it("settles a surviving requester child while deferred orphan cleanup remains owned", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const endedAt = Date.now();
+      const requesterTurnRunId = "run-requester-mixed-restore";
+      const attachmentsRootDir = path.join(stateDir, "attachments");
+      const attachmentsDir = path.join(attachmentsRootDir, "orphan");
+      await fs.mkdir(attachmentsDir, { recursive: true });
+      await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+      const orphan: SubagentRunRecord = {
+        runId: "run-orphan-mixed-restore",
+        requesterTurnRunId,
+        childSessionKey: "agent:main:subagent:orphan-mixed-restore",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "orphan mixed restore",
+        cleanup: "delete",
+        createdAt: endedAt - 1_000,
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 500,
+          endedAt,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "orphan", capturedAt: endedAt },
+        delivery: { status: "delivered", deliveredAt: endedAt },
+        attachmentsRootDir,
+        attachmentsDir,
+      };
+      const survivor: SubagentRunRecord = {
+        ...orphan,
+        runId: "run-survivor-mixed-restore",
+        childSessionKey: "agent:main:subagent:survivor-mixed-restore",
+        task: "survivor mixed restore",
+        cleanup: "keep",
+        retainAttachmentsOnKeep: true,
+        completion: { required: true, resultText: "survivor", capturedAt: endedAt },
+        cleanupHandled: true,
+        cleanupCompletedAt: endedAt,
+        attachmentsRootDir: undefined,
+        attachmentsDir: undefined,
+      };
+      saveSubagentRegistryToSqlite(
+        new Map([
+          [orphan.runId, orphan],
+          [survivor.runId, survivor],
+        ]),
+      );
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: survivor.childSessionKey,
+        sessionId: "sess-survivor-mixed-restore",
+        defaultSessionId: "sess-survivor-mixed-restore",
+      });
+
+      mod.initSubagentRegistry();
+
+      expect(mod.getSubagentRunByRunId(survivor.runId)?.requesterTurnRunId).toBeUndefined();
+      await vi.waitFor(
+        () => expect(loadSubagentRegistryFromSqlite().has(orphan.runId)).toBe(false),
+        { timeout: 1_000, interval: 10 },
+      );
+      expect(mod.getSubagentRunByRunId(survivor.runId)?.requesterTurnRunId).toBeUndefined();
+    });
+  });
+
   it.each([false, true])(
     "settles a restored steered requester turn (yielded: %s)",
     async (requesterYielded) => {

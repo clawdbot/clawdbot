@@ -226,6 +226,7 @@ export class SubagentLifecycleController {
     requesterTurnRunId: string;
     requesterYielded: boolean;
     acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+    ignoredRunIds?: ReadonlySet<string>;
   }) =>
     settleRequesterTurnAfterSessionSpawns({
       ...args,

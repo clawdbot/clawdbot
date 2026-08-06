@@ -43,6 +43,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   requesterTurnRunId: string;
   requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+  ignoredRunIds?: ReadonlySet<string>;
   runs: Map<string, SubagentRunRecord>;
   persistOrThrow(...runIds: string[]): void;
   schedule(runId: string, entry: SubagentRunRecord): void;
@@ -60,6 +61,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   // non-completion spawns are intentionally outside this batch.
   const entries = [...params.runs.values()].filter(
     (entry) =>
+      !params.ignoredRunIds?.has(entry.runId) &&
       entry.requesterSessionKey === requesterSessionKey &&
       entry.requesterTurnRunId === requesterTurnRunId &&
       entry.expectsCompletionMessage === true,

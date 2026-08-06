@@ -191,6 +191,9 @@ export function createSubagentRegistryRestorer(config: {
               runId: entry.taskRunId ?? entry.runId,
               childSessionKey: entry.childSessionKey,
             })),
+            // Deferred orphans remain durable cleanup owners, not members of the
+            // surviving requester batch being settled during this restore pass.
+            ignoredRunIds: deferredCleanupRunIds,
           });
         }
       }
