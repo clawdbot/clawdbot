@@ -137,8 +137,6 @@ spend and lockups while preserving normal tool access.
   a different tool or different arguments.
 - Another critical loop in the same run blocks its whole batch and ends the
   run. A new user run starts with a fresh recovery allowance.
-- Native harnesses that own their provider loop fail closed instead: they deny
-  the critical action before execution and terminate that run immediately.
 - The post-compaction guard emits `compaction_loop_persisted` errors naming
   the offending tool and identical-call count.
 

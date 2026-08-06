@@ -41,12 +41,10 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
-function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayRegistration): boolean {
-  const relayEnabled =
-    "preToolUseLoopDetection" in registration
-      ? registration.preToolUseLoopDetection !== false
-      : true;
-  if (!relayEnabled || !registration.sessionKey) {
+function nativePreToolUseMayRunLoopDetection(
+  registration: ActiveNativeHookRelayRegistration,
+): boolean {
+  if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
     return false;
   }
   const loopDetection = resolveToolLoopDetectionConfig({
@@ -101,7 +99,7 @@ export function nativeHookRelayEventToolMatcher(
 }
 
 export async function processNativeHookRelayInvocation(params: {
-  registration: ActiveNativeHookRelayRegistration;
+  registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -118,7 +116,7 @@ export async function processNativeHookRelayInvocation(params: {
 }
 
 async function runNativeHookRelayPreToolUse(params: {
-  registration: ActiveNativeHookRelayRegistration;
+  registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -126,12 +124,6 @@ async function runNativeHookRelayPreToolUse(params: {
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
-  const loopDetection = nativePreToolUseMayRunLoopDetection(params.registration)
-    ? resolveToolLoopDetectionConfig({
-        cfg: params.registration.config,
-        agentId: params.registration.agentId,
-      })
-    : undefined;
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,
@@ -144,7 +136,6 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
-      ...(loopDetection ? { loopDetection } : {}),
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.registration.requester ? { requester: params.registration.requester } : {}),
       ...params.registration.approvalContext,
@@ -154,33 +145,8 @@ async function runNativeHookRelayPreToolUse(params: {
     },
   });
   if (outcome.blocked) {
-    // Native harnesses do not expose their provider run loop here. Deny the
-    // action before execution and tell the native model to choose a different
-    // action; embedded runs get the bounded whole-run controller in agent-core.
-    const reason =
-      outcome.deniedReason === "tool-loop"
-        ? `${outcome.reason}\n\nDo not repeat this exact tool action. Reassess the task and choose a different action or answer without another tool call.`
-        : outcome.reason;
-    if (
-      outcome.deniedReason === "tool-loop" &&
-      !params.registration.criticalToolLoopTerminationRequested
-    ) {
-      params.registration.criticalToolLoopTerminationRequested = true;
-      // Codex awaits the PreToolUse command before either executing the tool or
-      // returning its blocked result to the provider. Request run cancellation
-      // before resolving this relay invocation so neither path can race ahead.
-      try {
-        params.registration.onCriticalToolLoop?.({
-          toolName,
-          ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-          reason: outcome.reason,
-        });
-      } catch {
-        // The tool denial remains authoritative even if run cleanup fails.
-      }
-    }
     return params.adapter.renderPreToolUseBlockResponse(
-      reason,
+      outcome.reason,
       outcome.kind === "failure" && outcome.disposition !== "blocked"
         ? outcome.disposition
         : undefined,

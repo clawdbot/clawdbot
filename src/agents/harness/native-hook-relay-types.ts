@@ -66,12 +66,6 @@ export type NativeHookRelayProcessResponse = {
   failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
-type NativeHookRelayCriticalToolLoop = {
-  toolName: string;
-  toolCallId?: string;
-  reason: string;
-};
-
 export type NativeHookRelayRegistration = {
   relayId: string;
   provider: NativeHookRelayProvider;
@@ -94,8 +88,6 @@ export type NativeHookRelayRegistration = {
     disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     durationMs: number;
   }) => void | Promise<void>;
-  /** Requests termination of a native provider run after a critical loop is denied. */
-  onCriticalToolLoop?: (intervention: NativeHookRelayCriticalToolLoop) => void;
 };
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
@@ -130,7 +122,6 @@ export type RegisterNativeHookRelayParams = {
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
-  onCriticalToolLoop?: NativeHookRelayRegistration["onCriticalToolLoop"];
 };
 
 type NativeHookRelayCommandOptions = {
@@ -203,7 +194,6 @@ export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
-  criticalToolLoopTerminationRequested: boolean;
 };
 
 export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {

@@ -582,9 +582,6 @@ export async function runCodexAppServerSideQuestion(
               pendingNativePreToolUseFailures.push(failure);
             }
           },
-          onCriticalToolLoop: (intervention) => {
-            runAbortController.abort(new Error(intervention.reason));
-          },
         })
       : undefined;
     const nativeHookRelayConfig = nativeHookRelay
@@ -726,13 +723,8 @@ export async function runCodexAppServerSideQuestion(
 
     let text: string;
     try {
-      // Wait on the run-scoped controller, not only the caller signal: caller
-      // aborts are already forwarded into it, and relay-triggered critical
-      // tool-loop termination aborts it directly. Waiting on the caller signal
-      // alone would defer turn/interrupt until the side turn finished or timed
-      // out after its tool loop was already denied.
       text = await collector.wait({
-        signal: runAbortController.signal,
+        signal: params.opts?.abortSignal,
         timeoutMs: Math.max(
           appServer.turnCompletionIdleTimeoutMs,
           SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
@@ -821,9 +813,6 @@ function registerCodexSideNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
-  onCriticalToolLoop: NonNullable<
-    Parameters<typeof registerNativeHookRelay>[0]["onCriticalToolLoop"]
-  >;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options.enabled === false) {
     return undefined;
@@ -845,7 +834,6 @@ function registerCodexSideNativeHookRelay(params: {
     }),
     signal: params.signal,
     onPreToolUseFailure: params.onPreToolUseFailure,
-    onCriticalToolLoop: params.onCriticalToolLoop,
     command: {
       timeoutMs: params.options.gatewayTimeoutMs,
     },
@@ -1174,18 +1162,6 @@ async function cleanupCodexSideThread(
   }
 }
 
-/**
- * Deliberate Error abort reasons carry run provenance (for example a critical
- * tool-loop intervention) and stay visible; a plain AbortError has no
- * provenance, so it keeps the generic /btw abort message.
- */
-function sideQuestionAbortError(signal: AbortSignal | undefined): Error {
-  const reason = signal?.reason;
-  return reason instanceof Error && reason.name !== "AbortError"
-    ? reason
-    : new Error("Codex /btw was aborted.");
-}
-
 class CodexSideQuestionCollector {
   private threadId: string | undefined;
   private turnId: string | undefined;
@@ -1250,7 +1226,7 @@ class CodexSideQuestionCollector {
       return Promise.resolve(this.finalText ?? this.assistantText);
     }
     if (options.signal?.aborted) {
-      return Promise.reject(sideQuestionAbortError(options.signal));
+      return Promise.reject(new Error("Codex /btw was aborted."));
     }
     return new Promise((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -1264,7 +1240,7 @@ class CodexSideQuestionCollector {
       const abort = () => {
         cleanup();
         this.settle = undefined;
-        reject(sideQuestionAbortError(options.signal));
+        reject(new Error("Codex /btw was aborted."));
       };
       timeout = setTimeout(
         () => {

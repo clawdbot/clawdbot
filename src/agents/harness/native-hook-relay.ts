@@ -123,10 +123,8 @@ export function registerNativeHookRelay(
     preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,
     preToolUseFailureProjections: new Map(),
-    criticalToolLoopTerminationRequested: false,
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
-    ...(params.onCriticalToolLoop ? { onCriticalToolLoop: params.onCriticalToolLoop } : {}),
   };
   relays.set(relayId, registration);
   registerNativeHookRelayBridge(registration, stateDbPath, invokeNativeHookRelay);

@@ -16,7 +16,6 @@ import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { loadBeforeToolCallRuntime } from "../agent-tools.before-tool-call.diagnostics.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
@@ -647,82 +646,6 @@ describe("native hook relay registry", () => {
       `${NATIVE_HOOK_RELAY_EXEC_PREFIX}/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id ` +
         `${relay.relayId} ${nativeHookRelayStateDbArgForTests()} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
     );
-  });
-
-  it("requests native run termination once when a critical loop is blocked", async () => {
-    const sessionKey = "agent:main:native-loop-termination";
-    const runId = "run-native-loop";
-    const loopDetection = { enabled: true } as const;
-    const pollArgs = { action: "poll", sessionId: "process-1" };
-    const { getDiagnosticSessionState, detectToolCallLoop, recordToolCall, recordToolCallOutcome } =
-      await loadBeforeToolCallRuntime();
-    const state = getDiagnosticSessionState({ sessionKey, sessionId: "session-1" });
-    for (let index = 0; index < 20; index += 1) {
-      const toolCallId = `prior-${index}`;
-      recordToolCall(state, "process", pollArgs, toolCallId, loopDetection, { runId });
-      recordToolCallOutcome(state, {
-        toolName: "process",
-        toolParams: pollArgs,
-        toolCallId,
-        result: {
-          content: [{ type: "text", text: "(no new output)" }],
-          details: { status: "running" },
-        },
-        config: loopDetection,
-        runId,
-      });
-    }
-    expect(detectToolCallLoop(state, "process", pollArgs, loopDetection, { runId })).toMatchObject({
-      stuck: true,
-      level: "critical",
-      detector: "known_poll_no_progress",
-    });
-    const lifecycle: string[] = [];
-    const onCriticalToolLoop = vi.fn(() => {
-      lifecycle.push("termination-requested");
-    });
-    const relay = registerNativeHookRelay({
-      provider: "codex",
-      sessionId: "session-1",
-      sessionKey,
-      runId,
-      config: { tools: { loopDetection } } as never,
-      onCriticalToolLoop,
-    });
-    await waitForNativeHookRelayBridgeRecord(relay.relayId);
-    const invokePoll = (toolUseId: string) =>
-      invokeNativeHookRelayBridge({
-        provider: "codex",
-        relayId: relay.relayId,
-        generation: relay.generation,
-        event: "pre_tool_use",
-        timeoutMs: 2_000,
-        rawPayload: {
-          hook_event_name: "PreToolUse",
-          tool_name: "process",
-          tool_use_id: toolUseId,
-          tool_input: pollArgs,
-        },
-      });
-
-    const first = await invokePoll("critical-1");
-    lifecycle.push("relay-resolved");
-    expect(JSON.parse(first.stdout)).toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: "deny",
-        permissionDecisionReason: expect.stringContaining("Do not repeat this exact tool action"),
-      },
-    });
-    expect(lifecycle).toEqual(["termination-requested", "relay-resolved"]);
-    expect(onCriticalToolLoop).toHaveBeenCalledTimes(1);
-    expect(onCriticalToolLoop).toHaveBeenCalledWith({
-      toolName: "process",
-      toolCallId: "critical-1",
-      reason: expect.stringContaining("CRITICAL"),
-    });
-
-    await invokePoll("critical-2");
-    expect(onCriticalToolLoop).toHaveBeenCalledTimes(1);
   });
 
   it("omits pre-tool relays when native loop detection is explicitly disabled", () => {
