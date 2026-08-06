@@ -14,8 +14,7 @@ enum GatewayDiscoverySelectionSupport {
         let preferredTransport = self.preferredTransport(
             for: gateway,
             current: state.remoteTransport,
-            preserveCurrentTransport: state.connectionMode == .remote &&
-                !currentRouteIsDiscoveryOwned)
+            currentRouteIsDiscoveryOwned: currentRouteIsDiscoveryOwned)
         if preferredTransport != state.remoteTransport {
             state.remoteTransport = preferredTransport
         }
@@ -45,14 +44,14 @@ enum GatewayDiscoverySelectionSupport {
     static func preferredTransport(
         for gateway: GatewayDiscoveryModel.DiscoveredGateway,
         current: AppState.RemoteTransport,
-        preserveCurrentTransport: Bool = true) -> AppState.RemoteTransport
+        currentRouteIsDiscoveryOwned: Bool = false) -> AppState.RemoteTransport
     {
         if self.shouldPreferDirectTransport(for: gateway) {
             return .direct
         }
-        // Discovery-owned and inactive routes must be recomputed for every selected gateway.
-        // Otherwise an old Direct choice can leak into an unrelated plaintext LAN selection.
-        if !preserveCurrentTransport {
+        // A discovery-owned route must be recomputed for every selected gateway. Otherwise a
+        // previous automatic Direct choice can leak into an unrelated plaintext LAN selection.
+        if currentRouteIsDiscoveryOwned {
             return .ssh
         }
         return current

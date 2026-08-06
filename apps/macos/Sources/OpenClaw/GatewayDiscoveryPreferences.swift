@@ -82,27 +82,35 @@ enum GatewayDiscoveryPreferences {
         -> (root: [String: Any], changed: Bool)
     {
         let connectionMode = ConnectionModeResolver.resolve(root: currentRoot).mode
-        guard connectionMode == .remote,
-              GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct,
-              let preferredStableID = self.preferredStableID()
+        guard GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
         else {
             return (currentRoot, false)
         }
-        if self.isVerifiedTailscaleServeRoute(
-            stableID: preferredStableID,
-            root: currentRoot)
-        {
-            return (currentRoot, false)
+        if connectionMode == .remote {
+            guard let preferredStableID = self.preferredStableID() else {
+                // Active Direct without a discovery receipt is operator-owned.
+                return (currentRoot, false)
+            }
+            if self.isVerifiedTailscaleServeRoute(
+                stableID: preferredStableID,
+                root: currentRoot)
+            {
+                return (currentRoot, false)
+            }
+            if let storedBinding = self.preferredRouteBinding() {
+                let currentBinding = self.routeBinding(
+                    connectionMode: .remote,
+                    remoteTransport: .direct,
+                    remoteURL: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "",
+                    remoteTarget: "")
+                // A mismatched binding proves the route was edited after discovery selected it.
+                guard storedBinding == currentBinding else { return (currentRoot, false) }
+            }
         }
-        if let storedBinding = self.preferredRouteBinding() {
-            let currentBinding = self.routeBinding(
-                connectionMode: .remote,
-                remoteTransport: .direct,
-                remoteURL: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "",
-                remoteTarget: "")
-            // A mismatched binding proves the route was edited after discovery selected it.
-            guard storedBinding == currentBinding else { return (currentRoot, false) }
-        }
+
+        // Shipped mode-exit flows cleared the discovery receipt, so an inactive Direct route has
+        // no reliable ownership provenance. Keeping it would let a mode-only return to Remote
+        // reactivate an attacker-selected endpoint without another trusted Direct decision.
 
         var root = currentRoot
         var gateway = root["gateway"] as? [String: Any] ?? [:]

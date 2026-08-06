@@ -166,7 +166,6 @@ struct GatewayDiscoverySelectionSupportTests {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
             let state = AppState(preview: true)
-            state.connectionMode = .remote
             state.remoteTransport = .direct
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
@@ -187,7 +186,6 @@ struct GatewayDiscoverySelectionSupportTests {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
             let state = AppState(preview: true)
-            state.connectionMode = .remote
             state.remoteTransport = .direct
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
@@ -207,7 +205,6 @@ struct GatewayDiscoverySelectionSupportTests {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
             let state = AppState(preview: true)
-            state.connectionMode = .remote
             state.remoteTransport = .direct
             state.remoteUrl = "wss://old-gateway.example.ts.net"
 

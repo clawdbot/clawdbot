@@ -248,7 +248,7 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
-    func `inactive direct route without discovery provenance remains operator owned`() {
+    func `inactive direct route without reliable provenance is retired`() {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
@@ -264,13 +264,13 @@ struct AppStateRemoteConfigTests {
         ]
         let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
 
-        #expect(!migration.changed)
-        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
-        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "wss://\(tailnetHost)")
+        #expect(migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "ws://127.0.0.1:18789")
     }
 
     @Test
-    func `cold inactive direct route is preserved but cannot authorize next discovery selection`() async {
+    func `cold inactive direct route is retired before mode only reactivation`() async {
         let configPath = TestIsolation.tempConfigPath()
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
@@ -301,27 +301,12 @@ struct AppStateRemoteConfigTests {
             let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
                 isPreview: false,
                 saver: { OpenClawConfigFile.saveDict($0) })
-            #expect(!startup.migrationChanged)
+            #expect(startup.migrationChanged)
             #expect(startup.migrationPersisted)
-            #expect(startup.remoteTransport == .direct)
+            #expect(startup.remoteTransport == .ssh)
 
             let state = AppState(preview: true)
-            GatewayDiscoverySelectionSupport.applyRemoteSelection(
-                gateway: GatewayDiscoveryModel.DiscoveredGateway(
-                    displayName: "Nearby gateway",
-                    serviceHost: "nearby-gateway.local",
-                    servicePort: 18789,
-                    lanHost: nil,
-                    tailnetDns: nil,
-                    sshPort: 22,
-                    gatewayPort: 18789,
-                    gatewayDirectReachable: true,
-                    stableID: "bonjour|nearby-gateway",
-                    debugID: "nearby-gateway",
-                    isLocal: false),
-                currentRouteIsDiscoveryOwned: GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(
-                    state: state),
-                state: state)
+            state.connectionMode = .remote
 
             #expect(state.remoteTransport == .ssh)
             #expect(state.remoteUrl == "ws://127.0.0.1:18789")
