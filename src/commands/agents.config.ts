@@ -129,6 +129,28 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   });
 }
 
+/** Identity patch for agent config updates; `null` clears a previously set field. */
+export type AgentIdentityPatch = {
+  [K in keyof IdentityConfig]?: IdentityConfig[K] | null;
+};
+
+function mergeAgentIdentity(
+  base: IdentityConfig | undefined,
+  patch: AgentIdentityPatch,
+): IdentityConfig | undefined {
+  const next: IdentityConfig = { ...base };
+  for (const [key, value] of Object.entries(patch) as Array<
+    [keyof IdentityConfig, IdentityConfig[keyof IdentityConfig] | null | undefined]
+  >) {
+    if (value === null || value === undefined || value === "") {
+      delete next[key];
+      continue;
+    }
+    next[key] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 export function applyAgentConfig(
   cfg: OpenClawConfig,
   params: {
@@ -137,7 +159,7 @@ export function applyAgentConfig(
     workspace?: string;
     agentDir?: string;
     model?: string | null;
-    identity?: IdentityConfig;
+    identity?: AgentIdentityPatch;
   },
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
@@ -145,14 +167,21 @@ export function applyAgentConfig(
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
-  const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
+  const mergedIdentity =
+    params.identity !== undefined ? mergeAgentIdentity(base.identity, params.identity) : undefined;
   const nextEntry: AgentEntry = {
     ...base,
     ...(name ? { name } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-    ...(mergedIdentity ? { identity: mergedIdentity } : {}),
   };
+  if (params.identity !== undefined) {
+    if (mergedIdentity) {
+      nextEntry.identity = mergedIdentity;
+    } else {
+      delete nextEntry.identity;
+    }
+  }
   // Model is tri-state: omission preserves the override, null restores inheritance.
   if (params.model === null) {
     delete nextEntry.model;

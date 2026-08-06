@@ -217,11 +217,23 @@ function resolveIdentityInsertIndex(lines: string[]): number {
 export function mergeIdentityMarkdownContent(
   content: string | undefined,
   identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
+  opts?: { clearFields?: ReadonlyArray<"name" | "theme" | "emoji" | "avatar"> },
 ): string {
   const lines = normalizeIdentityContent(content);
   const nextLines = lines.length > 0 ? [...lines] : ["# IDENTITY.md - Agent Identity", ""];
+  const clearFields = new Set(opts?.clearFields ?? []);
 
   for (const [field, label] of WRITABLE_IDENTITY_FIELDS) {
+    if (clearFields.has(field)) {
+      for (let index = nextLines.length - 1; index >= 0; index -= 1) {
+        const line = nextLines[index];
+        if (line !== undefined && matchesIdentityLabel(line, label)) {
+          nextLines.splice(index, 1);
+        }
+      }
+      continue;
+    }
+
     const value = identity[field]?.trim();
     if (!value) {
       continue;
