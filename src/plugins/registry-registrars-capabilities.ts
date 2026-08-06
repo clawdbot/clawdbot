@@ -4,7 +4,7 @@ import { registerPluginInteractiveHandlerInRegistry } from "./interactive-regist
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { defaultSlotIdForKey } from "./slots.js";
-import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
+import type { OpenClawPluginApi } from "./types.js";
 
 export function createCapabilityRegistrars(state: PluginRegistryState) {
   const { registry, pushDiagnostic } = state;
@@ -53,7 +53,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     id: Parameters<OpenClawPluginApi["registerContextEngine"]>[0],
     factory: Parameters<OpenClawPluginApi["registerContextEngine"]>[1],
-    registrationMode: PluginRegistrationMode,
+    runtimeCapable: boolean,
   ) => {
     const normalizedId = normalizeOptionalString(id) ?? "";
     if (!normalizedId) {
@@ -90,7 +90,10 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       `plugin:${record.id}`,
       {
         allowSameOwnerRefresh: true,
-        lifecycle: registrationMode === "full" ? "runtime" : "readOnlyDiscovery",
+        // Runtime-capable registration (live activation or a private runtime handle) makes
+        // the engine usable; discovery-only registration stays readOnlyDiscovery so resolve
+        // falls back to the default engine until runtime activation registers it.
+        lifecycle: runtimeCapable ? "runtime" : "readOnlyDiscovery",
       },
     );
     if (!result.ok) {

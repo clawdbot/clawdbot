@@ -524,6 +524,7 @@ export function loadRuntimePluginCandidate(params: {
     pluginConfig: validatedConfig.value,
     hookPolicy: entry?.hooks,
     registrationMode: registrationPlan.mode,
+    registerRuntimeCapableCapabilities: registrationPlan.registerRuntimeCapableCapabilities,
   });
   const beforeRegister = performance.now();
   let registerFailed = false;

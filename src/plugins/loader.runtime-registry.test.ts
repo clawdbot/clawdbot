@@ -71,10 +71,20 @@ it("registers runtime capabilities in an explicitly runtime-owned private handle
     body: `module.exports = {
       id: "private-runtime-context-engine",
       register(api) {
+        // Pure capability registration must run without the public 'full' signal so a
+        // private runtime handle can register a runtime-usable engine.
+        api.registerContextEngine("private-runtime-engine", () => ({
+          info: { id: "private-runtime-engine", name: "Private runtime engine" },
+        }));
+        // A genuine full-only side effect stays gated on the public activation signal and
+        // must not fire for a private runtime handle.
         if (api.registrationMode === "full") {
-          api.registerContextEngine("private-runtime-engine", () => ({
-            info: { id: "private-runtime-engine", name: "Private runtime engine" },
-          }));
+          api.registerTool({
+            name: "full_only_side_effect",
+            description: "must not register for a private runtime handle",
+            parameters: { type: "object", properties: {} },
+            execute() { return { content: [{ type: "text", text: "ok" }] }; },
+          }, { name: "full_only_side_effect" });
         }
       },
     };`,
@@ -92,13 +102,52 @@ it("registers runtime capabilities in an explicitly runtime-owned private handle
     handleRegistrationMode: "runtime",
   });
 
+  // Runtime-usable lifecycle without presenting 'full': resolve() will not fall back to legacy.
   expect(handle.contextEngines.get("private-runtime-engine")).toEqual(
     expect.objectContaining({
       owner: `plugin:${plugin.id}`,
       lifecycle: "runtime",
     }),
   );
+  // The plugin observed 'discovery', so its full-only side-effect branch never ran.
+  expect(handle.tools.flatMap((entry) => entry.names)).not.toContain("full_only_side_effect");
   expect(getActivePluginRegistry()).toBe(root);
+});
+
+it("registers a context engine read-only for a plain discovery handle", () => {
+  useNoBundledPlugins();
+  loadAndActivateRootPluginRegistry({ cache: false, config: {} });
+  const plugin = writePlugin({
+    id: "discovery-context-engine",
+    body: `module.exports = {
+      id: "discovery-context-engine",
+      register(api) {
+        api.registerContextEngine("discovery-engine", () => ({
+          info: { id: "discovery-engine", name: "Discovery engine" },
+        }));
+      },
+    };`,
+  });
+
+  const handle = loadPluginRegistryHandle({
+    cache: false,
+    config: {
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+      },
+    },
+    onlyPluginIds: [plugin.id],
+  });
+
+  // No runtime-capability signal: the engine stays discovery-only and resolve() falls back
+  // to the default engine until runtime activation registers it.
+  expect(handle.contextEngines.get("discovery-engine")).toEqual(
+    expect.objectContaining({
+      owner: `plugin:${plugin.id}`,
+      lifecycle: "readOnlyDiscovery",
+    }),
+  );
 });
 
 function requireMemoryEmbeddingProvider(providerId: string) {
