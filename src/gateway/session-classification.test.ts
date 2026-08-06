@@ -87,6 +87,21 @@ describe("sessionClassificationForRow", () => {
     expect(JSON.stringify(result)).not.toContain("491234567890");
   });
 
+  it("lets persisted spawn ownership override a delivery-shaped key", () => {
+    expect(
+      classification({
+        key: "agent:main:telegram:main:direct:491234567890",
+        isMain: false,
+        entry: entry({ spawnedBy: "agent:main:main" }),
+      }),
+    ).toMatchObject({
+      classification: "subagent",
+      accountId: "main",
+      peerKind: "direct",
+      isBackground: true,
+    });
+  });
+
   it("classifies stored chat type when a provider key is not a delivery route", () => {
     expect(
       classification({
