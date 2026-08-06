@@ -130,6 +130,8 @@ export type WorkboardUiState = {
   draftCommentBody: string;
   detailCardId: string | null;
   detailCommentBody: string;
+  proofLoadingCardIds: Set<string>;
+  proofLoadErrorsByCardId: Map<string, string>;
   busyCardIds: Set<string>;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;

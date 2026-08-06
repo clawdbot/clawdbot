@@ -414,9 +414,9 @@ the template id is stored as card metadata.
 
 Proof badges and the missing-proof view use `proofPage.total`, not only the
 embedded array length. When older history is omitted, card details label the
-section **Latest N of M proof records**. Dashboard search currently covers only
-the recent proof records loaded in the card view; use `workboard_proof_list` or
-`workboard.cards.proof.list` to inspect older proof.
+section **Latest N of M proof records** and provide **Load older proof**. Each
+click retrieves the next older page through `workboard.cards.proof.list` and
+adds it to the searchable card view without changing canonical proof history.
 
 ### Session-board widgets
 

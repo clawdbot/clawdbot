@@ -25,7 +25,7 @@ export {
 } from "./derived.ts";
 export { captureSessionToWorkboard } from "./session-capture.ts";
 export { getWorkboardDependencyState, resetDraftState } from "./card-state.ts";
-export { loadWorkboard, refreshWorkboard } from "./loading.ts";
+export { loadOlderWorkboardProof, loadWorkboard, refreshWorkboard } from "./loading.ts";
 export {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,

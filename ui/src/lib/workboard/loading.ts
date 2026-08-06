@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatError } from "./normalization-utils.ts";
-import { normalizeCardsPayload } from "./normalization.ts";
+import { normalizeCardsPayload, normalizeProofPagePayload } from "./normalization.ts";
 import {
   getWorkboardRuntime,
   getWorkboardState,
@@ -25,6 +25,7 @@ import {
   taskMatchesTrackedCardLink,
 } from "./task-links.ts";
 import type {
+  WorkboardProof,
   WorkboardRefreshSource,
   WorkboardTaskLinkState,
   WorkboardTaskSummary,
@@ -43,6 +44,72 @@ type LoadWorkboardParams = {
 
 export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolean> {
   return await loadWorkboardInternal(params);
+}
+
+export async function loadOlderWorkboardProof(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  cardId: string;
+  requestUpdate?: () => void;
+}): Promise<boolean> {
+  const state = getWorkboardState(params.host);
+  const card = state.cards.find((entry) => entry.id === params.cardId);
+  if (
+    !params.client ||
+    !card ||
+    card.proofPage?.hasMore !== true ||
+    state.proofLoadingCardIds.has(params.cardId)
+  ) {
+    return false;
+  }
+
+  const cursor = card.proofPage.nextCursor;
+  state.proofLoadingCardIds.add(params.cardId);
+  state.proofLoadErrorsByCardId.delete(params.cardId);
+  params.requestUpdate?.();
+  try {
+    const payload = await params.client.request("workboard.cards.proof.list", {
+      id: params.cardId,
+      ...(cursor ? { cursor } : {}),
+    });
+    const page = normalizeProofPagePayload(payload);
+    if (!page) {
+      throw new Error("Gateway returned an invalid Workboard proof page.");
+    }
+    const cardIndex = state.cards.findIndex((entry) => entry.id === params.cardId);
+    const currentCard = state.cards[cardIndex];
+    if (state.detailCardId !== params.cardId || currentCard !== card) {
+      return false;
+    }
+
+    const proof: WorkboardProof[] = [];
+    const proofIds = new Set<string>();
+    for (const entry of [...page.proof, ...(currentCard.metadata?.proof ?? [])]) {
+      if (!proofIds.has(entry.id)) {
+        proofIds.add(entry.id);
+        proof.push(entry);
+      }
+    }
+    const updatedCard = {
+      ...currentCard,
+      metadata: { ...currentCard.metadata, proof },
+      proofPage: {
+        total: Math.max(currentCard.proofPage?.total ?? 0, page.total, proof.length),
+        hasMore: page.hasMore,
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      },
+    };
+    state.cards = state.cards.map((entry, index) => (index === cardIndex ? updatedCard : entry));
+    return true;
+  } catch (error) {
+    if (state.detailCardId === params.cardId && state.cards.includes(card)) {
+      state.proofLoadErrorsByCardId.set(params.cardId, formatError(error));
+    }
+    return false;
+  } finally {
+    state.proofLoadingCardIds.delete(params.cardId);
+    params.requestUpdate?.();
+  }
 }
 
 async function loadWorkboardInternal(

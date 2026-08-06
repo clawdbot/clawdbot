@@ -365,6 +365,8 @@ function createDefaultState(): WorkboardUiState {
     draftCommentBody: "",
     detailCardId: null,
     detailCommentBody: "",
+    proofLoadingCardIds: new Set(),
+    proofLoadErrorsByCardId: new Map(),
     busyCardIds: new Set(),
     draggedCardId: null,
     syncingCardIds: new Set(),

@@ -7,6 +7,7 @@ import {
   getWorkboardDependencyState,
   getWorkboardLifecycle,
   getWorkboardState,
+  loadOlderWorkboardProof,
   workboardProofTotal,
   type WorkboardCard,
   type WorkboardDependencyState,
@@ -47,9 +48,13 @@ function ensureWorkboardCardDashboardElement(): Promise<void> {
 export function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
   state.detailCardId = card.id;
   state.detailCommentBody = "";
+  state.proofLoadErrorsByCardId.delete(card.id);
 }
 
 function closeCardDetails(state: WorkboardUiState) {
+  if (state.detailCardId) {
+    state.proofLoadErrorsByCardId.delete(state.detailCardId);
+  }
   state.detailCardId = null;
   state.detailCommentBody = "";
 }
@@ -137,10 +142,12 @@ function detailValues<T>(entries: readonly T[], ...fields: Array<keyof T>): stri
   return entries.map((entry) => joinDetailParts(...fields.map((field) => entry[field])));
 }
 
-function renderProofDetails(card: WorkboardCard) {
+function renderProofDetails(props: WorkboardProps, state: WorkboardUiState, card: WorkboardCard) {
   const proof = card.metadata?.proof ?? [];
   const proofTotal = workboardProofTotal(card);
   const hasMore = card.proofPage?.hasMore === true;
+  const loading = state.proofLoadingCardIds.has(card.id);
+  const error = state.proofLoadErrorsByCardId.get(card.id);
   if (proof.length === 0 && !hasMore) {
     return nothing;
   }
@@ -171,6 +178,25 @@ function renderProofDetails(card: WorkboardCard) {
             </ol>
           `
         : nothing}
+      ${hasMore
+        ? html`
+            <button
+              class="btn"
+              type="button"
+              ?disabled=${loading || !props.client || !props.connected}
+              @click=${() =>
+                void loadOlderWorkboardProof({
+                  host: props.host,
+                  client: props.client,
+                  cardId: card.id,
+                  requestUpdate: props.onRequestUpdate,
+                })}
+            >
+              ${loading ? t("common.loading") : t("workboard.detailProofLoadOlder")}
+            </button>
+          `
+        : nothing}
+      ${error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing}
     </section>
   `;
 }
@@ -363,7 +389,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 ></openclaw-workboard-card-dashboard>
               `
             : nothing}
-          ${renderDependencyDetailList(dependencies)} ${renderProofDetails(card)}
+          ${renderDependencyDetailList(dependencies)} ${renderProofDetails(props, state, card)}
           ${detailSections.map(([title, values]) => renderDetailList(title, values))}
 
           <section class="workboard-detail__section">

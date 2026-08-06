@@ -12,6 +12,7 @@ import {
   type WorkboardBoardSummary,
   type WorkboardCard,
   type WorkboardPriority,
+  type WorkboardProofPage,
   type WorkboardProofPageInfo,
   type WorkboardStatus,
   type WorkboardTaskSummary,
@@ -66,6 +67,15 @@ function normalizeProofPage(value: unknown, loadedProofCount: number): Workboard
     hasMore,
     ...(nextCursor ? { nextCursor } : {}),
   };
+}
+
+export function normalizeProofPagePayload(value: unknown): WorkboardProofPage | null {
+  if (!isRecord(value) || !Array.isArray(value.proof)) {
+    return null;
+  }
+  const proof = normalizeMetadata({ proof: value.proof })?.proof ?? [];
+  const page = normalizeProofPage(value, proof.length);
+  return { proof, ...page };
 }
 
 function normalizeCard(value: unknown): WorkboardCard | null {

@@ -15,6 +15,7 @@ import {
   getWorkboardLifecycle,
   getWorkboardDependencyState,
   getWorkboardState,
+  loadOlderWorkboardProof,
   loadWorkboard,
   moveWorkboardCard,
   refreshWorkboard,
@@ -430,6 +431,92 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", { proofView: "bounded" });
     expect(getWorkboardState(host).cards).toEqual([sampleCard]);
+  });
+
+  it("loads older proof pages in canonical order and discards stale responses", async () => {
+    const card = createWorkboardCard({
+      metadata: { proof: [] },
+      proofPage: { total: 6, hasMore: true },
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    const stalePage = createDeferred<unknown>();
+    const client = createSequencedClient({
+      "workboard.cards.proof.list": [
+        {
+          proof: [3, 4, 5, 6].map((createdAt) => ({
+            id: `proof-${createdAt}`,
+            status: "passed",
+            createdAt,
+          })),
+          total: 6,
+          hasMore: true,
+          nextCursor: "proof-page-3",
+        },
+        {
+          proof: [1, 2, 3].map((createdAt) => ({
+            id: `proof-${createdAt}`,
+            status: "passed",
+            createdAt,
+          })),
+          total: 6,
+          hasMore: false,
+        },
+        stalePage.promise,
+      ],
+    });
+
+    await expect(
+      loadOlderWorkboardProof({ host, client: client as never, cardId: card.id }),
+    ).resolves.toBe(true);
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.proof.list", {
+      id: card.id,
+    });
+    expect(state.cards[0]?.metadata?.proof?.map((entry) => entry.id)).toEqual([
+      "proof-3",
+      "proof-4",
+      "proof-5",
+      "proof-6",
+    ]);
+    expect(state.cards[0]?.proofPage).toEqual({
+      total: 6,
+      hasMore: true,
+      nextCursor: "proof-page-3",
+    });
+
+    await expect(
+      loadOlderWorkboardProof({ host, client: client as never, cardId: card.id }),
+    ).resolves.toBe(true);
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.proof.list", {
+      id: card.id,
+      cursor: "proof-page-3",
+    });
+    expect(state.cards[0]?.metadata?.proof?.map((entry) => entry.id)).toEqual([
+      "proof-1",
+      "proof-2",
+      "proof-3",
+      "proof-4",
+      "proof-5",
+      "proof-6",
+    ]);
+    expect(state.cards[0]?.proofPage).toEqual({ total: 6, hasMore: false });
+
+    const refreshedCard = { ...card, proofPage: { total: 7, hasMore: true } };
+    state.cards = [refreshedCard];
+    const staleLoad = loadOlderWorkboardProof({
+      host,
+      client: client as never,
+      cardId: card.id,
+    });
+    state.cards = [{ ...refreshedCard }];
+    stalePage.resolve({
+      proof: [{ id: "proof-stale", status: "passed", createdAt: 1 }],
+      total: 7,
+      hasMore: false,
+    });
+    await expect(staleLoad).resolves.toBe(false);
+    expect(state.cards[0]?.metadata?.proof).toEqual([]);
+    expect(state.proofLoadingCardIds.size).toBe(0);
   });
 
   it("refreshes diagnostics before listing cards when requested", async () => {
