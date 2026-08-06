@@ -226,39 +226,6 @@ export async function proposeCreateSkill(
 }
 
 /** Summary of a workspace skill the workshop is allowed to write. */
-type WritableWorkspaceSkillSummary = {
-  name: string;
-  description?: string;
-  filePath: string;
-};
-
-/**
- * Lists the workspace skills the workshop can target with update proposals, using the same
- * status discovery as `proposeUpdateSkill` so callers that route corrections to existing
- * skills stay in lockstep with what an update can actually write.
- */
-export function listWritableWorkspaceSkillSummaries(
-  workspaceDir: string,
-  opts?: { config?: OpenClawConfig; agentId?: string },
-): WritableWorkspaceSkillSummary[] {
-  const status = buildWorkspaceSkillStatus(workspaceDir, {
-    config: opts?.config,
-    agentId: opts?.agentId,
-  });
-  const summaries: WritableWorkspaceSkillSummary[] = [];
-  for (const skill of status.skills) {
-    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-      continue;
-    }
-    summaries.push(
-      skill.description
-        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
-        : { name: skill.skillKey, filePath: skill.filePath },
-    );
-  }
-  return summaries;
-}
-
 export async function proposeUpdateSkill(
   input: SkillProposalUpdateInput & SkillWorkshopWorkspaceOptions,
 ): Promise<SkillProposalReadResult> {
