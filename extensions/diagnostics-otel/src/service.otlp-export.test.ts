@@ -546,6 +546,39 @@ test.each(SHARED_ENDPOINT_ROUTING_CASES)(
   30_000,
 );
 
+test("keeps the required protobuf content type over a colliding custom header", async () => {
+  const receiver = await startOtlpReceiver();
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: true,
+    logs: true,
+    configure: (serviceContext) => {
+      serviceContext.config.diagnostics!.otel!.headers = {
+        "content-type": "text/plain",
+      };
+    },
+  });
+
+  try {
+    await emitRealSdkSignals();
+    await service.stop?.(ctx);
+
+    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
+      new Set(["/v1/traces", "/v1/metrics", "/v1/logs"]),
+    );
+    expect(
+      receiver.requests.every(
+        (request) => request.method === "POST" && request.contentType === "application/x-protobuf",
+      ),
+    ).toBe(true);
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
+
 test("uses real signal-specific exporter endpoints verbatim", async () => {
   const receiver = await startOtlpReceiver();
   releasePreloadedOtelGlobals();
