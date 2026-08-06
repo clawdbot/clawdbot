@@ -43,6 +43,7 @@ import {
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
 import {
+  extractWhatsAppPollUpdateMessage,
   isWhatsAppPollCreationMessage,
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
@@ -520,7 +521,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         );
       }
 
-      if (msg.message?.pollUpdateMessage) {
+      if (extractWhatsAppPollUpdateMessage(msg.message)) {
         // Poll votes are passive data (per #78963): decode and hook-dispatch
         // only, never enter the normal admission/reply pipeline below.
         if (msg.key) {

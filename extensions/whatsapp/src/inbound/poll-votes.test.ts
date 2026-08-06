@@ -113,6 +113,37 @@ describe("decodeWhatsAppPollVote", () => {
     expect(decoded?.selectedOptions).toEqual(["Yes"]);
   });
 
+  it("decodes a vote update wrapped in an ephemeralMessage envelope", () => {
+    // Regression: the vote-update entry point used to read
+    // message.pollUpdateMessage directly, bypassing the same
+    // wrapper-unwrapping poll creation detection already applies — a vote
+    // WhatsApp delivers inside a disappearing-message envelope would
+    // silently fail to decode.
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Pizza", "Sushi"],
+    });
+    const creationKey = creationKeyFor(POLL_MSG_ID);
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Sushi"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: POLL_MSG_ID,
+      voterJid: VOTER_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+    const wrappedVoteMessage = { ephemeralMessage: { message: voteMessage } };
+
+    const decoded = decodeWhatsAppPollVote({
+      message: wrappedVoteMessage,
+      key: voteKeyFor("VOTE-EPHEMERAL"),
+      getCachedMessage: () => pollCreationMessage,
+      selfJid: POLL_CREATOR_JID,
+    });
+
+    expect(decoded?.selectedOptions).toEqual(["Sushi"]);
+  });
+
   it("decodes multiple selected options", () => {
     const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
       section: "pollCreationMessage",

@@ -31,6 +31,28 @@ const POLL_CREATION_SECTIONS = [
   "pollCreationMessageV5",
 ] as const satisfies readonly (keyof proto.IMessage)[];
 
+const POLL_UPDATE_SECTIONS = [
+  "pollUpdateMessage",
+] as const satisfies readonly (keyof proto.IMessage)[];
+
+/**
+ * Reads a message's `pollUpdateMessage` section, unwrapping ephemeral/
+ * view-once/other FutureProofMessage envelopes the same way poll creation
+ * detection already does via `findMessageSection` — a vote update WhatsApp
+ * delivers wrapped (e.g. inside an ephemeral message) would otherwise bypass
+ * a bare top-level `message.pollUpdateMessage` check and be silently dropped.
+ */
+export function extractWhatsAppPollUpdateMessage(
+  message: proto.IMessage | null | undefined,
+): proto.Message.IPollUpdateMessage | undefined {
+  if (!message) {
+    return undefined;
+  }
+  return findMessageSection(message, POLL_UPDATE_SECTIONS)?.value as
+    | proto.Message.IPollUpdateMessage
+    | undefined;
+}
+
 function hashPollOptionName(optionName: string): string {
   return createHash("sha256").update(Buffer.from(optionName, "utf8")).digest("hex");
 }
@@ -149,7 +171,7 @@ export function decodeWhatsAppPollVote(params: {
   /** Test-only: inject an isolated store instead of the process-wide singleton. */
   store?: WhatsAppPollStore;
 }): WhatsAppDecodedPollVote | undefined {
-  const pollUpdateMessage = params.message?.pollUpdateMessage;
+  const pollUpdateMessage = extractWhatsAppPollUpdateMessage(params.message);
   const creationKey = pollUpdateMessage?.pollCreationMessageKey;
   const vote = pollUpdateMessage?.vote;
   const remoteJid = params.key.remoteJid ?? creationKey?.remoteJid;
@@ -410,7 +432,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   if (!shouldEmitWhatsAppPollVoteHooks({ cfg: params.cfg, accountId: params.accountId })) {
     return;
   }
-  const creationKey = params.message?.pollUpdateMessage?.pollCreationMessageKey;
+  const creationKey = extractWhatsAppPollUpdateMessage(params.message)?.pollCreationMessageKey;
   const remoteJid = params.key.remoteJid ?? creationKey?.remoteJid;
   if (
     !creationKey?.id ||

@@ -73,6 +73,39 @@ describe("WhatsAppPollStore", () => {
     expect(store.isVoteDedup("acct", "chat@lid", "VOTE-2")).toBe(false);
   });
 
+  it("does not extend expiry when ownership is rewritten by a delayed/replayed self-echo", async () => {
+    // Regression: update() used to pass the full ttlMs on every write, so a
+    // delayed messages.upsert echo of the same poll creation (WhatsApp
+    // redelivering after a reconnect, e.g.) reset the expiry clock to "now"
+    // instead of leaving it anchored to the original write.
+    store.rememberOwnPollCreation("acct", "chat@lid", "POLL-ANCHOR-OWN", 150);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 80);
+    });
+    // Replays the same write, as a delayed self-echo would.
+    store.rememberOwnPollCreation("acct", "chat@lid", "POLL-ANCHOR-OWN", 150);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    // 180ms since the original write: past its 150ms anchor. A naive
+    // full-ttl-refresh on the replay would still consider this alive
+    // (80ms + 150ms = 230ms), so this only passes with anchoring fixed.
+    expect(store.isOwnPollCreation("acct", "chat@lid", "POLL-ANCHOR-OWN")).toBe(false);
+  });
+
+  it("does not extend expiry when the creation message is rewritten by a delayed/replayed self-echo", async () => {
+    const message = { pollCreationMessage: { name: "q", options: [] } };
+    store.rememberPollCreationMessage("acct", "chat@lid", "POLL-ANCHOR-MSG", message, 150);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 80);
+    });
+    store.rememberPollCreationMessage("acct", "chat@lid", "POLL-ANCHOR-MSG", message, 150);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    expect(store.readPollCreationMessage("acct", "chat@lid", "POLL-ANCHOR-MSG")).toBeUndefined();
+  });
+
   it("survives being reopened against the same state dir (simulates a process restart)", () => {
     store.rememberOwnPollCreation("acct", "chat@lid", "POLL-RESTART", 60_000);
     const message = {

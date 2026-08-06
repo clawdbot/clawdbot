@@ -65,6 +65,25 @@ export class WhatsAppPollStore {
   }
 
   /**
+   * Computes the ttlMs to hand the underlying store so a record's expiry
+   * stays anchored to when it was first observed (`ownedAt`), regardless of
+   * how many times it's subsequently rewritten. Without this, `update()`
+   * unconditionally sets `expiresAt = now + ttlMs` on every call — so a
+   * delayed or replayed self-echo of the same poll creation message would
+   * push expiry further into the future each time it's reprocessed,
+   * silently outliving the documented creation-anchored retention window.
+   * Returns the caller's own `ttlMs` unchanged for a genuinely new record.
+   */
+  private resolveAnchoredTtlMs(key: string, ttlMs: number): number {
+    const current = this.creations.lookup(key);
+    if (!current) {
+      return ttlMs;
+    }
+    const remainingMs = current.ownedAt + ttlMs - Date.now();
+    return Math.max(1, Math.min(ttlMs, remainingMs));
+  }
+
+  /**
    * Marks `remoteJid:messageId` as a poll this account created. Safe to call
    * before the creation message's own content is known (e.g. right after an
    * accepted send) — an existing entry's `messageJson` is preserved.
@@ -75,10 +94,12 @@ export class WhatsAppPollStore {
     messageId: string,
     ttlMs: number,
   ): void {
+    const key = creationKey(accountId, remoteJid, messageId);
+    const anchoredTtlMs = this.resolveAnchoredTtlMs(key, ttlMs);
     this.creations.update?.(
-      creationKey(accountId, remoteJid, messageId),
-      (current) => ({ ...current, ownedAt: Date.now() }),
-      { ttlMs },
+      key,
+      (current) => ({ ...current, ownedAt: current?.ownedAt ?? Date.now() }),
+      { ttlMs: anchoredTtlMs },
     );
   }
 
@@ -91,7 +112,8 @@ export class WhatsAppPollStore {
    * decryption key in `messageContextInfo.messageSecret`), whether it's
    * known from the accepted send's own result or from the later
    * `messages.upsert` echo. Upserts alongside any ownership entry already
-   * written by `rememberOwnPollCreation`.
+   * written by `rememberOwnPollCreation`, without extending that entry's
+   * creation-anchored expiry (see `resolveAnchoredTtlMs`).
    */
   rememberPollCreationMessage(
     accountId: string,
@@ -100,11 +122,13 @@ export class WhatsAppPollStore {
     message: proto.IMessage,
     ttlMs: number,
   ): void {
+    const key = creationKey(accountId, remoteJid, messageId);
+    const anchoredTtlMs = this.resolveAnchoredTtlMs(key, ttlMs);
     const messageJson = serializeMessage(message);
     this.creations.update?.(
-      creationKey(accountId, remoteJid, messageId),
+      key,
       (current) => ({ ownedAt: current?.ownedAt ?? Date.now(), messageJson }),
-      { ttlMs },
+      { ttlMs: anchoredTtlMs },
     );
   }
 

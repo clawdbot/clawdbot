@@ -55,6 +55,8 @@ describe("web monitor inbox poll vote hook", () => {
      */
     pollMessageId: string;
     voteMessageId: string;
+    /** Wraps the vote-update message in an ephemeralMessage envelope, as WhatsApp does for disappearing-message chats. */
+    wrapVoteInEphemeral?: boolean;
   }) {
     const pollCreatorIsSelf = params.pollCreatorIsSelf ?? true;
     const { pollMessageId, voteMessageId } = params;
@@ -93,12 +95,15 @@ describe("web monitor inbox poll vote hook", () => {
       vote,
       senderTimestampMs: 1_700_000_100_000,
     });
+    const dispatchedVoteMessage = params.wrapVoteInEphemeral
+      ? { ephemeralMessage: { message: voteMessage } }
+      : voteMessage;
     const voteUpsert = {
       type: "notify",
       messages: [
         {
           key: { remoteJid: CHAT_JID, id: voteMessageId, fromMe: false, participant: VOTER_JID },
-          message: voteMessage,
+          message: dispatchedVoteMessage,
           messageTimestamp: 1_700_000_100,
         },
       ],
@@ -159,6 +164,37 @@ describe("web monitor inbox poll vote hook", () => {
         // per vote/retraction so consumers can correlate individual events.
         messageId: voteMessageId,
       },
+    );
+  });
+
+  it("fires poll_vote_received for a vote update wrapped in an ephemeralMessage envelope", async () => {
+    // Regression: the dispatch gate used to check msg.message.pollUpdateMessage
+    // directly, bypassing the same wrapper-unwrapping the extractor already
+    // applies to poll creation messages — a vote arriving inside a
+    // disappearing-message envelope was silently dropped.
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          pluginHooks: { pollVoteReceived: true },
+        },
+      },
+    });
+    const baileysCache = createBaileysCacheSupport();
+    const pollMessageId = "POLL-WRAPPED";
+    const voteMessageId = "VOTE-WRAPPED";
+
+    await emitPollAndVote({
+      baileysCache,
+      pollMessageId,
+      voteMessageId,
+      wrapVoteInEphemeral: true,
+    });
+    await waitForMessageCalls(runPollVoteReceivedMock, 1);
+
+    expect(runPollVoteReceivedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pollMessageId, selectedOptions: ["Sushi"] }),
+      expect.anything(),
     );
   });
 

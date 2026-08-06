@@ -283,13 +283,18 @@ as soon as the poll creation is accepted by WhatsApp (no need to wait for the
 `messages.upsert` echo). That key (and the "this account created this poll"
 record) is kept in the runtime's canonical plugin-state store, namespaced
 under the `whatsapp` plugin id — not a bespoke database — so it survives a
-gateway restart, not just an in-memory cache. Each record expires after
-`pollVoteRetentionMs` (default: `600000`, 10 minutes) counted from poll
-creation; expired records are swept automatically by the framework's own
-plugin-state maintenance task, so no key material lingers past its TTL. A
-vote arriving after that window (or an unrelated poll's leftover state) is
-not decodable and the hook simply does not fire for it — no error is raised.
-Configure the window channel-wide or per account:
+gateway restart, not just an in-memory cache. Each record's expiry is
+anchored to when it was first observed (`pollVoteRetentionMs`, default
+`600000`/10 minutes, from poll creation) and does not move: a later
+`messages.upsert` echo of the same poll, however delayed or replayed, can
+only shorten or confirm that expiry, never extend it. Expired records stop
+being readable immediately, and are physically removed from disk the next
+time the framework's plugin-state maintenance task runs (periodic, not
+synchronous with expiry) — so a small window can exist where expired key
+material is unreadable but not yet erased from the underlying database file.
+A vote arriving after the retention window (or an unrelated poll's leftover
+state) is not decodable and the hook simply does not fire for it — no error
+is raised. Configure the window channel-wide or per account:
 
 ```json5
 {
