@@ -138,6 +138,7 @@ describe("operator approval decision receipts", () => {
 
     const receipts = listOperatorApprovalReceiptsForRun({
       context,
+      linkState: "unambiguous",
       offset: 0,
       limit: 20,
       nowMs: 3_000,
@@ -213,6 +214,7 @@ describe("operator approval decision receipts", () => {
     expect(
       listOperatorApprovalReceiptsForRun({
         context,
+        linkState: "unambiguous",
         offset: 0,
         limit: 10,
         nowMs: 2_001,
@@ -244,6 +246,7 @@ describe("operator approval decision receipts", () => {
     expect(
       listOperatorApprovalReceiptsForRun({
         context,
+        linkState: "unambiguous",
         offset: 0,
         limit: 10,
         nowMs: RETENTION_MS + 2,

@@ -135,6 +135,7 @@ Approval outcomes map to stable receipt reasons:
 | Malformed approval verdict     | `operator_approval_denied_malformed_verdict`                                              |
 | Fail-closed storage state      | `operator_approval_denied_storage_corrupt`                                                |
 | Unreadable or inconsistent row | `operator_approval_record_corrupt`                                                        |
+| Multiple executions share run  | `operator_approval_execution_link_ambiguous`                                              |
 
 Allowed, denied, expired, and cancelled rows are `enforced` because the
 recorded human decision or fail-closed owner policy changed whether the action
@@ -144,6 +145,13 @@ non-action. An unreadable row is `unknown`, never reconstructed. If a retained
 approval names a run but its expected execution context is missing, run
 inspection returns `decision_context_link_missing` with `unknown` coverage and
 does not invent a receipt context.
+
+Because `runId` is correlation rather than execution identity, an approval row
+cannot select among multiple retained execution contexts sharing that run. An
+exact-execution inspection then projects the row as `unknown` with
+`operator_approval_execution_link_ambiguous`, no grant references, and an
+explicit run-only remediation. It never presents that row as an enforced allow
+or denial for the selected execution.
 
 Run inspection returns successful typed diagnostics instead of inventing
 facts:

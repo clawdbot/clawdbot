@@ -58,6 +58,7 @@ export function presentExecutionDecisionReceipts(params: {
   context: ExecutionIdentityContextV1;
   decisionOffset?: number;
   decisionLimit?: number;
+  approvalLinkState: "unambiguous" | "ambiguous";
   options: ExecutionDecisionReadOptions;
 }): AuditRunInspectResult {
   const offset = params.decisionOffset ?? 0;
@@ -91,6 +92,7 @@ export function presentExecutionDecisionReceipts(params: {
         executionId: params.context.executionId,
         runId: params.context.runId,
       },
+      linkState: params.approvalLinkState,
       offset: remainingOffset,
       limit: remainingLimit,
       nowMs: now,

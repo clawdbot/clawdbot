@@ -1,5 +1,6 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 // Persistent operator approval lifecycle and first-answer-wins transitions.
+import { createHash } from "node:crypto";
 import type { Selectable } from "kysely";
 import {
   type DecisionReceiptV1,
@@ -175,6 +176,7 @@ type OperatorApprovalReceiptContext = {
   executionId: string;
   runId: string;
 };
+type OperatorApprovalReceiptLinkState = "unambiguous" | "ambiguous";
 
 const OPERATOR_APPROVAL_DECISIONS = new Set<OperatorApprovalDecision>([
   "allow-once",
@@ -645,6 +647,54 @@ function projectOperatorApprovalReceipt(
   };
 }
 
+function projectAmbiguousOperatorApprovalReceipt(
+  record: OperatorApprovalRecord,
+  context: OperatorApprovalReceiptContext,
+): DecisionReceiptV1 {
+  const sourceRef = record.resolutionRef;
+  const receiptId = `approval-unlinked:${createHash("sha256")
+    .update(sourceRef, "utf8")
+    .update("\0", "utf8")
+    .update(context.contextId, "utf8")
+    .digest("base64url")}`;
+  return {
+    schemaVersion: 1,
+    receiptId,
+    contextId: context.contextId,
+    executionId: context.executionId,
+    runId: context.runId,
+    actionId: sourceRef,
+    occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
+    action: {
+      family: record.kind,
+      operation: "approval",
+      summary: `A terminal ${record.kind} approval is correlated with this run, but its retained record cannot identify an exact execution.`,
+    },
+    decision: {
+      outcome: "unknown",
+      reasonCode: "operator_approval_execution_link_ambiguous",
+    },
+    enforcement: {
+      coverageState: "unknown",
+      policyRefs: operatorApprovalPolicyRefs(record),
+      grantRefs: [],
+      contextFieldsUsed: ["runId"],
+    },
+    source: {
+      owner: "operator_approvals",
+      recordRef: sourceRef,
+      decisionBoundary: "gateway.operator-approval.first-answer",
+    },
+    missingEvidence: ["decision.execution_link"],
+    remediation: [
+      {
+        code: "treat_as_run_correlated",
+        text: "Treat this approval only as run-correlated; its retained record cannot identify an exact execution.",
+      },
+    ],
+  };
+}
+
 function projectCorruptOperatorApprovalReceipt(
   row: OperatorApprovalRow,
   context: OperatorApprovalReceiptContext,
@@ -731,6 +781,7 @@ export function countOperatorApprovalReceiptsForRun(params: {
 /** Project authoritative approval rows directly; no generic decision fact is written. */
 export function listOperatorApprovalReceiptsForRun(params: {
   context: OperatorApprovalReceiptContext;
+  linkState: OperatorApprovalReceiptLinkState;
   offset: number;
   limit: number;
   nowMs?: number;
@@ -753,7 +804,9 @@ export function listOperatorApprovalReceiptsForRun(params: {
       return rows.map((row) => {
         const record = decodeOperatorApprovalRow(row);
         return record
-          ? projectOperatorApprovalReceipt(record, params.context)
+          ? params.linkState === "ambiguous"
+            ? projectAmbiguousOperatorApprovalReceipt(record, params.context)
+            : projectOperatorApprovalReceipt(record, params.context)
           : projectCorruptOperatorApprovalReceipt(row, params.context);
       });
     }, params.databaseOptions) ?? []

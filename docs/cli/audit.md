@@ -143,6 +143,9 @@ enforced denial only when the approval owner recorded that terminal state. A
 corrupt approval is `unknown`. The text view labels `operator_approvals` as an
 authoritative owner-native SQLite record retained for 30 days; JSON preserves
 the same source owner and record reference without lossy reformatting.
+When multiple retained executions share the approval's `runId`, exact execution
+inspection reports `operator_approval_execution_link_ambiguous` with unknown
+coverage instead of assigning the approval outcome to the selected execution.
 
 JSON output is the Gateway result without lossy reformatting. An exact result contains one
 bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
