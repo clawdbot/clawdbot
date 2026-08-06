@@ -101,11 +101,15 @@ export async function resolveDirectStatusReplyForSession(
   const liveGroupId = params.targetGuildId ?? statusEntry?.groupId;
   const liveChatType = params.chatType ?? statusEntry?.chatType;
   const liveChannelId = params.targetChannelId;
+  // For non-DM conversations, modelByChannel keys are channel/conversation IDs,
+  // not guild/server IDs.  Pass the live channel ID as the resolver groupId so
+  // exact channel-ID config keys match instead of falling back to the wildcard.
+  const resolvedGroupId = liveChatType !== "dm" && liveChannelId ? liveChannelId : liveGroupId;
   const channelModelOverride = canApplyChannelModel
     ? resolveChannelModelOverride({
         cfg: statusCfg,
         channel: params.channel,
-        groupId: liveGroupId,
+        groupId: resolvedGroupId,
         groupChatType: liveChatType,
         groupChannel: statusEntry?.groupChannel,
         groupSubject: statusEntry?.subject,
@@ -133,22 +137,18 @@ export async function resolveDirectStatusReplyForSession(
     : null;
   const effectiveProvider = resolvedChannelModel?.ref.provider ?? statusModel.provider;
   const effectiveModel = resolvedChannelModel?.ref.model ?? statusModel.model;
-  // Cached last-run fields are not user selection; a default cache must not
-  // block a resolved channel model override. Only non-default cached values
-  // represent a prior explicit choice that should outrank the channel default.
-  const cachedProvider = statusEntry?.modelProvider?.trim();
-  const cachedModel = statusEntry?.model?.trim();
-  const cachedDiffersFromDefault =
-    (cachedProvider && cachedProvider !== defaultProvider) ||
-    (cachedModel && cachedModel !== defaultModel);
+  // Cached last-run fields (modelProvider / model) record the last executed
+  // route, not a user choice.  A resolved channel model override outranks
+  // them; use cached fields only when no channel override resolved.
+  const channelModelResolved = channelModelOverride != null;
   const selectedProvider =
     statusEntry?.providerOverride?.trim() ||
-    (cachedDiffersFromDefault ? cachedProvider : undefined) ||
-    effectiveProvider;
+    (channelModelResolved
+      ? effectiveProvider
+      : statusEntry?.modelProvider?.trim() || effectiveProvider);
   const selectedModel =
     statusEntry?.modelOverride?.trim() ||
-    (cachedDiffersFromDefault ? cachedModel : undefined) ||
-    effectiveModel;
+    (channelModelResolved ? effectiveModel : statusEntry?.model?.trim() || effectiveModel);
   const modelState = await createModelSelectionState({
     cfg: statusCfg,
     agentId: statusAgentId,

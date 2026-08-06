@@ -484,7 +484,7 @@ describe("resolveDirectStatusReplyForSession", () => {
     expect(statusCall.model).toBe("claude-fable-5");
   });
 
-  it("preserves cached non-default model over channel override", async () => {
+  it("lets channel model override outrank cached last-run model", async () => {
     resolveDefaultModelForAgent.mockReturnValue({
       provider: "openai",
       model: "gpt-5.4",
@@ -493,7 +493,8 @@ describe("resolveDirectStatusReplyForSession", () => {
       defaultProvider: "openai",
       defaultModel: "gpt-5.4",
     });
-    // Cached fields differ from the default — a real prior user choice.
+    // Cached fields differ from the default, but they are last-run artifacts,
+    // not explicit user choices. The channel model override takes precedence.
     loadSessionEntry.mockReturnValue({
       cfg: {
         agents: { defaults: { reasoningDefault: "off" } },
@@ -527,7 +528,98 @@ describe("resolveDirectStatusReplyForSession", () => {
       provider?: string;
       model?: string;
     };
-    // Cached non-default wins over channel model.
+    // Channel model override wins over cached last-run fields.
+    expect(statusCall.provider).toBe("anthropic");
+    expect(statusCall.model).toBe("claude-fable-5");
+  });
+
+  it("preserves cached last-run model when no channel override resolves", async () => {
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    resolveDefaultModel.mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+    });
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: { defaults: { reasoningDefault: "off" } },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        modelProvider: "google",
+        model: "gemini-flash-3",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    // No channel override — cached last-run fields are used.
+    expect(statusCall.provider).toBe("google");
+    expect(statusCall.model).toBe("gemini-flash-3");
+  });
+
+  it("uses live channel ID as groupId for non-DM channel model matching", async () => {
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    resolveDefaultModel.mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+    });
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: { defaults: { reasoningDefault: "off" } },
+        channels: {
+          modelByChannel: {
+            discord: {
+              "chan-456": "google/gemini-flash-3",
+              "*": "anthropic/claude-fable-5",
+            },
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: { sessionId: "sess-main" },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+      targetChannelId: "chan-456",
+      targetGuildId: "guild-123",
+      chatType: "channel",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    // Live channel ID is the modelByChannel key for guild channels.
     expect(statusCall.provider).toBe("google");
     expect(statusCall.model).toBe("gemini-flash-3");
   });
