@@ -1146,9 +1146,23 @@ export class NodeRegistry {
         };
       }
     }
-    // Pairing revalidation above can await, so re-derive what is left of the
-    // budget. Dispatching on an exhausted one would hand the command to the node
-    // after the caller's deadline already answered that none had been dispatched.
+    const requestId = randomUUID();
+    const invokeParams = normalizeSystemRunInvokeParams({
+      command: params.command,
+      params: params.params,
+    });
+    // Tool parameters are unbounded, so serializing them is as much of a budget
+    // spender as the awaits above.
+    const paramsJSON =
+      "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null;
+    const systemRunEvent = resolvePendingSystemRunEvent({
+      command: params.command,
+      params: invokeParams,
+    });
+    // Read the budget once every step that can spend it is behind us, so the node
+    // timeout and the pending timer below both start from what is actually left.
+    // Dispatching on an exhausted budget would hand the command to the node after
+    // the caller's deadline already answered that none had been dispatched.
     const timeoutMs =
       dispatchDeadlineAtMs === undefined
         ? budgetMs
@@ -1156,25 +1170,15 @@ export class NodeRegistry {
     if (dispatchDeadlineAtMs !== undefined && timeoutMs === 0) {
       return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
     }
-    const requestId = randomUUID();
-    const invokeParams = normalizeSystemRunInvokeParams({
-      command: params.command,
-      params: params.params,
-    });
     const payload = {
       id: requestId,
       nodeId: params.nodeId,
       command: params.command,
-      paramsJSON:
-        "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
+      paramsJSON,
       timeoutMs,
       idempotencyKey: params.idempotencyKey,
       sessionKey: normalizeString(params.sessionKey) || undefined,
     };
-    const systemRunEvent = resolvePendingSystemRunEvent({
-      command: params.command,
-      params: invokeParams,
-    });
     const result = new Promise<NodeInvokeResult>((resolve, reject) => {
       const pending: PendingInvoke = {
         nodeId: params.nodeId,

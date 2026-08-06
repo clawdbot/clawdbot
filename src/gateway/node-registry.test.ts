@@ -402,6 +402,48 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("does not dispatch when request serialization outlives the invoke budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const registry = createNodeRegistry();
+      const client = makeClient("conn-serialize", "node-serialize", frames);
+      registerNodeSession(registry, client);
+      const onDispatchReady = vi.fn();
+
+      const invocation = registry.invoke({
+        nodeId: "node-serialize",
+        expectedConnId: "conn-serialize",
+        command: "system.run",
+        params: {
+          cmd: ["echo"],
+          // Tool parameters are unbounded, so let serializing them spend the whole
+          // budget the way a large payload would.
+          argv: {
+            toJSON: () => {
+              vi.advanceTimersByTime(40);
+              return "serialized";
+            },
+          },
+        },
+        timeoutMs: 20,
+        onDispatchReady,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      // Arming the pending timer with the budget read before serialization would
+      // let the answer land after the caller's own deadline already passed.
+      expect(frames).toEqual([]);
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      await expect(invocation).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("revalidates persistent generation ownership for inbound node RPCs", async () => {
     const resolveCurrentPairingState = vi.fn().mockResolvedValue({
       identity: "identity-a",
