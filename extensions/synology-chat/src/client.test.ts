@@ -314,8 +314,19 @@ describe("sendHostedFileUrl", () => {
     expect(result).toEqual({ status: "accepted" });
   });
 
-  it("returns rejected on a definitive HTTP failure", async () => {
+  it("returns indeterminate on an HTTP server failure", async () => {
     mockFailureResponse(500);
+    const result = await settleTimers(
+      sendHostedFileUrl(
+        "https://nas.example.com/incoming",
+        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
+      ),
+    );
+    expect(result).toEqual({ status: "indeterminate" });
+  });
+
+  it("returns rejected on a definitive HTTP client failure", async () => {
+    mockFailureResponse(400);
     const result = await settleTimers(
       sendHostedFileUrl(
         "https://nas.example.com/incoming",
