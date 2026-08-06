@@ -50,6 +50,28 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
+  it("does not let a NO_REPLY silent final reply recover a preceding error", () => {
+    // A silent reply is the agent choosing to emit nothing after an error, not
+    // proof the run recovered. Keeping the error fatal preserves the error
+    // streak so failureAlert can fire. (#116731)
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ Exec failed: ENOENT /mnt/d unreachable",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "NO_REPLY",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("Exec failed");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "⚠️ 🛠️ Exec failed: ENOENT /mnt/d unreachable", isError: true },
+    ]);
+  });
+
   it("lets final assistant text recover multiple plain tool warnings globally", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

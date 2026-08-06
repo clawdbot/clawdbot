@@ -4,6 +4,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
@@ -255,6 +256,12 @@ export function resolveCronPayloadOutcome(params: {
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
+  // A silent reply (NO_REPLY) is not a recovery signal — the agent chose to
+  // emit nothing, which does not prove an earlier error was overcome. Treat
+  // it as absent so a preceding error payload stays fatal. (#116731)
+  const hasRecoveringFinalAssistantText =
+    normalizedFinalAssistantVisibleText !== undefined &&
+    !isSilentReplyText(normalizedFinalAssistantVisibleText, SILENT_REPLY_TOKEN);
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
@@ -266,7 +273,7 @@ export function resolveCronPayloadOutcome(params: {
   const lastErrorPayload =
     lastErrorPayloadIndex >= 0 ? params.payloads[lastErrorPayloadIndex] : undefined;
   const hasRecoveringTerminalOutput =
-    normalizedFinalAssistantVisibleText !== undefined ||
+    hasRecoveringFinalAssistantText ||
     hasSuccessfulPayloadAfterLastError ||
     hasSuccessfulPayloadBeforeLastError;
   // Some tools emit warning/error payloads before a final answer. Treat those
@@ -281,14 +288,14 @@ export function resolveCronPayloadOutcome(params: {
     params.failureSignal?.fatalForCron !== true &&
     lastErrorPayloadIndex >= 0 &&
     isCronMessagePresentationWarning(lastErrorPayloadText) &&
-    (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
+    (hasRecoveringFinalAssistantText || hasSuccessfulPayloadBeforeLastError);
   const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
     payloadHasStructuredDeliveryContent(payload),
   );
   const hasRecoveredToolWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
-    normalizedFinalAssistantVisibleText !== undefined &&
+    hasRecoveringFinalAssistantText &&
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
@@ -308,7 +315,7 @@ export function resolveCronPayloadOutcome(params: {
   // structured/media payloads that carry the actual delivery content.
   const shouldUseFinalAssistantVisibleText =
     (params.preferFinalAssistantVisibleText === true || hasRecoveredToolWarning) &&
-    normalizedFinalAssistantVisibleText !== undefined &&
+    hasRecoveringFinalAssistantText &&
     !hasFatalStructuredErrorPayload &&
     !hasStructuredDeliveryPayloads;
   const summary = shouldUseFinalAssistantVisibleText
