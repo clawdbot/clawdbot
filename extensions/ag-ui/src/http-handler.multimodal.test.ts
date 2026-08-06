@@ -1,0 +1,225 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventType } from "@ag-ui/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Split out of http-handler.test.ts to keep both files under the `max-lines`
+// cap. Covers what non-text content the handler forwards to the model.
+
+vi.mock("@ag-ui/encoder", () => ({
+  EventEncoder: vi.fn().mockImplementation(function () {
+    return {
+      getContentType: () => "text/event-stream",
+      encode: (event: unknown) => `data: ${JSON.stringify(event)}\n\n`,
+    };
+  }),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
+  getSessionEntry: vi.fn(() => undefined),
+  upsertSessionEntry: vi.fn(async () => {}),
+}));
+
+import { createAguiHttpHandler } from "./http-handler.js";
+import {
+  createReq,
+  createRes,
+  createDeviceToken,
+  createFakeApi,
+  parseEvents,
+  GATEWAY_SECRET,
+  APPROVED_DEVICE_ID,
+} from "./http-handler.test-helpers.js";
+
+const PNG_1PX =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AARAAAP4AAQaMBWQAAAABJRU5ErkJggg==";
+
+function imageMessage(role: string, text: string, data: string) {
+  return {
+    role,
+    content: [
+      { type: "text", text },
+      { type: "image", source: { type: "data", value: data, mimeType: "image/png" } },
+    ],
+  };
+}
+
+describe("AG-UI multimodal image forwarding", () => {
+  let fakeApi: ReturnType<typeof createFakeApi>;
+  let handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.OPENCLAW_GATEWAY_TOKEN = GATEWAY_SECRET;
+    fakeApi = createFakeApi([APPROVED_DEVICE_ID]);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
+  });
+
+  function post(body: unknown) {
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    return handler(createReq({ headers: { authorization: `Bearer ${token}` }, body }), createRes());
+  }
+
+  it("forwards an image sent on the current turn", async () => {
+    await post({
+      threadId: "t-img",
+      runId: "r-img",
+      messages: [imageMessage("user", "What is this?", PNG_1PX)],
+    });
+
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call.images).toHaveLength(1);
+  });
+
+  it("accepts an empty frontend tool result instead of dead-ending the run", async () => {
+    // A frontend tool that succeeds with no output sends `content: ""`. That
+    // carries no text and no image, but it IS the turn — rejecting it strands
+    // the run right after the browser did the work.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-emptytool",
+          runId: "r-emptytool",
+          messages: [
+            { role: "user", content: "make it blue" },
+            { role: "assistant", content: "", toolCalls: [{ id: "call-1", type: "function" }] },
+            { role: "tool", toolCallId: "call-1", content: "" },
+          ],
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).not.toBe(400);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).toHaveBeenCalled();
+  });
+
+  it("rejects an oversized declared toolset before committing the stream", async () => {
+    // Tool schemas reach the model verbatim, so they are capped like context and
+    // state. The rejection must be a clean 400, not a half-written SSE stream.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-bigtools",
+          runId: "r-bigtools",
+          messages: [{ role: "user", content: "hi" }],
+          tools: [{ name: "huge", description: "x".repeat(30_000), parameters: {} }],
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a malformed `tools` payload as RUN_ERROR rather than a truncated stream", async () => {
+    // Deliberate decision, not an oversight: `tools` is built by the client SDK
+    // from typed hooks, so junk here is hypothetical rather than observed. It is
+    // read after the SSE headers are committed but inside the run's try/catch,
+    // so it already ends in a defined protocol outcome — a RUN_ERROR event and a
+    // clean close. Pre-validating it would add production code to convert one
+    // visible failure into a slightly nicer visible failure.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-badtools",
+          runId: "r-badtools",
+          messages: [{ role: "user", content: "hi" }],
+          tools: [null],
+        },
+      }),
+      res,
+    );
+
+    const types = parseEvents(res.chunks).map((e) => e.type);
+    expect(types).toContain(EventType.RUN_STARTED);
+    expect(types).toContain(EventType.RUN_ERROR);
+    expect(res.ended).toBe(true);
+  });
+
+  it("forwards a `developer` instruction as a system prompt rather than dropping it", async () => {
+    // `developer` is a first-class AG-UI role alongside `system`. Matching only
+    // `system` accepted the request and silently ignored the instruction.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-dev",
+          runId: "r-dev",
+          messages: [
+            { role: "developer", content: "Always answer in JSON." },
+            { role: "user", content: "status?" },
+          ],
+        },
+      }),
+      createRes(),
+    );
+
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call.extraSystemPrompt).toContain("Always answer in JSON.");
+  });
+
+  it("accepts an image-only turn instead of rejecting it as an empty prompt", async () => {
+    // A pasted/dragged image with no caption is a normal multimodal turn, but
+    // the prompt builder only extracts text — so a text-empty body must not be
+    // treated as an empty request.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-img-only",
+          runId: "r-img-only",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "image", source: { type: "data", value: PNG_1PX, mimeType: "image/png" } },
+              ],
+            },
+          ],
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).not.toBe(400);
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call.images).toHaveLength(1);
+  });
+
+  it("does not resend an image from an earlier turn on a text-only turn", async () => {
+    // AG-UI clients POST the whole transcript every turn. Extracting images from
+    // all of it resent turn 1's image with turn 2's text, so the model answered
+    // against a stale image and the attachment was duplicated in the session.
+    // Image extraction is scoped to the same post-assistant delta as the prompt.
+    await post({
+      threadId: "t-img2",
+      runId: "r-img2",
+      messages: [
+        imageMessage("user", "What is this?", PNG_1PX),
+        { role: "assistant", content: "It is a single pixel." },
+        { role: "user", content: "Thanks — now tell me a joke." },
+      ],
+    });
+
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call.images).toBeUndefined();
+    expect(call.prompt).toContain("tell me a joke");
+  });
+});

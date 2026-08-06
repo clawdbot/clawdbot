@@ -12,9 +12,17 @@ vi.mock("@ag-ui/encoder", () => ({
   // Regular (constructable) function — production does `new EventEncoder(...)`,
   // and this vitest version cannot `new` a mock whose implementation is an
   // arrow function (arrows have no [[Construct]]).
-  EventEncoder: vi.fn().mockImplementation(function () {
+  //
+  // This mirrors the REAL encoder's asymmetry: getContentType() advertises the
+  // protobuf media type when Accept prefers it, while encode() always returns
+  // SSE text (only encodeBinary() emits protobuf). Modelling that is what makes
+  // a "protobuf content-type on an SSE body" mismatch catchable here; a mock
+  // that hardcoded text/event-stream would pass no matter what we sent.
+  EventEncoder: vi.fn().mockImplementation(function (params?: { accept?: string }) {
+    const acceptsProtobuf = Boolean(params?.accept?.includes("application/vnd.ag-ui.event+proto"));
     return {
-      getContentType: () => "text/event-stream",
+      getContentType: () =>
+        acceptsProtobuf ? "application/vnd.ag-ui.event+proto" : "text/event-stream",
       encode: (event: unknown) => `data: ${JSON.stringify(event)}\n\n`,
     };
   }),
@@ -523,18 +531,6 @@ describe("AG-UI HTTP handler", () => {
     expect(types).toContain(EventType.RUN_FINISHED);
   });
 
-  // -------------------------------------------------------------------------
-  // Step events
-  // -------------------------------------------------------------------------
-  //
-  // The two former step-event tests ("emits STEP_STARTED and STEP_FINISHED from
-  // onItemEvent" and "deduplicates STEP_STARTED for the same itemId") have been
-  // removed. They exercised the reply pipeline's `replyOptions.onItemEvent`
-  // callback, which drove STEP_STARTED/STEP_FINISHED AG-UI events. The refactor
-  // deleted the reply-pipeline branch entirely; the single runEmbeddedAgent path
-  // exposes no item/step callback and the handler emits no STEP_* events, so
-  // there is no equivalent new behavior to assert against.
-
   it("includes tool messages in conversation context for new run", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -558,12 +554,16 @@ describe("AG-UI HTTP handler", () => {
     expect(types).toContain(EventType.RUN_FINISHED);
   });
 
-  it("passes X-OpenClaw-Agent-Id header as accountId to resolveAgentRoute", async () => {
+  // `X-OpenClaw-Agent-Id` names the agent that runs the turn. It must never be
+  // forwarded as `accountId` — that only feeds channel-account bindings, so an
+  // unmatched name would execute on the DEFAULT agent and its workspace instead
+  // of failing. An unknown agent is therefore rejected, not downgraded.
+  it("rejects an unknown X-OpenClaw-Agent-Id instead of falling back to the default agent", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: {
         authorization: `Bearer ${token}`,
-        "x-openclaw-agent-id": "auditor",
+        "x-openclaw-agent-id": "no-such-agent",
       },
       body: {
         threadId: "t-agent",
@@ -574,16 +574,34 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = fakeApi.runtime;
-    expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "ag-ui",
-        accountId: "auditor",
-      }),
-    );
+    expect(res.statusCode).toBe(400);
+    const payload = JSON.parse(res.chunks.join(""));
+    expect(payload.error.type).toBe("invalid_request_error");
+    expect(payload.error.message).toContain("X-OpenClaw-Agent-Id");
   });
 
-  it("does not pass accountId when X-OpenClaw-Agent-Id header is absent", async () => {
+  it("never forwards the agent header as accountId", async () => {
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const req = createReq({
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-openclaw-agent-id": "no-such-agent",
+      },
+      body: {
+        threadId: "t-agent-2",
+        runId: "r-agent-2",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+    await handler(req, createRes());
+
+    const rt = fakeApi.runtime;
+    for (const call of rt.channel.routing.resolveAgentRoute.mock.calls) {
+      expect(call[0]?.accountId).toBeUndefined();
+    }
+  });
+
+  it("routes to the default agent when X-OpenClaw-Agent-Id is absent", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: { authorization: `Bearer ${token}` },
@@ -598,11 +616,11 @@ describe("AG-UI HTTP handler", () => {
 
     const rt = fakeApi.runtime;
     expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "ag-ui",
-        accountId: undefined,
-      }),
+      expect.objectContaining({ channel: "ag-ui" }),
     );
+    for (const call of rt.channel.routing.resolveAgentRoute.mock.calls) {
+      expect(call[0]?.accountId).toBeUndefined();
+    }
   });
 
   it("uses deviceId as peer ID for identity linking", async () => {
@@ -894,271 +912,85 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    // Simulate client disconnect
-    (req as EventEmitter).emit("close");
+    // Disconnect is observed on the RESPONSE (and its socket), not the request:
+    // by the time the stream is open the request body is fully consumed, so a
+    // `close` listener on `req` has already fired and never reports the client
+    // going away mid-run.
+    (res as unknown as EventEmitter).emit("close");
 
     expect(capturedAbortSignal).toBeDefined();
     expect(capturedAbortSignal!.aborted).toBe(true);
   });
-});
 
-// ---------------------------------------------------------------------------
-// AG-UI context forwarding
-// ---------------------------------------------------------------------------
-
-describe("AG-UI RunAgentInput.context forwarding", () => {
-  let fakeApi: ReturnType<typeof createFakeApi>;
-  let handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    process.env.OPENCLAW_GATEWAY_TOKEN = GATEWAY_SECRET;
-    fakeApi = createFakeApi([APPROVED_DEVICE_ID]);
-    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
-  });
-
-  // Context is no longer injected via finalizeInboundContext's BodyForAgent;
-  // the handler now appends formatContextEntries(...) to the `prompt` passed to
-  // runEmbeddedAgent (via promptSuffix). These tests assert the equivalent
-  // behavior on that prompt.
-  it("includes context entries in the run prompt", async () => {
+  it("advertises text/event-stream even when the client's Accept prefers protobuf", async () => {
+    // encode() only ever produces SSE frames, so the response must not claim to
+    // be protobuf — a client that trusted the header would fail to parse the body.
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: {
-        threadId: "t-ctx",
-        runId: "r-ctx",
-        messages: [{ role: "user", content: "Approve writes" }],
-        context: [
-          {
-            description: "Pending tool-call approvals",
-            value: '[{"callId":"write_123","toolName":"write"}]',
-          },
-        ],
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/vnd.ag-ui.event+proto",
       },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
-    expect(call.prompt).toContain("## Context provided by the UI");
-    expect(call.prompt).toContain("### Pending tool-call approvals");
-    expect(call.prompt).toContain("write_123");
-  });
-
-  it("does not inject a context block into the prompt when context is empty", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
       body: {
-        threadId: "t-ctx-empty",
-        runId: "r-ctx-empty",
-        messages: [{ role: "user", content: "Hello" }],
-        context: [],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
-    expect(call.prompt).not.toContain("## Context provided by the UI");
-  });
-
-  it("filters out context entries with empty description and value", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: {
-        threadId: "t-ctx-filter",
-        runId: "r-ctx-filter",
-        messages: [{ role: "user", content: "Hello" }],
-        context: [
-          { description: "", value: "" },
-          { description: "App state", value: "editing" },
-        ],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
-    expect(call.prompt).toContain("### App state");
-    expect(call.prompt).toContain("editing");
-    // Should not have an empty heading
-    expect(call.prompt).not.toContain("### \n");
-  });
-
-  it("does not inject a context block into the prompt when all context entries are empty", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: {
-        threadId: "t-ctx-all-empty",
-        runId: "r-ctx-all-empty",
-        messages: [{ role: "user", content: "Hello" }],
-        context: [
-          { description: "", value: "" },
-          { description: "", value: "" },
-        ],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
-    expect(call.prompt).not.toContain("## Context provided by the UI");
-  });
-
-  it("does not inject a context block into the prompt when context is absent", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: {
-        threadId: "t-ctx-none",
-        runId: "r-ctx-none",
+        threadId: "t-proto",
+        runId: "r-proto",
         messages: [{ role: "user", content: "Hello" }],
       },
     });
     const res = createRes();
     await handler(req, res);
 
+    expect(res.headers["content-type"]).toBe("text/event-stream");
+    expect(res.chunks.join("")).toContain("data: ");
+  });
+
+  it("keeps the session claimed after a mid-run disconnect so a concurrent run cannot steal the stream", async () => {
+    // Aborting only *requests* that the agent stop; tool hooks can still fire
+    // while the run unwinds. If the disconnect released ownership, a second
+    // request could claim the session and install its writer, and this run's
+    // late tool events — resolved by sessionKey alone — would land in it.
     const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
-    expect(call.prompt).not.toContain("## Context provided by the UI");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Device Pairing Tests
-// ---------------------------------------------------------------------------
-
-describe("Device pairing", () => {
-  let fakeApi: ReturnType<typeof createFakeApi>;
-  let handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    process.env.OPENCLAW_GATEWAY_TOKEN = GATEWAY_SECRET;
-  });
-
-  it("returns pairing_pending with pairingCode and token when no auth header", async () => {
-    fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
-
-    const req = createReq({
-      headers: {}, // No authorization header
-      body: {},
+    let releaseRun: (() => void) | undefined;
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
     });
-    const res = createRes();
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(403);
-    const body = JSON.parse(res.chunks[0]!);
-    expect(body.error.type).toBe("pairing_pending");
-    expect(body.error.pairing.pairingCode).toBe("TEST1234");
-    expect(body.error.pairing.token).toBeDefined();
-    expect(body.error.pairing.instructions).toContain("openclaw pairing approve ag-ui");
-  });
-
-  it("calls upsertPairingRequest when initiating pairing", async () => {
-    fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
-
-    const req = createReq({
-      headers: {}, // No authorization header
-      body: {},
+    rt.agent.runEmbeddedAgent.mockImplementation(async () => {
+      await runGate;
+      return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
     });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    expect(rt.channel.pairing.upsertPairingRequest).toHaveBeenCalledTimes(1);
-    expect(rt.channel.pairing.upsertPairingRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "ag-ui",
-      }),
-    );
-  });
-
-  it("rejects invalid HMAC signature with 401", async () => {
-    fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
-
-    // Token with invalid signature
-    const req = createReq({
-      headers: { authorization: "Bearer aW52YWxpZC1kZXZpY2UtaWQ.invalidsignature" },
-      body: { messages: [{ role: "user", content: "hi" }] },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(401);
-  });
-
-  it("returns pairing_pending for valid token but unapproved device", async () => {
-    // No approved devices
-    fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
-
-    // Create valid HMAC token for a device that's not approved
-    const unapprovedDeviceId = "87654321-4321-4321-4321-abcdef123456";
-    const token = createDeviceToken(GATEWAY_SECRET, unapprovedDeviceId);
-
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: { messages: [{ role: "user", content: "hi" }] },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(403);
-    const body = JSON.parse(res.chunks[0]!);
-    expect(body.error.type).toBe("pairing_pending");
-    expect(body.error.message).toContain("pending approval");
-  });
-
-  it("proceeds normally for valid token with approved device", async () => {
-    fakeApi = createFakeApi([APPROVED_DEVICE_ID]);
-    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const makeReq = () =>
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-hold",
+          runId: "r-hold",
+          messages: [{ role: "user", content: "Hello" }],
+        },
+      });
 
-    const req = createReq({
-      headers: { authorization: `Bearer ${token}` },
-      body: { messages: [{ role: "user", content: "Hello" }] },
+    const resA = createRes();
+    const runA = handler(makeReq(), resA);
+    // Let A get past body parsing and claim the session.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
     });
-    const res = createRes();
-    await handler(req, res);
 
-    const events = parseEvents(res.chunks);
-    expect(events[0]?.type).toBe(EventType.RUN_STARTED);
-    expect(events.some((e) => e.type === EventType.RUN_FINISHED)).toBe(true);
-  });
+    // Client A goes away while the run is still in flight.
+    (resA as unknown as EventEmitter).emit("close");
 
-  it("returns 429 rate_limit when max pending pairing requests reached", async () => {
-    // Simulate rate limit by returning empty code
-    fakeApi = createFakeApi([], { pairingCode: "" });
-    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
+    // A still owns the session, so B must be refused rather than take the stream.
+    const resB = createRes();
+    await handler(makeReq(), resB);
+    expect(resB.statusCode).toBe(409);
 
-    const req = createReq({
-      headers: {}, // No authorization header - initiates pairing
-      body: { messages: [{ role: "user", content: "hi" }] },
-    });
-    const res = createRes();
-    await handler(req, res);
+    // Once A's finally runs, ownership is released and the session is reusable.
+    releaseRun?.();
+    await runA;
 
-    expect(res.statusCode).toBe(429);
-    const body = JSON.parse(res.chunks[0]!);
-    expect(body.error.type).toBe("rate_limit");
-    expect(body.error.message).toContain("Too many pending pairing requests");
+    const resC = createRes();
+    await handler(makeReq(), resC);
+    expect(resC.statusCode).toBe(200);
   });
 });

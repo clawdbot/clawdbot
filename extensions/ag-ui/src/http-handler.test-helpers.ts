@@ -46,15 +46,41 @@ export function createRes(): ServerResponse & {
   headers: Record<string, string>;
   ended: boolean;
 } {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   const res = {
     statusCode: 200,
     chunks: [] as string[],
     headers: {} as Record<string, string>,
     ended: false,
+    // Real ServerResponse commits on flushHeaders/write and then rejects
+    // setHeader. Model that so tests can catch a status written after commit.
+    headersSent: false,
     setHeader(name: string, value: string) {
+      if (res.headersSent) {
+        throw Object.assign(new Error("Cannot set headers after they are sent to the client"), {
+          code: "ERR_HTTP_HEADERS_SENT",
+        });
+      }
       res.headers[name.toLowerCase()] = value;
     },
-    flushHeaders() {},
+    flushHeaders() {
+      res.headersSent = true;
+    },
+    on(event: string, cb: (...args: unknown[]) => void) {
+      const list = listeners.get(event) ?? [];
+      list.push(cb);
+      listeners.set(event, list);
+      return res;
+    },
+    once(event: string, cb: (...args: unknown[]) => void) {
+      return res.on(event, cb);
+    },
+    emit(event: string, ...args: unknown[]) {
+      for (const cb of listeners.get(event) ?? []) {
+        cb(...args);
+      }
+      return true;
+    },
     write(chunk: string) {
       res.chunks.push(chunk);
       return true;

@@ -1,13 +1,14 @@
 import { EventType } from "@ag-ui/core";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { handleBeforeToolCall, handleToolResultPersist } from "./hooks.js";
-import { setWriter, clearWriter, markClientToolNames, clearClientToolNames } from "./tool-store.js";
+import { claimRun, endRun, markClientToolNames, setRunWriter } from "./tool-store.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const SESSION_KEY = "hook-test-session";
+const OWNER = "run-owner-a";
 
 function createMockWriter() {
   const events: Array<{ type: EventType } & Record<string, unknown>> = [];
@@ -26,12 +27,17 @@ describe("Tool event hooks", () => {
 
   beforeEach(() => {
     mock = createMockWriter();
-    setWriter(SESSION_KEY, mock.writer, "msg-001");
+    claimRun({ sessionKey: SESSION_KEY, owner: OWNER });
+    setRunWriter({
+      sessionKey: SESSION_KEY,
+      owner: OWNER,
+      writer: mock.writer,
+      messageId: "msg-001",
+    });
   });
 
   afterEach(() => {
-    clearWriter(SESSION_KEY);
-    clearClientToolNames(SESSION_KEY);
+    endRun(SESSION_KEY, OWNER);
   });
 
   // -------------------------------------------------------------------------
@@ -64,7 +70,10 @@ describe("Tool event hooks", () => {
     });
 
     it("pushes no pending id, so a later tool_result_persist is a no-op", () => {
-      handleBeforeToolCall({ toolName: "get_weather" }, { sessionKey: SESSION_KEY });
+      handleBeforeToolCall(
+        { toolName: "get_weather", toolCallId: "call-1" },
+        { sessionKey: SESSION_KEY },
+      );
       handleToolResultPersist({}, { sessionKey: SESSION_KEY });
 
       expect(mock.events).toHaveLength(0);
@@ -78,7 +87,7 @@ describe("Tool event hooks", () => {
   describe("server tools", () => {
     it("emits TOOL_CALL_START + TOOL_CALL_ARGS on before_tool_call, then TOOL_CALL_RESULT + TOOL_CALL_END on persist", () => {
       handleBeforeToolCall(
-        { toolName: "search_db", params: { query: "test" } },
+        { toolName: "search_db", params: { query: "test" }, toolCallId: "call-search" },
         { sessionKey: SESSION_KEY },
       );
 
@@ -90,9 +99,10 @@ describe("Tool event hooks", () => {
       expect(mock.events[1]!.delta).toBe(JSON.stringify({ query: "test" }));
 
       const toolCallId = mock.events[0]!.toolCallId as string;
+      expect(toolCallId).toBe("call-search");
 
-      // After tool_result_persist: RESULT + END
-      handleToolResultPersist({}, { sessionKey: SESSION_KEY });
+      // After tool_result_persist: RESULT + END, correlated on the same host id
+      handleToolResultPersist({ toolCallId }, { sessionKey: SESSION_KEY });
 
       expect(mock.events).toHaveLength(4);
       expect(mock.events[2]!.type).toBe(EventType.TOOL_CALL_RESULT);
@@ -102,8 +112,8 @@ describe("Tool event hooks", () => {
       expect(mock.events[3]!.toolCallId).toBe(toolCallId);
     });
 
-    it("does not emit RESULT/END when no pending toolCallId exists", () => {
-      // Call persist without a prior before_tool_call
+    it("does not emit RESULT/END when the host supplied no toolCallId", () => {
+      // Call persist without an id — there is nothing to correlate the result to.
       handleToolResultPersist({}, { sessionKey: SESSION_KEY });
 
       expect(mock.events).toHaveLength(0);
@@ -117,7 +127,7 @@ describe("Tool event hooks", () => {
   describe("A2UI tool results", () => {
     it("emits ACTIVITY_SNAPSHOT for A2UI tool results", () => {
       handleBeforeToolCall(
-        { toolName: "demo_tool", params: { runs: [] } },
+        { toolName: "demo_tool", params: { runs: [] }, toolCallId: "call-a2ui" },
         { sessionKey: SESSION_KEY },
       );
 
@@ -131,7 +141,7 @@ describe("Tool event hooks", () => {
       });
 
       handleToolResultPersist(
-        { message: { content: [{ type: "text", text: a2uiJson }] } },
+        { toolCallId, message: { content: [{ type: "text", text: a2uiJson }] } },
         { sessionKey: SESSION_KEY },
       );
 
@@ -151,12 +161,15 @@ describe("Tool event hooks", () => {
 
     it("does not emit ACTIVITY_SNAPSHOT for non-A2UI results", () => {
       handleBeforeToolCall(
-        { toolName: "search_db", params: { q: "test" } },
+        { toolName: "search_db", params: { q: "test" }, toolCallId: "call-plain" },
         { sessionKey: SESSION_KEY },
       );
 
       handleToolResultPersist(
-        { message: { content: [{ type: "text", text: "plain result" }] } },
+        {
+          toolCallId: "call-plain",
+          message: { content: [{ type: "text", text: "plain result" }] },
+        },
         { sessionKey: SESSION_KEY },
       );
 
@@ -168,10 +181,16 @@ describe("Tool event hooks", () => {
     });
 
     it("populates TOOL_CALL_RESULT content from event.message", () => {
-      handleBeforeToolCall({ toolName: "my_tool", params: {} }, { sessionKey: SESSION_KEY });
+      handleBeforeToolCall(
+        { toolName: "my_tool", params: {}, toolCallId: "call-content" },
+        { sessionKey: SESSION_KEY },
+      );
 
       handleToolResultPersist(
-        { message: { content: [{ type: "text", text: "actual content" }] } },
+        {
+          toolCallId: "call-content",
+          message: { content: [{ type: "text", text: "actual content" }] },
+        },
         { sessionKey: SESSION_KEY },
       );
 
@@ -201,26 +220,61 @@ describe("Tool event hooks", () => {
     });
 
     it("does nothing when no writer is registered", () => {
-      clearWriter(SESSION_KEY);
+      endRun(SESSION_KEY, OWNER);
 
+      // Supply an id so this proves the writer gate rather than the id gate.
       handleBeforeToolCall(
-        { toolName: "get_weather", params: { city: "Tokyo" } },
+        { toolName: "get_weather", params: { city: "Tokyo" }, toolCallId: "call-1" },
         { sessionKey: SESSION_KEY },
       );
 
       expect(mock.events).toHaveLength(0);
     });
 
-    it("generates unique toolCallIds across calls", () => {
-      // Unmarked (backend/server) tools — the hook emits START for each.
-      handleBeforeToolCall({ toolName: "tool_a", params: { x: 1 } }, { sessionKey: SESSION_KEY });
-      handleBeforeToolCall({ toolName: "tool_b", params: { y: 2 } }, { sessionKey: SESSION_KEY });
+    it("uses the host's toolCallId verbatim so concurrent calls stay distinct", () => {
+      // Unmarked (backend/server) tools — the hook emits START for each, keyed on
+      // the id the host supplied. Inventing ids here (or tracking them on a LIFO
+      // stack) attaches result A to call B once the host runs tools in parallel.
+      handleBeforeToolCall(
+        { toolName: "tool_a", params: { x: 1 }, toolCallId: "host-a" },
+        { sessionKey: SESSION_KEY },
+      );
+      handleBeforeToolCall(
+        { toolName: "tool_b", params: { y: 2 }, toolCallId: "host-b" },
+        { sessionKey: SESSION_KEY },
+      );
 
       const ids = mock.events
         .filter((e) => e.type === EventType.TOOL_CALL_START)
         .map((e) => e.toolCallId);
-      expect(ids).toHaveLength(2);
-      expect(ids[0]).not.toBe(ids[1]);
+      expect(ids).toEqual(["host-a", "host-b"]);
+    });
+
+    it("emits nothing when the host supplied no toolCallId", () => {
+      // No id means no correlation is possible, so the card is skipped rather
+      // than rendered against a fabricated id a later result can never match.
+      handleBeforeToolCall({ toolName: "tool_a", params: { x: 1 } }, { sessionKey: SESSION_KEY });
+
+      expect(mock.events).toHaveLength(0);
+    });
+
+    it("accepts the toolCallId from the hook context", () => {
+      // The host passes the id on the context for some hook shapes; both spellings
+      // must correlate to the same card.
+      handleBeforeToolCall(
+        { toolName: "tool_a", params: { x: 1 } },
+        { sessionKey: SESSION_KEY, toolCallId: "ctx-a" },
+      );
+      handleToolResultPersist({}, { sessionKey: SESSION_KEY, toolCallId: "ctx-a" });
+
+      const ids = mock.events.map((e) => e.toolCallId);
+      expect(new Set(ids)).toEqual(new Set(["ctx-a"]));
+      expect(mock.events.map((e) => e.type)).toEqual([
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_ARGS,
+        EventType.TOOL_CALL_RESULT,
+        EventType.TOOL_CALL_END,
+      ]);
     });
   });
 });
