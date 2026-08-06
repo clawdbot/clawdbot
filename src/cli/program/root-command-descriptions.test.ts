@@ -32,6 +32,7 @@ const JSON_NOT_APPLICABLE = {
       "backup",
       "backup git",
       "backup sqlite",
+      "backup capture-final",
       "database",
       "database ownership",
       "message",
