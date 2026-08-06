@@ -3,7 +3,7 @@ import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { MemoryIndexManager } from "./manager.js";
 
@@ -174,6 +174,10 @@ function createRecoveryHarness(): RecoveryHarness {
 }
 
 describe("memory manager primary provider recovery", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     providerState.calls = [];
     providerState.embedQueryCalls = 0;
@@ -277,6 +281,35 @@ describe("memory manager primary provider recovery", () => {
     expect(manager.fallbackFrom).toBe("mock");
     expect(manager.retireProvider).toHaveBeenCalledWith(expect.objectContaining({ id: "mock" }));
     expect(manager.retireProvider).not.toHaveBeenCalledWith(fallbackProvider);
+  });
+
+  it("retains the recovery throttle after rollback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const manager = createRecoveryHarness();
+    const fallbackProvider = manager.provider;
+    manager.refreshIndexIdentityDirty = vi.fn(() => ({ status: "mismatched" }));
+
+    manager.schedulePrimaryProviderRecovery();
+    await manager.primaryProviderRecoveryBackgroundPromise;
+
+    expect(manager.provider).toBe(fallbackProvider);
+    expect(providerState.calls).toEqual([
+      { provider: "openai", model: "mock-embed", fallback: "none" },
+    ]);
+    expect(providerState.embedQueryCalls).toBe(1);
+    expect(manager.lastPrimaryRecoveryAttemptMs).toBe(1_000);
+
+    vi.setSystemTime(10_000);
+    manager.schedulePrimaryProviderRecovery();
+    await manager.primaryProviderRecoveryBackgroundPromise;
+
+    expect(manager.provider).toBe(fallbackProvider);
+    expect(providerState.calls).toEqual([
+      { provider: "openai", model: "mock-embed", fallback: "none" },
+    ]);
+    expect(providerState.embedQueryCalls).toBe(1);
+    expect(manager.lastPrimaryRecoveryAttemptMs).toBe(1_000);
   });
 
   it("serializes overlapping primary recovery probes", async () => {

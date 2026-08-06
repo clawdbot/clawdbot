@@ -66,7 +66,7 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
     void (async () => {
       try {
         const body = await readJsonBody(req);
-        const auth = String(req.headers.authorization ?? "");
+        const auth = req.headers.authorization ?? "";
         const provider = auth.includes("fallback-test-token") ? "fallback" : "primary";
         requests.push({ body, provider });
         if (provider === "primary" && !primaryAvailable) {

@@ -1100,7 +1100,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.applyProviderResult(primaryResult);
       this.providerKey = this.computeProviderKey();
       this.batch = this.resolveBatchConfig();
-      this.lastPrimaryRecoveryAttemptMs = 0;
       pendingProvider = null;
       if (previousFallbackState) {
         this.primaryProviderRecoveryFallbackState = previousFallbackState;
@@ -1303,6 +1302,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private commitPrimaryProviderRecovery(): void {
     const previous = this.primaryProviderRecoveryFallbackState;
     this.primaryProviderRecoveryFallbackState = null;
+    this.lastPrimaryRecoveryAttemptMs = 0;
     if (previous && previous.provider !== this.provider) {
       void this.retireProvider(previous.provider).catch((err: unknown) => {
         log.debug(`memory embeddings: failed to retire recovered fallback: ${String(err)}`);
