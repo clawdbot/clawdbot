@@ -219,6 +219,7 @@ struct AppStateRemoteConfigTests {
     func `legacy direct route is retired while gateway mode is inactive`() {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
+        GatewayDiscoveryPreferences.setPreferredStableID(nil)
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let root: [String: Any] = [
             "gateway": [
@@ -229,8 +230,6 @@ struct AppStateRemoteConfigTests {
                 ],
             ],
         ]
-        GatewayDiscoveryPreferences.setPreferredStableID("tailscale-serve|\(tailnetHost)")
-
         let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
 
         #expect(migration.changed)
@@ -298,25 +297,19 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
-    func `inactive direct route with a mismatched binding remains operator owned`() {
+    func `active direct route without a discovery receipt remains operator owned`() {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
         let root: [String: Any] = [
             "gateway": [
-                "mode": "local",
+                "mode": "remote",
                 "remote": [
                     "transport": "direct",
                     "url": "wss://manual-gateway.example.test",
                 ],
             ],
         ]
-        GatewayDiscoveryPreferences.setPreferredStableID(
-            "bonjour|old-gateway",
-            routeBinding: GatewayDiscoveryPreferences.routeBinding(
-                connectionMode: .remote,
-                remoteTransport: .direct,
-                remoteURL: "wss://old-gateway.example.test",
-                remoteTarget: ""))
+        GatewayDiscoveryPreferences.setPreferredStableID(nil)
 
         let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
 

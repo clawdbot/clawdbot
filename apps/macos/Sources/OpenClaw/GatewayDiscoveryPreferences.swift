@@ -82,28 +82,23 @@ enum GatewayDiscoveryPreferences {
         -> (root: [String: Any], changed: Bool)
     {
         let connectionMode = ConnectionModeResolver.resolve(root: currentRoot).mode
-        guard let preferredStableID = self.preferredStableID(),
-              GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
+        guard GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
         else {
             return (currentRoot, false)
         }
-        let storedBinding = self.preferredRouteBinding()
-        let expectedDirectBinding = self.routeBinding(
-            connectionMode: .remote,
-            remoteTransport: .direct,
-            remoteURL: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "",
-            remoteTarget: "")
-        let isInactiveBoundRoute = connectionMode != .remote &&
-            storedBinding != nil && storedBinding == expectedDirectBinding
-        guard storedBinding == nil || isInactiveBoundRoute else {
-            return (currentRoot, false)
-        }
-        if connectionMode == .remote,
-           self.isVerifiedTailscaleServeRoute(
-            stableID: preferredStableID,
-            root: currentRoot)
-        {
-            return (currentRoot, false)
+        if connectionMode == .remote {
+            guard let preferredStableID = self.preferredStableID(),
+                  self.preferredRouteBinding() == nil
+            else {
+                // Active Direct without an unbound discovery receipt is operator-owned.
+                return (currentRoot, false)
+            }
+            if self.isVerifiedTailscaleServeRoute(
+                stableID: preferredStableID,
+                root: currentRoot)
+            {
+                return (currentRoot, false)
+            }
         }
 
         var root = currentRoot
