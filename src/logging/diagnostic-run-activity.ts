@@ -324,8 +324,8 @@ function recordModelEnded(
   touchSessionActivity(activity, "model_call:ended");
 }
 
-function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
-  markDiagnosticRunProgress(event);
+function recordRunProgress(event: DiagnosticRunProgressActivityEvent, trusted: boolean): void {
+  markDiagnosticRunProgress(trusted ? event : { ...event, progressKind: "liveness" });
 }
 
 export function markDiagnosticArgumentChurnObservation(
@@ -733,7 +733,7 @@ export function startDiagnosticRunActivityTracking(): void {
     return;
   }
   const startAfterEventSequence = getInternalDiagnosticEventSequence();
-  unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event) => {
+  unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event, metadata) => {
     // A prior lifecycle can leave already-sequenced events in the async queue.
     // Ignore them so a restart cannot recreate activity that stop cleared.
     if (event.seq <= startAfterEventSequence) {
@@ -756,7 +756,7 @@ export function startDiagnosticRunActivityTracking(): void {
         recordModelEnded(event);
         return;
       case "run.progress":
-        recordRunProgress(event);
+        recordRunProgress(event, metadata.trusted);
         return;
       case "run.completed":
         recordRunCompleted(event);

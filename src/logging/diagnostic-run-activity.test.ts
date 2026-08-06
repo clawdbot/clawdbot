@@ -3,6 +3,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
 import {
+  emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -627,6 +628,51 @@ describe("repeated request liveness", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       lastProgressReason: "delayed-old-owner-output",
       repeatedRequestNoProgressAgeMs: expect.any(Number),
+    });
+  });
+
+  it("keeps active-owner evidence across untrusted semantic progress", async () => {
+    const ref = { sessionId: "untrusted-session", sessionKey: "agent:main:untrusted" };
+    const runId = "untrusted-run";
+
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId,
+        provider: "mock",
+        model: "request-model",
+        observationUnit: "request",
+      });
+    }
+
+    emitDiagnosticEvent({
+      type: "run.progress",
+      ...ref,
+      runId,
+      reason: "plugin:semantic",
+      progressKind: "semantic",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "plugin:semantic",
+      repeatedRequestNoProgressAgeMs: expect.any(Number),
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "run.progress",
+      ...ref,
+      runId,
+      reason: "model_result:semantic",
+      progressKind: "semantic",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "model_result:semantic",
+      repeatedRequestNoProgressAgeMs: undefined,
     });
   });
 
